@@ -22,6 +22,7 @@ pred_bat:
   car_charging_threshold: 6.0
   calculate_best: True
   best_soc_margin: 2.0
+  best_soc_min: 4.0
   metric_house: 38
   metric_battery: 7.5
   metric_export: 4

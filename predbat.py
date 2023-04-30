@@ -5,7 +5,7 @@ import math
 
 #
 # Battery Prediction app
-#
+#  
 # Note - tzlocal must be added to the system libraries in AppDeamon config
 #
 
@@ -173,9 +173,10 @@ class PredBat(hass.Hass):
         self.set_state("predbat.import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.log("Battery has " + str(hours_left) + " hours left - now at " + str(self.soc_kw))
      if save_best:
+        self.log('Saving best data with charge_limit %s' % charge_limit)
         self.set_state("predbat.soc_kw_best", state=self.dp2(soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
         self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-        best_soc = int((charge_limit / self.soc_max * 100.0) + 0.5)
+        best_soc = int((float(charge_limit) / self.soc_max * 100.0) + 0.5)
         self.set_state("predbat.best_charge_limit", state=best_soc, attributes = {'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%'})
         self.set_state("predbat.best_export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.best_import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -206,6 +207,7 @@ class PredBat(hass.Hass):
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0.5)
+     self.best_soc_min = self.args.get('best_soc_min', 4)
      
      self.charge_enable = self.get_state(self.args['charge_enable'], default = False)
      if self.charge_enable:
@@ -253,9 +255,11 @@ class PredBat(hass.Hass):
                 best_soc = try_soc
             try_soc -= 0.5
          
-        # Simulate best - add margin first
-        best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
-        self.log("Best soc calculated at %s (margin added %s) with metric %s" % (best_soc, self.best_soc_margin, best_metric))
+        # Simulate best - add margin first and clamp to min and then clamp to max
+        best_soc = best_soc + self.best_soc_margin
+        best_soc = max(self.best_soc_min, best_soc)
+        best_soc = min(best_soc, self.soc_max)
+        self.log("Best soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
         import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
      
      # Simulate current settings
