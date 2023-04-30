@@ -1,0 +1,24 @@
+---
+hello_world:
+  module: hello
+  class: HelloWorld
+  
+pred_bat:
+  module: predbat
+  class: PredBat
+  soc_kw: sensor.givtcp_sa2243g277_soc_kwh
+  soc_max: sensor.givtcp_sa2243g277_battery_capacity_kwh
+  reserve: number.givtcp_sa2243g277_battery_power_reserve
+  pv_kw_today: sensor.givtcp_sa2243g277_pv_energy_today_kwh
+  pv_forecast_today: sensor.solcast_forecast_today
+  pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
+  load_today: sensor.givtcp_sa2243g277_load_energy_today_kwh
+  charge_enable: switch.givtcp_sa2243g277_enable_charge_schedule
+  charge_start_time: select.givtcp_sa2243g277_charge_start_time_slot_1
+  charge_end_time: select.givtcp_sa2243g277_charge_end_time_slot_1
+  charge_limit: number.givtcp_sa2243g277_target_soc
+  charge_rate: number.givtcp_sa2243g277_battery_charge_rate
+  discharge_rate: number.givtcp_sa2243g277_battery_discharge_rate
+  debug_enable: False
+  car_charging_hold: True
+  car_charging_threshold: 6.0
