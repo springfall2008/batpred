@@ -5,7 +5,6 @@ pred_bat:
   soc_kw: sensor.givtcp_sa2243g277_soc_kwh
   soc_max: sensor.givtcp_sa2243g277_battery_capacity_kwh
   reserve: number.givtcp_sa2243g277_battery_power_reserve
-  pv_kw_today: sensor.givtcp_sa2243g277_pv_energy_today_kwh
   pv_forecast_today: sensor.solcast_forecast_today
   pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
   load_today: sensor.givtcp_sa2243g277_load_energy_today_kwh
