@@ -14,8 +14,14 @@ pred_bat:
   charge_limit: number.givtcp_sa2243g277_target_soc
   charge_rate: number.givtcp_sa2243g277_battery_charge_rate
   discharge_rate: number.givtcp_sa2243g277_battery_discharge_rate
+  battery_loss: 0.05
   days_previous: 7
-  forecast_hours: 24
+  forecast_hours: 36
   debug_enable: False
   car_charging_hold: True
   car_charging_threshold: 6.0
+  calculate_best: True
+  best_soc_margin: 2.0
+  metric_house: 38
+  metric_battery: 7.5
+  metric_export: 4
