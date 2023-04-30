@@ -46,7 +46,16 @@ To install:
   - predbat_best_import_energy_battery
   - predbat_best_import_energy_house
   - predbat_best_soc_kw
+  
+Example data out:
+
+![image](https://user-images.githubusercontent.com/48591903/235373372-a8ed02d9-fdd1-497e-b245-e4e6b0407b6b.png)
+  
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
 - Create a new apexcharts card and copy the YML from example_chart.yml into the chart settings, updating the serial number to match your inverter
 - Customise as you like
+
+Example chart:
+
+![image](https://user-images.githubusercontent.com/48591903/235373360-a2365956-6c8f-4d34-ac32-b57e4a46c7cd.png)
