@@ -27,10 +27,12 @@ To install:
   - debug_enable - option to print lots of debug messages
   - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
-  - best_soc_margin - Sets the number of Kwh of battery margin you want, it's added to battery charge amount for safety
+  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
+  - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
   - metric_export - Set to the price per Kwh you get for exporting
+  
 - You will find new entities are created in HA:
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
   - predbat.export_energy - Predicted export energy in Kwh
