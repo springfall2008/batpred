@@ -1,8 +1,4 @@
 ---
-hello_world:
-  module: hello
-  class: HelloWorld
-  
 pred_bat:
   module: predbat
   class: PredBat
