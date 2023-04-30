@@ -72,7 +72,10 @@ class PredBat(hass.Hass):
      midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
      midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
      
-     load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = 8)[0], 8, now_utc, 'state', 'last_updated', True, True, False)
+     days_previous = self.args.get('days_previous', 7)
+     forecast_hours = self.args.get('forecast_hours', 24)
+     
+     load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = days_previous + 1)[0], days_previous+1, now_utc, 'state', 'last_updated', True, True, False)
      soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
      soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
      reserve_percent = float(self.get_state(entity_id = self.args['reserve'], default=0))
@@ -85,7 +88,7 @@ class PredBat(hass.Hass):
         charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
         charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
         if charge_end_time_minutes < charge_start_time_minutes:
-            charge_end_time_minutes += 60*24
+            charge_end_time_minutes += 60 * 24
             
         charge_limit = float(self.get_state(self.args['charge_limit'])) * soc_max / 100.0
         charge_rate = float(self.get_state(self.args['charge_rate'])) / 1000.0 / 60.0
@@ -97,7 +100,7 @@ class PredBat(hass.Hass):
      if 'pv_forecast_today' in self.args:
         pv_forecast_data_today    = self.get_state(entity_id = self.args['pv_forecast_today'], attribute='forecast')
         pv_forecast_data_tomorrow = self.get_state(entity_id = self.args['pv_forecast_tomorrow'], attribute='forecast')
-        pv_forecast_minute = self.minute_data(pv_forecast_data_today + pv_forecast_data_tomorrow, 48, midnight_utc, 'pv_estimate', 'period_start', False, False, True)
+        pv_forecast_minute = self.minute_data(pv_forecast_data_today + pv_forecast_data_tomorrow, 24 + forecast_hours, midnight_utc, 'pv_estimate', 'period_start', False, False, True)
      else:
         pv_forecast = 0.0
         pv_forecast_data = {}
@@ -113,9 +116,9 @@ class PredBat(hass.Hass):
      difference_minutes = self.minutes_since_yesterday(now)
      minutes_now = int((now - midnight).seconds / 60)
      minutes_to_midnight = 24*60 - minutes_now
-     six_days = 24*60*6
+     six_days = 24*60*(days_previous - 1)
      
-     # Offset by 6 days to get to last week
+     # Offset by 6 (configurable) days to get to last week
      load_yesterday = load_minutes[difference_minutes + six_days]
      load_yesterday_now = load_minutes[24*60 + six_days]
      self.log("Minutes since yesterday " + str(difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now))
@@ -123,14 +126,15 @@ class PredBat(hass.Hass):
      predict_soc = {}
      predict_soc_time = {}
      minute = 0
-     minute_left = 24*60
+     minute_left = forecast_hours*60
      soc = soc_kw
      export_kwh = 0
      import_kwh = 0
      import_kwh_house = 0
      import_kwh_battery = 0
      
-     while minute < 24*60:
+     # Simulate each forward minute
+     while minute < forecast_hours*60:
          
         minute_yesterday = 24*60 - minute + six_days
         # Average previous load over 10 minutes due to sampling accuracy
