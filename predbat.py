@@ -151,7 +151,10 @@ class PredBat(hass.Hass):
             self.log("Hour %s load_yesterday %s pv_now %s soc %s" % (minute/60, load_yesterday, pv_now, soc))
         
         predict_soc[minute] = self.dp2(soc)
-        predict_soc_time[str(minute_timestamp)] = self.dp2(soc)
+        
+        # Only store every 5 minutes for data-set size
+        if minute % 5 == 0:
+            predict_soc_time[str(minute_timestamp)] = self.dp2(soc)
         
         # Store the worst caste
         if soc <= self.reserve:
