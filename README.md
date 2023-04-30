@@ -25,8 +25,15 @@ To install:
   - charge_end_time - The battery charge end time entity
   - charge_rate - The battery charge rate entity in watts 
   - discharge_rate - The battery discharge max rate entity in watts
+- You will find new entities are created in HA:
+  - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
+  - predbat.export_energy - Predicted export energy in Kwh
+  - predbat.import_energy - Predicted import energy in Kwh
+  - predbat.import_energy_battery - Predicted import energy to charge your home battery in Kwh
+  - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
+  - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
 
 To create the fancy chart 
-- Install apex charts
+- Install apex charts https://github.com/RomRider/apexcharts-card
 - Create a new apexcharts card and copy the YML from example_chart.yml into the chart settings, updating the serial number to match your inverter
 - Customise as you like
