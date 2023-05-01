@@ -3,6 +3,7 @@ pred_bat:
   module: predbat
   class: PredBat
   soc_kw: sensor.givtcp_sa2243g277_soc_kwh
+  soc_percent: number.givtcp_sa2243g277_target_soc
   soc_max: sensor.givtcp_sa2243g277_battery_capacity_kwh
   reserve: number.givtcp_sa2243g277_battery_power_reserve
   pv_forecast_today: sensor.solcast_forecast_today
@@ -26,3 +27,6 @@ pred_bat:
   metric_house: 38
   metric_battery: 7.5
   metric_export: 4
+  set_soc_enable: True
+  set_soc_minutes: 90
+  set_soc_notify: True

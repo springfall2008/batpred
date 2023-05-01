@@ -65,17 +65,14 @@ class PredBat(hass.Hass):
 
   def run_prediction(self, now, charge_limit, load_minutes, pv_forecast_minute, save, save_best):
       
-     difference_minutes = self.minutes_since_yesterday(now)
-     minutes_now = int((now - self.midnight).seconds / 60)
-     minutes_to_midnight = 24*60 - minutes_now
      six_days = 24*60*(self.days_previous - 1)
      
      # Offset by 6 (configurable) days to get to last week
-     load_yesterday = load_minutes[difference_minutes + six_days]
+     load_yesterday = load_minutes[self.difference_minutes + six_days]
      load_yesterday_now = load_minutes[24*60 + six_days]
-     self.log("Minutes since yesterday " + str(difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now))
+     self.log("Minutes since yesterday " + str(self.difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now))
      
-     forecast_minutes = min(self.forecast_hours * 60, minutes_to_midnight + 24*60)
+     forecast_minutes = min(self.forecast_hours * 60, self.minutes_to_midnight + 24*60)
      
      predict_soc = {}
      predict_soc_time = {}
@@ -98,7 +95,7 @@ class PredBat(hass.Hass):
         if load_yesterday < 0:
             load_yesterday = load_minutes[minute_yesterday]
             
-        minute_absolute = minute + minutes_now
+        minute_absolute = minute + self.minutes_now
         minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
         
         pv_now = pv_forecast_minute.get(minute_absolute, 0.0)
@@ -166,6 +163,7 @@ class PredBat(hass.Hass):
      #self.log("predict soc " + str(predict_soc_time))
 
      hours_left = minute_left / 60.0
+     charge_limit_percent = min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
 
      if save:
         self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
@@ -175,19 +173,34 @@ class PredBat(hass.Hass):
         self.set_state("predbat.import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.log("Battery has " + str(hours_left) + " hours left - now at " + str(self.soc_kw))
+        
      if save_best:
         self.log('Saving best data with charge_limit %s' % charge_limit)
         self.set_state("predbat.soc_kw_best", state=self.dp2(soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
         self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-        best_soc = int((float(charge_limit) / self.soc_max * 100.0) + 0.5)
-        self.set_state("predbat.best_charge_limit", state=best_soc, attributes = {'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%'})
+        self.set_state("predbat.best_charge_limit", state=charge_limit_percent, attributes = {'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%'})
         self.set_state("predbat.best_export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.best_import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.best_import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.best_import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
          
-     return import_kwh_battery, import_kwh_house, export_kwh
-     
+     return charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh
+
+  def adjust_battery_target(self, soc):
+     # Check current setting and adjust
+     current_soc = float(self.get_state(entity_id = self.args['soc_percent'], default=100))
+     if current_soc != soc:
+        self.log("Current SOC is %s and new target is %s" % (current_soc, soc))
+        entity_soc = self.get_entity(self.args['soc_percent'])
+        if entity_soc:
+            entity_soc.call_service("set_value", value=soc)
+            if self.args.get('set_soc_notify', False):
+                self.call_service("notify/notify", message='Predbat: Target SOC has been changed to %s' % soc)
+        else:
+            self.log("WARN: Unable to get entity to set SOC target")
+     else:
+        self.log("Current SOC is %s already at target" % (current_soc))
+        
   def update_pred(self):
      local_tz = get_localzone()      
      now_utc = datetime.now(local_tz) #timezone.utc)
@@ -196,6 +209,10 @@ class PredBat(hass.Hass):
      
      self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
      self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+     
+     self.difference_minutes = self.minutes_since_yesterday(now)
+     self.minutes_now = int((now - self.midnight).seconds / 60)
+     self.minutes_to_midnight = 24*60 - self.minutes_now
      
      self.days_previous = self.args.get('days_previous', 7)
      self.forecast_hours = self.args.get('forecast_hours', 24)
@@ -211,6 +228,7 @@ class PredBat(hass.Hass):
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0.5)
      self.best_soc_min = self.args.get('best_soc_min', 4)
+     self.set_soc_minutes = self.args.get('set_soc_minutes', 24*60)
      
      self.charge_enable = self.get_state(self.args['charge_enable'], default = False)
      if self.charge_enable:
@@ -249,7 +267,7 @@ class PredBat(hass.Hass):
         best_soc = try_soc
         best_metric = 999999
         while try_soc > self.reserve:
-            import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, try_soc, load_minutes, pv_forecast_minute, False, False)
+            charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, try_soc, load_minutes, pv_forecast_minute, False, False)
             metric = import_kwh_house * metric_house + import_kwh_battery * metric_battery - export_kwh * metric_export
             if self.debug_enable:
                 self.log("Trying soc %s gives import battery %s house %s export %s metric %s" % (try_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
@@ -263,10 +281,17 @@ class PredBat(hass.Hass):
         best_soc = max(self.best_soc_min, best_soc)
         best_soc = min(best_soc, self.soc_max)
         self.log("Best soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
-        import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
+        charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
+        
+        # Set the SOC, only do it within the window before the charge starts
+        if self.args.get('set_soc_enable', False) and self.charge_enable:
+            if (self.minutes_now < self.charge_start_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+                self.adjust_battery_target(charge_limit_percent)
+            else:
+                self.log("Not setting charging SOC as we are not within the window (now %s target set_soc_minutes %s charge start time %s" % (self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
      
      # Simulate current settings
-     import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, self.charge_limit, load_minutes, pv_forecast_minute, True, False)
+     charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, self.charge_limit, load_minutes, pv_forecast_minute, True, False)
      
   def initialize(self):
      self.log("Startup")
