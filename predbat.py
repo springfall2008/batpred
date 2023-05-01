@@ -329,7 +329,7 @@ class PredBat(hass.Hass):
   def initialize(self):
      self.log("Startup")
      # Run every 5 minutes
-     self.run_every(self.run_time_loop, "now", 5 * 60)
+     self.run_every(self.run_time_loop, "now", self.args.get('run_every', 5) * 60)
      
   def run_time_loop(self, cb_args):
      self.update_pred()
