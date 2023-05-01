@@ -3,7 +3,7 @@ Home battery prediction for Home Assistant with GivTCP
 
 Operation:
 
-The app runs every 5 minutes, it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
+The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours (you can predict longer but it can only try different battery settings for 1 charge slot). It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
 
 The output is a prediction of the battery levels and import and export amounts.
 
@@ -36,7 +36,7 @@ The following are entity names in HA and should be set correctly:
 These are configuration items that you can modify to fit your needs:
   - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
   - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
-  - forecast_hours - the number of hours to forecast ahead, keep in mind Solcast only gives you the next day so much more than 24 won't be that useful
+  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
   - debug_enable - option to print lots of debug messages
   - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
@@ -49,6 +49,7 @@ These are configuration items that you can modify to fit your needs:
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
   - set_soc_notify - When true a notification is sent with the new SOC target once set
+  - run_every - Set the number of minutes between updates, default is 5
   
 - You will find new entities are created in HA:
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
