@@ -26,6 +26,8 @@ The following are entity names in HA and should be set correctly:
   - reserve - sensor name for the reserve setting in %
   - pv_forecast_today - Entity name for solcast today's forecast
   - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
+  - pv_forecast_d3 - Entity name for solcast forecast for day 3
+  - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   - load_today - Entity name for the house load in kwh today (must be incrementing)
   - charge_enable - The charge enable entity - says if the battery will be charged in the time window
   - charge_start_time - The battery charge start time entity
