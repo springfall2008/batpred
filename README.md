@@ -45,6 +45,7 @@ These are configuration items that you can modify to fit your needs:
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
   - metric_export - Set to the price per Kwh you get for exporting
+  - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
   - set_soc_notify - When true a notification is sent with the new SOC target once set
@@ -56,12 +57,14 @@ These are configuration items that you can modify to fit your needs:
   - predbat.import_energy_battery - Predicted import energy to charge your home battery in Kwh
   - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
   - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
+  - predbat.metric - Predicted cost metric for the next simulated period (in pence)
 - When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage: 
-  - predbat.best_export_energy
-  - predbat_best_import_energy
-  - predbat_best_import_energy_battery
-  - predbat_best_import_energy_house
-  - predbat_best_soc_kw
+  - predbat.best_export_energy - Predicted exports under best SOC setting
+  - predbat_best_import_energy - Predicted imports under best SOC setting
+  - predbat_best_import_energy_battery - Predicted imports to the battery under best SOC setting
+  - predbat_best_import_energy_house - Predicted imports to the house under best SOC setting
+  - predbat_best_soc_kw - Predicted final state of charge (in Kwh), holds minute by minute prediction data (in attributes) to be charted
+  - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected
   
 Example data out:
 
