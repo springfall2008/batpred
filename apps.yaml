@@ -31,6 +31,6 @@ pred_bat:
   metric_export: 4
   metric_min_improvement: 5
   set_soc_enable: True
-  set_soc_minutes: 90
+  set_soc_minutes: 60
   set_soc_notify: True
   run_every: 5
