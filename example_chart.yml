@@ -4,7 +4,7 @@ header:
   title: Home Battery Prediction
   show_states: true
   colorize_states: true
-graph_span: 36h
+graph_span: 48h
 span:
   start: minute
   offset: '-12h'

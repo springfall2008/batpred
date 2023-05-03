@@ -2,14 +2,12 @@
 pred_bat:
   module: predbat
   class: PredBat
+  
+  # Set these to match your own GivTCP names, will need updating with your serial number
   soc_kw: sensor.givtcp_sa2243g277_soc_kwh
   soc_percent: number.givtcp_sa2243g277_target_soc
   soc_max: sensor.givtcp_sa2243g277_battery_capacity_kwh
   reserve: number.givtcp_sa2243g277_battery_power_reserve
-  pv_forecast_today: sensor.solcast_forecast_today
-  pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
-  pv_forecast_d3: sensor.solcast_forecast_d3
-  pv_forecast_d4: sensor.solcast_forecast_d4
   load_today: sensor.givtcp_sa2243g277_load_energy_today_kwh
   charge_enable: switch.givtcp_sa2243g277_enable_charge_schedule
   charge_start_time: select.givtcp_sa2243g277_charge_start_time_slot_1
@@ -17,20 +15,53 @@ pred_bat:
   charge_limit: number.givtcp_sa2243g277_target_soc
   charge_rate: number.givtcp_sa2243g277_battery_charge_rate
   discharge_rate: number.givtcp_sa2243g277_battery_discharge_rate
+  
+  # Set these to match solcast sensor names (unlikely to need changing)
+  pv_forecast_today: sensor.solcast_forecast_today
+  pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
+  pv_forecast_d3: sensor.solcast_forecast_d3
+  pv_forecast_d4: sensor.solcast_forecast_d4
+  
+  # Battery loss accounts for energy lost charging the battery, 0.05 is 5%
   battery_loss: 0.05
+  
+  # Days previous is the number of days back to find historical load data
   days_previous: 7
+  
+  # Number of hours forward to forecast
   forecast_hours: 48
-  debug_enable: False
+    # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
   car_charging_hold: True
   car_charging_threshold: 6.0
+  
+  # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
-  best_soc_margin: 1.0
+  # Best soc margin is added to the final SOC estimate (in kwh) to set the battery charge level
+  # while min sets the minimum charge level (in kwh)
+  best_soc_margin: 0
   best_soc_min: 4.0
-  metric_house: 38
-  metric_battery: 7.5
-  metric_export: 4
+  
+  # Set either the import and export entity to point to the Octopus Energy plugin or manually set the pence per kwh 
+  # for importing to the house, charging the battery and exports
+  # Needs updating with your meter number
+  metric_octopus_import: sensor.octopus_energy_electricity_20l3260392_2200017612712_current_rate
+  metric_octopus_export: sensor.octopus_energy_electricity_20l3260392_2200043522155_export_current_rate
+  #metric_house: 38
+  #metric_battery: 7.5
+  #metric_export: 4.2
+  
+  # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
+  # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
   metric_min_improvement: 5
+  
+  # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
+  # note it maybe set more than once if things change
   set_soc_enable: True
-  set_soc_minutes: 60
+  set_soc_minutes: 30
   set_soc_notify: True
-  run_every: 5
+  
+  # Set the frequency in minutes that this plugin is run
+  run_every: 10
+  
+  # Debug enable prints lots of debug, leave off by default
+  debug_enable: False

@@ -81,6 +81,7 @@ class PredBat(hass.Hass):
      import_kwh = 0
      import_kwh_house = 0
      import_kwh_battery = 0
+     metric = 0
      
      # For the SOC calculation we need to stop at the second charge window to avoid confusing multiple days out 
      end_record = min(forecast_minutes, self.charge_start_time_minutes + 24*60 - self.minutes_now)
@@ -126,8 +127,13 @@ class PredBat(hass.Hass):
             # Apply battery loss to computed charging energy
             # For now we ignore PV in this as it's probably not a major factor when mains charging is enabled
             if record:
-               import_kwh += max(0, soc - old_soc - pv_now) / self.battery_loss
-               import_kwh_battery += max(0, soc - old_soc - pv_now) / self.battery_loss
+               energy = max(0, soc - old_soc - pv_now) / self.battery_loss
+               import_kwh += energy
+               import_kwh_battery += energy
+               if minute_absolute in self.octopus_import:
+                   metric += self.octopus_import[minute_absolute] * energy
+               else:
+                   metric += self.metric_battery * energy
             
             if self.debug_enable and minute % 60 == 0:
                 self.log("Hour %s battery charging target soc %s" % (minute/60, charge_limit))
@@ -141,20 +147,35 @@ class PredBat(hass.Hass):
             if diff > self.discharge_rate:
                 soc -= self.discharge_rate
                 if record:
-                   import_kwh += (diff - self.discharge_rate)
-                   import_kwh_house += (diff - self.discharge_rate)
+                   energy = (diff - self.discharge_rate)
+                   import_kwh += energy
+                   import_kwh_house += energy
+                   if minute_absolute in self.octopus_import:
+                       metric += self.octopus_import[minute_absolute] * energy
+                   else:
+                       metric += self.metric_house * energy
             else:
                 soc -= diff
                 
         if soc < self.reserve:
             if record:
-               import_kwh += self.reserve - soc 
-               import_kwh_house += self.reserve - soc
+               energy = self.reserve - soc
+               import_kwh += energy 
+               import_kwh_house += energy
+               if minute_absolute in self.octopus_import:
+                   metric += self.octopus_import[minute_absolute] * energy
+               else:
+                   metric += self.metric_house * energy
             soc = self.reserve
             
         if soc > self.soc_max:
             if record:
-               export_kwh += soc - self.soc_max
+               energy = soc - self.soc_max
+               export_kwh += energy
+               if minute_absolute in self.octopus_export:
+                   metric -= self.octopus_export[minute_absolute] * energy
+               else:
+                   metric -= self.metric_export * energy
             soc = self.soc_max
         
         if self.debug_enable and minute % 60 == 0:
@@ -184,7 +205,7 @@ class PredBat(hass.Hass):
      charge_limit_percent = min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
 
      # Compute metric (cost) for this simulation
-     metric = (import_kwh_house * self.metric_house) + (import_kwh_battery * self.metric_battery) - (export_kwh * self.metric_export)
+     #metric = (import_kwh_house * self.metric_house) + (import_kwh_battery * self.metric_battery) - (export_kwh * self.metric_export)
      
      if save:
         self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
@@ -240,6 +261,7 @@ class PredBat(hass.Hass):
      
      self.days_previous = self.args.get('days_previous', 7)
      self.forecast_hours = self.args.get('forecast_hours', 24)
+     self.forecast_days = int((self.forecast_hours + 23)/24)
      
      load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
      self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
@@ -249,6 +271,14 @@ class PredBat(hass.Hass):
      self.metric_battery = self.args.get('metric_battery', 7.5)
      self.metric_export = self.args.get('metric_export', 4)
      self.metric_min_improvement = self.args.get('metric_min_improvement', 5)
+     self.octopus_import = {}
+     self.octopus_export = {}
+     if 'metric_octopus_import' in self.args:
+         data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
+         self.octopus_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
+     if 'metric_octopus_import' in self.args:
+         data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
+         self.octopus_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0.5)
@@ -288,7 +318,7 @@ class PredBat(hass.Hass):
             pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d6'], attribute='forecast')
         if 'pv_forecast_d7' in self.args:
             pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d7'], attribute='forecast')
-        pv_forecast_minute = self.minute_data(pv_forecast_data, 24 + self.forecast_hours, self.midnight_utc, 'pv_estimate', 'period_start', False, False, True)
+        pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate', 'period_start', False, False, True)
      else:
         pv_forecast_minute = {}
 
@@ -309,9 +339,8 @@ class PredBat(hass.Hass):
             metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, try_soc, load_minutes, pv_forecast_minute, False, False)
             self.debug_true = was_debug
             if self.debug_enable:
-                self.log("Trying soc %s gives import battery %s house %s export %s metric %s (%s + %s - %s)" % 
-                        (try_soc, import_kwh_battery, import_kwh_house, export_kwh, metric, 
-                        import_kwh_house*self.metric_house, import_kwh_battery*self.metric_battery, export_kwh*self.metric_export))
+                self.log("Trying soc %s gives import battery %s house %s export %s metric %s" % 
+                        (try_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
             
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement
             if metric + self.metric_min_improvement < best_metric:
@@ -326,9 +355,8 @@ class PredBat(hass.Hass):
         best_soc = min(best_soc, self.soc_max)
         self.log("Best soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
         best_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
-        self.log("Best soc %s gives import battery %s house %s export %s metric %s (%s + %s - %s)" % 
-                (best_soc, import_kwh_battery, import_kwh_house, export_kwh, metric, 
-                import_kwh_house*self.metric_house, import_kwh_battery*self.metric_battery, export_kwh*self.metric_export))
+        self.log("Best soc %s gives import battery %s house %s export %s metric %s" % 
+                (best_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
         
         # Set the SOC, only do it within the window before the charge starts
         if self.args.get('set_soc_enable', False) and self.charge_enable:
