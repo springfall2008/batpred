@@ -7,7 +7,10 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 The output is a prediction of the battery levels and import and export amounts.
 
-Optionally it can also predict the results based on different target battery charge levels (SOC) and suggest the best option to use. This is based on a rough cost of imports and exports and adjusted with a safety margin. You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
+Optionally it can also predict the results based on different target battery charge levels (SOC) and suggest the best option to use. 
+This is based on a rough cost of imports and exports or the pricing from the Octopus Energy plugin
+The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
+You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
 
 To install:
 
@@ -17,6 +20,7 @@ To install:
    - In python packages (in the config) add 'tzlocal'
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
+- If you want to use real pricing data and have Ocotpus Energy then ensure you have the Octopus Energy plugin installed and working
 - Customise any settings needed
 
 The following are entity names in HA and should be set correctly:
@@ -24,35 +28,46 @@ The following are entity names in HA and should be set correctly:
   - soc_max - Entity name for the maximum charge level for the battery
   - soc_percent - Entity name for used to set the SOC target for the battery in percentage
   - reserve - sensor name for the reserve setting in %
-  - pv_forecast_today - Entity name for solcast today's forecast
-  - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
-  - pv_forecast_d3 - Entity name for solcast forecast for day 3
-  - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   - load_today - Entity name for the house load in kwh today (must be incrementing)
   - charge_enable - The charge enable entity - says if the battery will be charged in the time window
   - charge_start_time - The battery charge start time entity
   - charge_end_time - The battery charge end time entity
   - charge_rate - The battery charge rate entity in watts 
   - discharge_rate - The battery discharge max rate entity in watts
+The following are entity names in Solcast, unlikely to need changing:  
+  - pv_forecast_today - Entity name for solcast today's forecast
+  - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
+  - pv_forecast_d3 - Entity name for solcast forecast for day 3
+  - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   
-These are configuration items that you can modify to fit your needs:
-  - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
-  - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
-  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
-  - debug_enable - option to print lots of debug messages
-  - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
-  - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
-  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
-  - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
+The following are entity names in the Ocotpus Energy plugin:
+  - metric_octopus_import
+  - metric_octopus_export
+Or if you don't have that then set:
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
   - metric_export - Set to the price per Kwh you get for exporting
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
+
+These are configuration items that you can modify to fit your needs:
+  - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
+  - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
+  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
+  
+  - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
+  - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
+  
+  - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
+  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
+  - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
+  
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
   - set_soc_notify - When true a notification is sent with the new SOC target once set
-  - run_every - Set the number of minutes between updates, default is 5
   
+  - run_every - Set the number of minutes between updates, default is 5
+  - debug_enable - option to print lots of debug messages
+   
 - You will find new entities are created in HA:
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
   - predbat.export_energy - Predicted export energy in Kwh
