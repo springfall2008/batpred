@@ -86,7 +86,7 @@ These are configuration items that you can modify to fit your needs:
   
 Example data out:
 
-![image](https://user-images.githubusercontent.com/48591903/235373372-a8ed02d9-fdd1-497e-b245-e4e6b0407b6b.png)
+![image](https://user-images.githubusercontent.com/48591903/235856719-f223fe71-76f6-4ab3-a9df-f1d3a1538d80.png)
   
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
