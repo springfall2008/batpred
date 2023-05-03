@@ -95,4 +95,4 @@ To create the fancy chart
 
 Example chart:
 
-![image](https://user-images.githubusercontent.com/48591903/235373360-a2365956-6c8f-4d34-ac32-b57e4a46c7cd.png)
+![image](https://user-images.githubusercontent.com/48591903/235856853-7a962991-07c3-40cf-85c3-77abfd2abd94.png)
