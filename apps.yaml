@@ -38,7 +38,7 @@ pred_bat:
   calculate_best: True
   # Best soc margin is added to the final SOC estimate (in kwh) to set the battery charge level
   # while min sets the minimum charge level (in kwh)
-  best_soc_margin: 0
+  best_soc_margin: 0.5
   best_soc_min: 4.0
   
   # Set either the import and export entity to point to the Octopus Energy plugin or manually set the pence per kwh 

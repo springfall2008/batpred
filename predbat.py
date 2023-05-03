@@ -9,6 +9,8 @@ import math
 # Note - tzlocal must be added to the system libraries in AppDeamon config
 #
 
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+
 class PredBat(hass.Hass):
 
   def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds, backwards, hourly):
@@ -19,7 +21,7 @@ class PredBat(hass.Hass):
      if format_seconds:
         format_string = "%Y-%m-%dT%H:%M:%S.%f%z" # 2023-04-25T19:33:47.861967+00:00
      else:
-        format_string = "%Y-%m-%dT%H:%M:%S%z" # 2023-04-25T19:33:47+00:00
+        format_string = TIME_FORMAT # 2023-04-25T19:33:47+00:00
 
      for b in history:
         if state_key not in b:
@@ -87,7 +89,7 @@ class PredBat(hass.Hass):
      end_record = min(forecast_minutes, self.charge_start_time_minutes + 24*60 - self.minutes_now)
      record = True
      
-     self.log("Minutes since yesterday " + str(self.difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now) + " end record " + str(end_record))
+     # self.log("Minutes since yesterday " + str(self.difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now) + " end record " + str(end_record))
      
      # Simulate each forward minute
      while minute < forecast_minutes:
@@ -185,7 +187,7 @@ class PredBat(hass.Hass):
         
         # Only store every 10 minutes for data-set size
         if minute % 10 == 0:
-            predict_soc_time[str(minute_timestamp)] = self.dp2(soc)
+            predict_soc_time[minute_timestamp.strftime(TIME_FORMAT)] = self.dp2(soc)
         
         # Store the number of minutes until the battery runs out
         if record and soc <= self.reserve:
@@ -199,7 +201,7 @@ class PredBat(hass.Hass):
         minute += 1
         
      #self.log("load yesterday " + str(load_minutes))
-     #self.log("predict soc " + str(predict_soc_time))
+     self.log("predict soc %s metric %s" % (final_soc, metric))
 
      hours_left = minute_left / 60.0
      charge_limit_percent = min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
@@ -246,6 +248,75 @@ class PredBat(hass.Hass):
      else:
         self.log("Current SOC is %s already at target" % (current_soc))
         
+  def rate_scan(self, rates):
+     
+     forecast_minutes = self.forecast_hours * 60
+     rate_min = 99999
+     rate_min_minute = 0
+     rate_max_minute = 0
+     rate_max = 0
+     rate_average = 0
+     rate_n = 0
+     
+     rate_low_start = -1
+     rate_low_end = -1
+     rate_low_rate = 99999
+     rate_low_threshold = 0.8
+     rate_low_average = 0
+     rate_low_count = 0
+     
+     self.log("Scan Octopus rates")
+     minute = self.minutes_now
+     while minute < forecast_minutes:
+         if minute in rates:
+             rate = rates[minute]
+             if rate > rate_max:
+                 rate_max = rate
+                 rate_max_minute = minute
+             if rate < rate_min:
+                 rate_min = rate
+                 rate_min_minute = minute
+             rate_average += rate
+             rate_n += 1
+         minute += 1
+     rate_average /= rate_n
+     self.log("Rates min %s max %s average %s" % (rate_min, rate_max, rate_average))
+     
+     # Find low rate period (below average)
+     minute = self.minutes_now
+     while minute < forecast_minutes:
+         if minute in rates:
+             rate = rates[minute]
+             if rate <= (rate_average * rate_low_threshold):
+                if rate_low_start < 0:
+                    rate_low_start = minute
+                    rate_low_end = forecast_minutes - 1
+                    rate_low_count = 0
+                if rate_low_end > minute:
+                   rate_low_average += rate
+                   rate_low_count += 1
+             else:
+                if rate_low_start >= 0 and rate_low_end >= minute:
+                    rate_low_end = minute
+                    break
+         minute += 1
+         
+     rate_low_average = self.dp2(rate_low_average / rate_low_count)
+     if (rate_low_start >= 0):
+         self.log("Low rate period next is %s-%s @%s" % (rate_low_start / 60, rate_low_end / 60, rate_low_average))
+         
+         rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
+         rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
+
+         self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(TIME_FORMAT), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp'})
+         self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(TIME_FORMAT), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp'})
+         self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
+     else:
+         self.log("No low rate period found")
+         self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp'})
+         self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp'})
+         self.set_state("predbat.low_rate_cost", state=rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
+     
   def update_pred(self):
      local_tz = get_localzone()      
      now_utc = datetime.now(local_tz) #timezone.utc)
@@ -276,6 +347,9 @@ class PredBat(hass.Hass):
      if 'metric_octopus_import' in self.args:
          data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
          self.octopus_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
+         self.rate_scan(self.octopus_import)
+     else:
+         self.log("No Octopus rate data provided - using default metric")
      if 'metric_octopus_import' in self.args:
          data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
          self.octopus_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
@@ -367,9 +441,11 @@ class PredBat(hass.Hass):
      
      # Simulate current settings
      metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, self.charge_limit, load_minutes, pv_forecast_minute, True, False)
+     self.log("Completed run")
      
   def initialize(self):
      self.log("Startup")
+     #self.update_pred()
      # Run every 5 minutes
      self.run_every(self.run_time_loop, "now", self.args.get('run_every', 5) * 60)
      
