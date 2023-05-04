@@ -12,6 +12,9 @@ This is based on a rough cost of imports and exports or the pricing from the Oct
 The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
 
+Optionally Octopus energy pricing data can be used to indentify and programme charging windows
+<caution> - This has not been tested on Agile yet, only on a single day/night rate - needs checking
+
 To install:
 
 - You must have GivTCP installed and running first
