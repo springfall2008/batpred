@@ -10,16 +10,17 @@ import math
 #
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 
 class PredBat(hass.Hass):
 
-  def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds, backwards, hourly):
+  def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds, backwards, hourly, to_key=None):
      bk = {}
      newest_state = 100
      newest_age = 99999
      
      if format_seconds:
-        format_string = "%Y-%m-%dT%H:%M:%S.%f%z" # 2023-04-25T19:33:47.861967+00:00
+        format_string = TIME_FORMAT_SECONDS # 2023-04-25T19:33:47.861967+00:00
      else:
         format_string = TIME_FORMAT # 2023-04-25T19:33:47+00:00
 
@@ -34,24 +35,46 @@ class PredBat(hass.Hass):
         last_updated = b[last_updated_key]
         last_updated_time = datetime.strptime(last_updated, format_string)
         
+        if to_key:
+            to_time = datetime.strptime(b[to_key], format_string)
+        else:
+            to_time = None
+        
         if backwards:
             td = now - last_updated_time
+            if (to_time):
+                td_to = now - to_time
         else:
             td = last_updated_time - now
+            if (to_time):
+                td_to = to_time - now
             
         minutes = int(td.seconds / 60) + int(td.days * 60*24)
+        if to_time:
+            minutes_to = int(td_to.seconds / 60) + int(td_to.days * 60*24)
+        
         if minutes < newest_age:
             newest_age = minutes
             newest_state = state
-        bk[minutes] = state
-     minute = 0
-     state = newest_state
-     while minute < 60 * 24 * days:
-         if minute in bk:
-             state = bk[minute]
-         else:
-             bk[minute] = state
-         minute += 1
+        
+        if to_time:
+            minute = minutes
+            while (minute < minutes_to):
+                bk[minute] = state
+                minute += 1
+        else:
+            bk[minutes] = state
+    
+     # If we only have a start time then fill the gaps with the last values
+     if not to_key:
+        minute = 0
+        state = newest_state
+        while minute < 60 * 24 * days:
+            if minute in bk:
+                state = bk[minute]
+            else:
+                bk[minute] = state
+            minute += 1
      return bk
       
   def minutes_since_yesterday(self, now):
@@ -247,9 +270,19 @@ class PredBat(hass.Hass):
             self.log("WARN: Unable to get entity to set SOC target")
      else:
         self.log("Current SOC is %s already at target" % (current_soc))
-        
-  def rate_scan(self, rates):
+
+  def rate_replicate(self, rates):
+     # We don't get enough hours of data for Octopus, so lets assume it repeats until told others
+     forecast_minutes = self.forecast_hours * 60
+     minute = 0
+     while minute < forecast_minutes:
+         if minute not in rates:
+             minute_mod = minute % (24*60)
+             rates[minute] = rates[minute_mod]
+         minute += 1
+     return rates
      
+  def rate_scan(self, rates):
      forecast_minutes = self.forecast_hours * 60
      rate_min = 99999
      rate_min_minute = 0
@@ -265,7 +298,7 @@ class PredBat(hass.Hass):
      rate_low_average = 0
      rate_low_count = 0
      
-     self.log("Scan Octopus rates")
+     self.log("Scan Octopus rates %s", rates)
      minute = self.minutes_now
      while minute < forecast_minutes:
          if minute in rates:
@@ -285,6 +318,11 @@ class PredBat(hass.Hass):
      # Find low rate period (below average)
      minute = self.minutes_now
      while minute < forecast_minutes:
+         
+         # Don't allow starts beyond 24-hours
+         if minute >= 24*60 and rate_low_start < 0:
+             break
+         
          if minute in rates:
              rate = rates[minute]
              if rate <= (rate_average * rate_low_threshold):
@@ -299,17 +337,23 @@ class PredBat(hass.Hass):
                 if rate_low_start >= 0 and rate_low_end >= minute:
                     rate_low_end = minute
                     break
+         else:
+             if rate_low_start >= 0 and rate_low_end >= minute:
+                 rate_low_end = minute
+             break
          minute += 1
          
      rate_low_average = self.dp2(rate_low_average / rate_low_count)
      if (rate_low_start >= 0):
-         self.log("Low rate period next is %s-%s @%s" % (rate_low_start / 60, rate_low_end / 60, rate_low_average))
+         self.log("Low rate period next is %s-%s @%s !" % (rate_low_start / 60, rate_low_end / 60, rate_low_average))
          
          rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
          rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
+         
+         time_format_time = '%H:%M:%S'
 
-         self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(TIME_FORMAT), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp'})
-         self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(TIME_FORMAT), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp'})
+         self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp'})
+         self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp'})
          self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
      else:
          self.log("No low rate period found")
@@ -346,13 +390,13 @@ class PredBat(hass.Hass):
      self.octopus_export = {}
      if 'metric_octopus_import' in self.args:
          data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
-         self.octopus_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
+         self.octopus_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
          self.rate_scan(self.octopus_import)
      else:
          self.log("No Octopus rate data provided - using default metric")
      if 'metric_octopus_import' in self.args:
          data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
-         self.octopus_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False)
+         self.octopus_export = self.rate_replicate(self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0.5)
