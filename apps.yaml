@@ -50,6 +50,15 @@ pred_bat:
   #metric_battery: 7.5
   #metric_export: 4.2
   
+  # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
+  rate_low_threshold: 0.8
+  
+  # When enabled the next charge window will be automatically configured based on the incoming rates
+  # Only works if the charging time window has been enabled and Octopus import rates are configured (metric_octopus_import)
+  # Set window minutes defines how many minutes before the charge window we should program it
+  set_charge_window: True
+  set_window_minutes: 30
+  
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
   metric_min_improvement: 5

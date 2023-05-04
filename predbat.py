@@ -88,6 +88,12 @@ class PredBat(hass.Hass):
   def dp2(self, value):
      return math.ceil(value*100)/100
 
+  def in_charge_window(self, minute):
+     for window in self.charge_window:
+         if minute >= window['start'] and minute < window['end']:
+             return True
+     return False
+      
   def run_prediction(self, now, charge_limit, load_minutes, pv_forecast_minute, save, save_best):
       
      six_days = 24*60*(self.days_previous - 1)
@@ -96,11 +102,10 @@ class PredBat(hass.Hass):
      load_yesterday = load_minutes[self.difference_minutes + six_days]
      load_yesterday_now = load_minutes[24*60 + six_days]
      
-     forecast_minutes = self.forecast_hours * 60
      predict_soc = {}
      predict_soc_time = {}
      minute = 0
-     minute_left = forecast_minutes
+     minute_left = self.forecast_minutes
      soc = self.soc_kw
      export_kwh = 0
      import_kwh = 0
@@ -109,13 +114,15 @@ class PredBat(hass.Hass):
      metric = 0
      
      # For the SOC calculation we need to stop at the second charge window to avoid confusing multiple days out 
-     end_record = min(forecast_minutes, self.charge_start_time_minutes + 24*60 - self.minutes_now)
+     end_record = self.forecast_minutes
+     if len(self.charge_window) > 1:
+         end_record = min(end_record, self.charge_window[1]['start'] - self.minutes_now)
      record = True
      
      # self.log("Minutes since yesterday " + str(self.difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now) + " end record " + str(end_record))
      
      # Simulate each forward minute
-     while minute < forecast_minutes:
+     while minute < self.forecast_minutes:
          
         # Outside the recording window?
         if minute >= end_record:
@@ -141,11 +148,7 @@ class PredBat(hass.Hass):
                 self.log("Hour %s car charging hold" % (minute/60))
                 
         # Are we within the charging time window?
-        if self.charge_enable and soc < charge_limit and (
-                            (minute_absolute >= self.charge_start_time_minutes and minute_absolute < self.charge_end_time_minutes) or
-                            (minute_absolute >= self.charge_start_time_minutes + 24*60 and minute_absolute < self.charge_end_time_minutes + 24*60) or
-                            (minute_absolute >= self.charge_start_time_minutes + 24*60*2 and minute_absolute < self.charge_end_time_minutes + 24*60*2)
-                            ):
+        if self.charge_enable and soc < charge_limit and self.in_charge_window(minute_absolute):
             old_soc = soc
             soc = min(soc + self.charge_rate, charge_limit)
             
@@ -235,6 +238,8 @@ class PredBat(hass.Hass):
      if save:
         self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
         self.set_state("predbat.soc_kw", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+        self.set_state("predbat.charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+        self.set_state("predbat.charge_limit", state=charge_limit_percent, attributes = {'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%'})
         self.set_state("predbat.export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -270,37 +275,89 @@ class PredBat(hass.Hass):
             self.log("WARN: Unable to get entity to set SOC target")
      else:
         self.log("Current SOC is %s already at target" % (current_soc))
+ 
+  def adjust_charge_window(self, charge_start_time, charge_end_time):
+      
+     # Change charge window settings
+     old_start = self.get_state(self.args['charge_start_time'])
+     old_end = self.get_state(self.args['charge_end_time'])
+     new_start = charge_start_time.strftime("%H:%M:%S")
+     new_end = charge_end_time.strftime("%H:%M:%S")
+     if new_start != old_start:
+         entity_start = self.get_entity(self.args['charge_start_time'])
+         entity_start.call_service("select_option", option=new_start)
+     if new_end != old_end:
+         entity_end = self.get_entity(self.args['charge_end_time'])
+         entity_end.call_service("select_option", option=new_end)
+     if new_start != old_start or new_end != old_end:
+         if self.args.get('set_soc_notify', False):
+             self.call_service("notify/notify", message='Predbat: Charge window change to: %s - %s' % (new_start, new_end))
+         self.log("Updated start and end charge window to %s - %s (old %s - %s)" % (new_start, new_end, old_start, old_end))
+
 
   def rate_replicate(self, rates):
      # We don't get enough hours of data for Octopus, so lets assume it repeats until told others
-     forecast_minutes = self.forecast_hours * 60
      minute = 0
-     while minute < forecast_minutes:
+     # Add 12 extra hours to make sure charging period will end
+     while minute < (self.forecast_minutes + 12*60):
          if minute not in rates:
              minute_mod = minute % (24*60)
              rates[minute] = rates[minute_mod]
          minute += 1
      return rates
      
+  def find_charge_window(self, rates, minute):
+     rate_low_start = -1
+     rate_low_end = -1
+     rate_low_rate = 99999
+     rate_low_threshold = self.args.get('rate_low_threshold', 0.8)
+     rate_low_average = 0
+     rate_low_count = 0
+     
+     stop_at = self.forecast_minutes + 12*60
+     # Scan for lower rate start and end
+     while minute < stop_at:
+         # Don't allow starts beyond the forecast window
+         if minute >= self.forecast_minutes and rate_low_start < 0:
+             break
+         
+         if minute in rates:
+             rate = rates[minute]
+             if rate <= (self.rate_average * rate_low_threshold):
+                if rate_low_start < 0:
+                    rate_low_start = minute
+                    rate_low_end = stop_at
+                    rate_low_count = 0
+                if rate_low_end > minute:
+                   rate_low_average += rate
+                   rate_low_count += 1
+             else:
+                if rate_low_start >= 0:
+                    rate_low_end = minute
+                    break
+         else:
+             if rate_low_start >= 0 and rate_low_end >= minute:
+                 rate_low_end = minute
+             break
+         minute += 1      
+        
+     if rate_low_count:
+         rate_low_average = self.dp2(rate_low_average / rate_low_count)
+     return rate_low_start, rate_low_end, rate_low_average
+     
   def rate_scan(self, rates):
-     forecast_minutes = self.forecast_hours * 60
      rate_min = 99999
      rate_min_minute = 0
      rate_max_minute = 0
      rate_max = 0
      rate_average = 0
      rate_n = 0
+     rate_low_min_window = 5
+     self.low_rates = []
      
-     rate_low_start = -1
-     rate_low_end = -1
-     rate_low_rate = 99999
-     rate_low_threshold = 0.8
-     rate_low_average = 0
-     rate_low_count = 0
-     
-     self.log("Scan Octopus rates %s", rates)
+     # Scan rates and find min/max/average
      minute = self.minutes_now
-     while minute < forecast_minutes:
+     while minute < self.forecast_minutes:
          if minute in rates:
              rate = rates[minute]
              if rate > rate_max:
@@ -312,49 +369,50 @@ class PredBat(hass.Hass):
              rate_average += rate
              rate_n += 1
          minute += 1
-     rate_average /= rate_n
-     self.log("Rates min %s max %s average %s" % (rate_min, rate_max, rate_average))
+    
+     if rate_n:
+         rate_average /= rate_n
      
-     # Find low rate period (below average)
+     self.log("Rates min %s max %s average %s" % (rate_min, rate_max, rate_average))
+     self.rate_min = rate_min
+     self.rate_max = rate_max
+     self.rate_average = rate_average
+     
+     # Find charging window
      minute = self.minutes_now
-     while minute < forecast_minutes:
-         
-         # Don't allow starts beyond 24-hours
-         if minute >= 24*60 and rate_low_start < 0:
-             break
-         
-         if minute in rates:
-             rate = rates[minute]
-             if rate <= (rate_average * rate_low_threshold):
-                if rate_low_start < 0:
-                    rate_low_start = minute
-                    rate_low_end = forecast_minutes - 1
-                    rate_low_count = 0
-                if rate_low_end > minute:
-                   rate_low_average += rate
-                   rate_low_count += 1
-             else:
-                if rate_low_start >= 0 and rate_low_end >= minute:
-                    rate_low_end = minute
-                    break
+     while True:
+         rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute)
+         window = {}
+         window['start'] = rate_low_start
+         window['end'] = rate_low_end
+         window['average'] = rate_low_average
+     
+         if rate_low_start >= 0:
+             if (rate_low_end - rate_low_start) >= rate_low_min_window:
+                 self.low_rates.append(window)
+             minute = rate_low_end
          else:
-             if rate_low_start >= 0 and rate_low_end >= minute:
-                 rate_low_end = minute
              break
-         minute += 1
+     
+     if (self.low_rates):
+         n = 0
+         for window in self.low_rates:
+             rate_low_start = window['start']
+             rate_low_end = window['end']
+             rate_low_average = window['average']
+        
+             self.log("Low rate period %s-%s @%s !" % (rate_low_start, rate_low_end, rate_low_average))
          
-     rate_low_average = self.dp2(rate_low_average / rate_low_count)
-     if (rate_low_start >= 0):
-         self.log("Low rate period next is %s-%s @%s !" % (rate_low_start / 60, rate_low_end / 60, rate_low_average))
+             rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
+             rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
          
-         rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
-         rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
-         
-         time_format_time = '%H:%M:%S'
+             time_format_time = '%H:%M:%S'
 
-         self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp'})
-         self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp'})
-         self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
+             if n == 0:
+                 self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp'})
+                 self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp'})
+                 self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
+             n += 1
      else:
          self.log("No low rate period found")
          self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp'})
@@ -377,6 +435,7 @@ class PredBat(hass.Hass):
      self.days_previous = self.args.get('days_previous', 7)
      self.forecast_hours = self.args.get('forecast_hours', 24)
      self.forecast_days = int((self.forecast_hours + 23)/24)
+     self.forecast_minutes = self.forecast_hours * 60
      
      load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
      self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
@@ -401,22 +460,55 @@ class PredBat(hass.Hass):
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0.5)
      self.best_soc_min = self.args.get('best_soc_min', 4)
-     self.set_soc_minutes = self.args.get('set_soc_minutes', 24*60)
+     self.set_soc_minutes = self.args.get('set_soc_minutes', 30)
+     self.set_window_minutes = self.args.get('set_window_minutes', 30)
      
      self.charge_enable = self.get_state(self.args['charge_enable'], default = False)
      if self.charge_enable:
+        
         charge_start_time = datetime.strptime(self.get_state(self.args['charge_start_time']), "%H:%M:%S")
         charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
+        charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
+
+        # Re-programme charge window based on low rates?
+        if self.args.get('set_charge_window', False) and self.low_rates:
+           window = self.low_rates[0]
+           if window['start'] < 24*60 and window['start'] > self.minutes_now:
+               charge_start_time = self.midnight_utc + timedelta(minutes=window['start'])
+               charge_end_time = self.midnight_utc + timedelta(minutes=window['end'])
+               self.log("Charge window will be: %s - %s" % (charge_start_time, charge_end_time))
+                   
+               # We must re-program if we are about to run to the new charge window or the old one is about to start
+               if ((window['start'] - self.minutes_now) < self.set_window_minutes) or ((charge_start_time_minutes - self.minutes_now) < self.set_window_minutes):
+                   self.adjust_charge_window(charge_start_time, charge_end_time)
         
+        # Compute charge window minutes start/end just for the next charge window
         self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
         self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
-        
         if self.charge_end_time_minutes < self.charge_start_time_minutes:
             self.charge_end_time_minutes += 60 * 24
             
         self.charge_limit = float(self.get_state(self.args['charge_limit'])) * self.soc_max / 100.0
         self.charge_rate = float(self.get_state(self.args['charge_rate'])) / 1000.0 / 60.0
         self.log("Charge settings are: %s-%s limit %s power %s (per minute)" % (str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit), str(self.charge_rate)))
+        
+        # Save list of charge windows within the simulation time window
+        if self.args.get('set_charge_window', False) and self.low_rates:
+            # If we are using calculated windows directly then save them
+            self.charge_window = self.low_rates
+        else:
+            # Construct charge window from the GivTCP settings
+            self.charge_window = []
+            minute = self.charge_start_time_minutes
+            minute_end = self.charge_end_time_minutes
+            while (minute < self.forecast_minutes):
+                window = {}
+                window['start'] = minute
+                window['end']   = minute_end
+                self.charge_window.append(window)
+                minute += 24 * 60
+                minute_end += 24 * 60
+        self.log('Charge windows currently %s' % self.charge_window)
         
      # battery max discharge rate
      self.discharge_rate = float(self.get_state(self.args['discharge_rate'])) / 1000.0 / 60.0
