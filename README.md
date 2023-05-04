@@ -62,6 +62,10 @@ These are configuration items that you can modify to fit your needs:
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
   - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
   
+  - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
+  - set_charge_window - When true automatically configure the next charge window in GivTCP
+  - set_window_minutes - Number of minutes before charging the window should be configured in GivTCP (default 30)
+  
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
   - set_soc_notify - When true a notification is sent with the new SOC target once set
