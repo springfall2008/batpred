@@ -93,7 +93,36 @@ class PredBat(hass.Hass):
          if minute >= window['start'] and minute < window['end']:
              return True
      return False
-      
+  
+  def get_from_incrementing(self, data, index):
+     
+     offset = 10
+     
+     value = data[index]
+     old_value = data[index + offset]
+     
+     diff = value - old_value
+     if diff < 0:
+        walk = index
+        diff = 0
+        while (walk <= index + offset):
+            if data[walk] == 0:
+                if walk == index:
+                    diff = data[walk + 1]
+                    break
+                elif walk == index + offset:
+                    diff = data[index] - data[walk - 1]
+                    break
+                else:
+                    diff = data[index] - data[walk - 1] + data[walk + 1] - data[index + offset]
+                    break
+            walk += 1
+                
+     diff /= offset
+     return diff
+     
+        
+     
   def run_prediction(self, now, charge_limit, load_minutes, pv_forecast_minute, save, save_best):
       
      six_days = 24*60*(self.days_previous - 1)
@@ -130,22 +159,25 @@ class PredBat(hass.Hass):
             
         minute_yesterday = 24 * 60 - minute + six_days
         # Average previous load over 10 minutes due to sampling accuracy
-        load_yesterday = (load_minutes[minute_yesterday] - load_minutes[minute_yesterday + 10]) / 10.0
-        
-        # Resets at midnight so avoid wrap
-        if load_yesterday < 0:
-            load_yesterday = load_minutes[minute_yesterday]
+        load_yesterday = self.get_from_incrementing(load_minutes, minute_yesterday)
             
         minute_absolute = minute + self.minutes_now
         minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
         
         pv_now = pv_forecast_minute.get(minute_absolute, 0.0)
 
-        if self.car_charging_hold and (load_yesterday >= self.car_charging_threshold):
-            # Car charging hold - ignore car charging in computation
+        # Car charging hold
+        if self.car_charging_hold and self.car_charging_energy:
+            # Hold based on data
+            car_energy = self.get_from_incrementing(self.car_charging_energy, minute_yesterday)
+            if self.debug_enable and car_energy > 0.0 and (minute % 60) == 0 and (minute < 60*48):
+                self.log("Hour %s car charging hold with data %s load now %s metric %s" % (minute/60, car_energy, load_yesterday, metric))
+        elif self.car_charging_hold and (load_yesterday >= self.car_charging_threshold):
+            # Car charging hold - ignore car charging in computation based on threshold
             load_yesterday = 0
             if self.debug_enable and minute % 60 == 0:
                 self.log("Hour %s car charging hold" % (minute/60))
+                
                 
         # Are we within the charging time window?
         if self.charge_enable and soc < charge_limit and self.in_charge_window(minute_absolute):
@@ -535,8 +567,14 @@ class PredBat(hass.Hass):
      # Car charging hold - when enabled battery is held during car charging in simulation
      self.car_charging_hold = self.args.get('car_charging_hold', False)
      self.car_charging_threshold = float(self.args.get('car_charging_threshold', 6.0)) / 60.0
+     self.car_charging_energy = {}
+     if 'car_charging_energy' in self.args:
+        self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
+        self.log("Car charging hold %s with energy data" % (self.car_charging_hold))
+     else:
+        self.log("Car charging hold %s threshold %s" % (self.car_charging_hold, self.car_charging_threshold*60.0))
+
      self.debug_enable = self.args.get('debug_enable', False)
-     self.log("Car charging hold %s threshold %s" % (self.car_charging_hold, self.car_charging_threshold*60.0))
 
      # Try different battery SOCs to get the best result
      if self.args.get('calculate_best', False):

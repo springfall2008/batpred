@@ -30,8 +30,11 @@ pred_bat:
   
   # Number of hours forward to forecast
   forecast_hours: 48
-    # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
+  
+  # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
+  # Or if an incrementing energy sensor is provided actuals can be subtracted
   car_charging_hold: True
+  car_charging_energy: sensor.wallbox_portal_added_energy
   car_charging_threshold: 6.0
   
   # Enable calculate best to work out the best battery SOC % based on cost
