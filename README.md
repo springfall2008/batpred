@@ -23,7 +23,7 @@ To install:
 - If you want to use real pricing data and have Ocotpus Energy then ensure you have the Octopus Energy plugin installed and working
 - Customise any settings needed
 
-The following are entity names in HA and should be set correctly:
+The following are entity names in HA for GivTCP and must be configured correctly:
   - soc_kw - Entity name of the battery SOC in Kw, should be the inverter one not an individual battery
   - soc_max - Entity name for the maximum charge level for the battery
   - soc_percent - Entity name for used to set the SOC target for the battery in percentage
@@ -34,6 +34,7 @@ The following are entity names in HA and should be set correctly:
   - charge_end_time - The battery charge end time entity
   - charge_rate - The battery charge rate entity in watts 
   - discharge_rate - The battery discharge max rate entity in watts
+  
 The following are entity names in Solcast, unlikely to need changing:  
   - pv_forecast_today - Entity name for solcast today's forecast
   - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
