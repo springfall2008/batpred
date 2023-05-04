@@ -60,7 +60,8 @@ These are configuration items that you can modify to fit your needs:
   
   - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
   - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
-  
+  - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
+    
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
   - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
