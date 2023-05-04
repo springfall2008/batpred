@@ -197,17 +197,25 @@ class PredBat(hass.Hass):
             # Apply battery loss to charging from PV
             if diff < 0:
                 diff *= self.battery_loss
-                
+            
             if diff > self.discharge_rate:
                 soc -= self.discharge_rate
                 if record:
                    energy = (diff - self.discharge_rate)
                    import_kwh += energy
-                   import_kwh_house += energy
+                   if self.charge_enable and self.in_charge_window(minute_absolute):
+                       # If the battery is on charge anyhow then imports are kind of the same as battery charging (price wise)
+                       import_kwh_battery += energy
+                   else:
+                       import_kwh_house += energy
+                       
                    if minute_absolute in self.octopus_import:
                        metric += self.octopus_import[minute_absolute] * energy
                    else:
-                       metric += self.metric_house * energy
+                       if self.charge_enable and self.in_charge_window(minute_absolute):
+                           metric += self.metric_battery * energy
+                       else:
+                           metric += self.metric_house * energy
             else:
                 soc -= diff
                 
@@ -473,6 +481,7 @@ class PredBat(hass.Hass):
      self.metric_min_improvement = self.args.get('metric_min_improvement', 5)
      self.octopus_import = {}
      self.octopus_export = {}
+     self.low_rates = []
      if 'metric_octopus_import' in self.args:
          data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
          self.octopus_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
