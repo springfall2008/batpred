@@ -7,7 +7,7 @@ import math
 # Battery Prediction app
 #  
 # Note - tzlocal must be added to the system libraries in AppDeamon config
-#
+# 
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -99,26 +99,18 @@ class PredBat(hass.Hass):
      offset = 10
      
      value = data[index]
-     old_value = data[index + offset]
+     old_value = data[index + offset - 1]
      
-     diff = value - old_value
+     diff = (value - old_value) / offset
      if diff < 0:
-        walk = index
-        diff = 0
-        while (walk <= index + offset):
-            if data[walk] == 0:
-                if walk == index:
-                    diff = data[walk + 1]
-                    break
-                elif walk == index + offset:
-                    diff = data[index] - data[walk - 1]
-                    break
-                else:
-                    diff = data[index] - data[walk - 1] + data[walk + 1] - data[index + offset]
-                    break
-            walk += 1
-                
-     diff /= offset
+        diff = data[index] - data[index + 1]
+        if diff < 0:
+            diff = data[index-1] - data[index]
+    
+     if diff < 0:
+         self.log("WARN: Negative diff %s at %s was %s %s .. %s %s" % (diff, index, data[index], data[index+1], data[index + offset - 1], data[index + offset]))
+         diff = 0
+         
      return diff
      
         
@@ -160,6 +152,8 @@ class PredBat(hass.Hass):
         minute_yesterday = 24 * 60 - minute + six_days
         # Average previous load over 10 minutes due to sampling accuracy
         load_yesterday = self.get_from_incrementing(load_minutes, minute_yesterday)
+        if load_yesterday < 0:
+            self.log("WARN: Negative load %s at %s" % (load_yesterday, minute))
             
         minute_absolute = minute + self.minutes_now
         minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
@@ -259,7 +253,7 @@ class PredBat(hass.Hass):
         minute += 1
         
      #self.log("load yesterday " + str(load_minutes))
-     self.log("predict soc %s metric %s" % (final_soc, metric))
+     self.log("predict charge limit %s soc %s metric %s" % (charge_limit, final_soc, metric))
 
      hours_left = minute_left / 60.0
      charge_limit_percent = min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
@@ -601,9 +595,9 @@ class PredBat(hass.Hass):
         best_soc = best_soc + self.best_soc_margin
         best_soc = max(self.best_soc_min, best_soc)
         best_soc = min(best_soc, self.soc_max)
-        self.log("Best soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
+        self.log("Best charge limit soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
         best_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
-        self.log("Best soc %s gives import battery %s house %s export %s metric %s" % 
+        self.log("Best charging limit soc %s gives import battery %s house %s export %s metric %s" % 
                 (best_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
         
         # Set the SOC, only do it within the window before the charge starts
