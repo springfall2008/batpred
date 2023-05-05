@@ -65,7 +65,8 @@ These are configuration items that you can modify to fit your needs:
     
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
-  - best_soc_min - Sets the minimum Soc to propose for the best SOC prediction
+  - best_soc_min - Sets the minimum battery level SOC to propose for the prediction
+  - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly)
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
   - set_charge_window - When true automatically configure the next charge window in GivTCP
