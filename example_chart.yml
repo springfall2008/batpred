@@ -1,3 +1,4 @@
+# This is an battery chart
 type: custom:apexcharts-card
 header:
   show: true
@@ -25,6 +26,39 @@ series:
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
   - entity: predbat.soc_kw_best
+    stroke_width: 1
+    curve: smooth
+    name: best
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+
+# This is a cost chart
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Home cost prediction
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: minute
+  offset: +0h
+now:
+  show: true
+series:
+  - entity: predbat.metric
+    stroke_width: 1
+    curve: smooth
+    name: predicted
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.best_metric
     stroke_width: 1
     curve: smooth
     name: best
