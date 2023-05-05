@@ -1,6 +1,6 @@
 import appdaemon.plugins.hass.hassapi as hass
 from datetime import datetime, timezone, timedelta
-from tzlocal import get_localzone
+import pytz
 import math
 
 #
@@ -461,7 +461,7 @@ class PredBat(hass.Hass):
          self.set_state("predbat.low_rate_cost", state=rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
      
   def update_pred(self):
-     local_tz = get_localzone()      
+     local_tz = pytz.timezone(self.args.get('timezone', "Europe/London"))
      now_utc = datetime.now(local_tz) #timezone.utc)
      now = datetime.now()
      self.log("PredBat - update at: " + str(now_utc))

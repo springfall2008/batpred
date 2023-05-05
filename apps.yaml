@@ -2,6 +2,9 @@
 pred_bat:
   module: predbat
   class: PredBat
+
+  # Timezone to work in  
+  timezone: Europe/London
   
   # Set these to match your own GivTCP names, will need updating with your serial number
   soc_kw: sensor.givtcp_sa2243g277_soc_kwh
