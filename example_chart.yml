@@ -11,11 +11,16 @@ span:
   offset: '-12h'
 now:
   show: true
+yaxis:
+  - min: 0
+    max: 9.54
 series:
   - entity: sensor.givtcp_sa2243g277_soc_kwh
     stroke_width: 1
     curve: smooth
     name: actual
+    show:
+      in_header: raw
   - entity: predbat.soc_kw
     stroke_width: 1
     curve: smooth
@@ -25,6 +30,8 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
+    show:
+      in_header: raw
   - entity: predbat.soc_kw_best
     stroke_width: 1
     curve: smooth
@@ -34,6 +41,9 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
+    show:
+      in_header: raw
+
 
 # This is a cost chart
 type: custom:apexcharts-card
@@ -58,6 +68,8 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
+    show:
+      in_header: raw
   - entity: predbat.best_metric
     stroke_width: 1
     curve: smooth
@@ -67,3 +79,5 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
+    show:
+      in_header: raw
