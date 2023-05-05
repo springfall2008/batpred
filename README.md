@@ -20,7 +20,7 @@ To install:
 - You must have GivTCP installed and running first
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
-   - In python packages (in the config) add 'tzlocal'
+   - ***No longer required in the latest version**** In python packages (in the config) add 'tzlocal'
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
 - If you want to use real pricing data and have Ocotpus Energy then ensure you have the Octopus Energy plugin installed and working
@@ -54,6 +54,7 @@ Or if you don't have that then set:
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
 
 These are configuration items that you can modify to fit your needs:
+  - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
   - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
   - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
   - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
