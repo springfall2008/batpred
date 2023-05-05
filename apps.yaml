@@ -42,10 +42,12 @@ pred_bat:
   
   # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
-  # Best soc margin is added to the final SOC estimate (in kwh) to set the battery charge level
-  # while min sets the minimum charge level (in kwh)
+  # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up)
+  # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
+  # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
   best_soc_margin: 0.5
-  best_soc_min: 4.0
+  best_soc_min: 2.0
+  best_soc_keep: 1.5
   
   # Set either the import and export entity to point to the Octopus Energy plugin or manually set the pence per kwh 
   # for importing to the house, charging the battery and exports
