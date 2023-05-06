@@ -519,6 +519,9 @@ class PredBat(hass.Hass):
          self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp'})
          self.set_state("predbat.low_rate_cost", state=rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
          
+     return rates
+     
+  def publish_rates(self, rates, export):    
      # Create rates/time every 30 minutes
      rates_time = {}
      for minute in range(0, self.forecast_minutes, 30):
@@ -526,7 +529,10 @@ class PredBat(hass.Hass):
          stamp = minute_timestamp.strftime(TIME_FORMAT)
          rates_time[stamp] = rates[minute]
 
-     self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
+     if export:
+        self.set_state("predbat.rates_export", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
+     else:
+        self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
      return rates
      
   def update_pred(self):
@@ -582,18 +588,20 @@ class PredBat(hass.Hass):
      if self.rate_import:
          self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
          self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
+         self.publish_rates(self.rate_import, False)
      else:
          self.log("No import rate data provided - using default metric")
      
      # Octopus export rates
      if 'metric_octopus_export' in self.args:
          data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
+         self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to')
          
      # Replicate rates for export
-     if 'self.rate_export':
-         self.rate_export = self.rate_replicate(self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
-     
-     if not self.rate_export:
+     if self.rate_export:
+         self.rate_export = self.rate_replicate(self.rate_export)
+         self.publish_rates(self.rate_export, True)
+     else:
          self.log("No export rate data provided - using default metric")
          
      self.reserve = self.soc_max * reserve_percent / 100.0
