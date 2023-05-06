@@ -18,6 +18,7 @@ pred_bat:
   charge_limit: number.givtcp_sa2243g277_target_soc
   charge_rate: number.givtcp_sa2243g277_battery_charge_rate
   discharge_rate: number.givtcp_sa2243g277_battery_discharge_rate
+  import_today: sensor.givtcp_sa2243g277_import_energy_today_kwh
   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today
