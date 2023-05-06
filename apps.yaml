@@ -49,14 +49,36 @@ pred_bat:
   best_soc_min: 2.0
   best_soc_keep: 1.5
   
-  # Set either the import and export entity to point to the Octopus Energy plugin or manually set the pence per kwh 
-  # for importing to the house, charging the battery and exports
+  # Energy rates
+  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
+  
+  # Set  import and export entity to point to the Octopus Energy plugin
   # Needs updating with your meter number
   metric_octopus_import: sensor.octopus_energy_electricity_20l3260392_2200017612712_current_rate
   metric_octopus_export: sensor.octopus_energy_electricity_20l3260392_2200043522155_export_current_rate
-  #metric_house: 38
-  #metric_battery: 7.5
-  #metric_export: 4.2
+  
+  # Or set your actual rates across time for import and export
+  # If start/end is missing it's assumed to be a fixed rate
+  # Gaps are filled with metric_house from above
+  rates_import:
+    -  start: "23:30:00"
+       end: "05:30:00"
+       rate: 7.5
+    -  start: "05:30:00"
+       end: "23:30:00"
+       rate: 40.0
+       
+  rates_export:
+    -  rate: 7.5
+    
+  # Or set rates to be assumed for imports for the house, charging the battery and exports
+  metric_house: 38
+  metric_battery: 7.5
+  metric_export: 4.2
+  
+  
+  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  octopus_intelligent_slot: binary_sensor.octopus_intelligent_slot
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   rate_low_threshold: 0.8

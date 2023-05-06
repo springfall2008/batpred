@@ -81,3 +81,32 @@ series:
       b[0]  })
     show:
       in_header: raw
+
+# Energy rate chart
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Energy rates
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: minute
+  offset: '-12h'
+now:
+  show: true
+yaxis:
+  - min: 0
+    max: 50
+series:
+  - entity: predbat.rates
+    stroke_width: 1
+    curve: stepline
+    name: rate
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw

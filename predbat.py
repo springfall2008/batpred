@@ -5,15 +5,20 @@ import math
 
 #
 # Battery Prediction app
-#  
-# Note - tzlocal must be added to the system libraries in AppDeamon config
+# 
 # 
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
+TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 
 class PredBat(hass.Hass):
 
+  def mintes_to_time(self, updated, now):
+     td = updated - now
+     minutes = int(td.seconds / 60) + int(td.days * 60*24)
+     return minutes
+     
   def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds, backwards, hourly, to_key=None):
      bk = {}
      newest_state = 100
@@ -192,8 +197,8 @@ class PredBat(hass.Hass):
                energy += load_yesterday
                import_kwh += energy
                import_kwh_battery += energy
-               if minute_absolute in self.octopus_import:
-                   metric += self.octopus_import[minute_absolute] * energy
+               if minute_absolute in self.rate_import:
+                   metric += self.rate_import[minute_absolute] * energy
                else:
                    metric += self.metric_battery * energy
             
@@ -217,8 +222,8 @@ class PredBat(hass.Hass):
                    else:
                        import_kwh_house += energy
                        
-                   if minute_absolute in self.octopus_import:
-                       metric += self.octopus_import[minute_absolute] * energy
+                   if minute_absolute in self.rate_import:
+                       metric += self.rate_import[minute_absolute] * energy
                    else:
                        if self.charge_enable and self.in_charge_window(minute_absolute):
                            metric += self.metric_battery * energy
@@ -232,8 +237,8 @@ class PredBat(hass.Hass):
                energy = self.reserve - soc
                import_kwh += energy 
                import_kwh_house += energy
-               if minute_absolute in self.octopus_import:
-                   metric += self.octopus_import[minute_absolute] * energy
+               if minute_absolute in self.rate_import:
+                   metric += self.rate_import[minute_absolute] * energy
                else:
                    metric += self.metric_house * energy
             soc = self.reserve
@@ -242,8 +247,8 @@ class PredBat(hass.Hass):
             if record:
                energy = soc - self.soc_max
                export_kwh += energy
-               if minute_absolute in self.octopus_export:
-                   metric -= self.octopus_export[minute_absolute] * energy
+               if minute_absolute in self.rate_export:
+                   metric -= self.rate_export[minute_absolute] * energy
                else:
                    metric -= self.metric_export * energy
             soc = self.soc_max
@@ -301,7 +306,7 @@ class PredBat(hass.Hass):
         self.set_state("predbat.duration", state=self.dp2(end_record/60), attributes = {'friendly_name' : 'Prediction duration', 'state_class': 'measurement', 'unit_of_measurement': 'hours'})
         
      if save_best:
-        self.log('Saving best data with charge_limit %s' % charge_limit)
+        self.log('Saving best data with charge_limit %s' % self.dp2(charge_limit))
         self.set_state("predbat.best_battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left best', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
         self.set_state("predbat.soc_kw_best", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
         self.set_state("predbat.best_soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
@@ -399,8 +404,34 @@ class PredBat(hass.Hass):
      if rate_low_count:
          rate_low_average = self.dp2(rate_low_average / rate_low_count)
      return rate_low_start, rate_low_end, rate_low_average
+
+  def basic_rates(self, info):
      
-  def rate_scan(self, rates):
+     rates = {} 
+     
+     # Default to house value
+     for minute in range(0, self.forecast_minutes):
+         rates[minute] = self.metric_house
+         
+     self.log("Adding rate info %s" % info)
+     midnight = datetime.strptime('00:00:00', "%H:%M:%S")
+     for this_rate in info:
+         start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
+         end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
+         rate = this_rate.get('rate', self.metric_house)
+         start_minutes = max(self.mintes_to_time(start, midnight), 0)
+         end_minutes   = min(self.mintes_to_time(end, midnight), self.forecast_minutes)
+         
+         if end_minutes <= start_minutes:
+             end_minutes += 24*60
+             
+         self.log("Found rate %s %s to %s" % (rate, start_minutes, end_minutes))
+         for minute in range(start_minutes, end_minutes):
+             rates[minute] = rate
+             
+     return rates
+     
+  def rate_scan(self, rates, octopus_slots):
      rate_min = 99999
      rate_min_minute = 0
      rate_max_minute = 0
@@ -411,7 +442,7 @@ class PredBat(hass.Hass):
      self.low_rates = []
      
      # Scan rates and find min/max/average
-     minute = self.minutes_now
+     minute = 0
      while minute < self.forecast_minutes:
          if minute in rates:
              rate = rates[minute]
@@ -427,11 +458,25 @@ class PredBat(hass.Hass):
     
      if rate_n:
          rate_average /= rate_n
-     
+         
      self.log("Rates min %s max %s average %s" % (rate_min, rate_max, rate_average))
      self.rate_min = rate_min
      self.rate_max = rate_max
      self.rate_average = rate_average
+     
+     # Add in any planned octopus slots
+     if octopus_slots:
+         for slot in octopus_slots:
+             start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+             end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
+             start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
+             end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
+             
+             self.log("Octopus Intelligent slot at %s-%s minutes assumed price %s" % (start_minutes, end_minutes, self.rate_min))
+             for minute in range(start_minutes, end_minutes):
+                 rates[minute] = self.rate_min
+                 if self.debug_enable and minute % 30 == 0:
+                     self.log("Set min octopus rate for time %s" % minute)
      
      # Find charging window
      minute = self.minutes_now
@@ -473,12 +518,25 @@ class PredBat(hass.Hass):
          self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp'})
          self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp'})
          self.set_state("predbat.low_rate_cost", state=rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
+         
+     # Create rates/time every 30 minutes
+     rates_time = {}
+     for minute in range(0, self.forecast_minutes, 30):
+         minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+         stamp = minute_timestamp.strftime(TIME_FORMAT)
+         rates_time[stamp] = rates[minute]
+
+     self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
+     return rates
      
   def update_pred(self):
      local_tz = pytz.timezone(self.args.get('timezone', "Europe/London"))
      now_utc = datetime.now(local_tz) #timezone.utc)
      now = datetime.now()
      self.log("PredBat - update at: " + str(now_utc))
+     
+     self.debug_enable = self.args.get('debug_enable', False)
+     self.log("Debug enable is %s" % self.debug_enable)
      
      self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
      self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -500,18 +558,44 @@ class PredBat(hass.Hass):
      self.metric_battery = self.args.get('metric_battery', 7.5)
      self.metric_export = self.args.get('metric_export', 4)
      self.metric_min_improvement = self.args.get('metric_min_improvement', 5)
-     self.octopus_import = {}
-     self.octopus_export = {}
+     self.rate_import = {}
+     self.rate_export = {}
+     self.rate_slots = []
      self.low_rates = []
+     
+     # Basic rates defined by user over time
+     if 'rates_import' in self.args:
+         self.rate_import = self.basic_rates(self.args['rates_import'])
+     if 'rates_export' in self.args:
+         self.rate_export = self.basic_rates(self.args['rates_export'])
+     
+     # Octopus import rates
      if 'metric_octopus_import' in self.args:
          data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
-         self.octopus_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
-         self.rate_scan(self.octopus_import)
+         
+     # Octopus intelligent slots
+     if 'octopus_intelligent_slot' in self.args:
+         self.octopus_slots = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='completedDispatches')
+         self.octopus_slots += self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='plannedDispatches')
+
+     # Replicate and scan rates  
+     if self.rate_import:
+         self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
+         self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
      else:
-         self.log("No Octopus rate data provided - using default metric")
-     if 'metric_octopus_import' in self.args:
+         self.log("No import rate data provided - using default metric")
+     
+     # Octopus export rates
+     if 'metric_octopus_export' in self.args:
          data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
-         self.octopus_export = self.rate_replicate(self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
+         
+     # Replicate rates for export
+     if 'self.rate_export':
+         self.rate_export = self.rate_replicate(self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
+     
+     if not self.rate_export:
+         self.log("No export rate data provided - using default metric")
+         
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0)
@@ -546,7 +630,7 @@ class PredBat(hass.Hass):
             self.charge_end_time_minutes += 60 * 24
             
         self.charge_limit = float(self.get_state(self.args['charge_limit'])) * self.soc_max / 100.0
-        self.charge_rate = float(self.get_state(self.args['charge_rate'])) / 1000.0 / 60.0
+        self.charge_rate = float(self.get_state(self.args['charge_rate'], attribute='max')) / 1000.0 / 60.0
         self.log("Charge settings are: %s-%s limit %s power %s (per minute)" % (str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit), str(self.charge_rate)))
         
         # Save list of charge windows within the simulation time window
@@ -568,7 +652,7 @@ class PredBat(hass.Hass):
         self.log('Charge windows currently %s' % self.charge_window)
         
      # battery max discharge rate
-     self.discharge_rate = float(self.get_state(self.args['discharge_rate'])) / 1000.0 / 60.0
+     self.discharge_rate = float(self.get_state(self.args['discharge_rate'], attribute='max')) / 1000.0 / 60.0
     
      # Fetch PV forecast if enbled, today must be enabled, other days are optional
      if 'pv_forecast_today' in self.args:
@@ -599,8 +683,6 @@ class PredBat(hass.Hass):
      else:
         self.log("Car charging hold %s threshold %s" % (self.car_charging_hold, self.car_charging_threshold*60.0))
 
-     self.debug_enable = self.args.get('debug_enable', False)
-
      # Try different battery SOCs to get the best result
      if self.args.get('calculate_best', False):
         try_soc = self.soc_max
@@ -610,7 +692,7 @@ class PredBat(hass.Hass):
             was_debug = self.debug_enable
             self.debug_enable = False
             metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(now, try_soc, load_minutes, pv_forecast_minute, False, False)
-            self.debug_true = was_debug
+            self.debug_enable = was_debug
             if self.debug_enable:
                 self.log("Trying soc %s gives import battery %s house %s export %s metric %s" % 
                         (try_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
@@ -629,18 +711,18 @@ class PredBat(hass.Hass):
          
         # Simulate best - add margin first and clamp to min and then clamp to max
         # Also save the final selected metric
-        self.log("Best charge limit (unadjusted) soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
+        self.log("Best charge limit (unadjusted) soc calculated at %s (margin added %s and min %s) with metric %s" % (self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
         best_soc = best_soc + self.best_soc_margin
         best_soc = max(self.best_soc_min, best_soc)
         best_soc = min(best_soc, self.soc_max)
-        self.log("Best charge limit (adjusted) soc calculated at %s (margin added %s and min %s) with metric %s" % (best_soc, self.best_soc_margin, self.best_soc_min, best_metric))
+        self.log("Best charge limit (adjusted) soc calculated at %s (margin added %s and min %s) with metric %s" % (self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
         best_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(now, best_soc, load_minutes, pv_forecast_minute, False, True)
         self.log("Best charging limit soc %s gives import battery %s house %s export %s metric %s" % 
-                (best_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
+                (self.dp2(best_soc), self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(metric)))
         
-        # Set the SOC, only do it within the window before the charge starts
+        # Set the SOC, only do it within the window before the charge starts or during the charge if we change our mind
         if self.args.get('set_soc_enable', False) and self.charge_enable:
-            if (self.minutes_now < self.charge_start_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+            if (self.minutes_now < self.charge_end_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                 self.adjust_battery_target(charge_limit_percent)
             else:
                 self.log("Not setting charging SOC as we are not within the window (now %s target set_soc_minutes %s charge start time %s" % (self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
@@ -651,9 +733,14 @@ class PredBat(hass.Hass):
      
   def initialize(self):
      self.log("Startup")
-     #self.update_pred()
-     # Run every 5 minutes
-     self.run_every(self.run_time_loop, "now", self.args.get('run_every', 5) * 60)
+     
+     # Run every N minutes aligned to the minute
+     now = datetime.now()
+     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)     
+     self.run_every(self.run_time_loop, midnight, self.args.get('run_every', 5) * 60)
+     
+     # Do first update now
+     self.update_pred()
      
   def run_time_loop(self, cb_args):
      self.update_pred()
