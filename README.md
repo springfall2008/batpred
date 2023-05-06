@@ -114,6 +114,19 @@ To create the fancy chart
 - Create a new apexcharts card and copy the YML from example_chart.yml into the chart settings, updating the serial number to match your inverter
 - Customise as you like
 
-Example chart:
+Example charts:
 
 ![image](https://user-images.githubusercontent.com/48591903/235856853-7a962991-07c3-40cf-85c3-77abfd2abd94.png)
+
+![image](https://user-images.githubusercontent.com/48591903/236629103-103ccc62-89aa-48bf-bc8b-0005c1153974.png)
+
+![image](https://user-images.githubusercontent.com/48591903/236629117-8f05e050-d43d-4a52-a2a7-b5e97b961e3c.png)
+
+
+Todo list:
+  - Create chart for export rates
+  - Add ability to average load over a number of days
+  - Add option to show other Octopus tariffs as cost comparison
+  - Try to use 90/10 data from solcast
+  - Need to test on Agile and Cosy tariff
+  
