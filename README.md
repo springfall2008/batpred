@@ -47,11 +47,20 @@ The following are entity names in Solcast, unlikely to need changing:
 The following are entity names in the Ocotpus Energy plugin:
   - metric_octopus_import
   - metric_octopus_export
-Or if you don't have that then set:
+Or manually set your rates using:
+  - rates_import
+    - start
+      end
+      rate
+  - rates_export
+    - start
+      end
+      rate
+      
+Or set assumed rates for the house, battery charging and export. You can't enable automatic charging windows with this option.
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
   - metric_export - Set to the price per Kwh you get for exporting
-  - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
 
 These are configuration items that you can modify to fit your needs:
   - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
@@ -64,6 +73,7 @@ These are configuration items that you can modify to fit your needs:
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
     
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
+  - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
   - best_soc_min - Sets the minimum battery level SOC to propose for the prediction
   - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly)
