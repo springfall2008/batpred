@@ -5,8 +5,8 @@ import math
 
 #
 # Battery Prediction app
-# 
-# 
+#
+#
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -72,15 +72,16 @@ class PredBat(hass.Hass):
     
      # If we only have a start time then fill the gaps with the last values
      if not to_key:
-        minute = 0
+        bk2 = {}
         state = newest_state
-        while minute < 60 * 24 * days:
+        for minute in range(0, 60*24*days):
             if minute in bk:
                 state = bk[minute]
-            else:
-                bk[minute] = state
+            bk2[minute] = state
             minute += 1
-     return bk
+        return bk2
+     else:
+        return bk
       
   def minutes_since_yesterday(self, now):
      # Calculate the date and time for 23:59 yesterday
@@ -98,20 +99,35 @@ class PredBat(hass.Hass):
          if minute >= window['start'] and minute < window['end']:
              return True
      return False
-  
+ 
+  def clean_incrementing_reverse(self, data):
+    
+     new_data = {}
+     length = len(data)
+     
+     increment = 0
+     last = data[length - 1]
+     
+     for index in range(0, length - 1):
+        rindex = length - index - 1
+        nxt = data[rindex]
+        if nxt >= last:
+            increment += nxt - last
+        last = nxt
+        new_data[rindex] = increment
+        
+     return new_data
+            
+        
   def get_from_incrementing(self, data, index):
      
      offset = 10
      
      value = data[index]
-     old_value = data[index + offset - 1]
+     old_value = data[index + offset]
      
      diff = (value - old_value) / offset
-     if diff < 0:
-        diff = data[index] - data[index + 1]
-        if diff < 0:
-            diff = data[index-1] - data[index]
-    
+     
      if diff < 0:
          self.log("WARN: Negative diff %s at %s was %s %s .. %s %s" % (diff, index, data[index], data[index+1], data[index + offset - 1], data[index + offset]))
          diff = 0
@@ -123,10 +139,6 @@ class PredBat(hass.Hass):
   def run_prediction(self, now, charge_limit, load_minutes, pv_forecast_minute, save, save_best):
       
      six_days = 24*60*(self.days_previous - 1)
-     
-     # Offset by 6 (configurable) days to get to last week
-     load_yesterday = load_minutes[self.difference_minutes + six_days]
-     load_yesterday_now = load_minutes[24*60 + six_days]
      
      predict_soc = {}
      predict_soc_time = {}
@@ -142,15 +154,14 @@ class PredBat(hass.Hass):
      load_kwh = 0
      metric = 0
      metric_time = {}
+     load_kwh_time = {}
      
      # For the SOC calculation we need to stop at the second charge window to avoid confusing multiple days out 
      end_record = self.forecast_minutes
      if len(self.charge_window) > 1:
          end_record = min(end_record, self.charge_window[1]['start'] - self.minutes_now)
      record = True
-     
-     # self.log("Minutes since yesterday " + str(self.difference_minutes) + " load past day " + str(load_yesterday) + " load past day now " + str(load_yesterday_now) + " end record " + str(end_record))
-     
+
      # Simulate each forward minute
      while minute < self.forecast_minutes:
          
@@ -181,7 +192,8 @@ class PredBat(hass.Hass):
                 self.log("Hour %s car charging hold" % (minute/60))
                 
         # Count load
-        load_kwh += load_yesterday
+        if record:
+           load_kwh += load_yesterday
                 
         # Are we within the charging time window?
         if self.charge_enable and soc < charge_limit and self.in_charge_window(minute_absolute):
@@ -259,10 +271,11 @@ class PredBat(hass.Hass):
         predict_soc[minute] = self.dp2(soc)
         
         # Only store every 10 minutes for data-set size
-        if minute % 10 == 0:
+        if (minute % 10) == 0:
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             predict_soc_time[stamp] = self.dp2(soc)
             metric_time[stamp] = self.dp2(metric)
+            load_kwh_time[stamp] = self.dp2(load_kwh)
         
         # Store the number of minutes until the battery runs out
         if record and soc <= self.reserve:
@@ -297,7 +310,7 @@ class PredBat(hass.Hass):
         self.set_state("predbat.charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.charge_limit", state=charge_limit_percent, attributes = {'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%'})
         self.set_state("predbat.export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-        self.set_state("predbat.load_energy", state=self.dp2(load_kwh), attributes = {'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+        self.set_state("predbat.load_energy", state=self.dp2(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
         self.set_state("predbat.import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -475,7 +488,7 @@ class PredBat(hass.Hass):
              self.log("Octopus Intelligent slot at %s-%s minutes assumed price %s" % (start_minutes, end_minutes, self.rate_min))
              for minute in range(start_minutes, end_minutes):
                  rates[minute] = self.rate_min
-                 if self.debug_enable and minute % 30 == 0:
+                 if self.debug_enable and (minute % 30) == 0:
                      self.log("Set min octopus rate for time %s" % minute)
      
      # Find charging window
@@ -534,7 +547,28 @@ class PredBat(hass.Hass):
      else:
         self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
      return rates
+
+  # Work out energy costs today (approx)
+  def today_cost(self, import_today):
+     day_cost = 0
+     day_energy = 0
+     day_cost_time = {}
      
+     for minute in range(0, self.minutes_now):
+        minute_back = self.minutes_now - minute
+        energy = self.get_from_incrementing(import_today, minute_back)
+        day_energy += energy
+        day_cost += self.rate_import[minute] * energy
+        
+        if (minute % 10) == 0:
+           minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+           stamp = minute_timestamp.strftime(TIME_FORMAT)
+           day_cost_time[stamp] = day_cost
+        
+     self.set_state("predbat.cost_today", state=day_cost, attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
+     self.log("Todays energy %s cost %s" % (day_energy, day_cost)) 
+     return
+
   def update_pred(self):
      local_tz = pytz.timezone(self.args.get('timezone', "Europe/London"))
      now_utc = datetime.now(local_tz) #timezone.utc)
@@ -557,6 +591,8 @@ class PredBat(hass.Hass):
      self.forecast_minutes = self.forecast_hours * 60
      
      load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
+     load_minutes = self.clean_incrementing_reverse(load_minutes)
+     
      self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
      self.soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
      reserve_percent = float(self.get_state(entity_id = self.args['reserve'], default=0))
@@ -604,6 +640,11 @@ class PredBat(hass.Hass):
      else:
          self.log("No export rate data provided - using default metric")
          
+     if 'import_today' in self.args and self.rate_import:
+         self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, True, False)
+         self.import_today = self.clean_incrementing_reverse(self.import_today)
+         self.today_cost(self.import_today)
+
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
      self.best_soc_margin = self.args.get('best_soc_margin', 0)
@@ -687,6 +728,7 @@ class PredBat(hass.Hass):
      self.car_charging_energy = {}
      if 'car_charging_energy' in self.args:
         self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
+        self.car_charging_energy = self.clean_incrementing_reverse(self.car_charging_energy)
         self.log("Car charging hold %s with energy data" % (self.car_charging_hold))
      else:
         self.log("Car charging hold %s threshold %s" % (self.car_charging_hold, self.car_charging_threshold*60.0))
