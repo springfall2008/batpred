@@ -147,6 +147,7 @@ class PredBat(hass.Hass):
      soc = self.soc_kw
      soc_min = self.soc_max
      charge_has_run = False
+     charge_has_started = False
      export_kwh = 0
      import_kwh = 0
      import_kwh_house = 0
@@ -288,6 +289,8 @@ class PredBat(hass.Hass):
         
         # Have we pasted the charging time
         if self.charge_enable and self.in_charge_window(minute_absolute):
+            charge_has_started = True
+        if self.charge_enable and charge_has_started and not self.in_charge_window(minute_absolute):
             charge_has_run = True
         
         # Record soc min
