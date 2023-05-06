@@ -91,19 +91,32 @@ These are configuration items that you can modify to fit your needs:
    
 - You will find new entities are created in HA:
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
+  - predbat_charge_limit - The current charge limit used for the scenario in %
+  - predbat_charge_limit_kw - The current charge limit used for the scenario in kwH
+  - predbat_duration - The duration of the prediction maximum in hours
+  - predbat_load_energy - Predicted best load energy in Kwh
   - predbat.export_energy - Predicted export energy in Kwh
   - predbat.import_energy - Predicted import energy in Kwh
   - predbat.import_energy_battery - Predicted import energy to charge your home battery in Kwh
   - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
   - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
+  - predbat.soc_min_kwh - The minimum battery level during the time period in Kwh
   - predbat.metric - Predicted cost metric for the next simulated period (in pence)
 - When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage: 
   - predbat.best_export_energy - Predicted exports under best SOC setting
   - predbat_best_import_energy - Predicted imports under best SOC setting
+  - predbat_best_load - Predicted best load energy
   - predbat_best_import_energy_battery - Predicted imports to the battery under best SOC setting
   - predbat_best_import_energy_house - Predicted imports to the house under best SOC setting
-  - predbat_best_soc_kw - Predicted final state of charge (in Kwh), holds minute by minute prediction data (in attributes) to be charted
-  - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected
+  - predbat_soc_kw_best - Predicted best final state of charge (in Kwh), holds minute by minute prediction data (in attributes) to be charted
+  - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost
+  - predbat.best_charge_limit - Predicted best battery charge limit in percent
+  - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
+  - predbat.low_rate_cost - The lowest rate cost in P
+  - predbat.low_rate_start - Start time of the next low rate
+  - predbat.low_rate_end - End time of the next low rate
+  - predbat.rates - The current energy rates in P (also can be charted)
+  - predbat.rates_export - The current energy export rates in P (also be be charted)
   
 Example data out:
 
@@ -124,7 +137,6 @@ Example charts:
 
 
 Todo list:
-  - Create chart for export rates
   - Add ability to average load over a number of days
   - Add option to show other Octopus tariffs as cost comparison
   - Try to use 90/10 data from solcast
