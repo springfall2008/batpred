@@ -5,7 +5,7 @@ import math
 
 #
 # Battery Prediction app
-#
+# 
 #
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -153,7 +153,7 @@ class PredBat(hass.Hass):
      import_kwh_house = 0
      import_kwh_battery = 0
      load_kwh = 0
-     metric = 0
+     metric = self.cost_today_sofar
      metric_time = {}
      load_kwh_time = {}
      
@@ -570,7 +570,7 @@ class PredBat(hass.Hass):
         
      self.set_state("predbat.cost_today", state=day_cost, attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p'})
      self.log("Todays energy %s cost %s" % (day_energy, day_cost)) 
-     return
+     return day_cost
 
   def update_pred(self):
      local_tz = pytz.timezone(self.args.get('timezone', "Europe/London"))
@@ -607,6 +607,7 @@ class PredBat(hass.Hass):
      self.rate_export = {}
      self.rate_slots = []
      self.low_rates = []
+     self.cost_today_sofar = 0
      
      # Basic rates defined by user over time
      if 'rates_import' in self.args:
@@ -646,7 +647,7 @@ class PredBat(hass.Hass):
      if 'import_today' in self.args and self.rate_import:
          self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, True, False)
          self.import_today = self.clean_incrementing_reverse(self.import_today)
-         self.today_cost(self.import_today)
+         self.cost_today_sofar = self.today_cost(self.import_today)
 
      self.reserve = self.soc_max * reserve_percent / 100.0
      self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
