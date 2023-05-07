@@ -4,19 +4,33 @@ see Readme for information
 """
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
 from datetime import datetime, timedelta
 import math
 import pytz
 import appdaemon.plugins.hass.hassapi as hass
+import requests
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
+TRY_AGILE = False # For debugging only - do not use right now, pretends you are on Agile when are you not
 
 class PredBat(hass.Hass):
     """ 
     The battery prediction class itself 
     """
+
+    def download_octopus_rates(self, url):
+
+        r = requests.get(url)
+        data = r.json()        
+        mdata = data['results']
+        r = requests.get(url + "?page=2")
+        data = r.json()  
+        mdata += data['results']      
+        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', False, False, False, to_key='valid_to')
+        return pdata
 
     def mintes_to_time(self, updated, now):
         """
@@ -179,11 +193,11 @@ class PredBat(hass.Hass):
         metric_time = {}
         load_kwh_time = {}
 
-        # For the SOC calculation we need to stop at the second charge window to avoid
-        # confusing multiple days out
+        # For the SOC calculation we need to stop 24 hours after the first charging window starts
+        # to avoid wrapping into the next day
         end_record = self.forecast_minutes
-        if len(self.charge_window) > 1:
-            end_record = min(end_record, self.charge_window[1]['start'] - self.minutes_now)
+        if len(self.charge_window):
+            end_record = min(end_record, self.charge_window[0]['start'] + 24*60 - self.minutes_now)
         record = True
 
         # Simulate each forward minute
@@ -634,7 +648,7 @@ class PredBat(hass.Hass):
         self.log("Todays energy {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_cost)))
         return day_cost
 
-    def __init__(self):
+    def reset(self):
         """
         Init stub
         """
@@ -741,7 +755,10 @@ class PredBat(hass.Hass):
 
         # Replicate and scan rates
         if self.rate_import:
-            self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
+            if TRY_AGILE:
+                self.rate_import = self.rate_replicate(self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/"))
+            else:
+                self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
             self.publish_rates(self.rate_import, False)
         else:
@@ -910,6 +927,7 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         self.log("Predbat Startup")
+        self.reset()
 
         # Run every N minutes aligned to the minute
         now = datetime.now()
