@@ -223,7 +223,19 @@ class PredBat(hass.Hass):
             # Apply battery loss to charging from PV
             if diff < 0:
                 diff *= self.battery_loss
-            
+                
+            # Max charge rate, export over the cap
+            if diff < -self.charge_rate:
+               soc -= self.charge_rate
+               if record:
+                   energy = -(diff + self.charge_rate)
+                   export_kwh += energy
+                   if minute_absolute in self.rate_export:
+                       metric -= self.rate_export[minute_absolute] * energy
+                   else:
+                       metric -= self.metric_export * energy
+                       
+            # Max discharge rate, draw from grid over the cap
             if diff > self.discharge_rate:
                 soc -= self.discharge_rate
                 if record:
@@ -244,7 +256,8 @@ class PredBat(hass.Hass):
                            metric += self.metric_house * energy
             else:
                 soc -= diff
-                
+           
+        # Flat battery, draw from grid over the cap     
         if soc < self.reserve:
             if record:
                energy = self.reserve - soc
@@ -256,6 +269,7 @@ class PredBat(hass.Hass):
                    metric += self.metric_house * energy
             soc = self.reserve
             
+        # Full battery, export over the cap
         if soc > self.soc_max:
             if record:
                energy = soc - self.soc_max
