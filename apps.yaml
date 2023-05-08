@@ -47,14 +47,19 @@ pred_bat:
   # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
   best_soc_margin: 0.5
-  best_soc_min: 2.5
-  best_soc_keep: 1.5
-  
+  best_soc_min: 2
+  best_soc_keep: 2
+    
+  # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
+  # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
+  metric_min_improvement: 5
+
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
   
-  # Set  import and export entity to point to the Octopus Energy plugin
+  # Set import and export entity to point to the Octopus Energy plugin
   # Needs updating with your meter number
+  # Or comment out if you don't have them
   metric_octopus_import: sensor.octopus_energy_electricity_20l3260392_2200017612712_current_rate
   metric_octopus_export: sensor.octopus_energy_electricity_20l3260392_2200043522155_export_current_rate
   
@@ -77,23 +82,19 @@ pred_bat:
   metric_battery: 7.5
   metric_export: 4.2
   
-  
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  # Or comment out if you don't
   octopus_intelligent_slot: binary_sensor.octopus_intelligent_slot
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   rate_low_threshold: 0.8
   
   # When enabled the next charge window will be automatically configured based on the incoming rates
-  # Only works if the charging time window has been enabled and Octopus import rates are configured (metric_octopus_import)
+  # Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
   # Set window minutes defines how many minutes before the charge window we should program it
   set_charge_window: True
   set_window_notify: True
   set_window_minutes: 30
-  
-  # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
-  # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
-  metric_min_improvement: 5
   
   # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
   # note it maybe set more than once if things change
@@ -102,6 +103,7 @@ pred_bat:
   set_soc_minutes: 30
   
   # Set the frequency in minutes that this plugin is run
+  # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 10
   
   # Debug enable prints lots of debug, leave off by default
