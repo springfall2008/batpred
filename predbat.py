@@ -15,6 +15,7 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TRY_AGILE = False # For debugging only - do not use right now, pretends you are on Agile when are you not
+MAX_CHARGE_LIMITS = 8
 
 class PredBat(hass.Hass):
     """ 
@@ -97,9 +98,12 @@ class PredBat(hass.Hass):
 
             if to_time:
                 minute = minutes
-                while minute <= minutes_to:
+                if minute == minutes_to:
                     mdata[minute] = state
-                    minute += 1
+                else:
+                    while minute < minutes_to:
+                        mdata[minute] = state
+                        minute += 1
             else:
                 mdata[minutes] = state
 
@@ -131,14 +135,16 @@ class PredBat(hass.Hass):
         """
         return math.ceil(value*100)/100
 
-    def in_charge_window(self, minute):
+    def in_charge_window(self, charge_window, minute):
         """
         Work out if this minute is within the a charge window
         """
-        for window in self.charge_window:
+        window_n = 0
+        for window in charge_window:
             if minute >= window['start'] and minute < window['end']:
-                return True
-        return False
+                return window_n
+            window_n += 1
+        return -1
 
     def clean_incrementing_reverse(self, data):
         """
@@ -171,7 +177,7 @@ class PredBat(hass.Hass):
         diff = (value - old_value) / offset
         return diff
 
-    def run_prediction(self, charge_limit, load_minutes, pv_forecast_minute, save, save_best):
+    def run_prediction(self, charge_limit, charge_window, load_minutes, pv_forecast_minute, save, save_best):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -208,6 +214,7 @@ class PredBat(hass.Hass):
 
             minute_absolute = minute + self.minutes_now
             minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
+            charge_window_n = self.in_charge_window(charge_window, minute_absolute)
 
             # Outside the recording window?
             if minute >= end_record and record:
@@ -233,9 +240,9 @@ class PredBat(hass.Hass):
                 load_kwh += load_yesterday
 
             # Are we within the charging time window?
-            if self.charge_enable and soc < charge_limit and self.in_charge_window(minute_absolute):
+            if self.charge_enable and (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
                 old_soc = soc
-                soc = min(soc + self.charge_rate, charge_limit)
+                soc = min(soc + self.charge_rate, charge_limit[charge_window_n])
 
                 # Apply battery loss to computed charging energy
                 # For now we ignore PV in this as it's probably not a major factor when mains charging is enabled
@@ -252,7 +259,7 @@ class PredBat(hass.Hass):
                         metric += self.metric_battery * energy
 
                 if self.debug_enable and minute % 60 == 0:
-                    self.log("Hour {} battery charging target soc {}".format(minute/60, charge_limit))
+                    self.log("Hour {} battery charging target soc {}".format(minute/60, charge_limit[charge_window_n]))
             else:
                 diff = load_yesterday - pv_now
 
@@ -277,7 +284,7 @@ class PredBat(hass.Hass):
                     if record:
                         energy = diff - self.discharge_rate
                         import_kwh += energy
-                        if self.charge_enable and self.in_charge_window(minute_absolute):
+                        if self.charge_enable and (charge_window_n >= 0):
                             # If the battery is on charge anyhow then imports are kind of the same as battery charging (price wise)
                             import_kwh_battery += energy
                         else:
@@ -286,7 +293,7 @@ class PredBat(hass.Hass):
                         if minute_absolute in self.rate_import:
                             metric += self.rate_import[minute_absolute] * energy
                         else:
-                            if self.charge_enable and self.in_charge_window(minute_absolute):
+                            if self.charge_enable and (charge_window_n >= 0):
                                 metric += self.metric_battery * energy
                             else:
                                 metric += self.metric_house * energy
@@ -337,9 +344,9 @@ class PredBat(hass.Hass):
                 final_soc = soc
 
             # Have we pasted the charging time
-            if self.charge_enable and self.in_charge_window(minute_absolute):
+            if self.charge_enable and (charge_window_n >= 0):
                 charge_has_started = True
-            if self.charge_enable and charge_has_started and not self.in_charge_window(minute_absolute):
+            if self.charge_enable and charge_has_started and (charge_window_n < 0):
                 charge_has_run = True
 
             # Record soc min
@@ -349,17 +356,15 @@ class PredBat(hass.Hass):
             minute += 1
 
         hours_left = minute_left / 60.0
-        charge_limit_percent = min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
+        charge_limit_percent = [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(0, len(charge_limit))]
 
-        self.log("predict charge limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} kwh".format(charge_limit_percent, self.dp2(charge_limit), self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min)))
+        if self.debug_enable or save or save_best:
+            self.log("predict charge limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} kwh".format(charge_limit_percent, self.dp2(charge_limit[0]), self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min)))
 
         # Save data to HA state
         if save:
             self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
-            self.set_state("predbat.soc_kw", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
-            self.set_state("predbat.soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
-            self.set_state("predbat.charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.charge_limit", state=charge_limit_percent, attributes = {'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%'})
+            self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
             self.set_state("predbat.export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.load_energy", state=self.dp2(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -373,8 +378,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best_battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left best', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
             self.set_state("predbat.soc_kw_best", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.set_state("predbat.best_soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
-            self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit), attributes = {'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.best_charge_limit", state=charge_limit_percent, attributes = {'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%'})
+            self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=True)
             self.set_state("predbat.best_load_energy", state=self.dp2(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -417,7 +421,7 @@ class PredBat(hass.Hass):
             entity_end = self.get_entity(self.args['charge_end_time'])
             entity_end.call_service("select_option", option=new_end)
         if new_start != old_start or new_end != old_end:
-            if self.args.get('set_soc_notify', False):
+            if self.args.get('set_window_notify', False):
                 self.call_service("notify/notify", message="Predbat: Charge window change to: {} - {}".format(new_start, new_end))
             self.log("Updated start and end charge window to {} - {} (old {} - {})".format(new_start, new_end, old_start, old_end))
 
@@ -430,7 +434,11 @@ class PredBat(hass.Hass):
         while minute < (self.forecast_minutes + 12*60):
             if minute not in rates:
                 minute_mod = minute % (24*60)
-                rates[minute] = rates[minute_mod]
+                if minute_mod in rates:
+                    rates[minute] = rates[minute_mod]
+                else:
+                    # Missing rate within 24 hours - fill with dummy high rate
+                    rates[minute] = self.metric_house
             minute += 1
         return rates
 
@@ -557,7 +565,7 @@ class PredBat(hass.Hass):
 
         # Find charging window
         minute = self.minutes_now
-        while True:
+        while len(self.low_rates) < MAX_CHARGE_LIMITS:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute)
             window = {}
             window['start'] = rate_low_start
@@ -648,6 +656,28 @@ class PredBat(hass.Hass):
         self.log("Todays energy {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_cost)))
         return day_cost
 
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+
+        charge_limit_time = {}
+        charge_limit_time_kw = {}
+        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
+            window = self.in_charge_window(charge_window, minute)
+            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+            stamp = minute_timestamp.strftime(TIME_FORMAT)
+            if window >= 0:
+                charge_limit_time[stamp] = charge_limit_percent[window]
+                charge_limit_time_kw[stamp] = charge_limit[window]
+            else:
+                charge_limit_time[stamp] = 0
+                charge_limit_time_kw[stamp] = 0
+        
+        if best:
+            self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit[0]), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_charge_limit", state=charge_limit_percent[0], attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%'})
+        else:
+            self.set_state("predbat.charge_limit_kw", state=self.dp2(charge_limit[0]), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.charge_limit", state=charge_limit_percent[0], attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%'})
+
     def reset(self):
         """
         Init stub
@@ -689,13 +719,44 @@ class PredBat(hass.Hass):
         self.charge_enable = False
         self.charge_start_time_minutes = 0
         self.charge_end_time_minutes = 0
-        self.charge_limit = 0
+        self.charge_limit = []
         self.charge_rate = 4000
         self.discharge_rate = 4000
         self.charge_window = []
         self.car_charging_hold = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
+
+    def optimise_charge_limit(self, window_n, charge_window, try_charge_limit, load_minutes, pv_forecast_minute):
+        """
+        Optimise a single charging window for best SOC
+        """
+        try_soc = self.soc_max
+        best_soc = try_soc
+        best_metric = 999999
+        
+        while try_soc > self.reserve:
+            was_debug = self.debug_enable
+            self.debug_enable = False
+            try_charge_limit[window_n] = try_soc
+            metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(try_charge_limit, charge_window, load_minutes, pv_forecast_minute, False, False)
+            self.debug_enable = was_debug
+            if self.debug_enable:
+                self.log("Trying soc {} for window {} gives import battery {} house {} export {} metric {}".format
+                        (try_soc, window_n, import_kwh_battery, import_kwh_house, export_kwh, metric))
+
+            # Only select the lower SOC if it makes a notable improvement has defined by min_improvement
+            # and it doesn't fall below the soc_keep threshold
+            if ((metric + self.metric_min_improvement) < best_metric) and (soc_min >= self.best_soc_keep):
+                best_metric = metric
+                best_soc = try_soc
+                if self.debug_enable:
+                    self.log("Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
+            else:
+                if self.debug_enable:
+                    self.log("Not Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
+            try_soc -= 0.5
+        return best_soc, best_metric
 
     def update_pred(self):
         """
@@ -757,6 +818,7 @@ class PredBat(hass.Hass):
         if self.rate_import:
             if TRY_AGILE:
                 self.rate_import = self.rate_replicate(self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/"))
+                self.octopus_slots = []
             else:
                 self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
@@ -800,46 +862,44 @@ class PredBat(hass.Hass):
             charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
             charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
 
-            # Re-programme charge window based on low rates?
-            if self.args.get('set_charge_window', False) and self.low_rates:
-                window = self.low_rates[0]
-                if window['start'] < 24*60 and window['start'] > self.minutes_now:
-                    charge_start_time = self.midnight_utc + timedelta(minutes=window['start'])
-                    charge_end_time = self.midnight_utc + timedelta(minutes=window['end'])
-                    self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
-
-                    # We must re-program if we are about to run to the new charge window or the old one is about to start
-                    if ((window['start'] - self.minutes_now) < self.set_window_minutes) or ((charge_start_time_minutes - self.minutes_now) < self.set_window_minutes):
-                        self.adjust_charge_window(charge_start_time, charge_end_time)
-
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
             self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
             if self.charge_end_time_minutes < self.charge_start_time_minutes:
                 self.charge_end_time_minutes += 60 * 24
 
-            self.charge_limit = float(self.get_state(self.args['charge_limit'])) * self.soc_max / 100.0
-            self.charge_rate = float(self.get_state(self.args['charge_rate'], attribute='max')) / 1000.0 / 60.0
-            self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit), str(self.charge_rate)))
+            # Construct charge window from the GivTCP settings
+            self.charge_window = []
+            minute = self.charge_start_time_minutes
+            minute_end = self.charge_end_time_minutes
 
-            # Save list of charge windows within the simulation time window
+            while minute < self.forecast_minutes:
+                window = {}
+                window['start'] = minute
+                window['end']   = minute_end
+                self.charge_window.append(window)
+                minute += 24 * 60
+                minute_end += 24 * 60
+            self.log('Charge windows currently {}'.format(self.charge_window))
+            
+            # Calculate best charge windows
             if self.args.get('set_charge_window', False) and self.low_rates:
                 # If we are using calculated windows directly then save them
-                self.charge_window = self.low_rates
+                self.charge_window_best = self.low_rates[:]
             else:
-                # Construct charge window from the GivTCP settings
-                self.charge_window = []
-                minute = self.charge_start_time_minutes
-                minute_end = self.charge_end_time_minutes
+                # Default best charge window as this one
+                self.charge_window_best = self.charge_window[:]
 
-                while minute < self.forecast_minutes:
-                    window = {}
-                    window['start'] = minute
-                    window['end']   = minute_end
-                    self.charge_window.append(window)
-                    minute += 24 * 60
-                    minute_end += 24 * 60
-            self.log('Charge windows currently {}'.format(self.charge_window))
+            # Get charge limit and fill for the number of windows
+            current_charge_limit = float(self.get_state(self.args['charge_limit']))
+            self.charge_limit = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
+            self.charge_limit_percent = [current_charge_limit for i in range(0, len(self.charge_window))]
+
+            self.charge_limit_best = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window_best))]
+            self.charge_limit_percent_best = [current_charge_limit for i in range(0, len(self.charge_window_best))]
+
+            self.charge_rate = float(self.get_state(self.args['charge_rate'], attribute='max')) / 1000.0 / 60.0
+            self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit[0]), str(self.charge_rate)))
 
         # battery max discharge rate
         self.discharge_rate = float(self.get_state(self.args['discharge_rate'], attribute='max')) / 1000.0 / 60.0
@@ -874,52 +934,60 @@ class PredBat(hass.Hass):
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
 
+        # Simulate current settings
+        metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(self.charge_limit, self.charge_window, load_minutes, pv_forecast_minute, True, False)
+
+        # Default best
+        self.charge_limit_percent_best = self.charge_limit_percent[:]
+
         # Try different battery SOCs to get the best result
         if self.args.get('calculate_best', False):
-            try_soc = self.soc_max
-            best_soc = try_soc
-            best_metric = 999999
-            while try_soc > self.reserve:
-                was_debug = self.debug_enable
-                self.debug_enable = False
-                metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(try_soc, load_minutes, pv_forecast_minute, False, False)
-                self.debug_enable = was_debug
+            # Set all to 100%
+            self.charge_limit_best = [self.soc_max for n in range(0, len(self.charge_limit_best))]
+            for window_n in range(0, len(self.charge_limit_best)):
+                self.log("optiming charge window {}".format(window_n))
+                best_soc, best_metric = self.optimise_charge_limit(window_n, self.charge_window_best, self.charge_limit_best, load_minutes, pv_forecast_minute)
+
+                # Simulate best - add margin first and clamp to min and then clamp to max
+                # Also save the final selected metric
                 if self.debug_enable:
-                    self.log("Trying soc {} gives import battery {} house {} export {} metric {}".format
-                            (try_soc, import_kwh_battery, import_kwh_house, export_kwh, metric))
+                    self.log("Best charge limit window {} (unadjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
+                best_soc = best_soc + self.best_soc_margin
+                best_soc = max(self.best_soc_min, best_soc)
+                best_soc = self.dp2(min(best_soc, self.soc_max))
+                if self.debug_enable:
+                    self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
+                self.charge_limit_best[window_n] = best_soc
 
-                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement
-                # and it doesn't fall below the soc_keep threshold
-                if ((metric + self.metric_min_improvement) < best_metric) and (soc_min >= self.best_soc_keep):
-                    best_metric = metric
-                    best_soc = try_soc
-                    if self.debug_enable:
-                        self.log("Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
-                else:
-                    if self.debug_enable:
-                        self.log("Not Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
-                try_soc -= 0.5
+            # Final simulation of best
+            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(self.charge_limit_best, self.charge_window_best, load_minutes, pv_forecast_minute, False, True)
+            self.log("Best charging limit socs {} gives import battery {} house {} export {} metric {}".format
+            (self.charge_limit_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric)))
 
-            # Simulate best - add margin first and clamp to min and then clamp to max
-            # Also save the final selected metric
-            self.log("Best charge limit (unadjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
-            best_soc = best_soc + self.best_soc_margin
-            best_soc = max(self.best_soc_min, best_soc)
-            best_soc = min(best_soc, self.soc_max)
-            self.log("Best charge limit (adjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
-            best_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(best_soc, load_minutes, pv_forecast_minute, False, True)
-            self.log("Best charging limit soc {} gives import battery {} house {} export {} metric {}".format
-                    (self.dp2(best_soc), self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(metric)))
+        if self.charge_enable:
+            # Re-programme charge window based on low rates?
+            if self.args.get('set_charge_window', False) and self.low_rates:
+                window = self.charge_window_best[0]
+                self.charge_start_time_minutes = window['start']
+                self.charge_end_time_minutes = window['end']
 
+                if window['start'] < 24*60 and window['start'] > self.minutes_now:
+                    charge_start_time = self.midnight_utc + timedelta(minutes=window['start'])
+                    charge_end_time = self.midnight_utc + timedelta(minutes=window['end'])
+                    self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
+
+                    # We must re-program if we are about to run to the new charge window or the old one is about to start
+                    if ((window['start'] - self.minutes_now) < self.set_window_minutes) or ((charge_start_time_minutes - self.minutes_now) < self.set_window_minutes):
+                        self.adjust_charge_window(charge_start_time, charge_end_time)
+            
             # Set the SOC, only do it within the window before the charge starts or during the charge if we change our mind
-            if self.args.get('set_soc_enable', False) and self.charge_enable:
+            if self.args.get('set_soc_enable', False):
                 if (self.minutes_now < self.charge_end_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
-                    self.adjust_battery_target(charge_limit_percent)
+                    self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
                     self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
 
-        # Simulate current settings
-        metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(self.charge_limit, load_minutes, pv_forecast_minute, True, False)
+
         self.log("Completed run")
 
     async def initialize(self):

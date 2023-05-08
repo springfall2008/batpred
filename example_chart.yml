@@ -43,7 +43,28 @@ series:
       b[0]  })
     show:
       in_header: raw
-
+  - entity: predbat.best_charge_limit_kw
+    stroke_width: 1
+    curve: stepline
+    name: charge_limit_best
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.charge_limit_kw
+    stroke_width: 1
+    curve: stepline
+    name: charge_limit
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
 
 # This is a cost chart
 type: custom:apexcharts-card

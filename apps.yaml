@@ -47,7 +47,7 @@ pred_bat:
   # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
   best_soc_margin: 0.5
-  best_soc_min: 2.0
+  best_soc_min: 2.5
   best_soc_keep: 1.5
   
   # Energy rates
@@ -88,6 +88,7 @@ pred_bat:
   # Only works if the charging time window has been enabled and Octopus import rates are configured (metric_octopus_import)
   # Set window minutes defines how many minutes before the charge window we should program it
   set_charge_window: True
+  set_window_notify: True
   set_window_minutes: 30
   
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
@@ -97,8 +98,8 @@ pred_bat:
   # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
   # note it maybe set more than once if things change
   set_soc_enable: True
-  set_soc_minutes: 30
   set_soc_notify: True
+  set_soc_minutes: 30
   
   # Set the frequency in minutes that this plugin is run
   run_every: 10
