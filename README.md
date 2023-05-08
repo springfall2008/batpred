@@ -3,27 +3,27 @@ Home battery prediction for Home Assistant with GivTCP
 
 Operation:
 
-The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours (you can predict longer but it can only try different battery settings for 1 charge slot). It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
+The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 8 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
 
 The output is a prediction of the battery levels and import and export amounts.
 
-Optionally it can also predict the results based on different target battery charge levels (SOC) and suggest the best option to use. 
+Optionally it can also predict the results based on different target battery charge levels (SOC) for up to 8 slots and suggest the best option to use. 
 This is based on a rough cost of imports and exports or the pricing from the Octopus Energy plugin
 The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
 
 Optionally Octopus energy pricing data can be used to indentify and programme charging windows
-<caution> - This has not been tested on Agile yet, only on a single day/night rate - needs checking
+<caution> - This has not been fully tested on Agile yet, only on a single day/night rate - needs checking
 
 To install:
 
 - You must have GivTCP installed and running first
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
-   - ***No longer required in the latest version**** In python packages (in the config) add 'tzlocal'
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
 - If you want to use real pricing data and have Ocotpus Energy then ensure you have the Octopus Energy plugin installed and working
+- If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured here. Batpred may decide to charge in these slots as well.
 - Customise any settings needed
 
 The following are entity names in HA for GivTCP and must be configured correctly:
@@ -45,8 +45,10 @@ The following are entity names in Solcast, unlikely to need changing:
   - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   
 The following are entity names in the Ocotpus Energy plugin:
-  - metric_octopus_import
-  - metric_octopus_export
+  - metric_octopus_import - Import rates from the Octopus plugin
+  - metric_octopus_export - Export rates from the Octopus plugin
+  - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
+  
 Or manually set your rates using:
   - rates_import
     - start
