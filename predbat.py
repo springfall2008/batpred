@@ -733,14 +733,23 @@ class PredBat(hass.Hass):
         """
         Optimise a single charging window for best SOC
         """
-        try_soc = self.soc_max
-        best_soc = try_soc
-        best_metric = 999999
+        loop_soc = self.soc_max
+        best_soc = self.soc_max
+        best_metric = 9999999
         
-        while try_soc > self.reserve:
+        while loop_soc > self.reserve:
             was_debug = self.debug_enable
             self.debug_enable = False
+
+            # Apply user clamping to the value we try
+            try_soc = min(loop_soc + self.best_soc_margin, self.soc_max)
+            try_soc = max(self.best_soc_min, try_soc)
+            try_soc = self.dp2(min(try_soc, self.soc_max))
+
+            # Store try value into the dinwo
             try_charge_limit[window_n] = try_soc
+
+            # Simulate
             metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(try_charge_limit, charge_window, load_minutes, pv_forecast_minute, False, False)
             self.debug_enable = was_debug
             if self.debug_enable:
@@ -757,7 +766,11 @@ class PredBat(hass.Hass):
             else:
                 if self.debug_enable:
                     self.log("Not Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
-            try_soc -= 0.5
+            loop_soc -= 0.5
+
+        # Add margin first and clamp to min and then clamp to max
+        # Also save the final selected metric
+
         return best_soc, best_metric
 
     def update_pred(self):
@@ -950,21 +963,14 @@ class PredBat(hass.Hass):
                 self.log("optiming charge window {}".format(window_n))
                 best_soc, best_metric = self.optimise_charge_limit(window_n, self.charge_window_best, self.charge_limit_best, load_minutes, pv_forecast_minute)
 
-                # Simulate best - add margin first and clamp to min and then clamp to max
-                # Also save the final selected metric
-                if self.debug_enable:
-                    self.log("Best charge limit window {} (unadjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
-                best_soc = best_soc + self.best_soc_margin
-                best_soc = max(self.best_soc_min, best_soc)
-                best_soc = self.dp2(min(best_soc, self.soc_max))
-                if self.debug_enable:
-                    self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
+                #if self.debug_enable:
+                self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))
                 self.charge_limit_best[window_n] = best_soc
 
-            # Final simulation of best
-            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(self.charge_limit_best, self.charge_window_best, load_minutes, pv_forecast_minute, False, True)
-            self.log("Best charging limit socs {} gives import battery {} house {} export {} metric {}".format
-            (self.charge_limit_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric)))
+        # Final simulation of best
+        best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(self.charge_limit_best, self.charge_window_best, load_minutes, pv_forecast_minute, False, True)
+        self.log("Best charging limit socs {} gives import battery {} house {} export {} metric {}".format
+        (self.charge_limit_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric)))
 
         if self.charge_enable:
             # Re-programme charge window based on low rates?
