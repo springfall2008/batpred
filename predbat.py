@@ -30,7 +30,7 @@ class PredBat(hass.Hass):
         r = requests.get(url + "?page=2")
         data = r.json()  
         mdata += data['results']      
-        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', False, False, False, to_key='valid_to')
+        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', False, False, to_key='valid_to')
         return pdata
 
     def mintes_to_time(self, updated, now):
@@ -41,7 +41,14 @@ class PredBat(hass.Hass):
         minutes = int(timeday.seconds / 60) + int(timeday.days * 60*24)
         return minutes
 
-    def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds,
+    def str2time(self, str):
+        if '.' in str:
+            tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
+        else:
+            tdata = datetime.strptime(str, TIME_FORMAT)
+        return tdata
+
+    def minute_data(self, history, days, now, state_key, last_updated_key,
                     backwards, hourly, to_key=None, smoothing=False):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -53,11 +60,6 @@ class PredBat(hass.Hass):
         newest_age = 99999
         prev_last_updated_time = None
 
-        if format_seconds:
-            format_string = TIME_FORMAT_SECONDS # 2023-04-25T19:33:47.861967+00:00
-        else:
-            format_string = TIME_FORMAT # 2023-04-25T19:33:47+00:00
-
         for item in history:
             if state_key not in item:
                 continue
@@ -66,8 +68,7 @@ class PredBat(hass.Hass):
             state = float(item[state_key])
             if hourly:
                 state /= 60
-            last_updated = item[last_updated_key]
-            last_updated_time = datetime.strptime(last_updated, format_string)
+            last_updated_time = self.str2time(item[last_updated_key])
 
             if not prev_last_updated_time:
                 prev_last_updated_time = last_updated_time
@@ -76,7 +77,7 @@ class PredBat(hass.Hass):
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
             if to_key:
-                to_time = datetime.strptime(item[to_key], format_string)
+                to_time = self.str2time(item[to_key])
             else:
                 if backwards:
                     to_time = prev_last_updated_time
@@ -823,7 +824,7 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
+        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, False, smoothing=True)
         load_minutes = self.clean_incrementing_reverse(load_minutes)
         self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
         self.soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
@@ -864,7 +865,7 @@ class PredBat(hass.Hass):
                 self.rate_import = self.rate_replicate(self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/"))
                 self.octopus_slots = []
             else:
-                self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to'))
+                self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to'))
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
             self.publish_rates(self.rate_import, False)
         else:
@@ -873,7 +874,7 @@ class PredBat(hass.Hass):
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
-            self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, False, to_key='to')
+            self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
 
         # Replicate rates for export
         if self.rate_export:
@@ -963,7 +964,7 @@ class PredBat(hass.Hass):
                 pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d6'], attribute='forecast')
             if 'pv_forecast_d7' in self.args:
                 pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d7'], attribute='forecast')
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate', 'period_start', False, False, True)
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate', 'period_start', False, True)
         else:
             pv_forecast_minute = {}
 
@@ -972,7 +973,7 @@ class PredBat(hass.Hass):
         self.car_charging_threshold = float(self.args.get('car_charging_threshold', 6.0)) / 60.0
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
+            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, False, smoothing=True)
             self.car_charging_energy = self.clean_incrementing_reverse(self.car_charging_energy)
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
