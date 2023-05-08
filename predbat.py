@@ -364,6 +364,8 @@ class PredBat(hass.Hass):
         # Save data to HA state
         if save:
             self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
+            self.set_state("predbat.soc_kw", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+            self.set_state("predbat.soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
             self.set_state("predbat.export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.load_energy", state=self.dp2(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -379,8 +381,8 @@ class PredBat(hass.Hass):
             self.set_state("predbat.soc_kw_best", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.set_state("predbat.best_soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=True)
-            self.set_state("predbat.best_load_energy", state=self.dp2(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_load_energy", state=self.dp2(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
@@ -745,9 +747,9 @@ class PredBat(hass.Hass):
                 self.log("Trying soc {} for window {} gives import battery {} house {} export {} metric {}".format
                         (try_soc, window_n, import_kwh_battery, import_kwh_house, export_kwh, metric))
 
-            # Only select the lower SOC if it makes a notable improvement has defined by min_improvement
+            # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if ((metric + self.metric_min_improvement) < best_metric) and (soc_min >= self.best_soc_keep):
+            if ((metric + (self.metric_min_improvement / len(charge_window)) < best_metric)) and (soc_min >= self.best_soc_keep):
                 best_metric = metric
                 best_soc = try_soc
                 if self.debug_enable:
