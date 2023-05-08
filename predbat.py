@@ -42,21 +42,21 @@ class PredBat(hass.Hass):
         return minutes
 
     def minute_data(self, history, days, now, state_key, last_updated_key, format_seconds,
-                    backwards, hourly, to_key=None):
+                    backwards, hourly, to_key=None, smoothing=False):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
         """
         mdata = {}
-        newest_state = 100
+        newest_state = 0
+        last_state = 0
         newest_age = 99999
+        prev_last_updated_time = None
 
         if format_seconds:
             format_string = TIME_FORMAT_SECONDS # 2023-04-25T19:33:47.861967+00:00
         else:
             format_string = TIME_FORMAT # 2023-04-25T19:33:47+00:00
-
-        prev_last_updated_time = None
 
         for item in history:
             if state_key not in item:
@@ -69,12 +69,16 @@ class PredBat(hass.Hass):
             last_updated = item[last_updated_key]
             last_updated_time = datetime.strptime(last_updated, format_string)
 
+            if not prev_last_updated_time:
+                prev_last_updated_time = last_updated_time
+                last_state = state
+
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
             if to_key:
                 to_time = datetime.strptime(item[to_key], format_string)
             else:
-                if prev_last_updated_time and backwards:
+                if backwards:
                     to_time = prev_last_updated_time
                 else:
                     to_time = None
@@ -101,21 +105,41 @@ class PredBat(hass.Hass):
                 if minute == minutes_to:
                     mdata[minute] = state
                 else:
-                    while minute < minutes_to:
-                        mdata[minute] = state
-                        minute += 1
+                    if smoothing:
+                        # Reset to zero?
+                        if state < last_state and (state == 0.0):
+                            while minute < minutes_to:
+                                mdata[minute] = state
+                                minute += 1
+                        else:
+                            # Can't really go backwards as incrementing data
+                            if state < last_state:
+                                state = last_state
+                            # Create linear function
+                            diff = (state - last_state) / (minutes_to - minute)
+                            index = 0
+                            while minute < minutes_to:
+                                mdata[minute] = state - diff*index
+                                minute += 1
+                                index += 1
+                    else:
+                        while minute < minutes_to:
+                            mdata[minute] = state
+                            minute += 1
             else:
                 mdata[minutes] = state
 
-            # Store previous time
+            # Store previous time & state
             prev_last_updated_time = last_updated_time
+            last_state = state
 
         # If we only have a start time then fill the gaps with the last values
         if not to_key:
             state = newest_state
             for minute in range(0, 60*24*days):
-                state = mdata.get(minute, state)
-                mdata[minute] = state
+                rindex = 60*24*days - minute - 1
+                state = mdata.get(rindex, state)
+                mdata[rindex] = state
                 minute += 1
         return mdata
 
@@ -134,6 +158,12 @@ class PredBat(hass.Hass):
         Round to 2 decimal places
         """
         return math.ceil(value*100)/100
+
+    def dp3(self, value):
+        """
+        Round to 3 decimal places
+        """
+        return math.ceil(value*1000)/1000
 
     def in_charge_window(self, charge_window, minute):
         """
@@ -157,7 +187,7 @@ class PredBat(hass.Hass):
         increment = 0
         last = data[length - 1]
 
-        for index in range(0, length - 1):
+        for index in range(0, length):
             rindex = length - index - 1
             nxt = data[rindex]
             if nxt >= last:
@@ -171,11 +201,7 @@ class PredBat(hass.Hass):
         """
         Get a single value from an incrementing series e.g. kwh today -> kwh this minute
         """
-        offset = 10
-        value = data[index]
-        old_value = data[index + offset]
-        diff = (value - old_value) / offset
-        return diff
+        return data[index] - data[index + 1]
 
     def run_prediction(self, charge_limit, charge_window, load_minutes, pv_forecast_minute, save, save_best):
         """
@@ -209,7 +235,6 @@ class PredBat(hass.Hass):
         # Simulate each forward minute
         while minute < self.forecast_minutes:
             minute_yesterday = 24 * 60 - minute + six_days
-            # Average previous load over 10 minutes due to sampling accuracy
             load_yesterday = self.get_from_incrementing(load_minutes, minute_yesterday)
 
             minute_absolute = minute + self.minutes_now
@@ -288,6 +313,7 @@ class PredBat(hass.Hass):
                             # If the battery is on charge anyhow then imports are kind of the same as battery charging (price wise)
                             import_kwh_battery += energy
                         else:
+                            # self.log("importing to minute %s amount %s kw total %s kwh total draw %s" % (minute, energy, import_kwh_house, diff))
                             import_kwh_house += energy
 
                         if minute_absolute in self.rate_import:
@@ -326,14 +352,14 @@ class PredBat(hass.Hass):
             if self.debug_enable and minute % 60 == 0:
                 self.log("Hour {} load_yesterday {} pv_now {} soc {}".format(minute/60, load_yesterday, pv_now, soc))
 
-            predict_soc[minute] = self.dp2(soc)
+            predict_soc[minute] = self.dp3(soc)
 
             # Only store every 10 minutes for data-set size
             if (minute % 10) == 0:
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                predict_soc_time[stamp] = self.dp2(soc)
+                predict_soc_time[stamp] = self.dp3(soc)
                 metric_time[stamp] = self.dp2(metric)
-                load_kwh_time[stamp] = self.dp2(load_kwh)
+                load_kwh_time[stamp] = self.dp3(load_kwh)
 
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
@@ -364,28 +390,28 @@ class PredBat(hass.Hass):
         # Save data to HA state
         if save:
             self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
-            self.set_state("predbat.soc_kw", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
-            self.set_state("predbat.soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+            self.set_state("predbat.soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+            self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
-            self.set_state("predbat.export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.load_energy", state=self.dp2(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.export_energy", state=self.dp3(export_kwh), attributes = {'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.load_energy", state=self.dp3(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.import_energy", state=self.dp3(import_kwh), attributes = {'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.import_energy_battery", state=self.dp3(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.import_energy_house", state=self.dp3(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.log("Battery has " + str(hours_left) + " hours left - now at " + str(self.soc_kw))
             self.set_state("predbat.metric", state=self.dp2(metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
             self.set_state("predbat.duration", state=self.dp2(end_record/60), attributes = {'friendly_name' : 'Prediction duration', 'state_class': 'measurement', 'unit_of_measurement': 'hours'})
 
         if save_best:
             self.set_state("predbat.best_battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left best', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'step' : 0.5})
-            self.set_state("predbat.soc_kw_best", state=self.dp2(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
-            self.set_state("predbat.best_soc_min_kwh", state=self.dp2(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+            self.set_state("predbat.soc_kw_best", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
+            self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'step' : 0.5})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=True)
-            self.set_state("predbat.best_export_energy", state=self.dp2(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.best_load_energy", state=self.dp2(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.best_import_energy", state=self.dp2(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.best_import_energy_battery", state=self.dp2(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
-            self.set_state("predbat.best_import_energy_house", state=self.dp2(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_export_energy", state=self.dp3(export_kwh), attributes = {'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_load_energy", state=self.dp3(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_import_energy", state=self.dp3(import_kwh), attributes = {'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_import_energy_battery", state=self.dp3(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
+            self.set_state("predbat.best_import_energy_house", state=self.dp3(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh'})
             self.set_state("predbat.best_metric", state=self.dp2(metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p'})
 
         return metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min
@@ -797,9 +823,8 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
+        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
         load_minutes = self.clean_incrementing_reverse(load_minutes)
-
         self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
         self.soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
         reserve_percent = float(self.get_state(entity_id = self.args['reserve'], default=0))
@@ -859,7 +884,7 @@ class PredBat(hass.Hass):
 
         # Load import today data and work out cost so far
         if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, True, False)
+            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
             self.import_today = self.clean_incrementing_reverse(self.import_today)
             self.cost_today_sofar = self.today_cost(self.import_today)
 
@@ -947,7 +972,7 @@ class PredBat(hass.Hass):
         self.car_charging_threshold = float(self.args.get('car_charging_threshold', 6.0)) / 60.0
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False)
+            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
             self.car_charging_energy = self.clean_incrementing_reverse(self.car_charging_energy)
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
