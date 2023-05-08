@@ -870,6 +870,7 @@ class PredBat(hass.Hass):
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
             data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
+            self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
 
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
@@ -883,10 +884,9 @@ class PredBat(hass.Hass):
         # Replicate and scan rates
         if self.rate_import:
             if TRY_AGILE:
-                self.rate_import = self.rate_replicate(self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/"))
+                self.rate_import = self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/")
                 self.octopus_slots = []
-            else:
-                self.rate_import = self.rate_replicate(self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to'))
+            self.rate_import = self.rate_replicate(self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
             self.publish_rates(self.rate_import, False)
         else:
