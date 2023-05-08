@@ -166,13 +166,13 @@ class PredBat(hass.Hass):
         """
         return math.ceil(value*1000)/1000
 
-    def in_charge_window(self, charge_window, minute):
+    def in_charge_window(self, charge_window, minute_abs):
         """
         Work out if this minute is within the a charge window
         """
         window_n = 0
         for window in charge_window:
-            if minute >= window['start'] and minute < window['end']:
+            if minute_abs >= window['start'] and minute_abs < window['end']:
                 return window_n
             window_n += 1
         return -1
@@ -204,6 +204,27 @@ class PredBat(hass.Hass):
         """
         return data[index] - data[index + 1]
 
+    def record_length(self, charge_window):
+        """
+        For the SOC calculation we need to stop 24 hours after the first charging window starts
+        to avoid wrapping into the next day
+        """
+        end_record = self.forecast_minutes
+        if len(charge_window):
+            end_record = min(end_record, charge_window[0]['start'] + 24*60 - self.minutes_now)
+        return end_record
+    
+    def max_charge_windows(self, end_record_abs, charge_window):
+        """
+        Work out how many charge windows the time period covers
+        """
+        charge_windows = 0
+        for minute in range(0, end_record_abs):
+            charge_n = self.in_charge_window(charge_window, minute)
+            if charge_n >= 0:
+                charge_windows = charge_n + 1
+        return charge_windows
+
     def run_prediction(self, charge_limit, charge_window, load_minutes, pv_forecast_minute, save, save_best):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -228,9 +249,7 @@ class PredBat(hass.Hass):
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
-        end_record = self.forecast_minutes
-        if len(self.charge_window):
-            end_record = min(end_record, self.charge_window[0]['start'] + 24*60 - self.minutes_now)
+        end_record = self.record_length(charge_window)
         record = True
 
         # Simulate each forward minute
@@ -763,14 +782,16 @@ class PredBat(hass.Hass):
         loop_soc = self.soc_max
         best_soc = self.soc_max
         best_metric = 9999999
+
+        end_record = self.record_length(charge_window)
+        record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, charge_window), 1)
         
         while loop_soc > self.reserve:
             was_debug = self.debug_enable
             self.debug_enable = False
 
             # Apply user clamping to the value we try
-            try_soc = min(loop_soc + self.best_soc_margin, self.soc_max)
-            try_soc = max(self.best_soc_min, try_soc)
+            try_soc = max(self.best_soc_min, loop_soc)
             try_soc = self.dp2(min(try_soc, self.soc_max))
 
             # Store try value into the dinwo
@@ -785,7 +806,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if ((metric + (self.metric_min_improvement / len(charge_window)) < best_metric)) and (soc_min >= self.best_soc_keep):
+            if ((metric + (self.metric_min_improvement / record_charge_windows) < best_metric)) and (soc_min >= self.best_soc_keep):
                 best_metric = metric
                 best_soc = try_soc
                 if self.debug_enable:
@@ -795,8 +816,8 @@ class PredBat(hass.Hass):
                     self.log("Not Selecting metric {} soc {} - soc_min {} and keep {}".format(metric, try_soc, soc_min, self.best_soc_keep))
             loop_soc -= 0.5
 
-        # Add margin first and clamp to min and then clamp to max
-        # Also save the final selected metric
+        # Add margin last
+        best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
         return best_soc, best_metric
 
