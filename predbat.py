@@ -827,7 +827,9 @@ class PredBat(hass.Hass):
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
             self.octopus_slots = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='completedDispatches')
-            self.octopus_slots += self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='plannedDispatches')
+            planned = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='plannedDispatches')
+            if planned:
+                self.octopus_slots += planned
 
         # Replicate and scan rates
         if self.rate_import:
