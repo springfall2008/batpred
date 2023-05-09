@@ -690,7 +690,7 @@ class PredBat(hass.Hass):
         day_cost_time = {}
 
         for minute in range(0, self.minutes_now):
-            minute_back = self.minutes_now - minute
+            minute_back = self.minutes_now - minute - 1
             energy = self.get_from_incrementing(import_today, minute_back)
             day_energy += energy
             day_cost += self.rate_import[minute] * energy
@@ -906,7 +906,7 @@ class PredBat(hass.Hass):
 
         # Load import today data and work out cost so far
         if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, True, False, smoothing=True)
+            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, False, smoothing=True)
             self.import_today = self.clean_incrementing_reverse(self.import_today)
             self.cost_today_sofar = self.today_cost(self.import_today)
 
