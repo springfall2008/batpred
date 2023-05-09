@@ -25,6 +25,8 @@ pred_bat:
   pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
   pv_forecast_d3: sensor.solcast_forecast_d3
   pv_forecast_d4: sensor.solcast_forecast_d4
+  # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
+  # pv_estimate: 10
   
   # Battery loss accounts for energy lost charging the battery, 0.05 is 5%
   battery_loss: 0.05

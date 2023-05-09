@@ -29,7 +29,7 @@ class PredBat(hass.Hass):
         r = requests.get(url + "?page=2")
         data = r.json()  
         mdata += data['results']      
-        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', False, False, to_key='valid_to')
+        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
         return pdata
 
     def mintes_to_time(self, updated, now):
@@ -48,7 +48,7 @@ class PredBat(hass.Hass):
         return tdata
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
-                    backwards, hourly, to_key=None, smoothing=False):
+                    backwards=False, to_key=None, smoothing=False, divide_by=0):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
@@ -65,8 +65,8 @@ class PredBat(hass.Hass):
             if item[state_key] == 'unavailable' or item[state_key] == 'unknown':
                 continue
             state = float(item[state_key])
-            if hourly:
-                state /= 60
+            if divide_by:
+                state /= divide_by
             last_updated_time = self.str2time(item[last_updated_key])
 
             if not prev_last_updated_time:
@@ -853,7 +853,7 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, False, smoothing=True)
+        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True)
         load_minutes = self.clean_incrementing_reverse(load_minutes)
         self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
         self.soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
@@ -878,7 +878,7 @@ class PredBat(hass.Hass):
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
             data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
-            self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
+            self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
         
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
@@ -905,7 +905,7 @@ class PredBat(hass.Hass):
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
-            self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
+            self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
 
         # Fixed URL for rate export
         if 'rates_export_octopus_url' in self.args:
@@ -921,7 +921,7 @@ class PredBat(hass.Hass):
 
         # Load import today data and work out cost so far
         if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', True, False, smoothing=True)
+            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True)
             self.import_today = self.clean_incrementing_reverse(self.import_today)
             self.cost_today_sofar = self.today_cost(self.import_today)
 
@@ -988,20 +988,20 @@ class PredBat(hass.Hass):
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
-            pv_forecast_data    = self.get_state(entity_id = self.args['pv_forecast_today'], attribute='forecast')
+            pv_forecast_data    = self.get_state(entity_id = self.args['pv_forecast_today'], attribute='detailedForecast')
             if 'pv_forecast_tomorrow' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_tomorrow'], attribute='forecast')
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_tomorrow'], attribute='detailedForecast')
             if 'pv_forecast_d3' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d3'], attribute='forecast')
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d3'], attribute='detailedForecast')
             if 'pv_forecast_d4' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d4'], attribute='forecast')
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d4'], attribute='detailedForecast')
             if 'pv_forecast_d5' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d5'], attribute='forecast')
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d5'], attribute='detailedForecast')
             if 'pv_forecast_d6' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d6'], attribute='forecast')
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d6'], attribute='detailedForecast')
             if 'pv_forecast_d7' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d7'], attribute='forecast')
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate', 'period_start', False, True)
+                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d7'], attribute='detailedForecast')
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate' + str(self.args.get('pv_estimate', '')), 'period_start', backwards=False, divide_by=30)
         else:
             pv_forecast_minute = {}
 
@@ -1010,7 +1010,7 @@ class PredBat(hass.Hass):
         self.car_charging_threshold = float(self.args.get('car_charging_threshold', 6.0)) / 60.0
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', True, False, smoothing=True)
+            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True)
             self.car_charging_energy = self.clean_incrementing_reverse(self.car_charging_energy)
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
