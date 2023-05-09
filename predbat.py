@@ -801,11 +801,11 @@ class PredBat(hass.Hass):
             metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(try_charge_limit, charge_window, load_minutes, pv_forecast_minute, False, False)
             self.debug_enable = was_debug
             if self.debug_enable:
-                self.log("Trying soc {} for window {} gives import battery {} house {} export {} metric {}".format
+                self.log("Tried soc {} for window {} gives import battery {} house {} export {} metric {}".format
                         (try_soc, window_n, import_kwh_battery, import_kwh_house, export_kwh, metric))
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            # and it doesn't fall below the soc_keep threshold
+            # and it doesn't fall below the soc_keep threshold 
             if ((metric + (self.metric_min_improvement / record_charge_windows) < best_metric)) and (soc_min >= self.best_soc_keep):
                 best_metric = metric
                 best_soc = try_soc
@@ -926,7 +926,6 @@ class PredBat(hass.Hass):
             # Find current charge window
             charge_start_time = datetime.strptime(self.get_state(self.args['charge_start_time']), "%H:%M:%S")
             charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
-            charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
 
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
@@ -952,6 +951,7 @@ class PredBat(hass.Hass):
             if self.args.get('set_charge_window', False) and self.low_rates:
                 # If we are using calculated windows directly then save them
                 self.charge_window_best = self.low_rates[:]
+                self.log('Charge windows best will be {}'.format(self.charge_window_best))
             else:
                 # Default best charge window as this one
                 self.charge_window_best = self.charge_window[:]
@@ -1025,23 +1025,33 @@ class PredBat(hass.Hass):
 
         if self.charge_enable:
             # Re-programme charge window based on low rates?
-            if self.args.get('set_charge_window', False) and self.low_rates:
+            if self.args.get('set_charge_window', False) and self.charge_window_best:
+                # Find the next best window and save it
                 window = self.charge_window_best[0]
-                self.charge_start_time_minutes = window['start']
-                self.charge_end_time_minutes = window['end']
 
                 if window['start'] < 24*60 and window['start'] > self.minutes_now:
                     charge_start_time = self.midnight_utc + timedelta(minutes=window['start'])
                     charge_end_time = self.midnight_utc + timedelta(minutes=window['end'])
                     self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
 
-                    # We must re-program if we are about to run to the new charge window or the old one is about to start
-                    if ((window['start'] - self.minutes_now) < self.set_window_minutes) or ((charge_start_time_minutes - self.minutes_now) < self.set_window_minutes):
+                    # We must re-program if we are about to start a new charge window
+                    # or the currently configured window is about to start
+                    if (self.minutes_now < window['start']) and (
+                          (window['start'] - self.minutes_now) <= self.set_window_minutes or 
+                          (self.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
+                        ):
+                        self.log("Configurating charge window now (now {} target set_window_minutes {} charge start time {}".format(self.minutes_now, self.set_window_minutes, window['start']))
                         self.adjust_charge_window(charge_start_time, charge_end_time)
+                    else:
+                        self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.minutes_now,self.set_window_minutes, window['start']))
+
+                    # Set configured window minutes for the SOC adjustment routine
+                    self.charge_start_time_minutes = window['start']
+                    self.charge_end_time_minutes = window['end']
             
             # Set the SOC, only do it within the window before the charge starts or during the charge if we change our mind
             if self.args.get('set_soc_enable', False):
-                if (self.minutes_now < self.charge_end_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+                if (self.minutes_now < self.charge_start_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
                     self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
