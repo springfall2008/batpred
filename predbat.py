@@ -970,7 +970,8 @@ class PredBat(hass.Hass):
             self.charge_limit = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
             self.charge_limit_percent = [current_charge_limit for i in range(0, len(self.charge_window))]
 
-            self.charge_limit_best = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window_best))]
+            # Pre-fill best with the current charge limit
+            self.charge_limit_best = [current_charge_limit * current_charge_limit / 100.0 for i in range(0, len(self.charge_window_best))]
             self.charge_limit_percent_best = [current_charge_limit for i in range(0, len(self.charge_window_best))]
 
             self.charge_rate = float(self.get_state(self.args['charge_rate'], attribute='max')) / 1000.0 / 60.0
@@ -1017,10 +1018,11 @@ class PredBat(hass.Hass):
 
         # Try different battery SOCs to get the best result
         if self.args.get('calculate_best', False):
-            # Set all to min
-            self.charge_limit_best = [self.best_soc_min for n in range(0, len(self.charge_limit_best))]
             end_record = self.record_length(self.charge_window_best)
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+            
+            # Set all to min
+            self.charge_limit_best = [self.best_soc_min if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
             for window_n in range(0, record_charge_windows):
                 self.log("optiming charge window {}".format(window_n))
