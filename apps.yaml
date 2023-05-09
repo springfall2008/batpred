@@ -77,8 +77,17 @@ pred_bat:
        
   rates_export:
     -  rate: 7.5
-    
+
+  # Can be used instead of the plugin to get import rates directly online
+  # Overrides metric_octopus_import and rates_import
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
+  
+  # Overrides metric_octopus_export and rates_export
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
+
   # Or set rates to be assumed for imports for the house, charging the battery and exports
+  # this method will not allow automatic setting of charging windows
   metric_house: 38
   metric_battery: 7.5
   metric_export: 4.2

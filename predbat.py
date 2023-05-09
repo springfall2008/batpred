@@ -14,7 +14,6 @@ import requests
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-TRY_AGILE = False # For debugging only - do not use right now, pretends you are on Agile when are you not
 MAX_CHARGE_LIMITS = 8
 
 class PredBat(hass.Hass):
@@ -880,21 +879,23 @@ class PredBat(hass.Hass):
         if 'metric_octopus_import' in self.args:
             data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
             self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
-
+        
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
             completed = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='completedDispatches')
             if completed:
-                self.octopus_slots += planned
+                self.octopus_slots += completed
             planned = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='plannedDispatches')
             if planned:
                 self.octopus_slots += planned
 
+        # Fixed URL for rate import
+        if 'rates_import_octopus_url' in self.args:
+            self.log("Downloading import rates directly from url {}".format(self.args['rates_import_octopus_url']))
+            self.rate_import = self.download_octopus_rates(self.args['rates_import_octopus_url'])
+
         # Replicate and scan rates
         if self.rate_import:
-            if TRY_AGILE:
-                self.rate_import = self.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-H/standard-unit-rates/")
-                self.octopus_slots = []
             self.rate_import = self.rate_replicate(self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
             self.publish_rates(self.rate_import, False)
@@ -905,6 +906,11 @@ class PredBat(hass.Hass):
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
             self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', False, False, to_key='to')
+
+        # Fixed URL for rate export
+        if 'rates_export_octopus_url' in self.args:
+            self.log("Downloading export rates directly from url {}".format(self.args['rates_export_octopus_url']))
+            self.rate_export = self.download_octopus_rates(self.args['rates_export_octopus_url'])
 
         # Replicate rates for export
         if self.rate_export:
