@@ -154,3 +154,85 @@ series:
     show:
       in_header: raw
 
+# Data prediction chart (import/export/pv/load)
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Data prediction
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: minute
+  offset: '-1h'
+now:
+  show: true
+yaxis:
+  - min: 0
+series:
+  - entity: predbat.load_energy
+    stroke_width: 1
+    curve: smooth
+    name: load
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.pv_energy
+    stroke_width: 1
+    curve: smooth
+    name: pv
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.import_energy
+    stroke_width: 1
+    curve: smooth
+    name: import
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.export_energy
+    stroke_width: 1
+    curve: smooth
+    name: export
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.best_import_energy
+    stroke_width: 1
+    curve: smooth
+    name: best import
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predbat.best_export_energy
+    stroke_width: 1
+    curve: smooth
+    name: best export
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
