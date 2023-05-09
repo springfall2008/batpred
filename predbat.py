@@ -775,16 +775,13 @@ class PredBat(hass.Hass):
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
 
-    def optimise_charge_limit(self, window_n, charge_window, try_charge_limit, load_minutes, pv_forecast_minute):
+    def optimise_charge_limit(self, window_n, record_charge_windows, charge_window, try_charge_limit, load_minutes, pv_forecast_minute):
         """
         Optimise a single charging window for best SOC
         """
         loop_soc = self.soc_max
         best_soc = self.soc_max
         best_metric = 9999999
-
-        end_record = self.record_length(charge_window)
-        record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, charge_window), 1)
         
         while loop_soc > self.reserve:
             was_debug = self.debug_enable
@@ -800,9 +797,9 @@ class PredBat(hass.Hass):
             # Simulate
             metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min = self.run_prediction(try_charge_limit, charge_window, load_minutes, pv_forecast_minute, False, False)
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable or 1:
                 self.log("Tried soc {} for window {} gives import battery {} house {} export {} metric {}".format
-                        (try_soc, window_n, import_kwh_battery, import_kwh_house, export_kwh, metric))
+                        (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(metric)))
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
@@ -1008,11 +1005,14 @@ class PredBat(hass.Hass):
 
         # Try different battery SOCs to get the best result
         if self.args.get('calculate_best', False):
-            # Set all to 100%
-            self.charge_limit_best = [self.soc_max for n in range(0, len(self.charge_limit_best))]
-            for window_n in range(0, len(self.charge_limit_best)):
+            # Set all to min
+            self.charge_limit_best = [self.best_soc_min for n in range(0, len(self.charge_limit_best))]
+            end_record = self.record_length(self.charge_window_best)
+            record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+
+            for window_n in range(0, record_charge_windows):
                 self.log("optiming charge window {}".format(window_n))
-                best_soc, best_metric = self.optimise_charge_limit(window_n, self.charge_window_best, self.charge_limit_best, load_minutes, pv_forecast_minute)
+                best_soc, best_metric = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_window_best, self.charge_limit_best, load_minutes, pv_forecast_minute)
 
                 #if self.debug_enable:
                 self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric)))

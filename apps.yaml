@@ -43,16 +43,17 @@ pred_bat:
   
   # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
-  # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up)
+  # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
+  #                   Best not used with multiple charge windows as it tends up limit everything.
   # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
-  best_soc_margin: 0.5
-  best_soc_min: 2
+  best_soc_margin: 0
+  best_soc_min: 2.5
   best_soc_keep: 2
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
-  metric_min_improvement: 5
+  metric_min_improvement: 2
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
