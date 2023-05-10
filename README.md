@@ -13,7 +13,7 @@ The solar forecast used is the central scenario from Solcast but you can also ad
 The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
 
-Energy pricing data from Octopus (metric_octopus_import) or manually (rates_import) can be used to indentify and programme charging windows.
+Energy pricing data from Octopus (metric_octopus_import) or manually (rates_import) can be used to identify and program charging windows.
 
 To install:
 
@@ -22,7 +22,8 @@ To install:
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
-- If you want to use real pricing data and have Ocotpus Energy then ensure you have the Octopus Energy plugin installed and working
+- If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working
+  or you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
 - If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured here. Batpred may decide to charge in these slots as well.
 - Customise any settings needed
 
