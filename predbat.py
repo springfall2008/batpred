@@ -61,6 +61,12 @@ class PredBat(hass.Hass):
         newest_age = 99999
         prev_last_updated_time = None
 
+        # Check history is valid
+        if not history:
+            self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
+            return mdata
+
+        # Process history
         for item in history:
 
             # Ignore data without correct keys
@@ -945,7 +951,10 @@ class PredBat(hass.Hass):
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
             data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
-            self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+            if data_import:
+                self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+            else:
+                self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
         
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
@@ -972,7 +981,10 @@ class PredBat(hass.Hass):
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
-            self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+            if data_export:
+                self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+            else:
+                self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
 
         # Fixed URL for rate export
         if 'rates_export_octopus_url' in self.args:
