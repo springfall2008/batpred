@@ -1,5 +1,5 @@
 # batpred
-Home battery prediction for Home Assistant with GivTCP
+Home battery prediction and automatic charging for Home Assistant with GivTCP
 
 Operation:
 
