@@ -8,12 +8,12 @@ The app runs every N minutes (default 5), it will automatically update its predi
 The output is a prediction of the battery levels and import and export amounts.
 
 Optionally it can also predict the results based on different target battery charge levels (SOC) for up to 8 slots and suggest the best option to use. 
-This is based on a rough cost of imports and exports or the pricing from the Octopus Energy plugin
+This is based on a rough cost of imports and exports or the energy pricing data (from Octopus or manually configured).
+The solar forecast used is the central scenario from Solcast but you can also add weighting to the 10% (worst case) scenario, the default is 20% weighting to this.
 The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
 
-Optionally Octopus energy pricing data can be used to indentify and programme charging windows
-<caution> - This has not been fully tested on Agile yet, only on a single day/night rate - needs checking
+Energy pricing data from Octopus (metric_octopus_import) or manually (rates_import) can be used to indentify and programme charging windows.
 
 To install:
 
@@ -48,7 +48,7 @@ The following are entity names in the Ocotpus Energy plugin:
   - metric_octopus_import - Import rates from the Octopus plugin
   - metric_octopus_export - Export rates from the Octopus plugin
   - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
-  
+ 
 Or manually set your rates using:
   - rates_import
     - start
@@ -58,7 +58,11 @@ Or manually set your rates using:
     - start
       end
       rate
-      
+
+Or you can override these by manually supplying an octopus pricing URL (expert feature)
+  - rates_import_octopus_url
+  - rates_export_octopus_url
+   
 Or set assumed rates for the house, battery charging and export. You can't enable automatic charging windows with this option.
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
@@ -69,6 +73,9 @@ These are configuration items that you can modify to fit your needs:
   - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
   - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
   - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
+  - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
+  - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
+  - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.2 for 20% weighting)
   
   - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
   - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
@@ -131,7 +138,7 @@ To create the fancy chart
 
 Example charts:
 
-![image](https://user-images.githubusercontent.com/48591903/235856853-7a962991-07c3-40cf-85c3-77abfd2abd94.png)
+![image](https://github.com/springfall2008/batpred/assets/48591903/8d5f74ef-c798-4bdb-8a04-b8f6e8b815b3)
 
 ![image](https://user-images.githubusercontent.com/48591903/236629103-103ccc62-89aa-48bf-bc8b-0005c1153974.png)
 
@@ -140,7 +147,5 @@ Example charts:
 
 Todo list:
   - Add ability to average load over a number of days
-  - Add option to show other Octopus tariffs as cost comparison
-  - Try to use 90/10 data from solcast
-  - Need to test on Agile and Cosy tariff
+  - More user testing on different tariffs
   
