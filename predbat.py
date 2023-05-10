@@ -14,7 +14,7 @@ import requests
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-MAX_CHARGE_LIMITS = 8
+MAX_CHARGE_LIMITS = 10
 
 class PredBat(hass.Hass):
     """ 
@@ -62,15 +62,29 @@ class PredBat(hass.Hass):
         prev_last_updated_time = None
 
         for item in history:
+
+            # Ignore data without correct keys
             if state_key not in item:
                 continue
+            if last_updated_key not in item:
+                continue
+
+            # Unavailable or bad values
             if item[state_key] == 'unavailable' or item[state_key] == 'unknown':
                 continue
-            state = float(item[state_key]) * scale
+
+            # Get the numerical key and the timestamp and ignore if in error
+            try:
+                state = float(item[state_key]) * scale
+                last_updated_time = self.str2time(item[last_updated_key])
+            except ValueError:
+                continue
+
+            # Divide down the state if required
             if divide_by:
                 state /= divide_by
-            last_updated_time = self.str2time(item[last_updated_key])
-
+            
+            # Update prev to the first if not set
             if not prev_last_updated_time:
                 prev_last_updated_time = last_updated_time
                 last_state = state
@@ -524,6 +538,7 @@ class PredBat(hass.Hass):
         rate_low_end = -1
         rate_low_threshold = self.args.get('rate_low_threshold', 0.8)
         rate_low_average = 0
+        rate_low_rate = 0
         rate_low_count = 0
 
         stop_at = self.forecast_minutes + 12*60
@@ -536,17 +551,26 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if rate <= (self.rate_average * rate_low_threshold):
+                    if 0 and rate_low_start >= 0 and rate != rate_low_rate:
+                        # Refuse mixed rates
+                        rate_low_end = minute
+                        #self.log("Rate low stop (change) %s rate %s" % (minute, rate))
+                        break
                     if rate_low_start < 0:
                         rate_low_start = minute
                         rate_low_end = stop_at
-                        rate_low_count = 0
-                    if rate_low_end > minute:
+                        rate_low_count = 1
+                        rate_low_average = rate
+                        rate_low_rate = rate
+                        #self.log("Rate low start %s rate %s" % (minute, rate))
+                    elif rate_low_end > minute:
                         rate_low_average += rate
                         rate_low_count += 1
                 else:
                     if rate_low_start >= 0:
+                        #self.log("Rate low stop (too high) %s rate %s" % (minute, rate))
                         rate_low_end = minute
-                        break
+                        break                    
             else:
                 if rate_low_start >= 0 and rate_low_end >= minute:
                     rate_low_end = minute
@@ -809,6 +833,7 @@ class PredBat(hass.Hass):
         best_soc = self.soc_max
         best_metric = 9999999
         best_cost = 0
+        prev_soc = self.soc_max + 1
         
         while loop_soc > self.reserve:
             was_debug = self.debug_enable
@@ -816,7 +841,12 @@ class PredBat(hass.Hass):
 
             # Apply user clamping to the value we try
             try_soc = max(self.best_soc_min, loop_soc)
+            try_soc = max(try_soc, self.reserve)
             try_soc = self.dp2(min(try_soc, self.soc_max))
+
+            # Stop when we won't change the soc anymore
+            if try_soc >= prev_soc:
+                break
 
             # Store try value into the dinwo
             try_charge_limit[window_n] = try_soc
@@ -842,7 +872,7 @@ class PredBat(hass.Hass):
                 metric += metric_diff
 
             self.debug_enable = was_debug
-            if self.debug_enable or 1:
+            if self.debug_enable:
                 self.log("Tried soc {} for window {} gives import battery {} house {} export {} min_soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
@@ -857,6 +887,8 @@ class PredBat(hass.Hass):
             else:
                 if self.debug_enable:
                     self.log("Not Selecting metric {} cost {} soc {} - soc_min {} and keep {}".format(metric, cost, try_soc, soc_min, self.best_soc_keep))
+            
+            prev_soc = try_soc
             loop_soc -= 0.5
 
         # Add margin last
@@ -1087,14 +1119,16 @@ class PredBat(hass.Hass):
                 # Find the next best window and save it
                 window = self.charge_window_best[0]
 
-                if window['start'] < 24*60 and window['start'] > self.minutes_now:
+                if window['start'] < 24*60 and window['end'] > self.minutes_now:
                     charge_start_time = self.midnight_utc + timedelta(minutes=window['start'])
                     charge_end_time = self.midnight_utc + timedelta(minutes=window['end'])
                     self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
 
                     # We must re-program if we are about to start a new charge window
-                    # or the currently configured window is about to start
-                    if (self.minutes_now < window['start']) and (
+                    # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
+                    if (self.minutes_now >= self.charge_start_time_minutes) and (self.minutes_now < self.charge_end_time_times):
+                        self.log("Currently in a charge window, don't change it")
+                    elif (self.minutes_now < window['end']) and (
                           (window['start'] - self.minutes_now) <= self.set_window_minutes or 
                           (self.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
@@ -1107,9 +1141,9 @@ class PredBat(hass.Hass):
                     self.charge_start_time_minutes = window['start']
                     self.charge_end_time_minutes = window['end']
             
-            # Set the SOC, only do it within the window before the charge starts or during the charge if we change our mind
+            # Set the SOC, only do it before or just within the window (not the entire way due to thrash in charge % values)
             if self.args.get('set_soc_enable', False):
-                if (self.minutes_now < self.charge_start_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+                if self.minutes_now <= (self.charge_start_time_minutes + 15) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
                     self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
