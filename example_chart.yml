@@ -24,7 +24,7 @@ series:
   - entity: predbat.soc_kw
     stroke_width: 1
     curve: smooth
-    name: predicted
+    name: base
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -33,6 +33,17 @@ series:
     show:
       in_header: raw
   - entity: predbat.soc_kw_best
+    stroke_width: 2
+    curve: smooth
+    name: best10
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.soc_kw_best10
     stroke_width: 1
     curve: smooth
     name: best
@@ -57,7 +68,7 @@ series:
   - entity: predbat.charge_limit_kw
     stroke_width: 1
     curve: stepline
-    name: charge_limit
+    name: charge_limit_base
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -65,6 +76,7 @@ series:
       b[0]  })
     show:
       in_header: raw
+
 
 # This is a cost chart
 type: custom:apexcharts-card
@@ -83,7 +95,7 @@ series:
   - entity: predbat.metric
     stroke_width: 1
     curve: smooth
-    name: predicted
+    name: base
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -92,9 +104,20 @@ series:
     show:
       in_header: raw
   - entity: predbat.best_metric
-    stroke_width: 1
+    stroke_width: 2
     curve: smooth
     name: best
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.best10_metric
+    stroke_width: 1
+    curve: smooth
+    name: best10
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -113,7 +136,7 @@ series:
       b[0]  })
     show:
       in_header: raw
-      
+
 # Energy rate chart
 type: custom:apexcharts-card
 header:

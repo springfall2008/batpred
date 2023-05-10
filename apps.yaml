@@ -25,14 +25,28 @@ pred_bat:
   pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
   pv_forecast_d3: sensor.solcast_forecast_d3
   pv_forecast_d4: sensor.solcast_forecast_d4
+
   # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
+  # If you use 10 then disable pv_metric10_weight below
   # pv_estimate: 10
   
   # Battery loss accounts for energy lost charging the battery, 0.05 is 5%
   battery_loss: 0.05
-  
+
+  # Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
+  # Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
+  load_scaling: 1.0
+
   # Days previous is the number of days back to find historical load data
   days_previous: 7
+
+  # Scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
+  # Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
+  pv_scaling: 1.0
+
+  # Weighting given to the 10% PV scenario, comment out or put to 0.0 to disable this
+  # A value of 0.2 assumes that 1:5 times we get the 10% scenario and hence to count this in the metric benefit/cost
+  pv_metric10_weight: 0.2
   
   # Number of hours forward to forecast
   forecast_hours: 48
@@ -50,7 +64,7 @@ pred_bat:
   # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
   best_soc_margin: 0
-  best_soc_min: 2.5
+  best_soc_min: 2
   best_soc_keep: 2
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
