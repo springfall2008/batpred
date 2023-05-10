@@ -28,7 +28,7 @@ To install:
 - Customise any settings needed
 
 The following are entity names in HA for GivTCP and must be configured correctly:
-  - soc_kw - Entity name of the battery SOC in Kw, should be the inverter one not an individual battery
+  - soc_kw - Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
   - soc_max - Entity name for the maximum charge level for the battery
   - soc_percent - Entity name for used to set the SOC target for the battery in percentage
   - reserve - sensor name for the reserve setting in %
