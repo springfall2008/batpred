@@ -137,8 +137,7 @@ To create the fancy chart
 - Customise as you like
 
 Example charts:
-
-![image](https://github.com/springfall2008/batpred/assets/48591903/8d5f74ef-c798-4bdb-8a04-b8f6e8b815b3)
+![image](https://github.com/springfall2008/batpred/assets/48591903/2c782f9e-ba50-4fd5-9893-c9c2eea7fcdc)
 
 ![image](https://user-images.githubusercontent.com/48591903/236629103-103ccc62-89aa-48bf-bc8b-0005c1153974.png)
 
