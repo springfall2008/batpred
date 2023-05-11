@@ -7,18 +7,19 @@ pred_bat:
   timezone: Europe/London
   
   # Set these to match your own GivTCP names, will need updating with your serial number
-  soc_kw: sensor.givtcp_sa2243g277_soc_kwh
-  soc_percent: number.givtcp_sa2243g277_target_soc
-  soc_max: sensor.givtcp_sa2243g277_battery_capacity_kwh
-  reserve: number.givtcp_sa2243g277_battery_power_reserve
-  load_today: sensor.givtcp_sa2243g277_load_energy_today_kwh
-  charge_enable: switch.givtcp_sa2243g277_enable_charge_schedule
-  charge_start_time: select.givtcp_sa2243g277_charge_start_time_slot_1
-  charge_end_time: select.givtcp_sa2243g277_charge_end_time_slot_1
-  charge_limit: number.givtcp_sa2243g277_target_soc
-  charge_rate: number.givtcp_sa2243g277_battery_charge_rate
-  discharge_rate: number.givtcp_sa2243g277_battery_discharge_rate
-  import_today: sensor.givtcp_sa2243g277_import_energy_today_kwh
+  geserial: sa2243g277
+  soc_kw: sensor.givtcp_{geserial}_soc_kwh
+  soc_percent: number.givtcp_{geserial}_target_soc
+  soc_max: sensor.givtcp_{geserial}_battery_capacity_kwh
+  reserve: number.givtcp_{geserial}_battery_power_reserve
+  load_today: sensor.givtcp_{geserial}_load_energy_today_kwh
+  charge_enable: switch.givtcp_{geserial}_enable_charge_schedule
+  charge_start_time: select.givtcp_{geserial}_charge_start_time_slot_1
+  charge_end_time: select.givtcp_{geserial}_charge_end_time_slot_1
+  charge_limit: number.givtcp_{geserial}_target_soc
+  charge_rate: number.givtcp_{geserial}_battery_charge_rate
+  discharge_rate: number.givtcp_{geserial}_battery_discharge_rate
+  import_today: sensor.givtcp_{geserial}_import_energy_today_kwh
   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today
@@ -93,7 +94,7 @@ pred_bat:
        rate: 40.0
        
   rates_export:
-    -  rate: 7.5
+    -  rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import

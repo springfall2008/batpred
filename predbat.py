@@ -21,6 +21,21 @@ class PredBat(hass.Hass):
     The battery prediction class itself 
     """
 
+    def get_arg(self, arg, default=None, indirect=True):
+        """
+        Argument getter that can use HA state as well as fixed values
+        """
+        value = self.args.get(arg, default)
+
+        for repeat in range(0, 2):
+            if isinstance(value, str) and '{' in value:
+                value = value.format(**self.args)
+
+        if indirect and isinstance(value, str) and '.' in value:
+            value = self.get_state(entity_id = value, default=default)
+
+        return value
+
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL
@@ -228,6 +243,8 @@ class PredBat(hass.Hass):
         """
         Get a single value from an incrementing series e.g. kwh today -> kwh this minute
         """
+        while index < 0:
+            index += 24*60
         return data[index] - data[index + 1]
 
     def record_length(self, charge_window):
@@ -285,6 +302,7 @@ class PredBat(hass.Hass):
         # Simulate each forward minute
         while minute < self.forecast_minutes:
             minute_yesterday = 24 * 60 - minute + six_days
+            # Minute yesterday can wrap if days_previous is only 1 
             minute_absolute = minute + self.minutes_now
             minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
             charge_window_n = self.in_charge_window(charge_window, minute_absolute)
@@ -493,13 +511,13 @@ class PredBat(hass.Hass):
         Adjust the battery charging target SOC % in GivTCP
         """
         # Check current setting and adjust
-        current_soc = float(self.get_state(entity_id = self.args['soc_percent'], default=100))
+        current_soc = float(self.get_state(entity_id = self.get_arg('soc_percent', indirect=False), default=100))
         if current_soc != soc:
             self.log("Current SOC is {} and new target is {}".format(current_soc, soc))
-            entity_soc = self.get_entity(self.args['soc_percent'])
+            entity_soc = self.get_entity(self.get_arg('soc_percent', indirect=False))
             if entity_soc:
                 entity_soc.call_service("set_value", value=soc)
-                if self.args.get('set_soc_notify', False):
+                if self.get_arg('set_soc_notify', False):
                     self.call_service("notify/notify", message='Predbat: Target SOC has been changed to {}'.format(soc))
             else:
                 self.log("WARN: Unable to get entity to set SOC target")
@@ -510,18 +528,18 @@ class PredBat(hass.Hass):
         """
         Adjust the charging window times (start and end) in GivTCP
         """
-        old_start = self.get_state(self.args['charge_start_time'])
-        old_end = self.get_state(self.args['charge_end_time'])
+        old_start = self.get_arg('charge_start_time')
+        old_end = self.get_arg('charge_end_time')
         new_start = charge_start_time.strftime("%H:%M:%S")
         new_end = charge_end_time.strftime("%H:%M:%S")
         if new_start != old_start:
-            entity_start = self.get_entity(self.args['charge_start_time'])
+            entity_start = self.get_entity(self.get_arg('charge_start_time', indirect=False))
             entity_start.call_service("select_option", option=new_start)
         if new_end != old_end:
-            entity_end = self.get_entity(self.args['charge_end_time'])
+            entity_end = self.get_entity(self.get_arg('charge_end_time', indirect=False))
             entity_end.call_service("select_option", option=new_end)
         if new_start != old_start or new_end != old_end:
-            if self.args.get('set_window_notify', False):
+            if self.get_arg('set_window_notify', False):
                 self.call_service("notify/notify", message="Predbat: Charge window change to: {} - {}".format(new_start, new_end))
             self.log("Updated start and end charge window to {} - {} (old {} - {})".format(new_start, new_end, old_start, old_end))
 
@@ -548,7 +566,7 @@ class PredBat(hass.Hass):
         """
         rate_low_start = -1
         rate_low_end = -1
-        rate_low_threshold = self.args.get('rate_low_threshold', 0.8)
+        rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
         rate_low_average = 0
         rate_low_rate = 0
         rate_low_count = 0
@@ -880,7 +898,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metricmid:
                 metric_diff = metric10 - metricmid
-                metric_diff *= self.args.get('pv_metric10_weight', 0.0)
+                metric_diff *= self.get_arg('pv_metric10_weight', 0.0)
                 metric += metric_diff
 
             self.debug_enable = was_debug
@@ -912,12 +930,12 @@ class PredBat(hass.Hass):
         """
         Update the prediction state, everything is called from here right now
         """
-        local_tz = pytz.timezone(self.args.get('timezone', "Europe/London"))
+        local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
         now_utc = datetime.now(local_tz)
         now = datetime.now()
         self.log("PredBat - update at: " + str(now_utc))
 
-        self.debug_enable = self.args.get('debug_enable', False)
+        self.debug_enable = self.get_arg('debug_enable', False)
         self.log("Debug enable is {}".format(self.debug_enable))
 
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -927,20 +945,20 @@ class PredBat(hass.Hass):
         self.minutes_now = int((now - self.midnight).seconds / 60)
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
-        self.days_previous = self.args.get('days_previous', 7)
-        forecast_hours = self.args.get('forecast_hours', 24)
+        self.days_previous = self.get_arg('days_previous', 7)
+        forecast_hours = self.get_arg('forecast_hours', 24)
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data(self.get_history(entity_id = self.args['load_today'], days = self.days_previous + 1)[0], 
-                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.args.get('load_scaling', 1.0), clean_increment=True)
-        self.soc_kw = float(self.get_state(entity_id = self.args['soc_kw'], default=0))
-        self.soc_max = float(self.get_state(entity_id = self.args['soc_max'], default=0))
-        reserve_percent = float(self.get_state(entity_id = self.args['reserve'], default=0))
-        self.metric_house = self.args.get('metric_house', 38.0)
-        self.metric_battery = self.args.get('metric_battery', 7.5)
-        self.metric_export = self.args.get('metric_export', 4)
-        self.metric_min_improvement = self.args.get('metric_min_improvement', 5)
+        load_minutes = self.minute_data(self.get_history(entity_id = self.get_arg('load_today', indirect=False), days = self.days_previous + 1)[0], 
+                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True)
+        self.soc_kw = float(self.get_arg('soc_kw', default=0))
+        self.soc_max = float(self.get_arg('soc_max', default=0))
+        reserve_percent = float(self.get_arg('reserve', default=0))
+        self.metric_house = self.get_arg('metric_house', 38.0)
+        self.metric_battery = self.get_arg('metric_battery', 7.5)
+        self.metric_export = self.get_arg('metric_export', 4)
+        self.metric_min_improvement = self.get_arg('metric_min_improvement', 5)
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
@@ -950,13 +968,13 @@ class PredBat(hass.Hass):
 
         # Basic rates defined by user over time
         if 'rates_import' in self.args:
-            self.rate_import = self.basic_rates(self.args['rates_import'])
+            self.rate_import = self.basic_rates(self.get_arg('rates_import', indirect=False))
         if 'rates_export' in self.args:
-            self.rate_export = self.basic_rates(self.args['rates_export'])
+            self.rate_export = self.basic_rates(self.get_arg('rates_export', indirect=False))
 
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
-            data_import = self.get_state(entity_id = self.args['metric_octopus_import'], attribute='rates')
+            data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
             if data_import:
                 self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
@@ -964,17 +982,17 @@ class PredBat(hass.Hass):
         
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
-            completed = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='completedDispatches')
+            completed = self.get_state(entity_id = self.get_arg('octopus_intelligent_slot', indirect=False), attribute='completedDispatches')
             if completed:
                 self.octopus_slots += completed
-            planned = self.get_state(entity_id = self.args['octopus_intelligent_slot'], attribute='plannedDispatches')
+            planned = self.get_state(entity_id = self.get_arg('octopus_intelligent_slot', indirect=False), attribute='plannedDispatches')
             if planned:
                 self.octopus_slots += planned
 
         # Fixed URL for rate import
         if 'rates_import_octopus_url' in self.args:
-            self.log("Downloading import rates directly from url {}".format(self.args['rates_import_octopus_url']))
-            self.rate_import = self.download_octopus_rates(self.args['rates_import_octopus_url'])
+            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url')))
+            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url'))
 
         # Replicate and scan rates
         if self.rate_import:
@@ -986,7 +1004,7 @@ class PredBat(hass.Hass):
 
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
-            data_export = self.get_state(entity_id = self.args['metric_octopus_export'], attribute='rates')
+            data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
             if data_export:
                 self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
@@ -994,8 +1012,8 @@ class PredBat(hass.Hass):
 
         # Fixed URL for rate export
         if 'rates_export_octopus_url' in self.args:
-            self.log("Downloading export rates directly from url {}".format(self.args['rates_export_octopus_url']))
-            self.rate_export = self.download_octopus_rates(self.args['rates_export_octopus_url'])
+            self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
+            self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
 
         # Replicate rates for export
         if self.rate_export:
@@ -1006,27 +1024,26 @@ class PredBat(hass.Hass):
 
         # Load import today data and work out cost so far
         if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data(self.get_history(entity_id = self.args['import_today'], days = 2)[0], 
+            self.import_today = self.minute_data(self.get_history(entity_id = self.get_arg('import_today', indirect=False), days = 2)[0], 
                                                  2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
             self.cost_today_sofar = self.today_cost(self.import_today)
 
         # Battery charging options
         self.reserve = self.soc_max * reserve_percent / 100.0
-        self.battery_loss = 1.0 - self.args.get('battery_loss', 0.05)
-        self.best_soc_margin = self.args.get('best_soc_margin', 0)
-        self.best_soc_min = self.args.get('best_soc_min', 0.5)
-        self.best_soc_keep = self.args.get('best_soc_keep', 0.5)
-        self.set_soc_minutes = self.args.get('set_soc_minutes', 30)
-        self.set_window_minutes = self.args.get('set_window_minutes', 30)
+        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
+        self.best_soc_margin = self.get_arg('best_soc_margin', 0)
+        self.best_soc_min = self.get_arg('best_soc_min', 0.5)
+        self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
+        self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
+        self.set_window_minutes = self.get_arg('set_window_minutes', 30)
 
-        self.charge_enable = self.get_state(self.args['charge_enable'], default = False)
-
+        self.charge_enable = self.get_arg('charge_enable', default = False)
         # If the battery is being charged then find the charge window
         if self.charge_enable:
+            self.log("Inverter charging is enabled")
             # Find current charge window
-            charge_start_time = datetime.strptime(self.get_state(self.args['charge_start_time']), "%H:%M:%S")
-            charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
-
+            charge_start_time = datetime.strptime(self.get_arg('charge_start_time'), "%H:%M:%S")
+            charge_end_time = datetime.strptime(self.get_arg('charge_end_time'), "%H:%M:%S")
 
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
@@ -1054,7 +1071,7 @@ class PredBat(hass.Hass):
             self.log('Charge windows currently {}'.format(self.charge_window))
             
             # Calculate best charge windows
-            if self.args.get('set_charge_window', False) and self.low_rates:
+            if self.get_arg('set_charge_window', False) and self.low_rates:
                 # If we are using calculated windows directly then save them
                 self.charge_window_best = self.low_rates[:]
                 self.log('Charge windows best will be {}'.format(self.charge_window_best))
@@ -1063,7 +1080,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best = self.charge_window[:]
 
             # Get charge limit and fill for the number of windows
-            current_charge_limit = float(self.get_state(self.args['charge_limit']))
+            current_charge_limit = float(self.get_arg('charge_limit'))
             self.charge_limit = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
             self.charge_limit_percent = [current_charge_limit for i in range(0, len(self.charge_window))]
 
@@ -1071,39 +1088,39 @@ class PredBat(hass.Hass):
             self.charge_limit_best = [current_charge_limit * current_charge_limit / 100.0 for i in range(0, len(self.charge_window_best))]
             self.charge_limit_percent_best = [current_charge_limit for i in range(0, len(self.charge_window_best))]
 
-            self.charge_rate = float(self.get_state(self.args['charge_rate'], attribute='max')) / 1000.0 / 60.0
+            self.charge_rate = float(self.get_state(self.get_arg('charge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
             self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit[0]), str(self.charge_rate)))
 
         # battery max discharge rate
-        self.discharge_rate = float(self.get_state(self.args['discharge_rate'], attribute='max')) / 1000.0 / 60.0
+        self.discharge_rate = float(self.get_state(self.get_arg('discharge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
-            pv_forecast_data    = self.get_state(entity_id = self.args['pv_forecast_today'], attribute='detailedForecast')
+            pv_forecast_data    = self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_tomorrow' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_tomorrow'], attribute='detailedForecast')
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d3' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d3'], attribute='detailedForecast')
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d4' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d4'], attribute='detailedForecast')
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d5' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d5'], attribute='detailedForecast')
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d5', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d6' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d6'], attribute='detailedForecast')
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d7' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.args['pv_forecast_d7'], attribute='detailedForecast')
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate' + str(self.args.get('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.args.get('pv_scaling', 1.0))
-            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.args.get('pv_scaling', 1.0))
+                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
+            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
         else:
             pv_forecast_minute = {}
             pv_forecast_minute10 = {}
 
         # Car charging hold - when enabled battery is held during car charging in simulation
-        self.car_charging_hold = self.args.get('car_charging_hold', False)
-        self.car_charging_threshold = float(self.args.get('car_charging_threshold', 6.0)) / 60.0
+        self.car_charging_hold = self.get_arg('car_charging_hold', False)
+        self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.args['car_charging_energy'], days = self.days_previous + 1)[0], 
+            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.days_previous + 1)[0], 
                                                         self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
@@ -1116,7 +1133,7 @@ class PredBat(hass.Hass):
         self.charge_limit_percent_best = self.charge_limit_percent[:]
 
         # Try different battery SOCs to get the best result
-        if self.args.get('calculate_best', False):
+        if self.get_arg('calculate_best', False):
             end_record = self.record_length(self.charge_window_best)
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
             
@@ -1139,7 +1156,7 @@ class PredBat(hass.Hass):
 
         if self.charge_enable:
             # Re-programme charge window based on low rates?
-            if self.args.get('set_charge_window', False) and self.charge_window_best:
+            if self.get_arg('set_charge_window', False) and self.charge_window_best:
                 # Find the next best window and save it
                 window = self.charge_window_best[0]
 
@@ -1166,7 +1183,7 @@ class PredBat(hass.Hass):
                     self.charge_end_time_minutes = window['end']
             
             # Set the SOC, only do it before or just within the window (not the entire way due to thrash in charge % values)
-            if self.args.get('set_soc_enable', False):
+            if self.get_arg('set_soc_enable', False):
                 if self.minutes_now <= (self.charge_start_time_minutes + 15) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
@@ -1190,7 +1207,7 @@ class PredBat(hass.Hass):
         self.run_in(self.run_time_loop, 0)
 
         # And then every N minutes
-        self.run_every(self.run_time_loop, midnight, self.args.get('run_every', 5) * 60)
+        self.run_every(self.run_time_loop, midnight, self.get_arg('run_every', 5) * 60)
 
     def run_time_loop(self, cb_args):
         """
