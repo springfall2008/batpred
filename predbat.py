@@ -525,7 +525,7 @@ class PredBat(hass.Hass):
         """
         minute = 0
         # Add 12 extra hours to make sure charging period will end
-        while minute < (self.forecast_minutes + 12*60):
+        while minute < (self.forecast_minutes + 24*60):
             if minute not in rates:
                 minute_mod = minute % (24*60)
                 if minute_mod in rates:
@@ -726,7 +726,7 @@ class PredBat(hass.Hass):
         Create rates/time every 30 minutes
         """
         rates_time = {}
-        for minute in range(0, self.forecast_minutes, 30):
+        for minute in range(0, self.forecast_minutes+24*60, 30):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             rates_time[stamp] = rates[minute]
@@ -1138,7 +1138,7 @@ class PredBat(hass.Hass):
 
                     # We must re-program if we are about to start a new charge window
                     # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
-                    if (self.minutes_now >= self.charge_start_time_minutes) and (self.minutes_now < self.charge_end_time_times):
+                    if (self.minutes_now >= self.charge_start_time_minutes) and (self.minutes_now < self.charge_end_time_minutes):
                         self.log("Currently in a charge window, don't change it")
                     elif (self.minutes_now < window['end']) and (
                           (window['start'] - self.minutes_now) <= self.set_window_minutes or 
