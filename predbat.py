@@ -251,7 +251,7 @@ class PredBat(hass.Hass):
                 charge_windows = charge_n + 1
         return charge_windows
 
-    def run_prediction(self, charge_limit, charge_window, load_minutes, pv_forecast_minute, save=None):
+    def run_prediction(self, charge_limit, charge_window, load_minutes, pv_forecast_minute, save=None, step=5):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -285,8 +285,6 @@ class PredBat(hass.Hass):
         # Simulate each forward minute
         while minute < self.forecast_minutes:
             minute_yesterday = 24 * 60 - minute + six_days
-            load_yesterday = self.get_from_incrementing(load_minutes, minute_yesterday)
-
             minute_absolute = minute + self.minutes_now
             minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
             charge_window_n = self.in_charge_window(charge_window, minute_absolute)
@@ -295,21 +293,29 @@ class PredBat(hass.Hass):
             if minute >= end_record and record:
                 record = False
 
-            # Get pv forecast
-            pv_now = pv_forecast_minute.get(minute_absolute, 0.0)
+            # Get load and pv forecast, total up for all values in the step
+            pv_now = 0
+            load_yesterday = 0
+            for offset in range(0, step):
+                pv_now += pv_forecast_minute.get(minute_absolute + offset, 0.0)
+                load_yesterday += self.get_from_incrementing(load_minutes, minute_yesterday - offset)
             pv_kwh += pv_now
 
             # Car charging hold
             if self.car_charging_hold and self.car_charging_energy:
                 # Hold based on data
-                car_energy = self.get_from_incrementing(self.car_charging_energy, minute_yesterday)
+                car_energy = 0
+                for offset in range(0, step):
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset)
+
                 if self.debug_enable and car_energy > 0.0 and (minute % 60) == 0 and (minute < 60*48):
                     self.log("Hour {} car charging hold with data {} load now {} metric {}".format(minute/60, car_energy, load_yesterday, metric))
+
                 load_yesterday = max(0, load_yesterday - car_energy)
-            elif self.car_charging_hold and (load_yesterday >= self.car_charging_threshold):
+            elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
                 # Car charging hold - ignore car charging in computation based on threshold
                 load_yesterday = 0
-                if self.debug_enable and minute % 60 == 0:
+                if self.debug_enable and (minute % 60) == 0:
                     self.log("Hour {} car charging hold".format(minute/60))
 
             # Count load
@@ -319,7 +325,7 @@ class PredBat(hass.Hass):
             # Are we within the charging time window?
             if self.charge_enable and (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
                 old_soc = soc
-                soc = min(soc + self.charge_rate, charge_limit[charge_window_n])
+                soc = min(soc + (self.charge_rate * step), charge_limit[charge_window_n])
 
                 # Apply battery loss to computed charging energy
                 # For now we ignore PV in this as it's probably not a major factor when mains charging is enabled
@@ -345,10 +351,10 @@ class PredBat(hass.Hass):
                     diff *= self.battery_loss
 
                 # Max charge rate, export over the cap
-                if diff < -self.charge_rate:
-                    soc -= self.charge_rate
+                if diff < -(self.charge_rate * step):
+                    soc -= self.charge_rate * step
                     if record:
-                        energy = -(diff + self.charge_rate)
+                        energy = -(diff + self.charge_rate * step)
                         export_kwh += energy
                         if minute_absolute in self.rate_export:
                             metric -= self.rate_export[minute_absolute] * energy
@@ -356,10 +362,10 @@ class PredBat(hass.Hass):
                             metric -= self.metric_export * energy
 
                 # Max discharge rate, draw from grid over the cap
-                if diff > self.discharge_rate:
-                    soc -= self.discharge_rate
+                if diff > (self.discharge_rate * step):
+                    soc -= self.discharge_rate * step
                     if record:
-                        energy = diff - self.discharge_rate
+                        energy = diff - (self.discharge_rate * step)
                         import_kwh += energy
                         if self.charge_enable and (charge_window_n >= 0):
                             # If the battery is on charge anyhow then imports are kind of the same as battery charging (price wise)
@@ -434,7 +440,7 @@ class PredBat(hass.Hass):
             if record and (charge_has_run or not self.charge_enable):
                 soc_min = min(soc_min, soc)
 
-            minute += 1
+            minute += step
 
         hours_left = minute_left / 60.0
         charge_limit_percent = [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(0, len(charge_limit))]
@@ -1025,7 +1031,7 @@ class PredBat(hass.Hass):
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
             self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
-            
+
             if self.charge_end_time_minutes < self.charge_start_time_minutes:
                 # As windows wrap, if end is in the future then move start back, otherwise forward
                 if self.charge_end_time_minutes > self.minutes_now:

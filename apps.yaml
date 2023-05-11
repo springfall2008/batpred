@@ -68,7 +68,7 @@ pred_bat:
   best_soc_keep: 2
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
-  # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
+  # If it's 0 then this is disabled. A figure of around 5 (which is 5p) is a good one to use if enabled.
   # If you use pv_metric10_weight then you probably don't need to enable this as the 10% forecast does the same thing better
   metric_min_improvement: 0
 
