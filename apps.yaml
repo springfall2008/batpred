@@ -45,8 +45,8 @@ pred_bat:
   pv_scaling: 1.0
 
   # Weighting given to the 10% PV scenario, comment out or put to 0.0 to disable this
-  # A value of 0.2 assumes that 1:5 times we get the 10% scenario and hence to count this in the metric benefit/cost
-  pv_metric10_weight: 0.2
+  # A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost
+  pv_metric10_weight: 0.1
   
   # Number of hours forward to forecast
   forecast_hours: 48
@@ -69,7 +69,8 @@ pred_bat:
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. I use around 5p as it's not worth trying to save less than that and risk a flat battery if the forecast is wrong
-  metric_min_improvement: 2
+  # If you use pv_metric10_weight then you probably don't need to enable this as the 10% forecast does the same thing better
+  metric_min_improvement: 0
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
@@ -117,7 +118,7 @@ pred_bat:
   
   # When enabled the next charge window will be automatically configured based on the incoming rates
   # Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
-  # Set window minutes defines how many minutes before the charge window we should program it
+  # Set window minutes defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
   set_charge_window: True
   set_window_notify: True
   set_window_minutes: 30

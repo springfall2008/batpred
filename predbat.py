@@ -878,7 +878,7 @@ class PredBat(hass.Hass):
                 metric += metric_diff
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable or 1:
                 self.log("Tried soc {} for window {} gives import battery {} house {} export {} min_soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
@@ -1021,15 +1021,21 @@ class PredBat(hass.Hass):
             charge_start_time = datetime.strptime(self.get_state(self.args['charge_start_time']), "%H:%M:%S")
             charge_end_time = datetime.strptime(self.get_state(self.args['charge_end_time']), "%H:%M:%S")
 
+
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
             self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
+            
             if self.charge_end_time_minutes < self.charge_start_time_minutes:
-                self.charge_end_time_minutes += 60 * 24
+                # As windows wrap, if end is in the future then move start back, otherwise forward
+                if self.charge_end_time_minutes > self.minutes_now:
+                    self.charge_start_time_minutes -= 60 * 24
+                else:
+                    self.charge_end_time_minutes += 60 * 24
 
             # Construct charge window from the GivTCP settings
             self.charge_window = []
-            minute = self.charge_start_time_minutes
+            minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
             minute_end = self.charge_end_time_minutes
 
             while minute < self.forecast_minutes:
