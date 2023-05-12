@@ -118,7 +118,7 @@ These are configuration items that you can modify to fit your needs:
   - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
   - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
   - predbat.soc_min_kwh - The minimum battery level during the time period in Kwh
-  - predbat.metric - Predicted cost metric for the next simulated period (in pence)
+  - predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
 - When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage: 
   - predbat.best_export_energy - Predicted exports under best SOC setting
   - predbat_best_import_energy - Predicted imports under best SOC setting
@@ -126,7 +126,11 @@ These are configuration items that you can modify to fit your needs:
   - predbat_best_import_energy_battery - Predicted imports to the battery under best SOC setting
   - predbat_best_import_energy_house - Predicted imports to the house under best SOC setting
   - predbat_soc_kw_best - Predicted best final state of charge (in Kwh), holds minute by minute prediction data (in attributes) to be charted
-  - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost
+  - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
+  - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
+  - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
+  - predbat.soc_kw_best_h12 - Single data point for hte predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
+  - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost in attributes.
   - predbat.best_charge_limit - Predicted best battery charge limit in percent
   - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
   - predbat.low_rate_cost - The lowest rate cost in P
