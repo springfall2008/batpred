@@ -1,6 +1,11 @@
 # batpred
 Home battery prediction and automatic charging for Home Assistant with GivTCP
 
+Copyright (c) Trefor Southwell May 2023 - All rights reserved
+This software maybe used at not cost for personal use only
+No warranty is given, either expressed or implied
+For support please raise a Github ticket or use the GivTCP Facebook page
+
 Operation:
 
 The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 8 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
@@ -27,7 +32,8 @@ To install:
 - If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured here. Batpred may decide to charge in these slots as well.
 - Customise any settings needed
 
-The following are entity names in HA for GivTCP and must be configured correctly:
+The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
+  - geserial - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
   - soc_kw - Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
   - soc_max - Entity name for the maximum charge level for the battery
   - soc_percent - Entity name for used to set the SOC target for the battery in percentage
@@ -45,12 +51,13 @@ The following are entity names in Solcast, unlikely to need changing:
   - pv_forecast_d3 - Entity name for solcast forecast for day 3
   - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   
-The following are entity names in the Ocotpus Energy plugin:
+The following are entity names in the Ocotpus Energy plugin and the Octopus Intelligent plugin.
+They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
   - metric_octopus_import - Import rates from the Octopus plugin
   - metric_octopus_export - Export rates from the Octopus plugin
   - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
  
-Or manually set your rates using:
+Or manually set your rates in a 24-hour period using these:
   - rates_import
     - start
       end
@@ -83,8 +90,8 @@ These are configuration items that you can modify to fit your needs:
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
     
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
-  - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p
-  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety
+  - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight.
+  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
   - best_soc_min - Sets the minimum battery level SOC to propose for the prediction
   - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly)
   
