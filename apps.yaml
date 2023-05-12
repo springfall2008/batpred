@@ -6,8 +6,9 @@ pred_bat:
   # Timezone to work in  
   timezone: Europe/London
   
-  # Set these to match your own GivTCP names, will need updating with your serial number
-  geserial: sa2243g277
+  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
+  # if it doesn't work
+  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
   soc_kw: sensor.givtcp_{geserial}_soc_kwh
   soc_percent: number.givtcp_{geserial}_target_soc
   soc_max: sensor.givtcp_{geserial}_battery_capacity_kwh
@@ -54,8 +55,9 @@ pred_bat:
   
   # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
   # Or if an incrementing energy sensor is provided actuals can be subtracted
+  # The wallbox sensor is an example, automatically added if you have one, or comment our or replace with your own
   car_charging_hold: True
-  car_charging_energy: sensor.wallbox_portal_added_energy
+  car_charging_energy: 're:sensor.wallbox_portal_added_energy'
   car_charging_threshold: 6.0
   
   # Enable calculate best to work out the best battery SOC % based on cost
@@ -77,10 +79,13 @@ pred_bat:
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
   
   # Set import and export entity to point to the Octopus Energy plugin
-  # Needs updating with your meter number
-  # Or comment out if you don't have them
-  metric_octopus_import: sensor.octopus_energy_electricity_20l3260392_2200017612712_current_rate
-  metric_octopus_export: sensor.octopus_energy_electricity_20l3260392_2200043522155_export_current_rate
+  # automatically matches your meter number assuming you have only one
+  # Will be ignored if you don't have the sensor
+  # Or manually set it to the correct sensor names e.g:
+  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
+  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
+  metric_octopus_import: 're:sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_current_rate'
+  metric_octopus_export: 're:sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate'
   
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
@@ -111,8 +116,8 @@ pred_bat:
   metric_export: 4.2
   
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
-  # Or comment out if you don't
-  octopus_intelligent_slot: binary_sensor.octopus_intelligent_slot
+  # Will automatically disable if not found, or comment out to disable fully
+  octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   rate_low_threshold: 0.8

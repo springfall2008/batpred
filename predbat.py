@@ -7,6 +7,7 @@ see Readme for information
 # pylint: disable=attribute-defined-outside-init
 from datetime import datetime, timedelta
 import math
+import re
 import pytz
 import appdaemon.plugins.hass.hassapi as hass
 import requests
@@ -614,11 +615,12 @@ class PredBat(hass.Hass):
     def basic_rates(self, info):
         """
         Work out the energy rates based on user supplied time periods
+        works on a 24-hour period only and then gets replicated later for future days
         """
         rates = {}
 
         # Default to house value
-        for minute in range(0, self.forecast_minutes):
+        for minute in range(0, 24*60):
             rates[minute] = self.metric_house
 
         self.log("Adding rate info {}".format(info))
@@ -628,14 +630,14 @@ class PredBat(hass.Hass):
             end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
             rate = this_rate.get('rate', self.metric_house)
             start_minutes = max(self.mintes_to_time(start, midnight), 0)
-            end_minutes   = min(self.mintes_to_time(end, midnight), self.forecast_minutes)
+            end_minutes   = min(self.mintes_to_time(end, midnight), 24*60-1)
 
             if end_minutes <= start_minutes:
                 end_minutes += 24*60
 
             self.log("Found rate {} {} to {} minutes".format(rate, start_minutes, end_minutes))
             for minute in range(start_minutes, end_minutes):
-                rates[minute] = rate
+                rates[minute % (24*60)] = rate
 
         return rates
 
@@ -1192,12 +1194,50 @@ class PredBat(hass.Hass):
 
         self.log("Completed run")
 
-    async def initialize(self):
+    def auto_config(self):
+        """
+        Auto configure
+        match arguments with sensors
+        """
+
+        states = self.get_state()
+        state_keys = states.keys()
+        disabled = []
+
+        # Find each arg re to match
+        for arg in self.args:
+            arg_value = self.args[arg]
+            if isinstance(arg_value, str) and arg_value.startswith('re:'):
+                my_re = '^' + arg_value[3:] + '$'
+                matched = False
+                for key in state_keys:
+                    res = re.search(my_re, key)
+                    if res:
+                        if len(res.groups()) > 0:
+                            self.log('Regular expression argument {} matched {} with {}'.format(arg, my_re, res.group(1)))
+                            self.args[arg] = res.group(1)
+                            matched = True
+                            break
+                        else:
+                            self.log('Regular expression argument {} Matched {} with {}'.format(arg, my_re, res.group(0)))
+                            self.args[arg] = res.group(0)
+                            matched = True
+                            break
+                if not matched:
+                    self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                    disabled.append(arg)
+
+        # Remove unmatched keys
+        for key in disabled:
+            del self.args[key]
+
+    def initialize(self):
         """
         Setup the app, called once each time the app starts
         """
         self.log("Predbat Startup")
         self.reset()
+        self.auto_config()
 
         # Run every N minutes aligned to the minute
         now = datetime.now()
