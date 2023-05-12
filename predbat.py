@@ -337,6 +337,14 @@ class PredBat(hass.Hass):
                 if self.debug_enable and (minute % 60) == 0:
                     self.log("Hour {} car charging hold".format(minute/60))
 
+            # Octopus slot car charging?
+            if self.car_charging_rate:
+                car_load = self.in_octopus_slot(minute_absolute)
+                if car_load > 0.0:
+                    load_yesterday += car_load * step / 60.0
+                    if self.debug_enable and (minute % 60) == 0:
+                        self.log("Car charging now load {} at minute {}" % (load_yesterday, minute))
+
             # Count load
             if record:
                 load_kwh += load_yesterday
@@ -640,6 +648,32 @@ class PredBat(hass.Hass):
                 rates[minute % (24*60)] = rate
 
         return rates
+
+    def in_octopus_slot(self, minute):
+        """
+        Is the given minute inside an Octopus slot
+        """
+        if self.octopus_slots:
+            for slot in self.octopus_slots:
+                if 'start_minutes' in slot:
+                    start_minutes = slot['start_minutes']
+                else:
+                    start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+                    start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
+                    slot['start_minutes'] = start_minutes
+
+                if 'end_minutes' in slot:
+                    end_minutes = slot['end_minutes']
+                else:
+                    end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
+                    end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
+                    slot['end_minutes'] = end_minutes
+
+                # Return the load in that slot
+                if minute >= start_minutes and minute < end_minutes:
+                    # The load expected is stored in chargeKwh for the half hour, or use the default set by the user if not which is hourly
+                    return abs(float(slot.get('chargeKwh', self.car_charging_rate / 2.0))) * 2.0
+        return 0
 
     def rate_scan(self, rates, octopus_slots):
         """
@@ -1120,6 +1154,8 @@ class PredBat(hass.Hass):
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
         self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
+        self.car_charging_rate = self.get_arg('octopus_intelligent_charge_rate', 0.0)
+
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
             self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.days_previous + 1)[0], 

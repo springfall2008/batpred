@@ -118,6 +118,8 @@ pred_bat:
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
+  # When set will assume your car will charge during intelligent slots at the given rate (in kw)
+  octopus_intelligent_charge_rate: 7.5
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   rate_low_threshold: 0.8
