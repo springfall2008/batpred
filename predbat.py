@@ -993,8 +993,8 @@ class PredBat(hass.Hass):
 
         # Fixed URL for rate import
         if 'rates_import_octopus_url' in self.args:
-            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url')))
-            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url'))
+            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
+            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
 
         # Replicate and scan rates
         if self.rate_import:
