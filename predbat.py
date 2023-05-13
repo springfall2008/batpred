@@ -579,6 +579,12 @@ class PredBat(hass.Hass):
         """
         return (self.midnight + timedelta(minutes=self.minutes_now)).strftime("%H:%M:%S")
 
+    def time_abs_str(self, minute):
+        """
+        Return time absolute as human string
+        """
+        return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
+
     def rate_replicate(self, rates):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
@@ -670,7 +676,7 @@ class PredBat(hass.Hass):
             if end_minutes <= start_minutes:
                 end_minutes += 24*60
 
-            self.log("Found rate {} {} to {} minutes".format(rate, start_minutes, end_minutes))
+            # self.log("Found rate {} {} to {} minutes".format(rate, start_minutes, end_minutes))
             for minute in range(start_minutes, end_minutes):
                 rates[minute % (24*60)] = rate
 
@@ -777,7 +783,7 @@ class PredBat(hass.Hass):
                 rate_low_end = window['end']
                 rate_low_average = window['average']
 
-                self.log("Low rate period {}-{} @{} !".format(rate_low_start, rate_low_end, rate_low_average))
+                self.log("Low rate period {} to {} @{} !".format(self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average))
 
                 rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
                 rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
@@ -1167,7 +1173,7 @@ class PredBat(hass.Hass):
             self.charge_limit_percent_best = [current_charge_limit for i in range(0, len(self.charge_window_best))]
 
             self.charge_rate = float(self.get_state(self.get_arg('charge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
-            self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(str(self.charge_start_time_minutes), str(self.charge_end_time_minutes), str(self.charge_limit[0]), str(self.charge_rate)))
+            self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), str(self.charge_limit[0]), str(self.charge_rate)))
 
         # battery max discharge rate
         self.discharge_rate = float(self.get_state(self.get_arg('discharge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
@@ -1245,7 +1251,7 @@ class PredBat(hass.Hass):
                 for windows in self.charge_window_best:
                     if minutes_end == windows['start']:
                         minutes_end = windows['end']
-                        self.log("Combine window with next window {}-{}".format(windows['start'], windows['end']))
+                        self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows['start']), self.time_abs_str(windows['end'])))
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (self.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
@@ -1263,10 +1269,10 @@ class PredBat(hass.Hass):
                           (minutes_start - self.minutes_now) <= self.set_window_minutes or 
                           (self.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                        self.log("Configurating charge window now (now {} target set_window_minutes {} charge start time {}".format(self.minutes_now, self.set_window_minutes, minutes_start))
+                        self.log("Configurating charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                         self.adjust_charge_window(charge_start_time, charge_end_time)
                     else:
-                        self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.minutes_now,self.set_window_minutes, minutes_start))
+                        self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now),self.set_window_minutes, self.time_abs_str(minutes_start)))
 
                     # Set configured window minutes for the SOC adjustment routine
                     self.charge_start_time_minutes = minutes_start
@@ -1277,7 +1283,7 @@ class PredBat(hass.Hass):
                 if self.minutes_now <= (self.charge_start_time_minutes + 15) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
-                    self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.minutes_now,self.set_soc_minutes, self.charge_start_time_minutes))
+                    self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(self.charge_start_time_minutes)))
 
 
         self.log("Completed run")
