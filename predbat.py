@@ -978,13 +978,13 @@ class PredBat(hass.Hass):
                 metric += metric_diff
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable or 1:
                 self.log("Tried soc {} for window {} gives import battery {} house {} export {} min_soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if ((metric + (self.metric_min_improvement / record_charge_windows) < best_metric)) and (soc_min >= self.best_soc_keep):
+            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -1229,7 +1229,7 @@ class PredBat(hass.Hass):
             for window_n in range(0, record_charge_windows):
                 best_soc, best_metric, best_cost = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_window_best, self.charge_limit_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
-                if self.debug_enable:
+                if self.debug_enable or 1:
                     self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
                 self.charge_limit_best[window_n] = best_soc
 
