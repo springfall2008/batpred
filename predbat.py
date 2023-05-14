@@ -602,13 +602,12 @@ class PredBat(hass.Hass):
             minute += 1
         return rates
 
-    def find_charge_window(self, rates, minute):
+    def find_charge_window(self, rates, minute, threshold_rate, find_high):
         """
         Find the charging windows based on the low rate threshold (percent below average)
         """
         rate_low_start = -1
         rate_low_end = -1
-        rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
         rate_low_average = 0
         rate_low_rate = 0
         rate_low_count = 0
@@ -622,7 +621,7 @@ class PredBat(hass.Hass):
 
             if minute in rates:
                 rate = rates[minute]
-                if rate <= (self.rate_average * rate_low_threshold):
+                if (not find_high and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate)):
                     if rate_low_start >= 0 and rate != rate_low_rate:
                         # Refuse mixed rates
                         rate_low_end = minute
@@ -653,7 +652,7 @@ class PredBat(hass.Hass):
             rate_low_average = self.dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
-    def basic_rates(self, info):
+    def basic_rates(self, info, rtype):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
@@ -664,7 +663,7 @@ class PredBat(hass.Hass):
         for minute in range(0, 24*60):
             rates[minute] = self.metric_house
 
-        self.log("Adding rate info {}".format(info))
+        self.log("Adding {} rate info {}".format(rtype, info))
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
             start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
@@ -708,9 +707,65 @@ class PredBat(hass.Hass):
                     return abs(float(slot.get('chargeKwh', self.car_charging_rate / 2.0))) * 2.0
         return 0
 
-    def rate_scan(self, rates, octopus_slots):
+    def rate_scan_export(self, rates):
         """
-        Scan the rates and work out min/max and charging windows
+        Scan the rates and work out min/max and charging windows for export
+        """
+        rate_low_min_window = 5
+        rate_high_threshold = 1.2
+
+        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
+        self.log("Export rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
+
+        self.rate_export_min = rate_min
+        self.rate_export_max = rate_max
+        self.rate_export_min_minute = rate_min_minute
+        self.rate_export_max_minute = rate_max_minute
+        self.rate_export_average = rate_average
+
+        # Find charging window
+        self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_high_threshold, True)
+
+        if self.high_export_rates:
+            window_n = 0
+            for window in self.high_export_rates:
+                rate_high_start = window['start']
+                rate_high_end = window['end']
+                rate_high_average = window['average']
+
+                self.log("High rate period {} to {} @{} !".format(self.time_abs_str(rate_high_start), self.time_abs_str(rate_high_end), rate_high_average))
+
+                rate_high_start_date = self.midnight_utc + timedelta(minutes=rate_high_start)
+                rate_high_end_date = self.midnight_utc + timedelta(minutes=rate_high_end)
+
+                time_format_time = '%H:%M:%S'
+
+                if window_n == 0 and not SIMULATE:
+                    self.set_state("predbat.high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state("predbat.high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state("predbat.high_rate_export_cost", state=rate_high_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                if window_n == 1 and not SIMULATE:
+                    self.set_state("predbat.high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state("predbat.high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state("predbat.high_rate_export_cost_2", state=rate_high_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                window_n += 1
+
+        # Clear rates that aren't available
+        if not self.high_export_rates and not SIMULATE:
+            self.log("No high export rate period found")
+            self.set_state("predbat.high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state("predbat.high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state("predbat.high_rate_export_cost", state=rate_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+        if len(self.high_export_rates) < 2 and not SIMULATE:
+            self.set_state("predbat.high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state("predbat.high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state("predbat.high_rate_export_cost_2", state=rate_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+
+        return rates
+
+    def rate_minmax(self, rates):
+        """
+        Work out min and max rates
         """
         rate_min = 99999
         rate_min_minute = 0
@@ -718,8 +773,6 @@ class PredBat(hass.Hass):
         rate_max = 0
         rate_average = 0
         rate_n = 0
-        rate_low_min_window = 5
-        self.low_rates = []
 
         # Scan rates and find min/max/average
         minute = 0
@@ -739,7 +792,41 @@ class PredBat(hass.Hass):
         if rate_n:
             rate_average /= rate_n
 
-        self.log("Rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
+        return self.dp2(rate_min), self.dp2(rate_max), self.dp2(rate_average), rate_min_minute, rate_max_minute
+
+    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high):
+        """
+        Scan for the next high/low rate window
+        """
+        minute = 0
+        found_rates = []
+
+        while len(found_rates) < MAX_CHARGE_LIMITS:
+            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
+            window = {}
+            window['start'] = rate_low_start
+            window['end'] = rate_low_end
+            window['average'] = rate_low_average
+
+            if rate_low_start >= 0:
+                if rate_low_end >= self.minutes_now and (rate_low_end - rate_low_start) >= rate_low_min_window:
+                    found_rates.append(window)
+                minute = rate_low_end
+            else:
+                break
+        return found_rates
+
+    def rate_scan(self, rates, octopus_slots):
+        """
+        Scan the rates and work out min/max and charging windows
+        """
+        rate_low_min_window = 5
+        rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
+        self.low_rates = []
+        
+        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
+        self.log("Import rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
+
         self.rate_min = rate_min
         self.rate_max = rate_max
         self.rate_min_minute = rate_min_minute
@@ -754,28 +841,16 @@ class PredBat(hass.Hass):
                 start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
                 end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
-                self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(start, end, self.rate_min))
+                self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(start, end, rate_min))
                 for minute in range(start_minutes, end_minutes):
                     rates[minute] = self.rate_min
                     if self.debug_enable and (minute % 30) == 0:
                         self.log("Set min octopus rate for time {}".format(minute))
 
         # Find charging window
-        minute = 0
-        while len(self.low_rates) < MAX_CHARGE_LIMITS:
-            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute)
-            window = {}
-            window['start'] = rate_low_start
-            window['end'] = rate_low_end
-            window['average'] = rate_low_average
+        self.low_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_low_threshold, False)
 
-            if rate_low_start >= 0:
-                if rate_low_end >= self.minutes_now and (rate_low_end - rate_low_start) >= rate_low_min_window:
-                    self.low_rates.append(window)
-                minute = rate_low_end
-            else:
-                break
-
+        # Output rate info
         if self.low_rates:
             window_n = 0
             for window in self.low_rates:
@@ -912,6 +987,11 @@ class PredBat(hass.Hass):
         self.rate_max = 0
         self.rate_max_minute = 0
         self.rate_average = 0
+        self.rate_export_min = 0
+        self.rate_export_min_minute = 0
+        self.rate_export_max = 0
+        self.rate_export_max_minute = 0
+        self.rate_export_average = 0
         self.set_soc_minutes = 0
         self.set_window_minutes = 0
         self.debug_enable = False
@@ -1049,9 +1129,9 @@ class PredBat(hass.Hass):
 
         # Basic rates defined by user over time
         if 'rates_import' in self.args:
-            self.rate_import = self.basic_rates(self.get_arg('rates_import', indirect=False))
+            self.rate_import = self.basic_rates(self.get_arg('rates_import', indirect=False), 'import')
         if 'rates_export' in self.args:
-            self.rate_export = self.basic_rates(self.get_arg('rates_export', indirect=False))
+            self.rate_export = self.basic_rates(self.get_arg('rates_export', indirect=False), 'export')
 
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
@@ -1098,6 +1178,7 @@ class PredBat(hass.Hass):
 
         # Replicate rates for export
         if self.rate_export:
+            self.rate_export = self.rate_scan_export(self.rate_export)
             self.rate_export = self.rate_replicate(self.rate_export)
             self.publish_rates(self.rate_export, True)
         else:
