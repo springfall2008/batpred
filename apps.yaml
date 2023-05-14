@@ -21,6 +21,10 @@ pred_bat:
   charge_rate: number.givtcp_{geserial}_battery_charge_rate
   discharge_rate: number.givtcp_{geserial}_battery_discharge_rate
   import_today: sensor.givtcp_{geserial}_import_energy_today_kwh
+  scheduled_charge_enable: switch.givtcp_{geserial}_enable_charge_schedule
+  discharge_start_time: select.givtcp_{geserial}_discharge_start_time_slot_1
+  discharge_end_time: select.givtcp_{geserial}_discharge_end_time_slot_1
+  inverter_mode: select.givtcp_{geserial}_mode
   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today
@@ -48,7 +52,7 @@ pred_bat:
 
   # Weighting given to the 10% PV scenario, comment out or put to 0.0 to disable this
   # A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost
-  pv_metric10_weight: 0.1
+  pv_metric10_weight: 0.15
   
   # Number of hours forward to forecast
   forecast_hours: 48
@@ -71,9 +75,11 @@ pred_bat:
   best_soc_keep: 2
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
-  # If it's 0 then this is disabled. A figure of around 5 (which is 5p) is a good one to use if enabled.
-  # If you use pv_metric10_weight then you probably don't need to enable this as the 10% forecast does the same thing better
-  metric_min_improvement: 0
+  # If it's 0 then this is disabled. 
+  # A figure of around 5 (which is 5p) is a good one to use if enabled.
+  # If you use pv_metric10_weight then you probably don't need to enable this as the 10% forecast does the same thing better 
+  # or you could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
+  metric_min_improvement: -0.1
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
@@ -130,6 +136,11 @@ pred_bat:
   set_charge_window: True
   set_window_notify: True
   set_window_minutes: 30
+
+  # Expermental, automatic discharge for export during high rate periods enable 
+  # force_export entity above must be set correctly and you must have an export rate set correctly also
+  # exports are in 30-minute slots
+  # set_discharge_window: true
   
   # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
   # note it maybe set more than once if things change
