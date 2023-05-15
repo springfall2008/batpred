@@ -50,16 +50,22 @@ FAQ:
 
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
   - geserial - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
-  - soc_kw - Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
-  - soc_max - Entity name for the maximum charge level for the battery
-  - soc_percent - Entity name for used to set the SOC target for the battery in percentage
-  - reserve - sensor name for the reserve setting in %
-  - load_today - Entity name for the house load in kwh today (must be incrementing)
-  - charge_enable - The charge enable entity - says if the battery will be charged in the time window
-  - charge_start_time - The battery charge start time entity
-  - charge_end_time - The battery charge end time entity
-  - charge_rate - The battery charge rate entity in watts 
-  - discharge_rate - The battery discharge max rate entity in watts
+  - soc_kw - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
+  - soc_max - GivTCP Entity name for the maximum charge level for the battery
+  - soc_percent - GivTCP Entity name for used to set the SOC target for the battery in percentage
+  - reserve - GivTCP sensor name for the reserve setting in %
+  - load_today - GivTCP Entity name for the house load in kwh today (must be incrementing)
+  - charge_enable - GivTCP charge enable entity - says if the battery will be charged in the time window
+  - charge_start_time - GivTCP battery charge start time entity
+  - charge_end_time - GivTCP battery charge end time entity
+  - charge_rate - GivTCP battery charge rate entity in watts 
+  - discharge_rate - GivTCP battery discharge max rate entity in watts
+  - import_today - GivTCP Imported energy today in Kwh (incrementing)
+  - export_today - GivTCP Exported energy today in Kwh (incrementing)
+  - scheduled_charge_enable - GivTCP Scheduled charge enable config
+  - discharge_start_time - GivTCP scheduled discharge slot_1 start time
+  - discharge_end_time - GivTCP scheduled discharge slot_1 end time
+  - inverter_mode - GivTCP inverter mode
   
 The following are entity names in Solcast, unlikely to need changing:  
   - pv_forecast_today - Entity name for solcast today's forecast
