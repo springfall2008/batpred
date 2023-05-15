@@ -544,6 +544,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.soc_kw_best_h12", state=self.dp3(predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=True)
+            self.publish_discharge_limit(discharge_window, discharge_enable, best=True)
             self.set_state("predbat.best_export_energy", state=self.dp3(export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state("predbat.best_load_energy", state=self.dp3(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state("predbat.best_pv_energy", state=self.dp3(pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
@@ -1038,8 +1039,39 @@ class PredBat(hass.Hass):
         self.log("Todays energy {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_cost)))
         return day_cost
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+    def publish_discharge_limit(self, discharge_window, discharge_enable, best):
+        """
+        Create entity to chart discharge limit
+        """
+        discharge_limit_time = {}
+        discharge_limit_time_kw = {}
+        discharge_limit = self.soc_max
+        discharge_limit_percent = 100
+        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
+            window_n = self.in_charge_window(discharge_window, minute)
+            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+            stamp = minute_timestamp.strftime(TIME_FORMAT)
+            if window_n >=0 and discharge_enable[window_n]:
+                discharge_limit_time[stamp] = 0
+                discharge_limit_time_kw[stamp] = 0
+                discharge_limit = 0
+                discharge_limit_percent = 0
+            else:
+                discharge_limit_time[stamp] = 100
+                discharge_limit_time_kw[stamp] = self.soc_max
 
+        if not SIMULATE:
+            if best:
+                self.set_state("predbat.best_discharge_limit_kw", state=self.dp2(discharge_limit), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state("predbat.best_discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+            else:
+                self.set_state("predbat.discharge_limit_kw", state=self.dp2(discharge_limit), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state("predbat.discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+        """
+        Create entity to chart charge limit
+        """
         charge_limit_time = {}
         charge_limit_time_kw = {}
         for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
