@@ -150,6 +150,8 @@ These are configuration items that you can modify to fit your needs:
   - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost in attributes.
   - predbat.best_charge_limit - Predicted best battery charge limit in percent
   - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
+  - predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
+  - predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kwH
   - predbat.low_rate_cost - The lowest rate cost in P
   - predbat.low_rate_start - Start time of the next low rate
   - predbat.low_rate_end - End time of the next low rate
@@ -158,7 +160,7 @@ These are configuration items that you can modify to fit your needs:
   
 Example data out:
 
-![image](https://user-images.githubusercontent.com/48591903/235856719-f223fe71-76f6-4ab3-a9df-f1d3a1538d80.png)
+![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
   
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
@@ -166,12 +168,11 @@ To create the fancy chart
 - Customise as you like
 
 Example charts:
-![image](https://github.com/springfall2008/batpred/assets/48591903/2c782f9e-ba50-4fd5-9893-c9c2eea7fcdc)
+![image](https://github.com/springfall2008/batpred/assets/48591903/39b6a1d5-8865-4855-9e60-6d8c4a3fbf12)
 
-![image](https://user-images.githubusercontent.com/48591903/236629103-103ccc62-89aa-48bf-bc8b-0005c1153974.png)
+![image](https://github.com/springfall2008/batpred/assets/48591903/a10e570d-373e-4fce-aebf-dc6463067e3b)
 
 ![image](https://user-images.githubusercontent.com/48591903/236629117-8f05e050-d43d-4a52-a2a7-b5e97b961e3c.png)
-
 
 Todo list:
   - Add ability to average load over a number of days
