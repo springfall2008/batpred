@@ -30,7 +30,7 @@ To install:
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
 - If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
   or you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
-- If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). Batpred may decide to charge in these slots as well.
+- If you are on Intelligent and want to include charging slots outside the normal period or account in your predictions for your car charging then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). Batpred may decide to charge in these slots as well.
 - Customise any settings needed
 
 FAQ:
