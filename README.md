@@ -39,6 +39,7 @@ FAQ:
     - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions)
   - Why is my predicted charge % higher or lower than I might expect?
     - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
+    - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm. If you do something like have export>import then Batpred will try to export as much as possible.
     - Have you tuned Solcast to match your output accurately?
     - Have you tuned the metric_min_improvement, best_soc_min and best_soc_keep settings?
     - Do you have predicted car charging during the time period?
