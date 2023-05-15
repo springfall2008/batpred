@@ -151,7 +151,7 @@ pred_bat:
   
   # Set the frequency in minutes that this plugin is run
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
-  run_every: 10
+  run_every: 5
   
   # Debug enable prints lots of debug, leave off by default
   debug_enable: False

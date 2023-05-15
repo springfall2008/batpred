@@ -16,7 +16,7 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 MAX_CHARGE_LIMITS = 10
-SIMULATE = False  # Debug option, when set don't write to entities but simulate each 15 min period
+SIMULATE = False # Debug option, when set don't write to entities but simulate each 15 min period
 
 class PredBat(hass.Hass):
     """ 
@@ -580,54 +580,78 @@ class PredBat(hass.Hass):
                     entity_soc.call_service("set_value", value=soc)
                     if self.get_arg('set_soc_notify', False):
                         self.call_service("notify/notify", message='Predbat: Target SOC has been changed to {} at {}'.format(soc, self.time_now_str()))
-                self.record_status("Set soc to {}".format(soc))
+                self.record_status("Set soc to {} at {}".format(soc, self.time_now_str()))
             else:
                 self.log("WARN: Unable to get entity to set SOC target")
         else:
             self.log("Current SOC is {} already at target".format(current_soc))
 
-    def adjust_force_discharge(self, force_discharge, start_time=None, end_time=None):
+    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
         """
         Adjust force discharge on/off
         """
         if SIMULATE:
-            inverter_mode = self.sim_inverter_mode
+            old_inverter_mode = self.sim_inverter_mode
+            old_start = self.sim_discharge_start
+            old_end = self.sim_discharge_end
         else:
-            inverter_mode = self.get_arg('inverter_mode')
+            old_inverter_mode = self.get_arg('inverter_mode')
+            old_start = self.get_arg('discharge_start_time')
+            old_end = self.get_arg('discharge_end_time')
 
         if force_discharge:
             new_inverter_mode = 'Timed Export'
         else:
             new_inverter_mode = 'Eco'
 
-        self.log("Adjust force discharge to {}, current mode {}".format(new_inverter_mode, inverter_mode))
-        if inverter_mode != new_inverter_mode:
-            entity_inverter_mode = self.get_entity(self.get_arg('inverter_mode', indirect=False))
-            entity_discharge_start_time = self.get_entity(self.get_arg('discharge_start_time', indirect=False))
-            entity_discharge_end_time = self.get_entity(self.get_arg('discharge_end_time', indirect=False))
+        # Start time to correct format
+        if new_start_time:
+            new_start = new_start_time.strftime("%H:%M:%S")
+        else:
+            new_start = None
 
+        # End time to correct format
+        if new_end_time:
+            new_end = new_end_time.strftime("%H:%M:%S")
+        else:
+            new_end = None
+
+        self.log("Adjust force discharge to {} times {} - {}, current mode {} times {} - {}".format(new_inverter_mode, new_start, new_end, old_inverter_mode, old_start, old_end))
+
+        # Change start time
+        if new_start and new_start != old_start:
+            entity_discharge_start_time = self.get_entity(self.get_arg('discharge_start_time', indirect=False))
+            self.log("Set new start time on {} to {}".format(entity_discharge_start_time, new_start))
+            self.record_status("Set discharge start time to {} at {}".format(new_start, self.time_now_str()))
+            if SIMULATE:
+                self.sim_discharge_start = new_start
+            else:
+                entity_discharge_start_time.call_service("select_option", option=new_start)
+
+        # Change end time
+        if new_end and new_end != old_end:
+            entity_discharge_end_time = self.get_entity(self.get_arg('discharge_end_time', indirect=False))
+            self.log("Set new end time on {} to {} was {}".format(entity_discharge_end_time, new_end, old_end))                    
+            self.record_status("Set discharge end time to {} at {}".format(new_end, self.time_now_str()))
+            if SIMULATE:
+                self.sim_discharge_end = new_end
+            else:
+                entity_discharge_end_time.call_service("select_option", option=new_end)
+
+        # Change inverter mode
+        if old_inverter_mode != new_inverter_mode:
             if SIMULATE:
                 self.sim_inverter_mode = new_inverter_mode
             else:
-                if start_time:
-                    new_start = start_time.strftime("%H:%M:%S")
-                    self.log("Set new start time on {} to {}".format(entity_discharge_start_time, new_start))
-                    entity_discharge_start_time.call_service("select_option", option=new_start)
-                    
-                    new_end = end_time.strftime("%H:%M:%S")
-                    self.log("Set new end time on {} to {}".format(entity_discharge_end_time, new_end))                    
-                    entity_discharge_end_time.call_service("select_option", option=new_end)
-                    entity_discharge_end_time.call_service("select_option", option=new_end)
-                    entity_discharge_start_time.call_service("select_option", option=new_start)
-
                 # Inverter mode
+                entity_inverter_mode = self.get_entity(self.get_arg('inverter_mode', indirect=False))
                 entity_inverter_mode.call_service("select_option", option=new_inverter_mode)
 
                 # Notify
                 if self.get_arg('set_discharge_notify', False):
                     self.call_service("notify/notify", message="Predbat: Force discharge set to {} at time {}".format(force_discharge, self.time_now_str()))
 
-            self.record_status("Set discharge mode to {} time {} - {}".format(new_inverter_mode, new_start, new_end))
+            self.record_status("Set discharge mode to {} at {}".format(new_inverter_mode, self.time_now_str()))
             self.log("Changing force discharge to {}".format(force_discharge))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time):
@@ -676,7 +700,7 @@ class PredBat(hass.Hass):
         if new_start != old_start or new_end != old_end:
             if self.get_arg('set_window_notify', False) and not SIMULATE:
                 self.call_service("notify/notify", message="Predbat: Charge window change to: {} - {} at {}".format(new_start, new_end, self.time_now_str()))
-            self.record_status("Charge window change to: {} - {}".format(new_start, new_end))
+            self.record_status("Charge window change to: {} - {} at {}".format(new_start, new_end, self.time_now_str()))
             self.log("Updated start and end charge window to {} - {} (old {} - {})".format(new_start, new_end, old_start, old_end))
 
     def time_now_str(self):
@@ -1154,8 +1178,10 @@ class PredBat(hass.Hass):
         self.simulate_offset = 0
         self.sim_soc = 100
         self.sim_inverter_mode = "Eco"
-        self.sim_charge_start_time = "23:30:00"
-        self.sim_charge_end_time = "05:30:00"
+        self.sim_charge_start_time = "00:00:00"
+        self.sim_charge_end_time = "00:00:00"
+        self.sim_discharge_start = "00:00"
+        self.sim_discharge_end = "23:59"
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, pv_forecast_minute10):
         """
@@ -1607,18 +1633,21 @@ class PredBat(hass.Hass):
                     self.charge_end_time_minutes = minutes_end
 
             # Set forced discharge window
-            if self.get_arg('set_discharge_window', False):
-                window_n = self.in_charge_window(self.discharge_window_best, self.minutes_now)
-                if window_n >= 0 and self.discharge_enable_best[window_n]:
-                    window = self.discharge_window_best[window_n]
-                    minutes_start = window['start']
-                    minutes_end = window['end']
-                    charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
-                    charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Discharge window will be: {} - {}".format(charge_start_time, charge_end_time))
-                    self.adjust_force_discharge(True, charge_start_time, charge_end_time)
+            if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
+                window = self.discharge_window_best[0]
+                minutes_start = window['start']
+                minutes_end = window['end']
+                discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
+                discharge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
+                self.log("Next discharge window will be: {} - {}".format(discharge_start_time, discharge_end_time))
+                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and self.discharge_enable_best[0]:
+                    self.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                 else:
-                    self.adjust_force_discharge(False)
+                    if (self.minutes_now < minutes_end) and (minutes_start - self.minutes_now) <= self.set_window_minutes:
+                        self.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
+                    else:
+                        self.log("Not setting discharge time as we are not yet within the window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
+                        self.adjust_force_discharge(False)
             
             # Set the SOC just before or within the charge window
             if self.get_arg('set_soc_enable', False):
