@@ -27,10 +27,25 @@ To install:
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
-- If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working
+- Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
+- If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
   or you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
-- If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured here. Batpred may decide to charge in these slots as well.
+- If you are on Intelligent and want to include charging slots outside the normal period then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). Batpred may decide to charge in these slots as well.
 - Customise any settings needed
+
+FAQ:
+  - I've installed Batbred but I don't see the correct entities:
+    - First look at AppDeamon.log (can be found in the list of logfiles in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
+    - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions)
+  - Why is my predicted charge % higher or lower than I might expect?
+    - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
+    - Have you tuned Solcast to match your output accurately?
+    - Have you tuned the metric_min_improvement, best_soc_min and best_soc_keep settings?
+    - Do you have predicted car charging during the time period?
+    - You can also tune load_scaling and pv_scaling to adjust predictions up and down a bit
+  - Why didn't the slot actually get configured?
+     - make sure set_charge_window and set_soc_enable is turned out
+  - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
 
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
   - geserial - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
@@ -56,7 +71,8 @@ They are set to a regular expression and auto-discovered but you can comment out
   - metric_octopus_import - Import rates from the Octopus plugin
   - metric_octopus_export - Export rates from the Octopus plugin
   - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
- 
+  - octopus_intelligent_charge_rate - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots
+
 Or manually set your rates in a 24-hour period using these:
   - rates_import
     - start
@@ -83,9 +99,9 @@ These are configuration items that you can modify to fit your needs:
   - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
   - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
   - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
-  - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.2 for 20% weighting)
+  - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
   
-  - car_charging_hold - When true it's assumed that the car charges from the grid and so any load values above a threshold (default 6kw, configure with car_charging_threshold) are the car and should be ignored in estimates
+  - car_charging_hold - When true car charging data is removed from the simulation, as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
   - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
     
@@ -98,6 +114,7 @@ These are configuration items that you can modify to fit your needs:
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
   - set_charge_window - When true automatically configure the next charge window in GivTCP
   - set_window_minutes - Number of minutes before charging the window should be configured in GivTCP (default 30)
+  - set_discharge_window - When true automatic forced export slots will be calculated and programmed (assuming you have a variable export rate that is worth using).
   
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
