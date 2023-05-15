@@ -270,6 +270,12 @@ class PredBat(hass.Hass):
                 charge_windows = charge_n + 1
         return charge_windows
 
+    def record_status(self, message, debug=""):
+        """
+        Records status to HA sensor
+        """
+        self.set_state("predbat.status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
+
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, save=None, step=5):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -283,6 +289,7 @@ class PredBat(hass.Hass):
         soc_min = self.soc_max
         charge_has_run = False
         charge_has_started = False
+        discharge_has_run = False
         export_kwh = 0
         import_kwh = 0
         import_kwh_house = 0
@@ -377,6 +384,9 @@ class PredBat(hass.Hass):
             elif (discharge_window_n >= 0) and (soc > self.reserve) and discharge_enable[discharge_window_n]:
                 # If force discharging the battery
                 # Stop when the battery runs out also
+                discharge_has_run = True
+
+                # Work out draw
                 battery_draw = self.discharge_rate * step
                 if soc - self.reserve < battery_draw:
                     battery_draw = soc - self.reserve
@@ -498,7 +508,7 @@ class PredBat(hass.Hass):
                 charge_has_run = True
 
             # Record soc min
-            if record and (charge_has_run or not self.charge_enable):
+            if record and (discharge_has_run or charge_has_run or not self.charge_enable):
                 soc_min = min(soc_min, soc)
 
             minute += step
@@ -567,8 +577,9 @@ class PredBat(hass.Hass):
                     self.sim_soc = soc
                 else:
                     entity_soc.call_service("set_value", value=soc)
-                if self.get_arg('set_soc_notify', False):
-                    self.call_service("notify/notify", message='Predbat: Target SOC has been changed to {} at {}'.format(soc, self.time_now_str()))
+                    if self.get_arg('set_soc_notify', False):
+                        self.call_service("notify/notify", message='Predbat: Target SOC has been changed to {} at {}'.format(soc, self.time_now_str()))
+                self.record_status("Set soc to {}".format(soc))
             else:
                 self.log("WARN: Unable to get entity to set SOC target")
         else:
@@ -608,9 +619,14 @@ class PredBat(hass.Hass):
                     entity_discharge_end_time.call_service("select_option", option=new_end)
                     entity_discharge_start_time.call_service("select_option", option=new_start)
 
+                # Inverter mode
                 entity_inverter_mode.call_service("select_option", option=new_inverter_mode)
 
-            self.call_service("notify/notify", message="Predbat: Force discharge set to {} at time {}".format(force_discharge, self.time_now_str()))
+                # Notify
+                if self.get_arg('set_discharge_notify', False):
+                    self.call_service("notify/notify", message="Predbat: Force discharge set to {} at time {}".format(force_discharge, self.time_now_str()))
+
+            self.record_status("Set discharge mode to {} time {} - {}".format(new_inverter_mode, new_start, new_end))
             self.log("Changing force discharge to {}".format(force_discharge))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time):
@@ -633,7 +649,9 @@ class PredBat(hass.Hass):
             # Enable scheduled charge if not turned on
             entity_start = self.get_entity(self.get_arg('scheduled_charge_enable', indirect=False))
             entity_start.call_service("turn_on")
-            self.call_service("notify/notify", message="Predbat: Enabling scheduled charging at {}".format(self.time_now_str()))
+            if self.get_arg('set_soc_notify', False):
+                self.call_service("notify/notify", message="Predbat: Enabling scheduled charging at {}".format(self.time_now_str()))
+            self.record_status("Turned on charge enable")
             self.log("Turning on scheduled charge")
 
         # Program start slot
@@ -655,8 +673,9 @@ class PredBat(hass.Hass):
                 entity_end.call_service("select_option", option=new_end)
 
         if new_start != old_start or new_end != old_end:
-            if self.get_arg('set_window_notify', False):
+            if self.get_arg('set_window_notify', False) and not SIMULATE:
                 self.call_service("notify/notify", message="Predbat: Charge window change to: {} - {} at {}".format(new_start, new_end, self.time_now_str()))
+            self.record_status("Charge window change to: {} - {}".format(new_start, new_end))
             self.log("Updated start and end charge window to {} - {} (old {} - {})".format(new_start, new_end, old_start, old_end))
 
     def time_now_str(self):
@@ -1176,7 +1195,7 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        return best_soc, best_metric, best_cost
+        return best_soc, best_metric, best_cost, soc_min
 
     def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10):
         """
@@ -1232,7 +1251,7 @@ class PredBat(hass.Hass):
                     self.log("Not Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_enable, soc_min, self.best_soc_keep))
             
  
-        return best_discharge, best_metric, best_cost
+        return best_discharge, best_metric, best_cost, soc_min
 
 
     def update_pred(self):
@@ -1475,10 +1494,10 @@ class PredBat(hass.Hass):
             self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
             for window_n in range(0, record_charge_windows):
-                best_soc, best_metric, best_cost = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                best_soc, best_metric, best_cost, soc_min = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
                 if self.debug_enable:
-                    self.log("Best charge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                    self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
                 self.charge_limit_best[window_n] = best_soc
 
         # Try different discharge options
@@ -1490,10 +1509,25 @@ class PredBat(hass.Hass):
             self.discharge_enable_best = [False for n in range(0, len(self.discharge_window_best))]
 
             for window_n in range(0, record_discharge_windows):
-                best_discharge, best_metric, best_cost = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
-                if self.debug_enable:
-                    self.log("Best discharge limit window {} (adjusted) soc calculated at {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                best_discharge, best_metric, best_cost, soc_min = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                if self.debug_enable or 1:
+                    self.log("Best discharge limit window {} discharge {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
                 self.discharge_enable_best[window_n] = best_discharge
+            
+            # Filter out the windows we disabled
+            new_best = []
+            new_enable = []
+            for window_n in range(0, len(self.discharge_enable_best)):
+                if self.discharge_enable_best[window_n]:
+                    # Also merge contigous enabled windows
+                    if new_best and self.discharge_window_best[window_n]['start'] == new_best[-1]['end']:
+                        new_best[-1]['end'] = self.discharge_window_best[window_n]['end']
+                    else:
+                        new_best.append(self.discharge_window_best[window_n])
+                        new_enable.append(True)
+            self.discharge_window_best = new_best
+            self.discharge_enable_best = new_enable
+            self.log("Discharge windows now {} {}".format(new_best, new_enable))
 
         # Final simulation of best, do 10% and normal scenario
         best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute10, save='best10')
@@ -1563,6 +1597,7 @@ class PredBat(hass.Hass):
 
 
         self.log("Completed run")
+        self.record_status("Run", debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
     def auto_config(self):
         """
@@ -1606,6 +1641,7 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         self.log("Predbat Startup")
+        self.record_status("Startup")
         self.reset()
         self.auto_config()
         

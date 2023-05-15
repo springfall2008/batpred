@@ -3,7 +3,7 @@ pred_bat:
   module: predbat
   class: PredBat
 
-  # Timezone to work in  
+  # Timezone to work in
   timezone: Europe/London
   
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
@@ -124,7 +124,7 @@ pred_bat:
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
-  # When set will assume your car will charge during intelligent slots at the given rate (in kw)
+  # When set will assume your car will charge during intelligent slots at the given rate (in kw) or the rate given by Octopus if provided
   octopus_intelligent_charge_rate: 7.5
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
@@ -141,6 +141,7 @@ pred_bat:
   # force_export entity above must be set correctly and you must have an export rate set correctly also
   # exports are in 30-minute slots
   # set_discharge_window: true
+  set_discharge_notify: True
   
   # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
   # note it maybe set more than once if things change
