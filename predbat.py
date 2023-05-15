@@ -1039,19 +1039,27 @@ class PredBat(hass.Hass):
                 self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         return rates
 
-    def today_cost(self, import_today):
+    def today_cost(self, import_today, export_today):
         """
         Work out energy costs today (approx)
         """
         day_cost = 0
         day_energy = 0
+        day_energy_export = 0
         day_cost_time = {}
 
         for minute in range(0, self.minutes_now):
             minute_back = self.minutes_now - minute - 1
+            energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
+            if export_today:
+                energy_export = self.get_from_incrementing(export_today, minute_back)
+            else:
+                energy_export = 0
             day_energy += energy
+            day_energy_export += energy_export
             day_cost += self.rate_import[minute] * energy
+            day_cost -= self.rate_export[minute] * energy_export
 
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
@@ -1060,7 +1068,7 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             self.set_state("predbat.cost_today", state=self.dp2(day_cost), attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-        self.log("Todays energy {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_cost)))
+        self.log("Todays energy import {} kwh export {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost)))
         return day_cost
 
     def publish_discharge_limit(self, discharge_window, discharge_enable, best):
@@ -1160,6 +1168,7 @@ class PredBat(hass.Hass):
         self.set_window_minutes = 0
         self.debug_enable = False
         self.import_today = {}
+        self.export_today = {}
         self.charge_enable = False
         self.charge_start_time_minutes = 0
         self.charge_end_time_minutes = 0
@@ -1413,11 +1422,22 @@ class PredBat(hass.Hass):
         else:
             self.log("No export rate data provided - using default metric")
 
-        # Load import today data and work out cost so far
+        # Load import today data 
         if 'import_today' in self.args and self.rate_import:
             self.import_today = self.minute_data(self.get_history(entity_id = self.get_arg('import_today', indirect=False), days = 2)[0], 
                                                  2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
-            self.cost_today_sofar = self.today_cost(self.import_today)
+        else:
+            self.import_today = {}
+
+        # Load export today data 
+        if 'export_today' in self.args and self.rate_export:
+            self.export_today = self.minute_data(self.get_history(entity_id = self.get_arg('export_today', indirect=False), days = 2)[0], 
+                                                 2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
+        else:
+            self.export_today = {}
+
+        if self.import_today:
+            self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
 
         # Battery charging options
         self.reserve = self.soc_max * reserve_percent / 100.0
