@@ -1554,9 +1554,9 @@ class PredBat(hass.Hass):
                 else:
                     self.adjust_force_discharge(False)
             
-            # Set the SOC, only do it before or just within the window (not the entire way due to thrash in charge % values)
+            # Set the SOC just before or within the charge window
             if self.get_arg('set_soc_enable', False):
-                if self.minutes_now <= (self.charge_start_time_minutes + 15) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+                if (self.minutes_now < self.charge_end_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     self.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
                     self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(self.charge_start_time_minutes)))
