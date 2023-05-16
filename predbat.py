@@ -856,10 +856,13 @@ class PredBat(hass.Hass):
                     end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
                     slot['end_minutes'] = end_minutes
 
+                slot_minutes = end_minutes - start_minutes
+                slot_hours = slot_minutes / 60.0
+
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
-                    # The load expected is stored in chargeKwh for the half hour, or use the default set by the user if not which is hourly
-                    return abs(float(slot.get('chargeKwh', self.car_charging_rate / 2.0))) * 2.0
+                    # The load expected is stored in chargeKwh for the period or use the default set by the user if not which is hourly
+                    return abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours))) / slot_hours
         return 0
 
     def rate_scan_export(self, rates):
@@ -1220,6 +1223,7 @@ class PredBat(hass.Hass):
         """
         loop_soc = self.soc_max
         best_soc = self.soc_max
+        best_soc_min = self.soc_max
         best_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
@@ -1272,6 +1276,7 @@ class PredBat(hass.Hass):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
+                best_soc_min = soc_min
                 if self.debug_enable:
                     self.log("Selecting metric {} cost {} soc {} - soc_min {} and keep {}".format(metric, cost, try_soc, soc_min, self.best_soc_keep))
             else:
@@ -1284,7 +1289,7 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        return best_soc, best_metric, best_cost, soc_min
+        return best_soc, best_metric, best_cost, best_soc_min
 
     def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10):
         """
