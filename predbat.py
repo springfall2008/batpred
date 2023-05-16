@@ -8,6 +8,7 @@ see Readme for information
 from datetime import datetime, timedelta
 import math
 import re
+import time
 import pytz
 import appdaemon.plugins.hass.hassapi as hass
 import requests
@@ -16,7 +17,8 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 MAX_CHARGE_LIMITS = 10
-SIMULATE = False # Debug option, when set don't write to entities but simulate each 15 min period
+SIMULATE = False        # Debug option, when set don't write to entities but simulate each 30 min period
+SIMULATE_LENGTH = 23*60 # How many periods to simulate, set to 0 for just current
 
 class PredBat(hass.Hass):
     """ 
@@ -586,6 +588,20 @@ class PredBat(hass.Hass):
         else:
             self.log("Current SOC is {} already at target".format(current_soc))
 
+    def write_and_poll_option(self, name, entity, new_value):
+        """
+        GivTCP Workaround, keep writing until correct
+        """
+        old_value = ""
+        tries = 16
+        while old_value != new_value and tries > 0:
+            entity.call_service("select_option", option=new_value)
+            time.sleep(2)
+            old_value = entity.get_state()
+            tries -=1
+        if tries == 0:
+            self.log("WARN: Trying to write {} to {} didn't complete".format(name, new_value))
+
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
         """
         Adjust force discharge on/off
@@ -626,7 +642,8 @@ class PredBat(hass.Hass):
             if SIMULATE:
                 self.sim_discharge_start = new_start
             else:
-                entity_discharge_start_time.call_service("select_option", option=new_start)
+                self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+                # entity_discharge_start_time.call_service("select_option", option=new_start)
 
         # Change end time
         if new_end and new_end != old_end:
@@ -636,7 +653,8 @@ class PredBat(hass.Hass):
             if SIMULATE:
                 self.sim_discharge_end = new_end
             else:
-                entity_discharge_end_time.call_service("select_option", option=new_end)
+                self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
+                # entity_discharge_end_time.call_service("select_option", option=new_end)
 
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
@@ -670,6 +688,8 @@ class PredBat(hass.Hass):
         new_start = charge_start_time.strftime("%H:%M:%S")
         new_end = charge_end_time.strftime("%H:%M:%S")
 
+        self.log("Charge window is {} - {}, being changed to {} - {}".format(old_start, old_end, new_start, new_end))
+
         if not SIMULATE and old_charge_schedule_enable == 'off':
             # Enable scheduled charge if not turned on
             entity_start = self.get_entity(self.get_arg('scheduled_charge_enable', indirect=False))
@@ -686,7 +706,8 @@ class PredBat(hass.Hass):
                 self.log("Simulate sim_charge_start_time now {}".format(new_start))
             else:
                 entity_start = self.get_entity(self.get_arg('charge_start_time', indirect=False))
-                entity_start.call_service("select_option", option=new_start)
+                # entity_start.call_service("select_option", option=new_start)
+                self.write_and_poll_option("charge_start_time", entity_start, new_start)
 
         # Program end slot
         if new_end != old_end:
@@ -695,7 +716,8 @@ class PredBat(hass.Hass):
                 self.log("Simulate sim_charge_end_time now {}".format(new_end))
             else:
                 entity_end = self.get_entity(self.get_arg('charge_end_time', indirect=False))
-                entity_end.call_service("select_option", option=new_end)
+                self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                # entity_end.call_service("select_option", option=new_end)
 
         if new_start != old_start or new_end != old_end:
             if self.get_arg('set_window_notify', False) and not SIMULATE:
@@ -1202,7 +1224,7 @@ class PredBat(hass.Hass):
         best_cost = 0
         prev_soc = self.soc_max + 1
         
-        while loop_soc > self.reserve:
+        while loop_soc >= self.reserve:
             was_debug = self.debug_enable
             self.debug_enable = False
 
@@ -1320,6 +1342,27 @@ class PredBat(hass.Hass):
  
         return best_discharge, best_metric, best_cost, soc_min
 
+    def window_sort_func(self, window):
+        """
+        Helper sort index function
+        """
+        return window['average']
+
+    def sort_window_by_price(self, windows):
+        """
+        Sort the charge windows by lowest price first, return a list of window IDs
+        """
+        window_with_id = windows[:]
+        wid = 0
+        for window in window_with_id:
+            window['id'] = wid
+            wid += 1
+        window_with_id.sort(key=self.window_sort_func)
+        id_list = []
+        for window in window_with_id:
+            id_list.append(window['id'])
+        # self.log("Sorted window ids {}".format(id_list))
+        return id_list
 
     def update_pred(self):
         """
@@ -1571,10 +1614,11 @@ class PredBat(hass.Hass):
             # Set all to min
             self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
-            for window_n in range(0, record_charge_windows):
+            # Optimise in price order, cheapest first
+            for window_n in self.sort_window_by_price(self.charge_window_best[:record_charge_windows]):
                 best_soc, best_metric, best_cost, soc_min = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
-                if self.debug_enable:
+                if self.debug_enable or 1:
                     self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
                 self.charge_limit_best[window_n] = best_soc
 
@@ -1629,6 +1673,7 @@ class PredBat(hass.Hass):
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (self.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
+                    self.log("Include original start {} with our start which is {}".format(self.charge_start_time_minutes, minutes_start))
                     minutes_start = self.charge_start_time_minutes
 
                 # Check if start is within 24 hours of now and end is in the future
@@ -1643,8 +1688,8 @@ class PredBat(hass.Hass):
                           (minutes_start - self.minutes_now) <= self.set_window_minutes or 
                           (self.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                        self.log("Configurating charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
-                        self.adjust_charge_window(charge_start_time, charge_end_time)
+                        self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                        self.adjust_charge_window(charge_start_time, charge_end_time)                        
                     else:
                         self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now),self.set_window_minutes, self.time_abs_str(minutes_start)))
 
@@ -1726,8 +1771,8 @@ class PredBat(hass.Hass):
         self.reset()
         self.auto_config()
         
-        if SIMULATE:
-            for offset in range (0, 23*60, 30):
+        if SIMULATE and SIMULATE_LENGTH:
+            for offset in range (0, SIMULATE_LENGTH, 30):
                 now = datetime.now()
                 midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
                 minutes_now = int((now - midnight).seconds / 60)
