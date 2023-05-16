@@ -8,17 +8,14 @@ For support please raise a Github ticket or use the GivTCP Facebook page
 
 Operation:
 
-The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 8 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction.
+The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 10 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction. When enable it will tune the charging percentage (SOC) for each of the slots to achieve the lowest cost possible.
 
-The output is a prediction of the battery levels and import and export amounts.
-
-Optionally it can also predict the results based on different target battery charge levels (SOC) for up to 8 slots and suggest the best option to use. 
-This is based on a rough cost of imports and exports or the energy pricing data (from Octopus or manually configured).
-The solar forecast used is the central scenario from Solcast but you can also add weighting to the 10% (worst case) scenario, the default is 20% weighting to this.
-The calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
-You can also have the target SOC automatically programmed into the inverter for the next day based on the calculation.
-
-Energy pricing data from Octopus (metric_octopus_import) or manually (rates_import) can be used to identify and program charging windows.
+- The output is a prediction of the battery levels, charging slots and % charge level, costs and import and export amounts.- 
+- Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Plugin. Both import and export rates are supported.
+- The solar forecast used is the central scenario from Solcast but you can also add weighting to the 10% (worst case) scenario, the default is 20% weighting to this.
+- The SOC calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
+- The charging windows and charge level (SOC) can be automatically programmed into the inverter.
+- Automatic planning of export slots is also supported, when enabled Batpred can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 
 To install:
 
