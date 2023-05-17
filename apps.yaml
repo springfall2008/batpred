@@ -45,6 +45,7 @@ pred_bat:
   load_scaling: 1.0
 
   # Days previous is the number of days back to find historical load data
+  # Recommended is 7 to capture day of the week but 1 can also be used
   days_previous: 7
 
   # Scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
@@ -69,11 +70,13 @@ pred_bat:
   calculate_best: True
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
-  # best_soc_min : sets the minimum charge level (in kwh) for overnight charging
+  # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot (set to 0 if you want to skip some slots)
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
+  # best_soc_step: is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
   best_soc_margin: 0
-  best_soc_min: 2
+  best_soc_min: 0
   best_soc_keep: 2
+  best_soc_step: 0.25
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. 
@@ -129,6 +132,7 @@ pred_bat:
   octopus_intelligent_charge_rate: 7.5
   
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
+  # If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period (max is 10)
   rate_low_threshold: 0.8
   
   # When enabled the next charge window will be automatically configured based on the incoming rates

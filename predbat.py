@@ -611,10 +611,10 @@ class PredBat(hass.Hass):
         GivTCP Workaround, keep writing until correct
         """
         old_value = ""
-        tries = 16
+        tries = 12
         while old_value != new_value and tries > 0:
             entity.call_service("select_option", option=new_value)
-            time.sleep(2)
+            time.sleep(5)
             old_value = entity.get_state()
             tries -=1
         if tries == 0:
