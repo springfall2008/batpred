@@ -231,7 +231,7 @@ class PredBat(hass.Hass):
         length = len(data)
 
         increment = 0
-        last = data[length - 1]
+        last = data[max(data)]
 
         for index in range(0, length):
             rindex = length - index - 1
@@ -1722,6 +1722,7 @@ class PredBat(hass.Hass):
         self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
         (self.charge_limit_best, self.discharge_enable_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
 
+        status = "Idle"
         if self.charge_enable:
             # Re-programme charge window based on low rates?
             if self.get_arg('set_charge_window', False) and self.charge_window_best:
@@ -1746,6 +1747,10 @@ class PredBat(hass.Hass):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
+
+                    # Status flag
+                    if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
+                        status = "Charging"
 
                     # We must re-program if we are about to start a new charge window
                     # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
@@ -1780,8 +1785,9 @@ class PredBat(hass.Hass):
                 self.log("Next discharge window will be: {} - {}".format(discharge_start_time, discharge_end_time))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and self.discharge_enable_best[0]:
                     self.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
+                    status = "Discharging"
                 else:
-                    if (self.minutes_now < minutes_end) and (minutes_start - self.minutes_now) <= self.set_window_minutes:
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_enable_best[0]:
                         self.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
                     else:
                         self.log("Not setting discharge time as we are not yet within the window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
@@ -1795,8 +1801,8 @@ class PredBat(hass.Hass):
                     self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(self.charge_start_time_minutes)))
 
 
-        self.log("Completed run")
-        self.record_status("Run", debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
+        self.log("Completed run status {}".format(status))
+        self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
     def auto_config(self):
         """
