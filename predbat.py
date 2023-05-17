@@ -43,13 +43,31 @@ class PredBat(hass.Hass):
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL
+        Retry 3 times and then throw error
         """
-        r = requests.get(url)
-        data = r.json()        
-        mdata = data['results']
-        r = requests.get(url + "?page=2")
-        data = r.json()  
-        mdata += data['results']      
+        for retry in range(0, 3):
+            pdata = self.download_octopus_rates_func(url)
+            if pdata:
+                break
+        if not pdata:
+            self.log("Unable to download Octopus data from URL {}".format(url))
+            raise ValueError
+        return pdata
+
+    def download_octopus_rates_func(self, url):
+        """
+        Download octopus rates directly from a URL
+        """
+        mdata = []
+
+        for page in range(1, 3):
+            r = requests.get(url + "?page={}".format(page))
+            try:
+                data = r.json()       
+            except requests.exceptions.JSONDecodeError:
+                self.log("WARN: Error downloading Octopus data from url {}".format(url))
+                return {}
+            mdata += data['results']
         pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
         return pdata
 
@@ -1259,6 +1277,7 @@ class PredBat(hass.Hass):
         best_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
+        prev_metric = 9999999
         
         while loop_soc >= 0:
             was_debug = self.debug_enable
@@ -1316,7 +1335,8 @@ class PredBat(hass.Hass):
                     self.log("Not Selecting metric {} cost {} soc {} - soc_min {} and keep {}".format(metric, cost, try_soc, soc_min, self.best_soc_keep))
             
             prev_soc = try_soc
-            loop_soc -= 0.5
+            prev_metric = metric
+            loop_soc -= max(self.get_arg('best_soc_step', 0.5), 0.1)
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
