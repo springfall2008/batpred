@@ -25,6 +25,8 @@ To install:
 - You must have GivTCP installed and running first
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
+   - Set the time_zone correctly in appdeamon.yml (e.g. Europe/London)
+   - Add 'thread_duration_warning_threshold: 30' to the appdeamon.yml file in the appdeamon section
 - Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
 - Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
@@ -117,6 +119,7 @@ These are configuration items that you can modify to fit your needs:
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
   - best_soc_min - Sets the minimum battery level SOC to propose for the prediction
   - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly)
+  - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
   - set_charge_window - When true automatically configure the next charge window in GivTCP
