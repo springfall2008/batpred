@@ -1,4 +1,4 @@
-# batpred
+# predbat
 Home battery prediction and automatic charging for Home Assistant with GivTCP
 
 Copyright (c) Trefor Southwell May 2023 - All rights reserved
@@ -134,6 +134,7 @@ These are configuration items that you can modify to fit your needs:
   - debug_enable - option to print lots of debug messages
    
 - You will find new entities are created in HA:
+  - predbat.status - Gives the current status and logs any adjustments made to your inverter
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
   - predbat_charge_limit - The current charge limit used for the scenario in %
   - predbat_charge_limit_kw - The current charge limit used for the scenario in kwH
