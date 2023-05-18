@@ -1582,6 +1582,8 @@ class PredBat(hass.Hass):
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
 
         self.charge_enable = self.get_arg('charge_enable', default = False)
+        self.charge_enable_time = self.get_arg('scheduled_charge_enable', 'on') == 'on'
+
         # If the battery is being charged then find the charge window
         if self.charge_enable:
             self.log("Inverter charging is enabled")
@@ -1608,7 +1610,7 @@ class PredBat(hass.Hass):
             self.charge_window = []
 
             self.log("Inverter scheduled charge enable is {}".format(self.get_arg('scheduled_charge_enable', 'on')))
-            if self.get_arg('scheduled_charge_enable', 'on') == 'on':
+            if self.charge_enable_time:
                 minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
                 minute_end = self.charge_end_time_minutes
                 while minute < self.forecast_minutes:
@@ -1618,6 +1620,10 @@ class PredBat(hass.Hass):
                     self.charge_window.append(window)
                     minute += 24 * 60
                     minute_end += 24 * 60
+            else:
+                # If charging is disabled set a fake window outside
+                self.charge_start_time_minutes = 24*60*2
+                self.charge_end_time_minutes = 24*60*2
             self.log('Charge windows currently {}'.format(self.charge_window))
 
             # Construct discharge window from GivTCP settings (How? XXX)
@@ -1653,7 +1659,10 @@ class PredBat(hass.Hass):
             self.discharge_enable_best = [False for i in range(0, len(self.discharge_window_best))]
 
             self.charge_rate = float(self.get_state(entity_id = self.get_arg('charge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
-            self.log("Charge settings are: {}-{} limit {} power {} (per minute)".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, str(self.charge_rate)))
+            if self.charge_enable_time:
+                self.log("Charge settings: {}-{} limit {} power {} (per minute)".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, str(self.charge_rate)))
+            else:
+                self.log("Charge settings: timed charged is disabled.")
 
         # battery max discharge rate
         self.discharge_rate = float(self.get_state(entity_id = self.get_arg('discharge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
@@ -1762,8 +1771,8 @@ class PredBat(hass.Hass):
                     self.log("Include original start {} with our start which is {}".format(self.charge_start_time_minutes, minutes_start))
                     minutes_start = self.charge_start_time_minutes
 
-                # Check if start is within 24 hours of now and end is in the future
-                if (minutes_start - self.minutes_now) < 24*60 and minutes_end > self.minutes_now:
+                # Check if end is within 24 hours of now and end is in the future
+                if (minutes_end - self.minutes_now) < 24*60 and minutes_end > self.minutes_now:
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
@@ -1786,7 +1795,7 @@ class PredBat(hass.Hass):
                     # Set configured window minutes for the SOC adjustment routine
                     self.charge_start_time_minutes = minutes_start
                     self.charge_end_time_minutes = minutes_end
-                elif (minutes_start >= 24*60):
+                elif (minutes_end >= 24*60):
                     # No charging require in the next 24 hours
                     self.log("No charge windows required for 24 hours")
                     self.disable_charge_window()
