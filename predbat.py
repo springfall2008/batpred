@@ -372,7 +372,7 @@ class PredBat(hass.Hass):
         """
         mdata = []
 
-        for page in range(1, 3):
+        for page in range(1, 4):
             r = requests.get(url + "?page={}".format(page))
             try:
                 data = r.json()       
@@ -619,11 +619,13 @@ class PredBat(hass.Hass):
 
     def record_length(self, charge_window):
         """
-        Only score the forecast until the end of tomorrow (the period)
+        Limit the forecast length to either the total forecast duration or the start of the last window that falls outside the forecast
         """
-        end_record = self.forecast_minutes - self.minutes_now
-        end_record = max(48*60 - self.minutes_now, end_record)
-        return end_record
+        end_record = self.forecast_minutes
+        max_windows = self.max_charge_windows(end_record, charge_window)
+        if len(charge_window) > max_windows:
+            end_record = min(end_record, charge_window[max_windows]['start'])
+        return end_record - self.minutes_now
     
     def max_charge_windows(self, end_record_abs, charge_window):
         """
@@ -633,7 +635,7 @@ class PredBat(hass.Hass):
         window_n = 0
         for window in charge_window:
             if end_record_abs >= window['end']:
-                charge_windows = window_n
+                charge_windows = window_n + 1
             window_n += 1
         return charge_windows
 
@@ -1766,7 +1768,7 @@ class PredBat(hass.Hass):
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
         self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
-        self.log("Base charge limit {} percent {}".format(self.charge_limit, self.charge_limit_best))
+        self.log("Base charge limit {} percent {}".format(self.charge_limit, self.charge_limit_percent))
 
         # Calculate best charge windows
         if self.low_rates:
@@ -1832,7 +1834,7 @@ class PredBat(hass.Hass):
         if self.get_arg('calculate_best', False):
             end_record = self.record_length(self.charge_window_best)
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
-            self.log("Record charge windows is {} end_record was {}".format(record_charge_windows, end_record))
+            self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, end_record + self.minutes_now))
             
             # Set all to min
             self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
