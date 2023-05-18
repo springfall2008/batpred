@@ -7,39 +7,49 @@ pred_bat:
   timezone: Europe/London
   
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work
+  # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
   #
-  # Sensors, currently more than one can be specified and they will be summed up automatically
+  # Sensors, currently more than one can be specified (ie one for inverter) and they will be summed up automatically
   #
-  soc_kw: 
-    - sensor.givtcp_{geserial}_soc_kwh
-  soc_max: 
-    - sensor.givtcp_{geserial}_battery_capacity_kwh
-  reserve: 
-    - number.givtcp_{geserial}_battery_power_reserve
   load_today: 
     - sensor.givtcp_{geserial}_load_energy_today_kwh
   import_today: 
     - sensor.givtcp_{geserial}_import_energy_today_kwh
   export_today: 
     - sensor.givtcp_{geserial}_export_energy_today_kwh
+  #
+  # Controls/status - must by 1 per inverter
+  #
+  num_inverters: 1
   charge_rate: 
     - number.givtcp_{geserial}_battery_charge_rate
   discharge_rate: 
     - number.givtcp_{geserial}_battery_discharge_rate
-  #
-  # Controls, currently only one is supported (future TODO to add multiple)
-  #
-  inverter_mode: select.givtcp_{geserial}_mode
-  soc_percent: number.givtcp_{geserial}_target_soc
-  charge_enable: switch.givtcp_{geserial}_enable_charge_schedule
-  charge_start_time: select.givtcp_{geserial}_charge_start_time_slot_1
-  charge_end_time: select.givtcp_{geserial}_charge_end_time_slot_1
-  charge_limit: number.givtcp_{geserial}_target_soc
-  scheduled_charge_enable: switch.givtcp_{geserial}_enable_charge_schedule
-  discharge_start_time: select.givtcp_{geserial}_discharge_start_time_slot_1
-  discharge_end_time: select.givtcp_{geserial}_discharge_end_time_slot_1
+  soc_kw: 
+    - sensor.givtcp_{geserial}_soc_kwh
+  soc_max: 
+    - sensor.givtcp_{geserial}_battery_capacity_kwh
+  reserve: 
+    - number.givtcp_{geserial}_battery_power_reserve
+  inverter_mode: 
+   - select.givtcp_{geserial}_mode
+  soc_percent: 
+   - number.givtcp_{geserial}_target_soc
+  charge_enable: 
+   - switch.givtcp_{geserial}_enable_charge_schedule
+  charge_start_time: 
+   - select.givtcp_{geserial}_charge_start_time_slot_1
+  charge_end_time: 
+   - select.givtcp_{geserial}_charge_end_time_slot_1
+  charge_limit: 
+   - number.givtcp_{geserial}_target_soc
+  scheduled_charge_enable: 
+   - switch.givtcp_{geserial}_enable_charge_schedule
+  discharge_start_time: 
+   - select.givtcp_{geserial}_discharge_start_time_slot_1
+  discharge_end_time: 
+   - select.givtcp_{geserial}_discharge_end_time_slot_1
   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today

@@ -16,34 +16,318 @@ import requests
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-MAX_CHARGE_LIMITS = 10
+MAX_CHARGE_LIMITS = 16
 SIMULATE = False        # Debug option, when set don't write to entities but simulate each 30 min period
 SIMULATE_LENGTH = 23*60 # How many periods to simulate, set to 0 for just current
+
+class Inverter():
+    def __init__(self, base, id=0):
+        self.id = id
+        self.base = base
+        self.charge_enable = False
+        self.charge_enable_time = False
+        self.charge_start_time_minutes = 24*60*2 
+        self.charge_start_end_minutes = 24*60*2 
+        self.sim_charge_start_time = "00:00:00"
+        self.sim_charge_end_time = "00:00:00"
+        self.charge_window = []
+        self.discharge_window = []
+        self.discharge_enable = []
+        self.current_charge_limit = 0
+        self.soc_kw = 0
+
+        # Battery size, charge and discharge rates
+        self.soc_max = float(self.base.get_arg('soc_max', default=0, index=self.id))
+        self.charge_rate = float(self.base.get_arg('charge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
+        self.discharge_rate = float(self.base.get_arg('discharge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
+        reserve_percent = float(self.base.get_arg('reserve', default=0, index=self.id))
+        self.reserve = self.base.dp2(self.soc_max * reserve_percent / 100.0)
+
+        self.base.log("New Inverter {} with soc_max {} charge_rate {} kw discharge_rate kw {} reserve {}".format(self.id, self.soc_max, self.base.dp2(self.charge_rate*60.0), self.base.dp2(self.discharge_rate*60.0), self.reserve))
+        
+    def update_status(self, minutes_now):
+        self.charge_enable = self.base.get_arg('charge_enable', default = False, index=self.id)
+        self.charge_enable_time = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id) == 'on'
+        self.soc_kw = float(self.base.get_arg('soc_kw', default=0, index=self.id))
+
+        # If the battery is being charged then find the charge window
+        if self.charge_enable:
+            # Find current charge window
+            if SIMULATE:
+                charge_start_time = datetime.strptime(self.sim_charge_start_time, "%H:%M:%S")
+                charge_end_time = datetime.strptime(self.sim_charge_end_time, "%H:%M:%S")
+            else:
+                charge_start_time = datetime.strptime(self.base.get_arg('charge_start_time', index=self.id), "%H:%M:%S")
+                charge_end_time = datetime.strptime(self.base.get_arg('charge_end_time', index=self.id), "%H:%M:%S")
+
+            # Compute charge window minutes start/end just for the next charge window
+            self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
+            self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
+
+            if self.charge_end_time_minutes < self.charge_start_time_minutes:
+                # As windows wrap, if end is in the future then move start back, otherwise forward
+                if self.charge_end_time_minutes > minutes_now:
+                    self.charge_start_time_minutes -= 60 * 24
+                else:
+                    self.charge_end_time_minutes += 60 * 24
+
+            # Construct charge window from the GivTCP settings
+            self.charge_window = []
+
+            self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)))
+            if self.charge_enable_time:
+                minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
+                minute_end = self.charge_end_time_minutes
+                while minute < self.base.forecast_minutes:
+                    window = {}
+                    window['start'] = minute
+                    window['end']   = minute_end
+                    self.charge_window.append(window)
+                    minute += 24 * 60
+                    minute_end += 24 * 60
+            else:
+                # If charging is disabled set a fake window outside
+                self.charge_start_time_minutes = 24*60*2
+                self.charge_end_time_minutes = 24*60*2
+            self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
+
+            # Construct discharge window from GivTCP settings (How? XXX)
+            self.discharge_window = []
+
+            # Work out existing charge limits and percent
+            self.current_charge_limit = float(self.base.get_arg('charge_limit', index=self.id))
+
+            # Pre-fill best discharge enable with Off
+            self.discharge_enable = [False for i in range(0, len(self.discharge_window))]
+
+            if self.charge_enable_time:
+                self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate*60.0))
+            else:
+                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate*60.0))
+
+    def adjust_battery_target(self, soc):
+        """
+        Adjust the battery charging target SOC % in GivTCP
+        """
+        # Check current setting and adjust
+        if SIMULATE:
+            current_soc = self.sim_soc
+        else:
+            current_soc = float(self.base.get_state(entity_id = self.base.get_arg('soc_percent', indirect=False, index=self.id), default=100))
+
+        if current_soc != soc:
+            self.base.log("Inverter {} Current SOC is {} and new target is {}".format(self.id, current_soc, soc))
+            entity_soc = self.base.get_entity(self.base.get_arg('soc_percent', indirect=False, index=self.id))
+            if entity_soc:
+                if SIMULATE:
+                    self.sim_soc = soc
+                else:
+                    entity_soc.call_service("set_value", value=soc)
+                    if self.base.get_arg('set_soc_notify', False):
+                        self.base.call_service("notify/notify", message='Predbat: Inverter {} Target SOC has been changed to {} at {}'.format(self.id, soc, self.base.time_now_str()))
+                self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
+            else:
+                self.base.log("WARN: Inverter {} Unable to get entity to set SOC target".format(self.id))
+        else:
+            self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
+
+    def write_and_poll_option(self, name, entity, new_value):
+        """
+        GivTCP Workaround, keep writing until correct
+        """
+        old_value = ""
+        tries = 12
+        while old_value != new_value and tries > 0:
+            entity.call_service("select_option", option=new_value)
+            time.sleep(5)
+            old_value = entity.get_state()
+            tries -=1
+        if tries == 0:
+            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete".format(self.id, name, new_value))
+
+    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
+        """
+        Adjust force discharge on/off
+        """
+        if SIMULATE:
+            old_inverter_mode = self.sim_inverter_mode
+            old_start = self.sim_discharge_start
+            old_end = self.sim_discharge_end
+        else:
+            old_inverter_mode = self.base.get_arg('inverter_mode', index=self.id)
+            old_start = self.base.get_arg('discharge_start_time', index=self.id)
+            old_end = self.base.get_arg('discharge_end_time', index=self.id)
+
+        if force_discharge:
+            new_inverter_mode = 'Timed Export'
+        else:
+            new_inverter_mode = 'Eco'
+
+        # Start time to correct format
+        if new_start_time:
+            new_start = new_start_time.strftime("%H:%M:%S")
+        else:
+            new_start = None
+
+        # End time to correct format
+        if new_end_time:
+            new_end = new_end_time.strftime("%H:%M:%S")
+        else:
+            new_end = None
+
+        self.base.log("Inverter {} Adjust force discharge to {} times {} - {}, current mode {} times {} - {}".format(self.id, new_inverter_mode, new_start, new_end, old_inverter_mode, old_start, old_end))
+
+        # Change start time
+        if new_start and new_start != old_start:
+            entity_discharge_start_time = self.base.get_entity(self.base.get_arg('discharge_start_time', indirect=False, index=self.id))
+            self.base.log("Inverter {} set new start time on {} to {}".format(self.id, entity_discharge_start_time, new_start))
+            self.base.record_status("Inverter {} set discharge start time to {} at {}".format(self.id, new_start, self.base.time_now_str()))
+            if SIMULATE:
+                self.sim_discharge_start = new_start
+            else:
+                self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+
+        # Change end time
+        if new_end and new_end != old_end:
+            entity_discharge_end_time = self.base.get_entity(self.base.get_arg('discharge_end_time', indirect=False, index=self.id))
+            self.base.log("Inverter {} Set new end time on {} to {} was {}".format(self.id, entity_discharge_end_time, new_end, old_end))                    
+            self.base.record_status("Inverter {} Set discharge end time to {} at {}".format(self.id, new_end, self.base.time_now_str()))
+            if SIMULATE:
+                self.sim_discharge_end = new_end
+            else:
+                self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
+
+        # Change inverter mode
+        if old_inverter_mode != new_inverter_mode:
+            if SIMULATE:
+                self.sim_inverter_mode = new_inverter_mode
+            else:
+                # Inverter mode
+                entity_inverter_mode = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
+                entity_inverter_mode.call_service("select_option", option=new_inverter_mode)
+
+                # Notify
+                if self.base.get_arg('set_discharge_notify', False):
+                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
+
+            self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
+            self.base.log("Inverter {} Changing force discharge to {}".format(self.id, force_discharge))
+
+    def disable_charge_window(self):
+        """
+        Disable charge window
+        """
+        if SIMULATE:
+            old_charge_schedule_enable = 'off'
+        else:
+            old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)
+
+        if old_charge_schedule_enable == 'on':
+            if not SIMULATE:
+                # Enable scheduled charge if not turned on
+                entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                entity_start.call_service("turn_off")
+                if self.base.get_arg('set_soc_notify', False):
+                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
+            else:
+                self.sim_charge_schedule_enable = False
+                
+            self.base.record_status("Inverter {} Turned off charge enable".format(self.id))
+            self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
+
+    def adjust_charge_window(self, charge_start_time, charge_end_time):
+        """
+        Adjust the charging window times (start and end) in GivTCP
+        """
+        if SIMULATE:
+            old_start = self.sim_charge_start_time
+            old_end = self.sim_charge_end_time
+            old_charge_schedule_enable = self.sim_charge_schedule_enable
+        else:
+            old_start = self.base.get_arg('charge_start_time', index=self.id)
+            old_end = self.base.get_arg('charge_end_time', index=self.id)
+            old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', True, index=self.id)
+
+        new_start = charge_start_time.strftime("%H:%M:%S")
+        new_end = charge_end_time.strftime("%H:%M:%S")
+
+        self.base.log("Inverter {} charge window is {} - {}, being changed to {} - {}".format(self.id, old_start, old_end, new_start, new_end))
+
+        if old_charge_schedule_enable == 'off':
+            if not SIMULATE:
+                # Enable scheduled charge if not turned on
+                entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                entity_start.call_service("turn_on")
+                if self.base.get_arg('set_soc_notify', False):
+                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
+            else:
+                self.sim_charge_schedule_enable = True
+
+            self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
+            self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
+
+        # Program start slot
+        if new_start != old_start:
+            if SIMULATE:
+                self.sim_charge_start_time = new_start
+                self.base.log("Simulate sim_charge_start_time now {}".format(new_start))
+            else:
+                entity_start = self.base.get_entity(self.base.get_arg('charge_start_time', indirect=False, index=self.id))
+                # entity_start.call_service("select_option", option=new_start)
+                self.write_and_poll_option("charge_start_time", entity_start, new_start)
+
+        # Program end slot
+        if new_end != old_end:
+            if SIMULATE:
+                self.sim_charge_end_time = new_end
+                self.log("Simulate sim_charge_end_time now {}".format(new_end))
+            else:
+                entity_end = self.base.get_entity(self.base.get_arg('charge_end_time', indirect=False, index=self.id))
+                self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                # entity_end.call_service("select_option", option=new_end)
+
+        if new_start != old_start or new_end != old_end:
+            if self.base.get_arg('set_window_notify', False) and not SIMULATE:
+                self.base.call_service("notify/notify", message="Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+            self.base.record_status("Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+            self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
+
 
 class PredBat(hass.Hass):
     """ 
     The battery prediction class itself 
     """
 
-    def resolve_arg(self, value, default=None, indirect=True, combine=False, attribute=None):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None):
         """
         Resolve argument templates and state instances
         """
+        if isinstance(value, list) and (index is not None):
+            if index < len(value):
+                value = value[index]
+            else:
+                self.log("WARN: Out of range index {} within item {} value {}".format(index, arg, value))
+                value = None
+            index = None
+
+        if index:
+            self.log("WARN: Out of range index {} within item {} value {}".format(index, arg, value))
+
         # If we have a list of items get each and add them up or return them as a list
         if isinstance(value, list):
             if combine:
                 final = 0
                 for item in value:
-                    got = self.resolve_arg(item, default=default, indirect=True)
+                    got = self.resolve_arg(arg, item, default=default, indirect=True)
                     try:
                         final += float(got)
                     except ValueError:
-                        self.log("WARN: Return bad value {} from {}".format(got, item))
+                        self.log("WARN: Return bad value {} from {} arg {}".format(got, item, arg))
                 return final
             else:
                 final = []
                 for item in value:
-                    item = self.resolve_arg(item, default=default, indirect=indirect)
+                    item = self.resolve_arg(arg, item, default=default, indirect=indirect)
                     final.append(item)
                 return final
 
@@ -60,12 +344,12 @@ class PredBat(hass.Hass):
                 value = self.get_state(entity_id = value, default=default)
         return value
 
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None):
         """
         Argument getter that can use HA state as well as fixed values
         """
         value = self.args.get(arg, default)
-        value = self.resolve_arg(value, default=default, indirect=indirect, combine=combine, attribute=attribute)
+        value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
         return value
 
     def download_octopus_rates(self, url):
@@ -335,12 +619,10 @@ class PredBat(hass.Hass):
 
     def record_length(self, charge_window):
         """
-        For the SOC calculation we need to stop 24 hours after the first charging window starts
-        to avoid wrapping into the next day
+        Only score the forecast until the end of tomorrow (the period)
         """
-        end_record = self.forecast_minutes
-        if len(charge_window):
-            end_record = min(end_record, charge_window[0]['start'] + 24*60 - self.minutes_now)
+        end_record = self.forecast_minutes - self.minutes_now
+        end_record = max(48*60 - self.minutes_now, end_record)
         return end_record
     
     def max_charge_windows(self, end_record_abs, charge_window):
@@ -348,10 +630,11 @@ class PredBat(hass.Hass):
         Work out how many charge windows the time period covers
         """
         charge_windows = 0
-        for minute in range(0, end_record_abs):
-            charge_n = self.in_charge_window(charge_window, minute)
-            if charge_n >= 0:
-                charge_windows = charge_n + 1
+        window_n = 0
+        for window in charge_window:
+            if end_record_abs >= window['end']:
+                charge_windows = window_n
+            window_n += 1
         return charge_windows
 
     def record_status(self, message, debug=""):
@@ -643,195 +926,6 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best10_metric", state=self.dp2(metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
         return metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc
-
-    def adjust_battery_target(self, soc):
-        """
-        Adjust the battery charging target SOC % in GivTCP
-        """
-        # Check current setting and adjust
-        if SIMULATE:
-            current_soc = self.sim_soc
-        else:
-            current_soc = float(self.get_state(entity_id = self.get_arg('soc_percent', indirect=False), default=100))
-
-        if current_soc != soc:
-            self.log("Current SOC is {} and new target is {}".format(current_soc, soc))
-            entity_soc = self.get_entity(self.get_arg('soc_percent', indirect=False))
-            if entity_soc:
-                if SIMULATE:
-                    self.sim_soc = soc
-                else:
-                    entity_soc.call_service("set_value", value=soc)
-                    if self.get_arg('set_soc_notify', False):
-                        self.call_service("notify/notify", message='Predbat: Target SOC has been changed to {} at {}'.format(soc, self.time_now_str()))
-                self.record_status("Set soc to {} at {}".format(soc, self.time_now_str()))
-            else:
-                self.log("WARN: Unable to get entity to set SOC target")
-        else:
-            self.log("Current SOC is {} already at target".format(current_soc))
-
-    def write_and_poll_option(self, name, entity, new_value):
-        """
-        GivTCP Workaround, keep writing until correct
-        """
-        old_value = ""
-        tries = 12
-        while old_value != new_value and tries > 0:
-            entity.call_service("select_option", option=new_value)
-            time.sleep(5)
-            old_value = entity.get_state()
-            tries -=1
-        if tries == 0:
-            self.log("WARN: Trying to write {} to {} didn't complete".format(name, new_value))
-
-    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
-        """
-        Adjust force discharge on/off
-        """
-        if SIMULATE:
-            old_inverter_mode = self.sim_inverter_mode
-            old_start = self.sim_discharge_start
-            old_end = self.sim_discharge_end
-        else:
-            old_inverter_mode = self.get_arg('inverter_mode')
-            old_start = self.get_arg('discharge_start_time')
-            old_end = self.get_arg('discharge_end_time')
-
-        if force_discharge:
-            new_inverter_mode = 'Timed Export'
-        else:
-            new_inverter_mode = 'Eco'
-
-        # Start time to correct format
-        if new_start_time:
-            new_start = new_start_time.strftime("%H:%M:%S")
-        else:
-            new_start = None
-
-        # End time to correct format
-        if new_end_time:
-            new_end = new_end_time.strftime("%H:%M:%S")
-        else:
-            new_end = None
-
-        self.log("Adjust force discharge to {} times {} - {}, current mode {} times {} - {}".format(new_inverter_mode, new_start, new_end, old_inverter_mode, old_start, old_end))
-
-        # Change start time
-        if new_start and new_start != old_start:
-            entity_discharge_start_time = self.get_entity(self.get_arg('discharge_start_time', indirect=False))
-            self.log("Set new start time on {} to {}".format(entity_discharge_start_time, new_start))
-            self.record_status("Set discharge start time to {} at {}".format(new_start, self.time_now_str()))
-            if SIMULATE:
-                self.sim_discharge_start = new_start
-            else:
-                self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
-                # entity_discharge_start_time.call_service("select_option", option=new_start)
-
-        # Change end time
-        if new_end and new_end != old_end:
-            entity_discharge_end_time = self.get_entity(self.get_arg('discharge_end_time', indirect=False))
-            self.log("Set new end time on {} to {} was {}".format(entity_discharge_end_time, new_end, old_end))                    
-            self.record_status("Set discharge end time to {} at {}".format(new_end, self.time_now_str()))
-            if SIMULATE:
-                self.sim_discharge_end = new_end
-            else:
-                self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
-                # entity_discharge_end_time.call_service("select_option", option=new_end)
-
-        # Change inverter mode
-        if old_inverter_mode != new_inverter_mode:
-            if SIMULATE:
-                self.sim_inverter_mode = new_inverter_mode
-            else:
-                # Inverter mode
-                entity_inverter_mode = self.get_entity(self.get_arg('inverter_mode', indirect=False))
-                entity_inverter_mode.call_service("select_option", option=new_inverter_mode)
-
-                # Notify
-                if self.get_arg('set_discharge_notify', False):
-                    self.call_service("notify/notify", message="Predbat: Force discharge set to {} at time {}".format(force_discharge, self.time_now_str()))
-
-            self.record_status("Set discharge mode to {} at {}".format(new_inverter_mode, self.time_now_str()))
-            self.log("Changing force discharge to {}".format(force_discharge))
-
-    def disable_charge_window(self):
-        """
-        Disable charge window
-        """
-        if SIMULATE:
-            old_charge_schedule_enable = 'off'
-        else:
-            old_charge_schedule_enable = self.get_arg('scheduled_charge_enable', 'on')
-
-        if old_charge_schedule_enable == 'on':
-            if not SIMULATE:
-                # Enable scheduled charge if not turned on
-                entity_start = self.get_entity(self.get_arg('scheduled_charge_enable', indirect=False))
-                entity_start.call_service("turn_off")
-                if self.get_arg('set_soc_notify', False):
-                    self.call_service("notify/notify", message="Predbat: Disabled scheduled charging at {}".format(self.time_now_str()))
-            else:
-                self.sim_charge_schedule_enable = False
-                
-            self.record_status("Turned off charge enable")
-            self.log("Turning off scheduled charge")
-
-    def adjust_charge_window(self, charge_start_time, charge_end_time):
-        """
-        Adjust the charging window times (start and end) in GivTCP
-        """
-        if SIMULATE:
-            old_start = self.sim_charge_start_time
-            old_end = self.sim_charge_end_time
-            old_charge_schedule_enable = self.sim_charge_schedule_enable
-        else:
-            old_start = self.get_arg('charge_start_time')
-            old_end = self.get_arg('charge_end_time')
-            old_charge_schedule_enable = self.get_arg('scheduled_charge_enable', True)
-
-        new_start = charge_start_time.strftime("%H:%M:%S")
-        new_end = charge_end_time.strftime("%H:%M:%S")
-
-        self.log("Charge window is {} - {}, being changed to {} - {}".format(old_start, old_end, new_start, new_end))
-
-        if old_charge_schedule_enable == 'off':
-            if not SIMULATE:
-                # Enable scheduled charge if not turned on
-                entity_start = self.get_entity(self.get_arg('scheduled_charge_enable', indirect=False))
-                entity_start.call_service("turn_on")
-                if self.get_arg('set_soc_notify', False):
-                    self.call_service("notify/notify", message="Predbat: Enabling scheduled charging at {}".format(self.time_now_str()))
-            else:
-                self.sim_charge_schedule_enable = True
-
-            self.record_status("Turned on charge enable")
-            self.log("Turning on scheduled charge")
-
-        # Program start slot
-        if new_start != old_start:
-            if SIMULATE:
-                self.sim_charge_start_time = new_start
-                self.log("Simulate sim_charge_start_time now {}".format(new_start))
-            else:
-                entity_start = self.get_entity(self.get_arg('charge_start_time', indirect=False))
-                # entity_start.call_service("select_option", option=new_start)
-                self.write_and_poll_option("charge_start_time", entity_start, new_start)
-
-        # Program end slot
-        if new_end != old_end:
-            if SIMULATE:
-                self.sim_charge_end_time = new_end
-                self.log("Simulate sim_charge_end_time now {}".format(new_end))
-            else:
-                entity_end = self.get_entity(self.get_arg('charge_end_time', indirect=False))
-                self.write_and_poll_option("charge_end_time", entity_end, new_end)
-                # entity_end.call_service("select_option", option=new_end)
-
-        if new_start != old_start or new_end != old_end:
-            if self.get_arg('set_window_notify', False) and not SIMULATE:
-                self.call_service("notify/notify", message="Predbat: Charge window change to: {} - {} at {}".format(new_start, new_end, self.time_now_str()))
-            self.record_status("Charge window change to: {} - {} at {}".format(new_start, new_end, self.time_now_str()))
-            self.log("Updated start and end charge window to {} - {} (old {} - {})".format(new_start, new_end, old_start, old_end))
 
     def time_now_str(self):
         """
@@ -1307,19 +1401,18 @@ class PredBat(hass.Hass):
         self.debug_enable = False
         self.import_today = {}
         self.export_today = {}
+        self.current_charge_limit = 0
         self.charge_enable = False
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = 0
-        self.charge_end_time_minutes = 0
+        self.charge_window = []
         self.charge_limit = []
+        self.charge_window_best = []
         self.charge_limit_best = []
+        self.discharge_window = []
         self.discharge_enable = []
         self.discharge_enable_best = []
-        self.charge_rate = 4000
-        self.discharge_rate = 4000
-        self.charge_window = []
-        self.discharge_window = []
         self.discharge_window_best = []
+        self.charge_rate = 0
+        self.discharge_rate = 0
         self.car_charging_hold = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
@@ -1388,7 +1481,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep):
+            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (best_metric==9999999 or soc_min >= self.best_soc_keep):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -1549,9 +1642,6 @@ class PredBat(hass.Hass):
 
         load_minutes = self.minute_data_load(now_utc)
 
-        self.soc_kw = float(self.get_arg('soc_kw', default=0, combine=True))
-        self.soc_max = float(self.get_arg('soc_max', default=0, combine=True))
-        reserve_percent = float(self.get_arg('reserve', default=0, combine=True))
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4)
@@ -1637,99 +1727,69 @@ class PredBat(hass.Hass):
             self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
 
         # Battery charging options
-        self.reserve = self.dp2(self.soc_max * reserve_percent / 100.0)
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.5)
         self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
         self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
-
-        self.charge_enable = self.get_arg('charge_enable', default = False)
-        self.charge_enable_time = self.get_arg('scheduled_charge_enable', 'on') == 'on'
-
-        # If the battery is being charged then find the charge window
-        if self.charge_enable:
-            self.log("Inverter charging is enabled")
-            # Find current charge window
-            if SIMULATE:
-                charge_start_time = datetime.strptime(self.sim_charge_start_time, "%H:%M:%S")
-                charge_end_time = datetime.strptime(self.sim_charge_end_time, "%H:%M:%S")
-            else:
-                charge_start_time = datetime.strptime(self.get_arg('charge_start_time'), "%H:%M:%S")
-                charge_end_time = datetime.strptime(self.get_arg('charge_end_time'), "%H:%M:%S")
-
-            # Compute charge window minutes start/end just for the next charge window
-            self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
-            self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
-
-            if self.charge_end_time_minutes < self.charge_start_time_minutes:
-                # As windows wrap, if end is in the future then move start back, otherwise forward
-                if self.charge_end_time_minutes > self.minutes_now:
-                    self.charge_start_time_minutes -= 60 * 24
-                else:
-                    self.charge_end_time_minutes += 60 * 24
-
-            # Construct charge window from the GivTCP settings
-            self.charge_window = []
-
-            self.log("Inverter scheduled charge enable is {}".format(self.get_arg('scheduled_charge_enable', 'on')))
-            if self.charge_enable_time:
-                minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
-                minute_end = self.charge_end_time_minutes
-                while minute < self.forecast_minutes:
-                    window = {}
-                    window['start'] = minute
-                    window['end']   = minute_end
-                    self.charge_window.append(window)
-                    minute += 24 * 60
-                    minute_end += 24 * 60
-            else:
-                # If charging is disabled set a fake window outside
-                self.charge_start_time_minutes = 24*60*2
-                self.charge_end_time_minutes = 24*60*2
-            self.log('Charge windows currently {}'.format(self.charge_window))
-
-            # Construct discharge window from GivTCP settings (How? XXX)
-            self.discharge_window = []
-            
-            # Calculate best charge windows
-            if self.get_arg('set_charge_window', False) and self.low_rates:
-                # If we are using calculated windows directly then save them
-                self.charge_window_best = self.low_rates[:]
-                self.log('Charge windows best will be {}'.format(self.charge_window_best))
-            else:
-                # Default best charge window as this one
-                self.charge_window_best = self.charge_window[:]
-
-            # Calculate best discharge windows
-            if self.get_arg('set_discharge_window', False) and self.high_export_rates:
-                self.discharge_window_best = self.high_export_rates[:]
-                self.log('Discharge windows best will be {}'.format(self.discharge_window_best))
-            else:
-                self.discharge_window_best = self.discharge_window[:]
-
-            # Get charge limit and fill for the number of windows
-            current_charge_limit = float(self.get_arg('charge_limit'))
-            self.charge_limit = [current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
-            self.charge_limit_percent = [current_charge_limit for i in range(0, len(self.charge_window))]
-
-            # Pre-fill best charge limit with the current charge limit
-            self.charge_limit_best = [current_charge_limit * current_charge_limit / 100.0 for i in range(0, len(self.charge_window_best))]
-            self.charge_limit_percent_best = [current_charge_limit for i in range(0, len(self.charge_window_best))]
-
-            # Pre-fill best discharge enable with Off
-            self.discharge_enable = [False for i in range(0, len(self.discharge_window_best))]
-            self.discharge_enable_best = [False for i in range(0, len(self.discharge_window_best))]
-
-            self.charge_rate = float(self.get_arg('charge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
-            if self.charge_enable_time:
-                self.log("Charge settings: {}-{} limit {} power {} kw".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, self.charge_rate*60.0))
-            else:
-                self.log("Charge settings: timed charged is disabled, power {} kw".format(self.charge_rate*60.0))
-
-        # battery max discharge rate
+        self.charge_rate = float(self.get_arg('charge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
         self.discharge_rate = float(self.get_arg('discharge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
+
+        # Find the inverters
+        self.num_inverters = int(self.get_arg('num_inverters', 1))
+        self.inverters = []
+        self.charge_enable = False
+        self.charge_window = []
+        self.discharge_window = []
+        self.discharge_enable = []
+        self.soc_kw = 0
+        self.soc_max = 0
+        self.reserve = 0
+
+        for id in range(0, self.num_inverters):
+            inverter = Inverter(self, id)
+            inverter.update_status(self.minutes_now)
+            # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
+            if inverter.charge_enable and not self.charge_enable:
+                self.charge_enable = True
+                self.current_charge_limit = inverter.current_charge_limit
+                self.charge_window = inverter.charge_window
+                self.discharge_window = inverter.discharge_window
+                self.discharge_enable = inverter.discharge_enable
+            self.soc_max += inverter.soc_max
+            self.soc_kw += inverter.soc_kw
+            self.reserve += inverter.reserve
+            self.inverters.append(inverter)
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} ".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw))
+
+        # Work out current charge limits
+        self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
+        self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
+        self.log("Base charge limit {} percent {}".format(self.charge_limit, self.charge_limit_best))
+
+        # Calculate best charge windows
+        if self.low_rates:
+            # If we are using calculated windows directly then save them
+            self.charge_window_best = self.low_rates[:]
+            self.log('Charge windows best will be {}'.format(self.charge_window_best))
+        else:
+            # Default best charge window as this one
+            self.charge_window_best = []
+
+        # Calculate best discharge windows
+        if self.high_export_rates:
+            self.discharge_window_best = self.high_export_rates[:]
+            self.log('Discharge windows best will be {}'.format(self.discharge_window_best))
+        else:
+            self.discharge_window_best = []
+
+        # Pre-fill best charge limit with the current charge limit
+        self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window_best))]
+        self.charge_limit_percent_best = [self.current_charge_limit for i in range(0, len(self.charge_window_best))]
+
+        # Pre-fill best discharge enable with Off
+        self.discharge_enable_best = [False for i in range(0, len(self.discharge_window_best))]
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
@@ -1765,16 +1825,14 @@ class PredBat(hass.Hass):
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
 
-        # Simulate current settings
+        # Simulate current settings (inverter 0)
         metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_enable, load_minutes, pv_forecast_minute, save='base')
-
-        # Default best
-        self.charge_limit_percent_best = self.charge_limit_percent[:]
 
         # Try different battery SOCs to get the best result
         if self.get_arg('calculate_best', False):
             end_record = self.record_length(self.charge_window_best)
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+            self.log("Record charge windows is {} end_record was {}".format(record_charge_windows, end_record))
             
             # Set all to min
             self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
@@ -1784,7 +1842,7 @@ class PredBat(hass.Hass):
                 best_soc, best_metric, best_cost, soc_min = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
                 if self.debug_enable or 1:
-                    self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                    self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
                 self.charge_limit_best[window_n] = best_soc
 
             # Discard unused slots
@@ -1816,82 +1874,83 @@ class PredBat(hass.Hass):
         (self.charge_limit_best, self.discharge_enable_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
 
         status = "Idle"
-        if self.charge_enable:
-            # Re-programme charge window based on low rates?
-            if self.get_arg('set_charge_window', False) and self.charge_window_best:
-                # Find the next best window and save it
-                window = self.charge_window_best[0]
-                minutes_start = window['start']
-                minutes_end = window['end']
+        for inverter in self.inverters:
+            if inverter.charge_enable:
+                # Re-programme charge window based on low rates?
+                if self.get_arg('set_charge_window', False) and self.charge_window_best:
+                    # Find the next best window and save it
+                    window = self.charge_window_best[0]
+                    minutes_start = window['start']
+                    minutes_end = window['end']
 
-                # Combine contigous windows
-                for windows in self.charge_window_best:
-                    if minutes_end == windows['start']:
-                        minutes_end = windows['end']
-                        self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows['start']), self.time_abs_str(windows['end'])))
+                    # Combine contigous windows
+                    for windows in self.charge_window_best:
+                        if minutes_end == windows['start']:
+                            minutes_end = windows['end']
+                            self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows['start']), self.time_abs_str(windows['end'])))
 
-                # Avoid adjust avoid start time forward when it's already started
-                if (self.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
-                    self.log("Include original start {} with our start which is {}".format(self.charge_start_time_minutes, minutes_start))
-                    minutes_start = self.charge_start_time_minutes
+                    # Avoid adjust avoid start time forward when it's already started
+                    if (inverter.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
+                        self.log("Include original start {} with our start which is {}".format(inverter.charge_start_time_minutes, minutes_start))
+                        minutes_start = inverter.charge_start_time_minutes
 
-                # Check if end is within 24 hours of now and end is in the future
-                if (minutes_end - self.minutes_now) < 24*60 and minutes_end > self.minutes_now:
-                    charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
-                    charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
+                    # Check if end is within 24 hours of now and end is in the future
+                    if (minutes_end - self.minutes_now) < 24*60 and minutes_end > self.minutes_now:
+                        charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
+                        charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
+                        self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
 
-                    # Status flag
-                    if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        status = "Charging"
+                        # Status flag
+                        if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
+                            status = "Charging"
 
-                    # We must re-program if we are about to start a new charge window
-                    # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
-                    if (self.minutes_now < minutes_end) and (
-                          (minutes_start - self.minutes_now) <= self.set_window_minutes or 
-                          (self.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
-                        ):
-                        self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
-                        self.adjust_charge_window(charge_start_time, charge_end_time)                        
+                        # We must re-program if we are about to start a new charge window
+                        # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
+                        if (self.minutes_now < minutes_end) and (
+                            (minutes_start - self.minutes_now) <= self.set_window_minutes or 
+                            (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
+                            ):
+                            self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                            inverter.adjust_charge_window(charge_start_time, charge_end_time)                        
+                        else:
+                            self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now),self.set_window_minutes, self.time_abs_str(minutes_start)))
+
+                        # Set configured window minutes for the SOC adjustment routine
+                        inverter.charge_start_time_minutes = minutes_start
+                        inverter.charge_end_time_minutes = minutes_end
+                    elif (minutes_end >= 24*60):
+                        # No charging require in the next 24 hours
+                        self.log("No charge windows required for 24 hours")
+                        inverter.disable_charge_window()
+                elif self.get_arg('set_charge_window', False):
+                    # No charge windows
+                    self.log("No charge windows found")
+                    inverter.disable_charge_window()
+
+                # Set forced discharge window
+                if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
+                    window = self.discharge_window_best[0]
+                    minutes_start = window['start']
+                    minutes_end = window['end']
+                    discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
+                    discharge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
+                    self.log("Next discharge window will be: {} - {}".format(discharge_start_time, discharge_end_time))
+                    if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and self.discharge_enable_best[0]:
+                        self.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
+                        status = "Discharging"
                     else:
-                        self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now),self.set_window_minutes, self.time_abs_str(minutes_start)))
-
-                    # Set configured window minutes for the SOC adjustment routine
-                    self.charge_start_time_minutes = minutes_start
-                    self.charge_end_time_minutes = minutes_end
-                elif (minutes_end >= 24*60):
-                    # No charging require in the next 24 hours
-                    self.log("No charge windows required for 24 hours")
-                    self.disable_charge_window()
-            elif self.get_arg('set_charge_window', False):
-                # No charge windows
-                self.log("No charge windows found")
-                self.disable_charge_window()
-
-            # Set forced discharge window
-            if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
-                window = self.discharge_window_best[0]
-                minutes_start = window['start']
-                minutes_end = window['end']
-                discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
-                discharge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                self.log("Next discharge window will be: {} - {}".format(discharge_start_time, discharge_end_time))
-                if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and self.discharge_enable_best[0]:
-                    self.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
-                    status = "Discharging"
-                else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_enable_best[0]:
-                        self.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
+                        if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_enable_best[0]:
+                            inverter.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
+                        else:
+                            self.log("Not setting discharge time as we are not yet within the window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
+                            inverter.adjust_force_discharge(False)
+                
+                # Set the SOC just before or within the charge window
+                if self.get_arg('set_soc_enable', False):
+                    if (self.minutes_now < inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
+                        inverter.adjust_battery_target(self.charge_limit_percent_best[0])
                     else:
-                        self.log("Not setting discharge time as we are not yet within the window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
-                        self.adjust_force_discharge(False)
-            
-            # Set the SOC just before or within the charge window
-            if self.get_arg('set_soc_enable', False):
-                if (self.minutes_now < self.charge_end_time_minutes) and (self.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
-                    self.adjust_battery_target(self.charge_limit_percent_best[0])
-                else:
-                    self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(self.charge_start_time_minutes)))
+                        self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
 
 
         self.log("Completed run status {}".format(status))
