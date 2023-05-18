@@ -25,7 +25,7 @@ class PredBat(hass.Hass):
     The battery prediction class itself 
     """
 
-    def resolve_arg(self, value, default=None, indirect=True, combine=False):
+    def resolve_arg(self, value, default=None, indirect=True, combine=False, attribute=None):
         """
         Resolve argument templates and state instances
         """
@@ -54,15 +54,18 @@ class PredBat(hass.Hass):
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and '.' in value:
-            value = self.get_state(entity_id = value, default=default)
+            if attribute:
+                value = self.get_state(entity_id = value, default=default, attribute=attribute)
+            else:
+                value = self.get_state(entity_id = value, default=default)
         return value
 
-    def get_arg(self, arg, default=None, indirect=True, combine=False):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None):
         """
         Argument getter that can use HA state as well as fixed values
         """
         value = self.args.get(arg, default)
-        value = self.resolve_arg(value, default=default, indirect=indirect, combine=combine)
+        value = self.resolve_arg(value, default=default, indirect=indirect, combine=combine, attribute=attribute)
         return value
 
     def download_octopus_rates(self, url):
@@ -1719,14 +1722,14 @@ class PredBat(hass.Hass):
             self.discharge_enable = [False for i in range(0, len(self.discharge_window_best))]
             self.discharge_enable_best = [False for i in range(0, len(self.discharge_window_best))]
 
-            self.charge_rate = float(self.get_state(entity_id = self.get_arg('charge_rate', indirect=False), attribute='max', combine=True)) / 1000.0 / 60.0
+            self.charge_rate = float(self.get_arg('charge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
             if self.charge_enable_time:
-                self.log("Charge settings: {}-{} limit {} power {} (per minute)".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, str(self.charge_rate)))
+                self.log("Charge settings: {}-{} limit {} power {} kw".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, self.charge_rate*60.0))
             else:
-                self.log("Charge settings: timed charged is disabled.")
+                self.log("Charge settings: timed charged is disabled, power {} kw".format(self.charge_rate*60.0))
 
         # battery max discharge rate
-        self.discharge_rate = float(self.get_state(entity_id = self.get_arg('discharge_rate', indirect=False), attribute='max', combine=True)) / 1000.0 / 60.0
+        self.discharge_rate = float(self.get_arg('discharge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
