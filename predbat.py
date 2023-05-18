@@ -25,19 +25,44 @@ class PredBat(hass.Hass):
     The battery prediction class itself 
     """
 
-    def get_arg(self, arg, default=None, indirect=True):
+    def resolve_arg(self, value, default=None, indirect=True, combine=False):
         """
-        Argument getter that can use HA state as well as fixed values
+        Resolve argument templates and state instances
         """
-        value = self.args.get(arg, default)
+        # If we have a list of items get each and add them up or return them as a list
+        if isinstance(value, list):
+            if combine:
+                final = 0
+                for item in value:
+                    got = self.resolve_arg(item, default=default, indirect=True)
+                    try:
+                        final += float(got)
+                    except ValueError:
+                        self.log("WARN: Return bad value {} from {}".format(got, item))
+                return final
+            else:
+                final = []
+                for item in value:
+                    item = self.resolve_arg(item, default=default, indirect=indirect)
+                    final.append(item)
+                return final
 
+        # Resolve templated data
         for repeat in range(0, 2):
             if isinstance(value, str) and '{' in value:
                 value = value.format(**self.args)
 
+        # Resolve indirect instance
         if indirect and isinstance(value, str) and '.' in value:
             value = self.get_state(entity_id = value, default=default)
+        return value
 
+    def get_arg(self, arg, default=None, indirect=True, combine=False):
+        """
+        Argument getter that can use HA state as well as fixed values
+        """
+        value = self.args.get(arg, default)
+        value = self.resolve_arg(value, default=default, indirect=indirect, combine=combine)
         return value
 
     def download_octopus_rates(self, url):
@@ -86,8 +111,36 @@ class PredBat(hass.Hass):
             tdata = datetime.strptime(str, TIME_FORMAT)
         return tdata
 
+    def minute_data_import_export(self, now_utc, key):
+        """
+        Download one or more entities for import/export data
+        """
+        entity_ids = self.get_arg(key, indirect=False)
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
+        import_today = {}    
+        for entity_id in entity_ids:
+            import_today = self.minute_data(self.get_history(entity_id = entity_id, days = 2)[0], 
+                                                2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
+        return import_today
+
+    def minute_data_load(self, now_utc):
+        """
+        Download one or more entities for load data
+        """
+        entity_ids = self.get_arg('load_today', indirect=False)
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+
+        load_minutes = {}
+        for entity_id in entity_ids:
+            load_minutes = self.minute_data(self.get_history(entity_id = entity_id, days = self.days_previous + 1)[0], 
+                                            self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
+        return load_minutes
+
     def minute_data(self, history, days, now, state_key, last_updated_key,
-                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0):
+                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[]):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
@@ -204,6 +257,14 @@ class PredBat(hass.Hass):
         # Reverse data with smoothing 
         if clean_increment:
             mdata = self.clean_incrementing_reverse(mdata)
+
+        # Accumulate to previous data?
+        if accumulate:
+            for minute in range(0, 60*24*days):
+                if minute in mdata:
+                    mdata[minute] += accumulate.get(minute, 0)
+                else:
+                    mdata[minute] = accumulate.get(minute, 0)
 
         return mdata
 
@@ -1244,6 +1305,7 @@ class PredBat(hass.Hass):
         self.import_today = {}
         self.export_today = {}
         self.charge_enable = False
+        self.charge_enable_time = False
         self.charge_start_time_minutes = 0
         self.charge_end_time_minutes = 0
         self.charge_limit = []
@@ -1482,11 +1544,11 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data(self.get_history(entity_id = self.get_arg('load_today', indirect=False), days = self.days_previous + 1)[0], 
-                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True)
-        self.soc_kw = float(self.get_arg('soc_kw', default=0))
-        self.soc_max = float(self.get_arg('soc_max', default=0))
-        reserve_percent = float(self.get_arg('reserve', default=0))
+        load_minutes = self.minute_data_load(now_utc)
+
+        self.soc_kw = float(self.get_arg('soc_kw', default=0, combine=True))
+        self.soc_max = float(self.get_arg('soc_max', default=0, combine=True))
+        reserve_percent = float(self.get_arg('reserve', default=0, combine=True))
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4)
@@ -1557,18 +1619,17 @@ class PredBat(hass.Hass):
 
         # Load import today data 
         if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data(self.get_history(entity_id = self.get_arg('import_today', indirect=False), days = 2)[0], 
-                                                 2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
+            self.import_today = self.minute_data_import_export(now_utc, 'import_today')
         else:
             self.import_today = {}
 
         # Load export today data 
         if 'export_today' in self.args and self.rate_export:
-            self.export_today = self.minute_data(self.get_history(entity_id = self.get_arg('export_today', indirect=False), days = 2)[0], 
-                                                 2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
+            self.export_today = self.minute_data_import_export(now_utc, 'export_today')
         else:
             self.export_today = {}
 
+        # Work out cost today
         if self.import_today:
             self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
 
@@ -1658,14 +1719,14 @@ class PredBat(hass.Hass):
             self.discharge_enable = [False for i in range(0, len(self.discharge_window_best))]
             self.discharge_enable_best = [False for i in range(0, len(self.discharge_window_best))]
 
-            self.charge_rate = float(self.get_state(entity_id = self.get_arg('charge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
+            self.charge_rate = float(self.get_state(entity_id = self.get_arg('charge_rate', indirect=False), attribute='max', combine=True)) / 1000.0 / 60.0
             if self.charge_enable_time:
                 self.log("Charge settings: {}-{} limit {} power {} (per minute)".format(self.time_abs_str(self.charge_start_time_minutes), self.time_abs_str(self.charge_end_time_minutes), current_charge_limit, str(self.charge_rate)))
             else:
                 self.log("Charge settings: timed charged is disabled.")
 
         # battery max discharge rate
-        self.discharge_rate = float(self.get_state(entity_id = self.get_arg('discharge_rate', indirect=False), attribute='max')) / 1000.0 / 60.0
+        self.discharge_rate = float(self.get_state(entity_id = self.get_arg('discharge_rate', indirect=False), attribute='max', combine=True)) / 1000.0 / 60.0
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
