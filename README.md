@@ -20,6 +20,8 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - Automatic planning of export slots is also supported, when enabled Batpred can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
 
+- Multiple inverter support depends on running all inverters in lockstep, that is each will charge at the same time to the same %
+
 To install:
 
 - You must have GivTCP installed and running first
@@ -51,19 +53,22 @@ FAQ:
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
 
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
+  - num_inverters - If you increase this above 1 you must provide multiple of each of these entities
   - geserial - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
+Data per inverter
+  - load_today - GivTCP Entity name for the house load in kwh today (must be incrementing)
+  - import_today - GivTCP Imported energy today in Kwh (incrementing)
+  - export_today - GivTCP Exported energy today in Kwh (incrementing) 
+Control per inverter:
   - soc_kw - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
   - soc_max - GivTCP Entity name for the maximum charge level for the battery
   - soc_percent - GivTCP Entity name for used to set the SOC target for the battery in percentage
   - reserve - GivTCP sensor name for the reserve setting in %
-  - load_today - GivTCP Entity name for the house load in kwh today (must be incrementing)
   - charge_enable - GivTCP charge enable entity - says if the battery will be charged in the time window
   - charge_start_time - GivTCP battery charge start time entity
   - charge_end_time - GivTCP battery charge end time entity
   - charge_rate - GivTCP battery charge rate entity in watts 
   - discharge_rate - GivTCP battery discharge max rate entity in watts
-  - import_today - GivTCP Imported energy today in Kwh (incrementing)
-  - export_today - GivTCP Exported energy today in Kwh (incrementing)
   - scheduled_charge_enable - GivTCP Scheduled charge enable config
   - discharge_start_time - GivTCP scheduled discharge slot_1 start time
   - discharge_end_time - GivTCP scheduled discharge slot_1 end time
