@@ -87,8 +87,8 @@ class Inverter():
                     minute_end += 24 * 60
             else:
                 # If charging is disabled set a fake window outside
-                self.charge_start_time_minutes = 24*60*2
-                self.charge_end_time_minutes = 24*60*2
+                self.charge_start_time_minutes = self.base.forecast_minutes
+                self.charge_end_time_minutes = self.base.forecast_minutes
             self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
 
             # Construct discharge window from GivTCP settings (How? XXX)
@@ -231,8 +231,13 @@ class Inverter():
                     self.base.call_service("notify/notify", message="Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
                 self.sim_charge_schedule_enable = False
-                
-            self.base.record_status("Inverter {} Turned off charge enable".format(self.id))
+
+            # Updated cached status to disabled    
+            self.charge_enable_time = False
+            self.charge_start_time_minutes = self.base.forecast_minutes
+            self.charge_end_time_minutes = self.base.forecast_minutes
+
+            self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time):
@@ -263,6 +268,7 @@ class Inverter():
             else:
                 self.sim_charge_schedule_enable = True
 
+            self.charge_enable_time = True
             self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
             self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
@@ -1777,7 +1783,7 @@ class PredBat(hass.Hass):
             self.log('Charge windows best will be {}'.format(self.charge_window_best))
         else:
             # Default best charge window as this one
-            self.charge_window_best = []
+            self.charge_window_best = self.charge_window
 
         # Calculate best discharge windows
         if self.high_export_rates:
@@ -1847,9 +1853,12 @@ class PredBat(hass.Hass):
                     self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
                 self.charge_limit_best[window_n] = best_soc
 
-            # Discard unused slots
+        # Discard unused slots if we controlling the charge window
+        if self.get_arg('set_charge_window', False):
             self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
             self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+        else:
+            self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
 
         # Try different discharge options
         if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
@@ -1928,6 +1937,8 @@ class PredBat(hass.Hass):
                     # No charge windows
                     self.log("No charge windows found")
                     inverter.disable_charge_window()
+                    inverter.charge_start_time_minutes = 24*60*2
+                    inverter.charge_end_time_minutes = 24*60*2
 
                 # Set forced discharge window
                 if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
