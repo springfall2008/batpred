@@ -1358,11 +1358,13 @@ class PredBat(hass.Hass):
                 charge_limit_time_kw[stamp] = 0
         
         if not SIMULATE:
-            charge_limit_first = self.reserve
+            charge_limit_first = 0
             charge_limit_percent_first = 0
             if charge_limit:
-                charge_limit_first = charge_limit[0]
-                charge_limit_percent_first = charge_limit_percent[0]
+                # Ignore charge windows beyond 24 hours away as they won't apply right now
+                if charge_window[0]['end'] < 24*60:
+                    charge_limit_first = charge_limit[0]
+                    charge_limit_percent_first = charge_limit_percent[0]
             if best:
                 self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
                 self.set_state("predbat.best_charge_limit", state=charge_limit_percent_first, attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
