@@ -1362,7 +1362,7 @@ class PredBat(hass.Hass):
             charge_limit_percent_first = 0
             if charge_limit:
                 # Ignore charge windows beyond 24 hours away as they won't apply right now
-                if charge_window[0]['end'] < 24*60:
+                if charge_window[0]['end'] < (24*60 + self.minutes_now):
                     charge_limit_first = charge_limit[0]
                     charge_limit_percent_first = charge_limit_percent[0]
             if best:
@@ -2018,7 +2018,6 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         self.log("Predbat Startup")
-        self.record_status("Startup")
         self.reset()
         self.auto_config()
         
