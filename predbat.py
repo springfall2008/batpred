@@ -715,7 +715,7 @@ class PredBat(hass.Hass):
                 # Hold based on data
                 car_energy = 0
                 for offset in range(0, step):
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset)
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset) * self.get_arg('car_charging_energy_scale', 1.0)
 
                 if self.debug_enable and car_energy > 0.0 and (minute % 60) == 0 and (minute < 60*48):
                     self.log("Hour {} car charging hold with data {} load now {} metric {}".format(minute/60, car_energy, load_yesterday, metric))

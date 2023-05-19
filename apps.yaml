@@ -90,8 +90,10 @@ pred_bat:
   # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
   # Or if an incrementing energy sensor is provided actuals can be subtracted
   # The wallbox sensor is an example, automatically added if you have one, or comment our or replace with your own
+  # Car charging energy scale - 1.0 if in Kwh or enter a different figure to scale the data accordingly
   car_charging_hold: True
   car_charging_energy: 're:sensor.wallbox_portal_added_energy'
+  car_charging_energy_scale: 1.0
   car_charging_threshold: 6.0
   
   # Enable calculate best to work out the best battery SOC % based on cost
