@@ -26,8 +26,8 @@ class Inverter():
         self.base = base
         self.charge_enable = False
         self.charge_enable_time = False
-        self.charge_start_time_minutes = 24*60*2 
-        self.charge_start_end_minutes = 24*60*2 
+        self.charge_start_time_minutes = self.base.forecast_minutes 
+        self.charge_start_end_minutes = self.base.forecast_minutes 
         self.sim_charge_start_time = "00:00:00"
         self.sim_charge_end_time = "00:00:00"
         self.charge_window = []
@@ -37,7 +37,7 @@ class Inverter():
         self.soc_kw = 0
 
         # Battery size, charge and discharge rates
-        self.soc_max = float(self.base.get_arg('soc_max', default=0, index=self.id))
+        self.soc_max = float(self.base.get_arg('soc_max', default=0, index=self.id)) * self.base.battery_scaling
         self.charge_rate = float(self.base.get_arg('charge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
         self.discharge_rate = float(self.base.get_arg('discharge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
         reserve_percent = float(self.base.get_arg('reserve', default=0, index=self.id))
@@ -48,10 +48,10 @@ class Inverter():
     def update_status(self, minutes_now):
         self.charge_enable = self.base.get_arg('charge_enable', default = False, index=self.id)
         self.charge_enable_time = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id) == 'on'
-        self.soc_kw = float(self.base.get_arg('soc_kw', default=0, index=self.id))
+        self.soc_kw = float(self.base.get_arg('soc_kw', default=0, index=self.id)) * self.base.battery_scaling
 
         # If the battery is being charged then find the charge window
-        if self.charge_enable:
+        if self.charge_enable and self.charge_enable_time:
             # Find current charge window
             if SIMULATE:
                 charge_start_time = datetime.strptime(self.sim_charge_start_time, "%H:%M:%S")
@@ -70,40 +70,44 @@ class Inverter():
                     self.charge_start_time_minutes -= 60 * 24
                 else:
                     self.charge_end_time_minutes += 60 * 24
+        else:
+            # If charging is disabled set a fake window outside
+            self.charge_start_time_minutes = self.base.forecast_minutes
+            self.charge_end_time_minutes = self.base.forecast_minutes
 
-            # Construct charge window from the GivTCP settings
-            self.charge_window = []
+        # Construct charge window from the GivTCP settings
+        self.charge_window = []
 
-            self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)))
-            if self.charge_enable_time:
-                minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
-                minute_end = self.charge_end_time_minutes
-                while minute < self.base.forecast_minutes:
-                    window = {}
-                    window['start'] = minute
-                    window['end']   = minute_end
-                    self.charge_window.append(window)
-                    minute += 24 * 60
-                    minute_end += 24 * 60
-            else:
-                # If charging is disabled set a fake window outside
-                self.charge_start_time_minutes = self.base.forecast_minutes
-                self.charge_end_time_minutes = self.base.forecast_minutes
-            self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
+        self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)))
+        if self.charge_enable_time:
+            minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
+            minute_end = self.charge_end_time_minutes
+            while minute < self.base.forecast_minutes:
+                window = {}
+                window['start'] = minute
+                window['end']   = minute_end
+                self.charge_window.append(window)
+                minute += 24 * 60
+                minute_end += 24 * 60
 
-            # Construct discharge window from GivTCP settings (How? XXX)
-            self.discharge_window = []
+        self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
 
-            # Work out existing charge limits and percent
+        # Work out existing charge limits and percent
+        if self.charge_enable and self.charge_enable_time:
             self.current_charge_limit = float(self.base.get_arg('charge_limit', index=self.id))
+        else:
+            self.current_charge_limit = 0
 
-            # Pre-fill best discharge enable with Off
-            self.discharge_enable = [False for i in range(0, len(self.discharge_window))]
+        if self.charge_enable_time:
+            self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate*60.0))
+        else:
+            self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate*60.0))
+            
+        # Construct discharge window from GivTCP settings (How? XXX)
+        self.discharge_window = []
 
-            if self.charge_enable_time:
-                self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate*60.0))
-            else:
-                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate*60.0))
+        # Pre-fill best discharge enable with Off
+        self.discharge_enable = [False for i in range(0, len(self.discharge_window))]
 
     def adjust_battery_target(self, soc):
         """
@@ -898,6 +902,7 @@ class PredBat(hass.Hass):
         # Save data to HA state
         if save and save=='base' and not SIMULATE:
             self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:timelapse'})
+            self.set_state("predbat.soc_kw_h0", state=self.dp3(predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
@@ -1390,7 +1395,8 @@ class PredBat(hass.Hass):
         self.cost_today_sofar = 0
         self.octopus_slots = []
         self.reserve = 0
-        self.battery_loss = 0
+        self.battery_loss = 1.0
+        self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_margin = 0
         self.best_soc_keep = 0
@@ -1736,6 +1742,7 @@ class PredBat(hass.Hass):
 
         # Battery charging options
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
+        self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.5)
         self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
@@ -1937,8 +1944,6 @@ class PredBat(hass.Hass):
                     # No charge windows
                     self.log("No charge windows found")
                     inverter.disable_charge_window()
-                    inverter.charge_start_time_minutes = 24*60*2
-                    inverter.charge_end_time_minutes = 24*60*2
 
                 # Set forced discharge window
                 if self.get_arg('set_discharge_window', False) and self.discharge_window_best:

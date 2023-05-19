@@ -64,6 +64,10 @@ pred_bat:
   # Battery loss accounts for energy lost charging the battery, 0.05 is 5%
   battery_loss: 0.05
 
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
+  battery_scaling: 1.0
+
   # Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
   # Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
   load_scaling: 1.0
