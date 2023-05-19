@@ -109,6 +109,7 @@ Or set assumed rates for the house, battery charging and export. You can't enabl
 These are configuration items that you can modify to fit your needs:
   - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
   - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
+  - battery_scaling - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use predbat.soc_kw_h0 as your current status rather than the GivTCP entity so everything lines up
   - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0)
   - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
   - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
