@@ -14,7 +14,7 @@ yaxis:
   - min: 0
     max: 9.54
 series:
-  - entity: sensor.givtcp_sa2243g277_soc_kwh
+  - entity: predbat.soc_kw_h0
     stroke_width: 1
     curve: smooth
     name: actual

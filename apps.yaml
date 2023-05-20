@@ -62,7 +62,9 @@ pred_bat:
   # pv_estimate: 10
   
   # Battery loss accounts for energy lost charging the battery, 0.05 is 5%
+  # Battery loss discharge accounts for energy lost discharging the battery, 0.05 is 5%
   battery_loss: 0.05
+  battery_loss_discharge: 0.05
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
@@ -90,7 +92,7 @@ pred_bat:
   # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
   # Or if an incrementing energy sensor is provided actuals can be subtracted
   # The wallbox sensor is an example, automatically added if you have one, or comment our or replace with your own
-  # Car charging energy scale - 1.0 if in Kwh or enter a different figure to scale the data accordingly
+  # Car charging energy scale - 1.0 if in Kwh or enter a different figure to scale the data accordingly (2.0 would double the data)
   car_charging_hold: True
   car_charging_energy: 're:sensor.wallbox_portal_added_energy'
   car_charging_energy_scale: 1.0
@@ -168,14 +170,16 @@ pred_bat:
   # When enabled the next charge window will be automatically configured based on the incoming rates
   # Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
   # Set window minutes defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
+  # Will also automatically disable charging if not required and re-enable it when required. 
+  # If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on.
   set_charge_window: True
   set_window_notify: True
   set_window_minutes: 30
 
-  # Expermental, automatic discharge for export during high rate periods enable 
-  # force_export entity above must be set correctly and you must have an export rate set correctly also
-  # exports are in 30-minute slots
-  # set_discharge_window: true
+  # When enabled automatically discharge for export during high rate periods 
+  # inverter mode and discharge start/end time entities above must be set correctly and you must have an export rate set correctly
+  # exports are in 30-minute slots, not all slots will be used
+  set_discharge_window: False
   set_discharge_notify: True
   
   # When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts

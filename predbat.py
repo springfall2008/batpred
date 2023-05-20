@@ -715,7 +715,7 @@ class PredBat(hass.Hass):
                 # Hold based on data
                 car_energy = 0
                 for offset in range(0, step):
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset) * self.get_arg('car_charging_energy_scale', 1.0)
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset)
 
                 if self.debug_enable and car_energy > 0.0 and (minute % 60) == 0 and (minute < 60*48):
                     self.log("Hour {} car charging hold with data {} load now {} metric {}".format(minute/60, car_energy, load_yesterday, metric))
@@ -739,127 +739,76 @@ class PredBat(hass.Hass):
             if record:
                 load_kwh += load_yesterday
 
-            # Are we within the charging time window?
+            diff = load_yesterday - pv_now
+
+            # Battery behaviour
+            battery_draw = 0
             if self.charge_enable and (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
-                old_soc = soc
-                soc = min(soc + (self.charge_rate * step), charge_limit[charge_window_n])
-
-                # Apply battery loss to computed charging energy
-                # For now we ignore PV in this as it's probably not a major factor when mains charging is enabled
-                if record:
-                    energy = max(0, soc - old_soc - pv_now) / self.battery_loss
-
-                    # Must add in grid import for load
-                    energy += load_yesterday
-                    import_kwh += energy
-                    import_kwh_battery += energy
-                    if minute_absolute in self.rate_import:
-                        metric += self.rate_import[minute_absolute] * energy
-                    else:
-                        metric += self.metric_battery * energy
-
-                if self.debug_enable and (minute % 60) == 0:
-                    self.log("Hour {} battery charging target soc {}".format(minute/60, charge_limit[charge_window_n]))
+                # Charge enable
+                battery_draw = -max(min(self.charge_rate * step, charge_limit[charge_window_n] - soc), 0)
             elif (discharge_window_n >= 0) and (soc > self.reserve) and discharge_enable[discharge_window_n]:
-                # If force discharging the battery
-                # Stop when the battery runs out also
-                discharge_has_run = True
-
-                # Work out draw
+                # Discharge enable
                 battery_draw = self.discharge_rate * step
-                if soc - self.reserve < battery_draw:
+                if (soc - self.reserve) < battery_draw:
                     battery_draw = soc - self.reserve
-                soc -= battery_draw
-                diff = load_yesterday - pv_now - battery_draw
-
-                if diff >= 0:
-                    # Importing despite full draw?
-                    energy = diff
-                    if record:
-                        import_kwh += energy
-                        import_kwh_house += energy
-                        if minute_absolute in self.rate_import:
-                            metric += self.rate_import[minute_absolute] * energy
-                        else:
-                            metric += self.metric_house * energy
-                else:
-                    # Export
-                    energy = -diff
-                    if record:
-                        export_kwh += energy
-                        #  self.log("Discharging minute {} rate {} diff {} export {}".format(minute, battery_draw, diff, energy))
-                        if minute_absolute in self.rate_export:
-                            metric -= self.rate_export[minute_absolute] * energy
-                        else:
-                            metric -= self.metric_export * energy
-
+                discharge_has_run = True
             else:
-                diff = load_yesterday - pv_now
-
-                # Apply battery loss to charging from PV
-                if diff < 0:
-                    diff *= self.battery_loss
-
-                # Max charge rate, export over the cap
-                if diff < -(self.charge_rate * step):
-                    soc -= self.charge_rate * step
-                    if record:
-                        energy = -(diff + self.charge_rate * step)
-                        export_kwh += energy
-                        if minute_absolute in self.rate_export:
-                            metric -= self.rate_export[minute_absolute] * energy
-                        else:
-                            metric -= self.metric_export * energy
-
-                # Max discharge rate, draw from grid over the cap
-                if diff > (self.discharge_rate * step):
-                    soc -= self.discharge_rate * step
-                    if record:
-                        energy = diff - (self.discharge_rate * step)
-                        import_kwh += energy
-                        if self.charge_enable and (charge_window_n >= 0):
-                            # If the battery is on charge anyhow then imports are kind of the same as battery charging (price wise)
-                            import_kwh_battery += energy
-                        else:
-                            # self.log("importing to minute %s amount %s kw total %s kwh total draw %s" % (minute, energy, import_kwh_house, diff))
-                            import_kwh_house += energy
-
-                        if minute_absolute in self.rate_import:
-                            metric += self.rate_import[minute_absolute] * energy
-                        else:
-                            if self.charge_enable and (charge_window_n >= 0):
-                                metric += self.metric_battery * energy
-                            else:
-                                metric += self.metric_house * energy
+                # ECO Mode
+                if diff > 0:
+                    battery_draw = min(diff, self.discharge_rate * step)
                 else:
-                    soc -= diff
+                    battery_draw = max(diff, -self.discharge_rate * step)
+            
+            # Clamp battery at reserve
+            if battery_draw > 0:
+                soc -= battery_draw / self.battery_loss_discharge
+                if soc < self.reserve:
+                    battery_draw -= (self.reserve - soc) * self.battery_loss_discharge
+                    soc = self.reserve
 
-            # Flat battery, draw from grid over the cap
-            if soc < self.reserve:
+            # Clamp battery at max
+            if battery_draw < 0:
+                soc -= battery_draw * self.battery_loss
+                if soc > self.soc_max:
+                    battery_draw += (soc - self.soc_max) / self.battery_loss
+                    soc = self.soc_max
+
+            if (self.debug_enable) and (minute % 30 == 0):
+                self.log("Time {} battery {} load {} (load {} pv {}) grid {} soc {}".format(self.time_abs_str(minute_absolute), battery_draw, diff, load_yesterday, pv_now, diff - battery_draw, soc))
+
+            # Work out left over energy after battery adjustment
+            diff -= battery_draw
+
+            if diff > 0:
+                # Import
                 if record:
-                    energy = self.reserve - soc
-                    import_kwh += energy
-                    import_kwh_house += energy
-                    if minute_absolute in self.rate_import:
-                        metric += self.rate_import[minute_absolute] * energy
+                    import_kwh += diff
+                    if self.charge_enable and (charge_window_n >= 0):
+                        # If the battery is on charge anyhow then imports are at battery charging rate
+                        import_kwh_battery += diff
                     else:
-                        metric += self.metric_house * energy
-                soc = self.reserve
+                        # self.log("importing to minute %s amount %s kw total %s kwh total draw %s" % (minute, energy, import_kwh_house, diff))
+                        import_kwh_house += diff
 
-            # Full battery, export over the cap
-            if soc > self.soc_max:
+                    if minute_absolute in self.rate_import:
+                        metric += self.rate_import[minute_absolute] * diff
+                    else:
+                        if self.charge_enable and (charge_window_n >= 0):
+                            metric += self.metric_battery * diff
+                        else:
+                            metric += self.metric_house * diff
+                diff = 0
+            else:
+                # Export
                 if record:
-                    energy = soc - self.soc_max
+                    energy = -diff
                     export_kwh += energy
                     if minute_absolute in self.rate_export:
                         metric -= self.rate_export[minute_absolute] * energy
                     else:
                         metric -= self.metric_export * energy
-                soc = self.soc_max
-
-            if self.debug_enable and minute % 60 == 0:
-                self.log("Hour {} load_yesterday {} pv_now {} soc {}".format(minute/60, load_yesterday, pv_now, soc))
-
+                diff = 0
+                
             predict_soc[minute] = self.dp3(soc)
 
             # Only store every 10 minutes for data-set size
@@ -1098,7 +1047,9 @@ class PredBat(hass.Hass):
 
         # Find charging window
         self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_high_threshold, True)
+        return rates
 
+    def publish_rates_export(self):
         if self.high_export_rates:
             window_n = 0
             for window in self.high_export_rates:
@@ -1128,13 +1079,12 @@ class PredBat(hass.Hass):
             self.log("No high export rate period found")
             self.set_state("predbat.high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost", state=rate_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.high_rate_export_cost", state=self.rate_export_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         if len(self.high_export_rates) < 2 and not SIMULATE:
             self.set_state("predbat.high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost_2", state=rate_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.high_rate_export_cost_2", state=self.rate_export_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
-        return rates
 
     def rate_minmax(self, rates):
         """
@@ -1222,7 +1172,9 @@ class PredBat(hass.Hass):
 
         # Find charging window
         self.low_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_low_threshold, False)
+        return rates
 
+    def publish_rates_import(self):
         # Output rate info
         if self.low_rates:
             window_n = 0
@@ -1253,13 +1205,11 @@ class PredBat(hass.Hass):
             self.log("No low rate period found")
             self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_cost", state=rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.low_rate_cost", state=self.rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         if len(self.low_rates) < 2 and not SIMULATE:
             self.set_state("predbat.low_rate_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.low_rate_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_cost_2", state=rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-
-        return rates
+            self.set_state("predbat.low_rate_cost_2", state=self.rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
     def publish_rates(self, rates, export):
         """
@@ -1271,6 +1221,11 @@ class PredBat(hass.Hass):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             rates_time[stamp] = rates[minute]
+
+        if export:
+            self.publish_rates_export()
+        else:
+            self.publish_rates_import()
 
         if not SIMULATE:
             if export:
@@ -1398,6 +1353,7 @@ class PredBat(hass.Hass):
         self.octopus_slots = []
         self.reserve = 0
         self.battery_loss = 1.0
+        self.battery_loss_discharge = 1.0
         self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_margin = 0
@@ -1744,6 +1700,7 @@ class PredBat(hass.Hass):
 
         # Battery charging options
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.5)
@@ -1837,7 +1794,7 @@ class PredBat(hass.Hass):
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
             self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.days_previous + 1)[0], 
-                                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True)
+                                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.get_arg('car_charging_energy_scale', 1.0))
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
