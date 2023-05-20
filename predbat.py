@@ -886,6 +886,9 @@ class PredBat(hass.Hass):
             self.set_state("predbat.soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.best10_pv_energy", state=self.dp3(pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state("predbat.best10_metric", state=self.dp2(metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.best10_export_energy", state=self.dp3(export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state("predbat.best10_load_energy", state=self.dp3(load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state("predbat.best10_import_energy", state=self.dp3(import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
         return metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc
 
@@ -1895,14 +1898,18 @@ class PredBat(hass.Hass):
                         # Set configured window minutes for the SOC adjustment routine
                         inverter.charge_start_time_minutes = minutes_start
                         inverter.charge_end_time_minutes = minutes_end
-                    elif (minutes_end >= 24*60):
+                    elif (minutes_end >= 24*60) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                         # No charging require in the next 24 hours
-                        self.log("No charge windows required for 24 hours")
+                        self.log("No charge window required, disabling before the start")
                         inverter.disable_charge_window()
-                elif self.get_arg('set_charge_window', False):
+                    else:
+                        self.log("No change to charge window yet, waiting for schedule.")
+                elif self.get_arg('set_charge_window', False) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                     # No charge windows
-                    self.log("No charge windows found")
+                    self.log("No charge windows found, disabling before the start")
                     inverter.disable_charge_window()
+                elif self.get_arg('set_charge_window', False):
+                    self.log("No change to charge window yet, waiting for schedule.")
 
                 # Set forced discharge window
                 if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
