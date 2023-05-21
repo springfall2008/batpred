@@ -97,7 +97,16 @@ pred_bat:
   car_charging_energy: 're:sensor.wallbox_portal_added_energy'
   car_charging_energy_scale: 1.0
   car_charging_threshold: 6.0
-  
+
+  # When car charging planned the sensor should return a positive value including
+  #     True, 'yes', 'on', 'connected', 'charging', 'paused', 'waiting for car demand', 'scheduled', 'enabled', 'latched', 'locked'
+  # And then the prediction will assume the car will charge at car_charging_rate during the low rate slots
+  # This should not be used if you use Octopus Intelligent Slots which will take priority if enabled
+  # car_charging_planned: switch.tsunami_charger
+  # car_charging_planned: sensor.wallbox_portal_status_description
+  car_charging_planned: False
+  car_charging_rate: 7.5
+
   # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
