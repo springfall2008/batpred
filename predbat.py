@@ -736,7 +736,7 @@ class PredBat(hass.Hass):
                 # Planned low rate charging
                 planned = self.get_arg('car_charging_planned', False)
                 if isinstance(planned, str):
-                    if planned.lower() in ['yes', 'on', 'connected', 'charging', 'paused', 'waiting for car demand', 'scheduled', 'enabled', 'latched', 'locked']:
+                    if planned.lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
                         planned = True
                     else:
                         planned = False
