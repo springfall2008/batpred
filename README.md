@@ -85,7 +85,7 @@ They are set to a regular expression and auto-discovered but you can comment out
   - metric_octopus_import - Import rates from the Octopus plugin
   - metric_octopus_export - Export rates from the Octopus plugin
   - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
-  - octopus_intelligent_charge_rate - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots
+  - octopus_intelligent_charge_rate - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots using this or the data reported by Octopus
 
 Or manually set your rates in a 24-hour period using these:
   - rates_import
@@ -119,7 +119,10 @@ These are configuration items that you can modify to fit your needs:
   - car_charging_hold - When true car charging data is removed from the simulation, as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
   - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
-    
+ 
+  - car_charging_planned - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
+  - car_charging_rate - Set to the rate it's assumed the car charges at in low rate slots
+   
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight.
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
