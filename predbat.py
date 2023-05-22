@@ -1669,6 +1669,12 @@ class PredBat(hass.Hass):
         self.octopus_slots = []
         self.cost_today_sofar = 0
 
+        # Car charging information
+        self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100))
+        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
+
         # Basic rates defined by user over time
         if 'rates_import' in self.args:
             self.rate_import = self.basic_rates(self.get_arg('rates_import', indirect=False), 'import')
@@ -1701,16 +1707,14 @@ class PredBat(hass.Hass):
 
             # Extract vehicle preference if we can get it
             vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
-            octopus_limit = None
             if vehicle_pref:
                 octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
                 octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size / 100.0)
                 self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
 
-            if vehicle:
-                self.log('Octopus Intelligent vehicle details battery size {} rate {} limit {} (octopus limit {})'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, octopus_limit))
-            else:
-                self.log("Octopus Intelligent - no vehicle details")
+        # Log vehicle info
+        if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
+            self.log('Vehicle details: battery size {} rate {} limit {} current soc {}'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, self.car_charging_soc))
 
         # Fixed URL for rate import
         if 'rates_import_octopus_url' in self.args:
@@ -1773,12 +1777,6 @@ class PredBat(hass.Hass):
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
         self.charge_rate = float(self.get_arg('charge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
         self.discharge_rate = float(self.get_arg('discharge_rate', combine=True, attribute='max')) / 1000.0 / 60.0
-
-        # Car charging information
-        self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100))
-        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
 
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
