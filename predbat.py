@@ -731,7 +731,7 @@ class PredBat(hass.Hass):
 
             # Simulate car charging
             car_load = 0.0
-            if self.octopus_intelligent_charge_rate and self.octopus_slots:
+            if self.octopus_slots and self.get_arg('octopus_intelligent_charging', True):
                 # Octopus slot car charging?
                 car_load = self.in_octopus_slot(minute_absolute)
             elif self.in_low_rate_slot(minute_absolute, self.low_rates) >= 0 and (minute < 24*60):
@@ -743,7 +743,7 @@ class PredBat(hass.Hass):
                     else:
                         planned = False
                 if planned:
-                    car_load = self.get_arg('car_charging_rate', 7.5)
+                    car_load = self.car_charging_rate
 
             # Car charging?
             if car_load > 0.0:
@@ -1064,7 +1064,7 @@ class PredBat(hass.Hass):
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
                     # The load expected is stored in chargeKwh for the period or use the default set by the user if not which is hourly
-                    return abs(float(slot.get('chargeKwh', self.octopus_intelligent_charge_rate * slot_hours))) / slot_hours
+                    return abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours))) / slot_hours
         return 0
 
     def rate_scan_export(self, rates):
@@ -1421,6 +1421,7 @@ class PredBat(hass.Hass):
         self.car_charging_battery_size = 100
         self.car_charging_limit = 100
         self.car_charging_soc = 0
+        self.car_charging_rate = 7.4
         self.discharge_window = []
         self.discharge_enable = []
         self.discharge_enable_best = []
@@ -1430,7 +1431,6 @@ class PredBat(hass.Hass):
         self.car_charging_hold = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}   
-        self.octopus_intelligent_charge_rate = 0
         self.simulate_offset = 0
         self.sim_soc = 100
         self.sim_inverter_mode = "Eco"
@@ -1682,15 +1682,35 @@ class PredBat(hass.Hass):
                 self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
-        
+
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
-            completed = self.get_state(entity_id = self.get_arg('octopus_intelligent_slot', indirect=False), attribute='completedDispatches')
+            entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
+            completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
             if completed:
                 self.octopus_slots += completed
-            planned = self.get_state(entity_id = self.get_arg('octopus_intelligent_slot', indirect=False), attribute='plannedDispatches')
+            planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
             if planned:
                 self.octopus_slots += planned
+
+            # Extract vehicle data if we can get it
+            vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
+            if vehicle:
+                self.car_charging_battery_size = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size))
+                self.car_charging_rate = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate))
+
+            # Extract vehicle preference if we can get it
+            vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
+            octopus_limit = None
+            if vehicle_pref:
+                octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
+                octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size / 100.0)
+                self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
+
+            if vehicle:
+                self.log('Octopus Intelligent vehicle details battery size {} rate {} limit {} (octopus limit {})'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, octopus_limit))
+            else:
+                self.log("Octopus Intelligent - no vehicle details")
 
         # Fixed URL for rate import
         if 'rates_import_octopus_url' in self.args:
@@ -1758,6 +1778,7 @@ class PredBat(hass.Hass):
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100))
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
         self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
 
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
@@ -1838,7 +1859,6 @@ class PredBat(hass.Hass):
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
         self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
-        self.octopus_intelligent_charge_rate = self.get_arg('octopus_intelligent_charge_rate', 0.0)
 
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:

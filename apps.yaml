@@ -98,7 +98,7 @@ pred_bat:
   car_charging_energy_scale: 1.0
   car_charging_threshold: 6.0
 
-  # car_charging_planned is set to a sensor which when positive indicates the car will charge in the low rate slots ad the rate of car_charging_rate kwH
+  # car_charging_planned is set to a sensor which when positive indicates the car will charge in the low rate slots ad the rate of car_charging_rate kw
   # The list of possible values is in car_charging_planned_response
   # This should not be used if you use Octopus Intelligent Slots which will take priority if enabled
   # car_charging_planned: binary_sensor.tsunami_charger
@@ -118,6 +118,7 @@ pred_bat:
     - 'latched'
     - 'locked'
     - 'plugged in'
+  # Sets the car charging rate in kw, can also be pulled automatically from Ocotpus Intelligent if enabled
   car_charging_rate: 7.5
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
@@ -125,6 +126,12 @@ pred_bat:
   #car_charging_battery_size: 75
   #car_charging_limit: 're:number.tsunami_charge_limit'
   #car_charging_soc: 're:sensor.tsunami_battery'
+
+  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  # Will automatically disable if not found, or comment out to disable fully
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
+  octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
+  octopus_intelligent_charging: True
 
   # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
@@ -184,14 +191,7 @@ pred_bat:
   metric_house: 38
   metric_battery: 7.5
   metric_export: 4.2
-  
-  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
-  # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature
-  octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
-  # When set will assume your car will charge during intelligent slots at the given rate (in kw) or the rate given by Octopus if provided
-  octopus_intelligent_charge_rate: 7.5
-  
+    
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   # If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period (max is 10)
   rate_low_threshold: 0.8
