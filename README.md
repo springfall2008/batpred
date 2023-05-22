@@ -121,7 +121,12 @@ These are configuration items that you can modify to fit your needs:
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
   - car_charging_planned - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
+  - car_charging_planned_response - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
   - car_charging_rate - Set to the rate it's assumed the car charges at in low rate slots
+
+  - car_charging_battery_size - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops.
+  - car_charging_limit - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
+  - car_charging_soc - The cars current % charge level, link to a suitable sensor. Default is 0%
    
   - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight.
@@ -131,7 +136,8 @@ These are configuration items that you can modify to fit your needs:
   - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
-  - set_charge_window - When true automatically configure the next charge window in GivTCP
+ 
+  - set_charge_window - When true automatically configure the next charge window in GivTCP, charge windows can also be disabled by Predbat when this is enabled.
   - set_window_minutes - Number of minutes before charging the window should be configured in GivTCP (default 30)
   - set_discharge_window - When true automatic forced export slots will be calculated and programmed (assuming you have a variable export rate that is worth using).
   
