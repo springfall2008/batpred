@@ -732,8 +732,8 @@ class PredBat(hass.Hass):
             if self.octopus_intelligent_charge_rate and self.octopus_slots:
                 # Octopus slot car charging?
                 car_load = self.in_octopus_slot(minute_absolute)
-            elif self.in_low_rate_slot(minute_absolute, self.low_rates):
-                # Planned low rate charging
+            elif self.in_low_rate_slot(minute_absolute, self.low_rates) >= 0 and (minute < 24*60):
+                # Planned low rate charging, don't consider beyond 24 hours due to wrapping of slots, and the car is likey unplugged before then
                 planned = self.get_arg('car_charging_planned', False)
                 if isinstance(planned, str):
                     if planned.lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
@@ -1017,12 +1017,14 @@ class PredBat(hass.Hass):
 
     def in_low_rate_slot(self, minute, low_rates):
         """
-        Check if minute (absolute) falls within low rate slow
+        Check if minute (absolute) falls within low rate slow, returns the slot or -1 otherwise
         """
+        window_n = 0
         for window in low_rates:
             if minute >= window['start'] and minute <= window['end']:
-                return True
-        return False
+                return window_n
+            window_n += 1
+        return -1
 
     def in_octopus_slot(self, minute):
         """
