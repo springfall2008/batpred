@@ -183,6 +183,8 @@ These are configuration items that you can modify to fit your needs:
   - predbat.low_rate_end - End time of the next low rate
   - predbat.rates - The current energy rates in P (also can be charted)
   - predbat.rates_export - The current energy export rates in P (also be be charted)
+  - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
+  - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
   
 Example data out:
 
