@@ -1671,8 +1671,6 @@ class PredBat(hass.Hass):
 
         # Car charging information
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100))
-        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
         self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
 
         # Basic rates defined by user over time
@@ -1711,6 +1709,10 @@ class PredBat(hass.Hass):
                 octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
                 octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size / 100.0)
                 self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
+
+        # Work out current SOC and limit
+        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
 
         # Log vehicle info
         if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
