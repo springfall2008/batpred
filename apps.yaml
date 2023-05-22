@@ -119,6 +119,12 @@ pred_bat:
     - 'locked'
     - 'plugged in'
   car_charging_rate: 7.5
+  # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
+  # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
+  # If you have intelligent you don't need to use this as it allocate slots, but it may help to get a more accurate figure
+  #car_charging_battery_size: 75
+  #car_charging_limit: 're:number.tsunami_charge_limit'
+  #car_charging_soc: 're:sensor.tsunami_battery'
 
   # Enable calculate best to work out the best battery SOC % based on cost
   calculate_best: True
@@ -181,6 +187,7 @@ pred_bat:
   
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
+  # When enabled it overrides the 'car_charging_planned' feature
   octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
   # When set will assume your car will charge during intelligent slots at the given rate (in kw) or the rate given by Octopus if provided
   octopus_intelligent_charge_rate: 7.5
