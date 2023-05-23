@@ -28,8 +28,6 @@ class Inverter():
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes 
         self.charge_start_end_minutes = self.base.forecast_minutes 
-        self.sim_charge_start_time = "00:00:00"
-        self.sim_charge_end_time = "00:00:00"
         self.charge_window = []
         self.discharge_window = []
         self.discharge_enable = []
@@ -54,8 +52,8 @@ class Inverter():
         if self.charge_enable and self.charge_enable_time:
             # Find current charge window
             if SIMULATE:
-                charge_start_time = datetime.strptime(self.sim_charge_start_time, "%H:%M:%S")
-                charge_end_time = datetime.strptime(self.sim_charge_end_time, "%H:%M:%S")
+                charge_start_time = datetime.strptime(self.base.sim_charge_start_time, "%H:%M:%S")
+                charge_end_time = datetime.strptime(self.base.sim_charge_end_time, "%H:%M:%S")
             else:
                 charge_start_time = datetime.strptime(self.base.get_arg('charge_start_time', index=self.id), "%H:%M:%S")
                 charge_end_time = datetime.strptime(self.base.get_arg('charge_end_time', index=self.id), "%H:%M:%S")
@@ -115,7 +113,7 @@ class Inverter():
         """
         # Check current setting and adjust
         if SIMULATE:
-            current_soc = self.sim_soc
+            current_soc = self.base.sim_soc
         else:
             current_soc = float(self.base.get_state(entity_id = self.base.get_arg('soc_percent', indirect=False, index=self.id), default=100))
 
@@ -124,7 +122,7 @@ class Inverter():
             entity_soc = self.base.get_entity(self.base.get_arg('soc_percent', indirect=False, index=self.id))
             if entity_soc:
                 if SIMULATE:
-                    self.sim_soc = soc
+                    self.base.sim_soc = soc
                 else:
                     entity_soc.call_service("set_value", value=soc)
                     if self.base.get_arg('set_soc_notify', False):
@@ -154,9 +152,9 @@ class Inverter():
         Adjust force discharge on/off
         """
         if SIMULATE:
-            old_inverter_mode = self.sim_inverter_mode
-            old_start = self.sim_discharge_start
-            old_end = self.sim_discharge_end
+            old_inverter_mode = self.base.sim_inverter_mode
+            old_start = self.base.sim_discharge_start
+            old_end = self.base.sim_discharge_end
         else:
             old_inverter_mode = self.base.get_arg('inverter_mode', index=self.id)
             old_start = self.base.get_arg('discharge_start_time', index=self.id)
@@ -187,7 +185,7 @@ class Inverter():
             self.base.log("Inverter {} set new start time on {} to {}".format(self.id, entity_discharge_start_time, new_start))
             self.base.record_status("Inverter {} set discharge start time to {} at {}".format(self.id, new_start, self.base.time_now_str()))
             if SIMULATE:
-                self.sim_discharge_start = new_start
+                self.base.sim_discharge_start = new_start
             else:
                 self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
 
@@ -197,14 +195,14 @@ class Inverter():
             self.base.log("Inverter {} Set new end time on {} to {} was {}".format(self.id, entity_discharge_end_time, new_end, old_end))                    
             self.base.record_status("Inverter {} Set discharge end time to {} at {}".format(self.id, new_end, self.base.time_now_str()))
             if SIMULATE:
-                self.sim_discharge_end = new_end
+                self.base.sim_discharge_end = new_end
             else:
                 self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
 
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
             if SIMULATE:
-                self.sim_inverter_mode = new_inverter_mode
+                self.base.sim_inverter_mode = new_inverter_mode
             else:
                 # Inverter mode
                 entity_inverter_mode = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
@@ -222,7 +220,7 @@ class Inverter():
         Disable charge window
         """
         if SIMULATE:
-            old_charge_schedule_enable = 'off'
+            old_charge_schedule_enable = self.base.sim_charge_schedule_enable
         else:
             old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)
 
@@ -234,7 +232,7 @@ class Inverter():
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_service("notify/notify", message="Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
-                self.sim_charge_schedule_enable = False
+                self.base.sim_charge_schedule_enable = 'off'
 
             # Updated cached status to disabled    
             self.charge_enable_time = False
@@ -249,13 +247,13 @@ class Inverter():
         Adjust the charging window times (start and end) in GivTCP
         """
         if SIMULATE:
-            old_start = self.sim_charge_start_time
-            old_end = self.sim_charge_end_time
-            old_charge_schedule_enable = self.sim_charge_schedule_enable
+            old_start = self.base.sim_charge_start_time
+            old_end = self.base.sim_charge_end_time
+            old_charge_schedule_enable = self.base.sim_charge_schedule_enable
         else:
             old_start = self.base.get_arg('charge_start_time', index=self.id)
             old_end = self.base.get_arg('charge_end_time', index=self.id)
-            old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', True, index=self.id)
+            old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)
 
         new_start = charge_start_time.strftime("%H:%M:%S")
         new_end = charge_end_time.strftime("%H:%M:%S")
@@ -270,7 +268,7 @@ class Inverter():
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_service("notify/notify", message="Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
-                self.sim_charge_schedule_enable = True
+                self.base.sim_charge_schedule_enable = 'on'
 
             self.charge_enable_time = True
             self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
@@ -279,7 +277,7 @@ class Inverter():
         # Program start slot
         if new_start != old_start:
             if SIMULATE:
-                self.sim_charge_start_time = new_start
+                self.base.sim_charge_start_time = new_start
                 self.base.log("Simulate sim_charge_start_time now {}".format(new_start))
             else:
                 entity_start = self.base.get_entity(self.base.get_arg('charge_start_time', indirect=False, index=self.id))
@@ -289,8 +287,8 @@ class Inverter():
         # Program end slot
         if new_end != old_end:
             if SIMULATE:
-                self.sim_charge_end_time = new_end
-                self.log("Simulate sim_charge_end_time now {}".format(new_end))
+                self.base.sim_charge_end_time = new_end
+                self.base.log("Simulate sim_charge_end_time now {}".format(new_end))
             else:
                 entity_end = self.base.get_entity(self.base.get_arg('charge_end_time', indirect=False, index=self.id))
                 self.write_and_poll_option("charge_end_time", entity_end, new_end)
@@ -1438,7 +1436,7 @@ class PredBat(hass.Hass):
         self.sim_charge_end_time = "00:00:00"
         self.sim_discharge_start = "00:00"
         self.sim_discharge_end = "23:59"
-        self.sim_charge_schedule_enable = True
+        self.sim_charge_schedule_enable = 'on'
         self.sim_soc_charge = []
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, pv_forecast_minute10):
@@ -1491,7 +1489,7 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable or 1:
                 self.log("Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
@@ -1639,7 +1637,7 @@ class PredBat(hass.Hass):
             now += timedelta(minutes=self.simulate_offset)
             now_utc += timedelta(minutes=self.simulate_offset)
 
-        self.log("PredBat - update at: " + str(now_utc))
+        self.log("--------------- PredBat - update at: " + str(now_utc))
 
         self.debug_enable = self.get_arg('debug_enable', False)
         self.log("Debug enable is {}".format(self.debug_enable))
