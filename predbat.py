@@ -388,7 +388,7 @@ class PredBat(hass.Hass):
                 self.log("WARN: Error downloading Octopus data from url {}".format(url))
                 return {}
             mdata += data['results']
-        pdata = self.minute_data(mdata, 2, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
+        pdata = self.minute_data(mdata, self.forecast_days + 1, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
         return pdata
 
     def mintes_to_time(self, updated, now):
@@ -416,8 +416,8 @@ class PredBat(hass.Hass):
 
         import_today = {}    
         for entity_id in entity_ids:
-            import_today = self.minute_data(self.get_history(entity_id = entity_id, days = 2)[0], 
-                                                2, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
+            import_today = self.minute_data(self.get_history(entity_id = entity_id, days = self.forecast_days + 1)[0], 
+                                                self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
         return import_today
 
     def minute_data_load(self, now_utc):
@@ -708,7 +708,9 @@ class PredBat(hass.Hass):
             for offset in range(0, step):
                 pv_now += pv_forecast_minute.get(minute_absolute + offset, 0.0)
                 load_yesterday += self.get_from_incrementing(load_minutes, minute_yesterday - offset)
-            pv_kwh += pv_now
+
+            if record:
+                pv_kwh += pv_now
 
             # Car charging hold
             if self.car_charging_hold and self.car_charging_energy:
@@ -962,7 +964,7 @@ class PredBat(hass.Hass):
 
             if minute in rates:
                 rate = rates[minute]
-                if (not find_high and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate)):
+                if (not find_high and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)):
                     if rate_low_start >= 0 and self.dp2(rate) != self.dp2(rate_low_rate):
                         # Refuse mixed rates
                         rate_low_end = minute
@@ -1289,8 +1291,12 @@ class PredBat(hass.Hass):
                 energy_export = 0
             day_energy += energy
             day_energy_export += energy_export
-            day_cost += self.rate_import[minute] * energy
-            day_cost -= self.rate_export[minute] * energy_export
+            
+            if self.rate_import:
+                day_cost += self.rate_import[minute] * energy
+                
+            if self.rate_export:
+                day_cost -= self.rate_export[minute] * energy_export
 
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
@@ -1681,7 +1687,7 @@ class PredBat(hass.Hass):
         if 'metric_octopus_import' in self.args:
             data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
             if data_import:
-                self.rate_import = self.minute_data(data_import, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+                self.rate_import = self.minute_data(data_import, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
 
@@ -1733,7 +1739,7 @@ class PredBat(hass.Hass):
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
             if data_export:
-                self.rate_export = self.minute_data(data_export, self.forecast_days, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+                self.rate_export = self.minute_data(data_export, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
                 self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
 
@@ -1848,8 +1854,8 @@ class PredBat(hass.Hass):
                 pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d7' in self.args:
                 pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
-            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
+            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
         else:
             pv_forecast_minute = {}
             pv_forecast_minute10 = {}
