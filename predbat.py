@@ -688,6 +688,7 @@ class PredBat(hass.Hass):
         minute_left = self.forecast_minutes
         soc = self.soc_kw
         soc_min = self.soc_max
+        soc_min_minute = self.minutes_now
         charge_has_run = False
         charge_has_started = False
         discharge_has_run = False
@@ -766,7 +767,7 @@ class PredBat(hass.Hass):
             if car_load > 0.0:
                 car_load_scale = car_load * step / 60.0
                 car_load_scale = min(car_load_scale, self.car_charging_limit - car_soc)
-                car_soc += car_load_scale
+                car_soc += car_load_scale * self.car_charging_loss
                 load_yesterday += car_load_scale
 
             # Count load
@@ -871,6 +872,8 @@ class PredBat(hass.Hass):
 
             # Record soc min
             if record and (discharge_has_run or charge_has_run or not charge_window):
+                if soc < soc_min:
+                    soc_min_minute = minute_absolute
                 soc_min = min(soc_min, soc)
 
             minute += step
@@ -879,8 +882,8 @@ class PredBat(hass.Hass):
         charge_limit_percent = [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(0, len(charge_limit))]
 
         if self.debug_enable or save:
-            self.log("predict {} charge {} limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} kwh load {} pv {}".format(
-                      save, charge_window, charge_limit_percent, charge_limit, self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min), self.dp2(load_kwh), self.dp2(pv_kwh)))
+            self.log("predict {} charge {} limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} @ {} kwh load {} pv {}".format(
+                      save, charge_window, charge_limit_percent, charge_limit, self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(load_kwh), self.dp2(pv_kwh)))
             self.log("         [{}]".format(self.scenario_summary_title()))
             self.log("    SOC: [{}]".format(self.scenario_summary(predict_soc_time)))
             self.log("   LOAD: [{}]".format(self.scenario_summary(load_kwh_time)))
@@ -896,7 +899,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.car_soc", state=self.dp2(car_soc / self.car_charging_battery_size * 100.0), attributes = {'results' : predict_car_soc_time, 'friendly_name' : 'Car battery SOC', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_h0", state=self.dp3(predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
+            self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
             self.set_state("predbat.export_energy", state=self.dp3(export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state("predbat.load_energy", state=self.dp3(load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
@@ -915,7 +918,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.soc_kw_best_h1", state=self.dp3(predict_soc[60]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 1h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h8", state=self.dp3(predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h12", state=self.dp3(predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
+            self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.set_state("predbat.best_export_energy", state=self.dp3(export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state("predbat.best_load_energy", state=self.dp3(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state("predbat.best_pv_energy", state=self.dp3(pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
@@ -1442,6 +1445,7 @@ class PredBat(hass.Hass):
         self.car_charging_limit = 100
         self.car_charging_soc = 0
         self.car_charging_rate = 7.4
+        self.car_charging_loss = 1.0
         self.discharge_window = []
         self.discharge_enable = []
         self.discharge_enable_best = []
@@ -1733,6 +1737,7 @@ class PredBat(hass.Hass):
         # Work out current SOC and limit
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
         self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0))
 
         # Log vehicle info
         if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
