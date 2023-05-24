@@ -653,6 +653,29 @@ class PredBat(hass.Hass):
         """
         self.set_state("predbat.status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
 
+    def scenario_summary_title(self):
+        txt = ""
+        for minute in range(0, self.forecast_minutes, 60):
+            minute_absolute = minute + self.minutes_now
+            minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
+            stamp = minute_timestamp.strftime("%H:%M")
+            if txt:
+                txt += ', '
+            txt += "%6s" % str(stamp)
+        return txt
+
+    def scenario_summary(self, datap):
+        txt = ""
+        for minute in range(0, self.forecast_minutes, 60):
+            minute_absolute = minute + self.minutes_now
+            minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
+            stamp = minute_timestamp.strftime(TIME_FORMAT)
+            value = datap[stamp]
+            if txt:
+                txt += ', '
+            txt += "%6s" % str(self.dp2(value))
+        return txt
+
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, save=None, step=5):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -718,16 +741,10 @@ class PredBat(hass.Hass):
                 car_energy = 0
                 for offset in range(0, step):
                     car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset)
-
-                if self.debug_enable and car_energy > 0.0 and (minute % 60) == 0 and (minute < 60*48):
-                    self.log("Hour {} car charging hold with data {} load now {} metric {}".format(minute/60, car_energy, load_yesterday, metric))
-
                 load_yesterday = max(0, load_yesterday - car_energy)
             elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
                 # Car charging hold - ignore car charging in computation based on threshold
                 load_yesterday = 0
-                if self.debug_enable and (minute % 60) == 0:
-                    self.log("Hour {} car charging hold".format(minute/60))
 
             # Simulate car charging
             car_load = 0.0
@@ -751,8 +768,6 @@ class PredBat(hass.Hass):
                 car_load_scale = min(car_load_scale, self.car_charging_limit - car_soc)
                 car_soc += car_load_scale
                 load_yesterday += car_load_scale
-                if self.debug_enable and (minute % 60) == 0:
-                    self.log("Car charging now load {} at minute {} car soc {}" % (load_yesterday, minute, car_soc))
 
             # Count load
             if record:
@@ -791,9 +806,6 @@ class PredBat(hass.Hass):
                 if soc > self.soc_max:
                     battery_draw += (soc - self.soc_max) / self.battery_loss
                     soc = self.soc_max
-
-            if (self.debug_enable) and (minute % 30 == 0):
-                self.log("Time {} battery {} load {} (load {} pv {}) grid {} soc {}".format(self.time_abs_str(minute_absolute), battery_draw, diff, load_yesterday, pv_now, diff - battery_draw, soc))
 
             # Work out left over energy after battery adjustment
             diff -= battery_draw
@@ -858,7 +870,7 @@ class PredBat(hass.Hass):
                 charge_has_run = True
 
             # Record soc min
-            if record and (discharge_has_run or charge_has_run or not self.charge_enable):
+            if record and (discharge_has_run or charge_has_run or not charge_window):
                 soc_min = min(soc_min, soc)
 
             minute += step
@@ -867,8 +879,16 @@ class PredBat(hass.Hass):
         charge_limit_percent = [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(0, len(charge_limit))]
 
         if self.debug_enable or save:
-            self.log("predict {} charge limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} kwh load {} pv {}".format(
-                      save, charge_limit_percent, charge_limit, self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min), self.dp2(load_kwh), self.dp2(pv_kwh)))
+            self.log("predict {} charge {} limit {}% ({} kwh) final soc {} kwh metric {} p min_soc {} kwh load {} pv {}".format(
+                      save, charge_window, charge_limit_percent, charge_limit, self.dp2(final_soc), self.dp2(metric), self.dp2(soc_min), self.dp2(load_kwh), self.dp2(pv_kwh)))
+            self.log("         [{}]".format(self.scenario_summary_title()))
+            self.log("    SOC: [{}]".format(self.scenario_summary(predict_soc_time)))
+            self.log("   LOAD: [{}]".format(self.scenario_summary(load_kwh_time)))
+            self.log("     PV: [{}]".format(self.scenario_summary(pv_kwh_time)))
+            self.log(" IMPORT: [{}]".format(self.scenario_summary(import_kwh_time)))
+            self.log(" EXPORT: [{}]".format(self.scenario_summary(export_kwh_time)))
+            self.log("    CAR: [{}]".format(self.scenario_summary(predict_car_soc_time)))
+            self.log(" METRIC: [{}]".format(self.scenario_summary(metric_time)))
 
         # Save data to HA state
         if save and save=='base' and not SIMULATE:
@@ -1205,8 +1225,6 @@ class PredBat(hass.Hass):
                 self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate_min))
                 for minute in range(start_minutes, end_minutes):
                     rates[minute] = self.rate_min
-                    if self.debug_enable and (minute % 30) == 0:
-                        self.log("Set min octopus rate for time {}".format(minute))
 
         # Find charging window
         self.low_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_low_threshold, False)
@@ -1495,7 +1513,7 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             self.debug_enable = was_debug
-            if self.debug_enable or 1:
+            if self.debug_enable:
                 self.log("Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
@@ -1886,18 +1904,12 @@ class PredBat(hass.Hass):
 
             # Optimise in price order, cheapest first
             for window_n in self.sort_window_by_price(self.charge_window_best[:record_charge_windows]):
+                self.log("Optimise charge window: {}".format(window_n))
                 best_soc, best_metric, best_cost, soc_min = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
                 if self.debug_enable or 1:
                     self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
                 self.charge_limit_best[window_n] = best_soc
-
-        # Discard unused slots if we controlling the charge window
-        if self.get_arg('set_charge_window', False):
-            self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-            self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
-        else:
-            self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
 
         # Try different discharge options
         if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
@@ -1913,15 +1925,25 @@ class PredBat(hass.Hass):
                     self.log("Best discharge limit window {} discharge {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
                 self.discharge_enable_best[window_n] = best_discharge
             
-            # Filter out the windows we disabled
-            self.discharge_enable_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_enable_best, self.discharge_window_best)
-            self.log("Discharge windows now {} {}".format(self.discharge_enable_best, self.discharge_window_best))
 
         # Final simulation of best, do 10% and normal scenario
         best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute10, save='best10')
         best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, save='best')
         self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
         (self.charge_limit_best, self.discharge_enable_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
+
+        # Filter out any unused charge windows
+        if self.get_arg('set_charge_window', False):
+            self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+            self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+        else:
+            self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+
+        # Filter out any unused discharge windows
+        if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
+            # Filter out the windows we disabled
+            self.discharge_enable_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_enable_best, self.discharge_window_best)
+            self.log("Discharge windows now {} {}".format(self.discharge_enable_best, self.discharge_window_best))
 
         status = "Idle"
         for inverter in self.inverters:
