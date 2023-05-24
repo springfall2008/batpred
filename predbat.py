@@ -916,8 +916,6 @@ class PredBat(hass.Hass):
             self.set_state("predbat.soc_kw_best_h8", state=self.dp3(predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h12", state=self.dp3(predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
-            self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=True)
-            self.publish_discharge_limit(discharge_window, discharge_enable, best=True)
             self.set_state("predbat.best_export_energy", state=self.dp3(export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state("predbat.best_load_energy", state=self.dp3(load_kwh), attributes = {'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state("predbat.best_pv_energy", state=self.dp3(pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
@@ -1926,24 +1924,29 @@ class PredBat(hass.Hass):
                 self.discharge_enable_best[window_n] = best_discharge
             
 
-        # Final simulation of best, do 10% and normal scenario
-        best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute10, save='best10')
-        best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, save='best')
-        self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
-        (self.charge_limit_best, self.discharge_enable_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
+        if self.get_arg('calculate_best', False):
+            # Final simulation of best, do 10% and normal scenario
+            best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute10, save='best10')
+            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, save='best')
+            self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
+            (self.charge_limit_best, self.discharge_enable_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
 
-        # Filter out any unused charge windows
-        if self.get_arg('set_charge_window', False):
-            self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-            self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
-        else:
-            self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+            # Filter out any unused charge windows
+            if self.get_arg('set_charge_window', False):
+                self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+                self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+            else:
+                self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
 
-        # Filter out any unused discharge windows
-        if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
-            # Filter out the windows we disabled
-            self.discharge_enable_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_enable_best, self.discharge_window_best)
-            self.log("Discharge windows now {} {}".format(self.discharge_enable_best, self.discharge_window_best))
+            # Filter out any unused discharge windows
+            if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
+                # Filter out the windows we disabled
+                self.discharge_enable_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_enable_best, self.discharge_window_best)
+                self.log("Discharge windows now {} {}".format(self.discharge_enable_best, self.discharge_window_best))
+        
+            # Publish charge and discharge window best
+            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
+            self.publish_discharge_limit(self.discharge_window_best, self.discharge_enable_best, best=True)
 
         status = "Idle"
         for inverter in self.inverters:
