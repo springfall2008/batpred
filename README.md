@@ -18,6 +18,7 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - The SOC calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 - The charging windows and charge level (SOC) can be automatically programmed into the inverter.
 - Automatic planning of export slots is also supported, when enabled Batpred can start a forced discharge of the battery if the export rates are high and you have spare capacity.
+- Ability to manage reserve % to match SOC % to prevent discharge (if enabled)
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
 
 - Multiple inverter support depends on running all inverters in lockstep, that is each will charge at the same time to the same %
@@ -146,6 +147,10 @@ These are configuration items that you can modify to fit your needs:
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
   - set_soc_notify - When true a notification is sent with the new SOC target once set
+
+  - set_reserve_enable - When true the reserve % will be set to the same as the SOC target % during charging windows and back to the minimum outside these windows
+  - set_reserve_notify - When true notification will be sent about reserve % changes
+  - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
   
   - run_every - Set the number of minutes between updates, default is 5
   - debug_enable - option to print lots of debug messages
