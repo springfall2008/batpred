@@ -51,6 +51,8 @@ FAQ:
   - Why didn't the slot actually get configured?
      - make sure set_charge_window and set_soc_enable is turned out
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
+  - The charge limit keeps increasing/decreasing in the charge window or is unstable
+     - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
 
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
   - num_inverters - If you increase this above 1 you must provide multiple of each of these entities
