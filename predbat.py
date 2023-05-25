@@ -832,7 +832,7 @@ class PredBat(hass.Hass):
                 if diff > 0:
                     battery_draw = min(diff, self.discharge_rate_max * step)
                 else:
-                    battery_draw = max(diff, -self.discharge_rate_max * step)
+                    battery_draw = max(diff, -self.charge_rate_max * step)
             
             # Clamp battery at reserve
             if battery_draw > 0:
