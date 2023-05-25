@@ -124,8 +124,9 @@ pred_bat:
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent you don't need to use this as it allocate slots, but it may help to get a more accurate figure
   #car_charging_battery_size: 75
-  #car_charging_limit: 're:number.tsunami_charge_limit'
-  #car_charging_soc: 're:sensor.tsunami_battery'
+  car_charging_limit: 're:number.tsunami_charge_limit'
+  car_charging_soc: 're:sensor.tsunami_battery'
+  car_charging_loss: 0.08
 
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
@@ -168,11 +169,11 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with metric_house from above
   rates_import:
-    -  start: "23:30:00"
-       end: "05:30:00"
+    -  start: "00:30:00"
+       end: "04:30:00"
        rate: 7.5
-    -  start: "05:30:00"
-       end: "23:30:00"
+    -  start: "04:30:00"
+       end: "00:30:00"
        rate: 40.0
        
   rates_export:
@@ -216,6 +217,13 @@ pred_bat:
   set_soc_enable: True
   set_soc_notify: True
   set_soc_minutes: 30
+  # When set_reserve_enable is true the reserve % will be reprogrammed during a charging window to match the target SOC in order
+  # to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % 
+  # which is often 4%.
+  # Feature can only be used when set_soc_enable is True
+  set_reserve_enable: False
+  set_reserve_notify: True
+  set_reserve_min: 4
   
   # Set the frequency in minutes that this plugin is run
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
