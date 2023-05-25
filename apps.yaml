@@ -124,8 +124,8 @@ pred_bat:
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent you don't need to use this as it allocate slots, but it may help to get a more accurate figure
   #car_charging_battery_size: 75
-  car_charging_limit: 're:number.tsunami_charge_limit'
-  car_charging_soc: 're:sensor.tsunami_battery'
+  #car_charging_limit: 're:number.tsunami_charge_limit'
+  #car_charging_soc: 're:sensor.tsunami_battery'
   car_charging_loss: 0.08
 
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
