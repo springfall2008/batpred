@@ -202,7 +202,7 @@ now:
 yaxis:
   - min: 0
 series:
-  - entity: predbat.load_energy
+  - entity: predbat.best_load_energy
     stroke_width: 1
     curve: smooth
     name: load
@@ -213,7 +213,7 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
-  - entity: predbat.pv_energy
+  - entity: predbat.best_pv_energy
     stroke_width: 1
     curve: smooth
     name: pv
