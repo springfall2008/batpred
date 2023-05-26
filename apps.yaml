@@ -88,6 +88,12 @@ pred_bat:
   
   # Number of hours forward to forecast
   forecast_hours: 48
+
+  # The number of hours ahead to count in charge planning (for cost estimates)
+  # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
+  # tariffs like Agile
+  # Don't set higher than forecast_hours
+  forecast_plan_hours: 24
   
   # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
   # Or if an incrementing energy sensor is provided actuals can be subtracted

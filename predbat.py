@@ -669,7 +669,7 @@ class PredBat(hass.Hass):
         """
         Limit the forecast length to either the total forecast duration or the start of the last window that falls outside the forecast
         """
-        end_record = self.forecast_minutes
+        end_record = min(self.get_arg('forecast_plan_hours', 24)*60 + self.minutes_now, self.forecast_minutes)
         max_windows = self.max_charge_windows(end_record, charge_window)
         if len(charge_window) > max_windows:
             end_record = min(end_record, charge_window[max_windows]['start'])
@@ -1557,7 +1557,7 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable or 1:
                 self.log("Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} soc {} cost {} metric {} metricmid {} metric10 {}".format
                         (try_soc, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10)))
 
