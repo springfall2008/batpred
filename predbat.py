@@ -720,7 +720,7 @@ class PredBat(hass.Hass):
             txt += "%6s" % str(self.dp2(value))
         return txt
 
-    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, save=None, step=5):
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, save=None, step=5, end_record=None):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -748,13 +748,15 @@ class PredBat(hass.Hass):
         pv_kwh_time = {}
         export_kwh_time = {}
         import_kwh_time = {}
+        record_time = {}
         car_soc = self.car_charging_soc
 
         # self.log("Sim discharge window {} enable {}".format(discharge_window, discharge_enable))
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
-        end_record = self.record_length(charge_window)
+        if not end_record:
+            end_record = self.record_length(charge_window)
         record = True
 
         # Simulate each forward minute
@@ -899,6 +901,7 @@ class PredBat(hass.Hass):
                 import_kwh_time[stamp] = self.dp2(import_kwh)
                 export_kwh_time[stamp] = self.dp2(export_kwh)
                 predict_car_soc_time[stamp] = self.dp2(car_soc / self.car_charging_battery_size * 100.0)
+                record_time[stamp] = 0 if record else self.soc_max
 
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
@@ -970,6 +973,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best_import_energy_battery", state=self.dp3(import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state("predbat.best_import_energy_house", state=self.dp3(import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state("predbat.best_metric", state=self.dp2(metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
 
         if save and save=='best10' and not SIMULATE:
             self.set_state("predbat.soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
@@ -1880,7 +1884,7 @@ class PredBat(hass.Hass):
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
             self.inverters.append(inverter)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} discharge rate".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max, self.discharge_rate_max))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
@@ -1943,12 +1947,12 @@ class PredBat(hass.Hass):
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
 
-        # Simulate current settings (inverter 0)
-        metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_enable, load_minutes, pv_forecast_minute, save='base')
+        # Simulate current settings
+        end_record = self.record_length(self.charge_window_best)
+        metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_enable, load_minutes, pv_forecast_minute, save='base', end_record=end_record)
 
         # Try different battery SOCs to get the best result
         if self.get_arg('calculate_best', False):
-            end_record = self.record_length(self.charge_window_best)
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
             self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
             
@@ -1978,8 +1982,8 @@ class PredBat(hass.Hass):
                         self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
         # Try different discharge options
-        if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
-            end_record = self.record_length(self.discharge_window_best)
+        if self.get_arg('calculate_best', False) and self.get_arg('set_discharge_window', False) and self.discharge_window_best:
+            end_record = self.record_length(self.charge_window_best)
             record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
 
             # Set all to off
