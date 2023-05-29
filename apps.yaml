@@ -22,6 +22,18 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
+  
+  # needs a bit more testing - new feature
+  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
+  # Set one per inverter
+  #givtcp_rest: 
+  # - 'http://homeassistant.local:6345'
+  # - 'http://homeassistant.local:6346'
+  # - 'http://homeassistant.local:6347'
+  # - 'http://homeassistant.local:6348'
+
+  # If not using REST then instead set the Control here (one for each inverter)
+  # - you can delete this section if using REST
   charge_rate: 
     - number.givtcp_{geserial}_battery_charge_rate
   discharge_rate: 
@@ -36,8 +48,6 @@ pred_bat:
    - select.givtcp_{geserial}_mode
   soc_percent: 
    - number.givtcp_{geserial}_target_soc
-  charge_enable: 
-   - switch.givtcp_{geserial}_enable_charge_schedule
   charge_start_time: 
    - select.givtcp_{geserial}_charge_start_time_slot_1
   charge_end_time: 
@@ -84,7 +94,7 @@ pred_bat:
 
   # Weighting given to the 10% PV scenario, comment out or put to 0.0 to disable this
   # A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost
-  pv_metric10_weight: 0.15
+  pv_metric10_weight: 0.1
   
   # Number of hours forward to forecast
   forecast_hours: 48
@@ -92,7 +102,6 @@ pred_bat:
   # The number of hours ahead to count in charge planning (for cost estimates)
   # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
   # tariffs like Agile
-  # Don't set higher than forecast_hours
   forecast_plan_hours: 24
   
   # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
@@ -147,10 +156,12 @@ pred_bat:
   # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot (set to 0 if you want to skip some slots)
   # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
   # best_soc_step: is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
+  # best_soc_pass_margin: Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0)
   best_soc_margin: 0
   best_soc_min: 0
   best_soc_keep: 2
   best_soc_step: 0.25
+  best_soc_pass_margin: 0
     
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. 
@@ -227,7 +238,7 @@ pred_bat:
   # to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % 
   # which is often 4%.
   # Feature can only be used when set_soc_enable is True
-  set_reserve_enable: False
+  set_reserve_enable: True
   set_reserve_notify: True
   set_reserve_min: 4
   
