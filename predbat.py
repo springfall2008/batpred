@@ -968,7 +968,7 @@ class PredBat(hass.Hass):
             # Car charging?
             if car_load > 0.0:
                 car_load_scale = car_load * step / 60.0
-                car_load_scale = min(car_load_scale, self.car_charging_limit - car_soc)
+                car_load_scale = max(min(car_load_scale, self.car_charging_limit - car_soc), 0)
                 car_soc += car_load_scale * self.car_charging_loss
                 load_yesterday += car_load_scale
 
@@ -1922,7 +1922,6 @@ class PredBat(hass.Hass):
 
         # Work out current car SOC and limit
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
         self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0))
 
         # Octopus intelligent slots
@@ -1941,12 +1940,19 @@ class PredBat(hass.Hass):
                 self.car_charging_battery_size = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size))
                 self.car_charging_rate = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate))
 
+            # Get car charging limit again from car based on new battery size
+            self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
+
             # Extract vehicle preference if we can get it
             vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
             if vehicle_pref:
                 octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
                 octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size / 100.0)
+                self.log("Car charging limit {} and Octopus limit {} - select min - battery size {}".format(self.car_charging_limit, octopus_limit, self.car_charging_battery_size))
                 self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
+
+        # Work out car SOC
+        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
 
         # Log vehicle info
         if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
