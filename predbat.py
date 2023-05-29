@@ -2252,7 +2252,7 @@ class PredBat(hass.Hass):
                 discharge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                 self.log("Next discharge window will be: {} - {}".format(discharge_start_time, discharge_end_time))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and self.discharge_enable_best[0]:
-                    self.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
+                    inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                     status = "Discharging"
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_enable_best[0]:
