@@ -22,7 +22,7 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
-  
+
   # needs a bit more testing - new feature
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter
@@ -238,7 +238,7 @@ pred_bat:
   # to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % 
   # which is often 4%.
   # Feature can only be used when set_soc_enable is True
-  set_reserve_enable: True
+  set_reserve_enable: False
   set_reserve_notify: True
   set_reserve_min: 4
   
