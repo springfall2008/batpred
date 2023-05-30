@@ -270,6 +270,7 @@ class Inverter():
             new_end = None
 
         self.base.log("Inverter {} Adjust force discharge to {} times {} - {}, current mode {} times {} - {}".format(self.id, new_inverter_mode, new_start, new_end, old_inverter_mode, old_start, old_end))
+        changed_start_end = False
 
         # Change start time
         if new_start and new_start != old_start:
@@ -279,6 +280,7 @@ class Inverter():
                 self.base.sim_discharge_start = new_start
             else:
                 if not self.rest_api:
+                    changed_start_end = True
                     entity_discharge_start_time = self.base.get_entity(self.base.get_arg('discharge_start_time', indirect=False, index=self.id))
                     self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
 
@@ -290,11 +292,13 @@ class Inverter():
                 self.base.sim_discharge_end = new_end
             else:
                 if not self.rest_api:
+                    changed_start_end = True
                     entity_discharge_end_time = self.base.get_entity(self.base.get_arg('discharge_end_time', indirect=False, index=self.id))
                     self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
         
         # REST version of writing slot
         if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
+            changed_start_end = True
             self.rest_setDischargeSlot1(new_start, new_end)
 
         # Change inverter mode
@@ -303,6 +307,11 @@ class Inverter():
                 self.base.sim_inverter_mode = new_inverter_mode
             else:
                 # Inverter mode
+                if changed_start_end:
+                    # XXX: Workaround for GivTCP window state update time to take effort
+                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+                    time.sleep(30)
+
                 if self.rest_api:
                     self.rest_setBatteryMode(new_inverter_mode)
                 else:
@@ -422,6 +431,17 @@ class Inverter():
         Get inverter status
         """
         url = self.rest_api + '/readData'
+        r = requests.get(url)
+        if r.status_code == 200:
+            return r.json()
+        else:
+            return None
+
+    def rest_runAll(self):
+        """
+        Updated and get inverter status
+        """
+        url = self.rest_api + '/runAll'
         r = requests.get(url)
         if r.status_code == 200:
             return r.json()
@@ -2292,11 +2312,6 @@ class PredBat(hass.Hass):
                     inverter.adjust_reserve(self.charge_limit_percent_best[0])
                 else:
                     inverter.adjust_reserve(0)
-
-        #self.log("HACK Discharge")
-        #discharge_start_time = self.midnight_utc + timedelta(minutes=1050)
-        #discharge_end_time = self.midnight_utc + timedelta(minutes=1075)
-        #inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
 
         self.log("Completed run status {}".format(status))
         self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
