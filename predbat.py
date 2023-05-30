@@ -60,7 +60,10 @@ class Inverter():
                 self.reserve_percent = float(self.base.get_arg('reserve', default=0, index=self.id))            
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
-        self.base.log("New Inverter {} with soc_max {} charge_rate {} kw discharge_rate kw {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.charge_rate_max * 60.0), self.base.dp2(self.discharge_rate_max * 60.0), self.reserve_percent))
+        # Max inverter rate
+        self.inverter_limit = float(self.base.get_arg('inverter_limit', 7500, index=self.id)) / (1000 * 60.0)
+
+        self.base.log("New Inverter {} with soc_max {} charge_rate {} kw discharge_rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.charge_rate_max * 60.0), self.base.dp2(self.discharge_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
         
     def update_status(self, minutes_now):
         """
@@ -976,7 +979,8 @@ class PredBat(hass.Hass):
             if record:
                 load_kwh += load_yesterday
 
-            diff = load_yesterday - pv_now
+            pv_ac = min(load_yesterday, pv_now, self.inverter_limit * step)
+            pv_dc = pv_now - pv_ac
 
             # Battery behaviour
             battery_draw = 0
@@ -991,11 +995,11 @@ class PredBat(hass.Hass):
                 discharge_has_run = True
             else:
                 # ECO Mode
-                if diff > 0:
-                    battery_draw = min(diff, self.discharge_rate_max * step)
+                if load_yesterday - pv_ac - pv_dc > 0:
+                    battery_draw = min(load_yesterday - pv_ac - pv_dc, self.discharge_rate_max * step, self.inverter_limit * step - pv_ac)
                 else:
-                    battery_draw = max(diff, -self.charge_rate_max * step)
-            
+                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -self.charge_rate_max * step)
+
             # Clamp battery at reserve
             if battery_draw > 0:
                 soc -= battery_draw / self.battery_loss_discharge
@@ -1011,7 +1015,10 @@ class PredBat(hass.Hass):
                     soc = self.soc_max
 
             # Work out left over energy after battery adjustment
-            diff -= battery_draw
+            diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
+            if diff < 0:
+                # Can not export over inverter limit
+                diff = max(diff, -self.inverter_limit * step)
 
             if diff > 0:
                 # Import
@@ -1757,6 +1764,7 @@ class PredBat(hass.Hass):
         best_discharge = False
         best_metric = 9999999
         best_cost = 0
+        best_soc_min = self.soc_max
         
         for this_discharge_enable in [False, True]:
             was_debug = self.debug_enable
@@ -1793,10 +1801,11 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep):
+            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep or soc_min <= self.best_soc_min):
                 best_metric = metric
                 best_discharge = this_discharge_enable
                 best_cost = cost
+                best_soc_min = soc_min
                 if self.debug_enable:
                     self.log("Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_enable, soc_min, self.best_soc_keep))
             else:
@@ -1804,7 +1813,7 @@ class PredBat(hass.Hass):
                     self.log("Not Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_enable, soc_min, self.best_soc_keep))
             
  
-        return best_discharge, best_metric, best_cost, soc_min
+        return best_discharge, best_metric, best_cost, best_soc_min
 
     def window_sort_func(self, window):
         """
@@ -2020,6 +2029,7 @@ class PredBat(hass.Hass):
 
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
+        self.inverter_limit = 0
         self.inverters = []
         self.charge_window = []
         self.discharge_window = []
@@ -2031,6 +2041,7 @@ class PredBat(hass.Hass):
         self.discharge_rate_max = 0
         found_first = False
 
+        # For each inverter get the details
         for id in range(0, self.num_inverters):
             inverter = Inverter(self, id)
             inverter.update_status(self.minutes_now)
@@ -2048,9 +2059,12 @@ class PredBat(hass.Hass):
             self.charge_rate_max += inverter.charge_rate_max
             self.discharge_rate_max += inverter.discharge_rate_max
             self.inverters.append(inverter)
+            self.inverter_limit += inverter.inverter_limit
+
+        # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
@@ -2260,6 +2274,9 @@ class PredBat(hass.Hass):
                     else:
                         self.log("Not setting discharge time as we are not yet within the window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
                         inverter.adjust_force_discharge(False)
+            elif self.get_arg('set_discharge_window', False):
+                self.log("Not discharging as we have no discharge window planned")
+                inverter.adjust_force_discharge(False)
             
             # Set the SOC just before or within the charge window
             if self.get_arg('set_soc_enable', False):
@@ -2276,6 +2293,10 @@ class PredBat(hass.Hass):
                 else:
                     inverter.adjust_reserve(0)
 
+        #self.log("HACK Discharge")
+        #discharge_start_time = self.midnight_utc + timedelta(minutes=1050)
+        #discharge_end_time = self.midnight_utc + timedelta(minutes=1075)
+        #inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
 
         self.log("Completed run status {}".format(status))
         self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
