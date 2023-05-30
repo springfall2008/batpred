@@ -84,7 +84,7 @@ Control per inverter (only used if REST isn't set):
 Other per inverter:
   - inverter_limit - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600)
 
-The following are entity names in Solcast, unlikely to need changing:  
+The following are entity names in Solcast, unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking:  
   - pv_forecast_today - Entity name for solcast today's forecast
   - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
   - pv_forecast_d3 - Entity name for solcast forecast for day 3
