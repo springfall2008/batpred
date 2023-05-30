@@ -62,11 +62,16 @@ Data per inverter
   - load_today - GivTCP Entity name for the house load in kwh today (must be incrementing)
   - import_today - GivTCP Imported energy today in Kwh (incrementing)
   - export_today - GivTCP Exported energy today in Kwh (incrementing) 
-Control per inverter:
+
+REST Interface
+  - givtcp_rest - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
+  
+Control per inverter (only used if REST isn't set):
   - soc_kw - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
   - soc_max - GivTCP Entity name for the maximum charge level for the battery
   - soc_percent - GivTCP Entity name for used to set the SOC target for the battery in percentage
   - reserve - GivTCP sensor name for the reserve setting in %
+  - inverter_mode - GivTCP inverter mode control
   - charge_enable - GivTCP charge enable entity - says if the battery will be charged in the time window
   - charge_start_time - GivTCP battery charge start time entity
   - charge_end_time - GivTCP battery charge end time entity
@@ -75,8 +80,10 @@ Control per inverter:
   - scheduled_charge_enable - GivTCP Scheduled charge enable config
   - discharge_start_time - GivTCP scheduled discharge slot_1 start time
   - discharge_end_time - GivTCP scheduled discharge slot_1 end time
-  - inverter_mode - GivTCP inverter mode
-  
+
+Other per inverter:
+  - inverter_limit - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600)
+
 The following are entity names in Solcast, unlikely to need changing:  
   - pv_forecast_today - Entity name for solcast today's forecast
   - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
@@ -141,8 +148,11 @@ These are configuration items that you can modify to fit your needs:
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
  
   - set_charge_window - When true automatically configure the next charge window in GivTCP, charge windows can also be disabled by Predbat when this is enabled.
-  - set_window_minutes - Number of minutes before charging the window should be configured in GivTCP (default 30)
+  - set_window_minutes - Number of minutes before charging/discharging the window should be configured in GivTCP (default 30 - recommended)
+  - set_window_notify - When True notifications about the charge window are raised to HA
+ 
   - set_discharge_window - When true automatic forced export slots will be calculated and programmed (assuming you have a variable export rate that is worth using).
+  - set_discharge_notify - When true notifications for discharge windows are raised to HA
   
   - set_soc_enable - When true the best SOC Target will be automatically programmed
   - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
@@ -152,7 +162,7 @@ These are configuration items that you can modify to fit your needs:
   - set_reserve_notify - When true notification will be sent about reserve % changes
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
   
-  - run_every - Set the number of minutes between updates, default is 5
+  - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - debug_enable - option to print lots of debug messages
    
 - You will find new entities are created in HA:
