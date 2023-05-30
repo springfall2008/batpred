@@ -61,6 +61,10 @@ pred_bat:
   discharge_end_time: 
    - select.givtcp_{geserial}_discharge_end_time_slot_1
   
+  # Inverter max AC limit in W (one per inverter)
+  # inverter_limit: 
+  #  - 3600
+   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today
   pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
