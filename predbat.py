@@ -357,7 +357,7 @@ class Inverter():
         else:
             if self.rest_data:
                 old_start = self.rest_data['Timeslots']['Charge_start_time_slot_1']
-                old_end = self.rest_data['Timeslots']['Charge_start_end_slot_1']
+                old_end = self.rest_data['Timeslots']['Charge_end_time_slot_1']
                 old_charge_schedule_enable = self.rest_data['Control']['Enable_Charge_Schedule']
             else:
                 old_start = self.base.get_arg('charge_start_time', index=self.id)
