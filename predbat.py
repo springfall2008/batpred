@@ -46,22 +46,22 @@ class Inverter():
             self.charge_rate_max = self.rest_data['Control']['Battery_Charge_Rate'] / 1000.0 / 60.0
             self.discharge_rate_max = self.rest_data['Control']['Battery_Discharge_Rate'] / 1000.0 / 60.0
         else:
-            self.soc_max = float(self.base.get_arg('soc_max', default=0, index=self.id)) * self.base.battery_scaling
-            self.charge_rate_max = float(self.base.get_arg('charge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
-            self.discharge_rate_max = float(self.base.get_arg('discharge_rate', attribute='max', index=self.id)) / 1000.0 / 60.0
+            self.soc_max = self.base.get_arg('soc_max', default=0.0, index=self.id) * self.base.battery_scaling
+            self.charge_rate_max = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
+            self.discharge_rate_max = self.base.get_arg('discharge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
 
         # Get the current reserve setting or consider the minimum if we are overriding it
         if self.base.get_arg('set_reserve_enable', False):
-            self.reserve_percent = float(self.base.get_arg('set_reserve_min', 4))
+            self.reserve_percent = self.base.get_arg('set_reserve_min', 4.0)
         else:
             if self.rest_data:
                 self.reserve_percent = float(self.rest_data['Control']['Battery_Power_Reserve'])
             else:
-                self.reserve_percent = float(self.base.get_arg('reserve', default=0, index=self.id))            
+                self.reserve_percent = self.base.get_arg('reserve', default=0.0, index=self.id)            
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate
-        self.inverter_limit = float(self.base.get_arg('inverter_limit', 7500, index=self.id)) / (1000 * 60.0)
+        self.inverter_limit = self.base.get_arg('inverter_limit', 7500.0, index=self.id) / (1000 * 60.0)
 
         self.base.log("New Inverter {} with soc_max {} charge_rate {} kw discharge_rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.charge_rate_max * 60.0), self.base.dp2(self.discharge_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
         
@@ -84,7 +84,7 @@ class Inverter():
                 self.soc_kw = self.rest_data['Power']['Power']['SOC_kWh']
                 self.base.log("Inverter {} SOC_Kwh {}".format(self.id, self.soc_kw))
             else:
-                self.soc_kw = float(self.base.get_arg('soc_kw', default=0, index=self.id)) * self.base.battery_scaling
+                self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -137,7 +137,7 @@ class Inverter():
             if self.rest_data:
                 self.current_charge_limit = float(self.rest_data['Control']['Target_SOC'])
             else:
-                self.current_charge_limit = float(self.base.get_arg('charge_limit', index=self.id))
+                self.current_charge_limit = self.base.get_arg('charge_limit', index=self.id, default=100)
         else:
             self.current_charge_limit = 0
 
@@ -162,7 +162,7 @@ class Inverter():
             if self.rest_data:
                 current_reserve = float(self.rest_data['Control']['Battery_Power_Reserve'])
             else:
-                current_reserve = float(self.base.get_state(entity_id = self.base.get_arg('reserve', indirect=False, index=self.id), default=0))
+                current_reserve = self.base.get_arg('reserve', index=self.id, default=0.0)
 
         # Clamp to minimum
         if reserve < self.reserve_percent:
@@ -199,7 +199,7 @@ class Inverter():
             if self.rest_data:
                 current_soc = float(self.rest_data['Power']['Power']['SOC'])
             else:
-                current_soc = float(self.base.get_state(entity_id = self.base.get_arg('soc_percent', indirect=False, index=self.id), default=100))
+                current_soc = self.base.get_arg('soc_percent', indirect=False, index=self.id, default=100.0)
 
         if current_soc != soc:
             self.base.log("Inverter {} Current SOC is {} % and new target is {} %".format(self.id, current_soc, soc))
@@ -577,6 +577,14 @@ class PredBat(hass.Hass):
         """
         value = self.args.get(arg, default)
         value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
+
+        # Convert to float?
+        if isinstance(default, float):
+            try:
+                value = float(value)
+            except ValueError:
+                self.log("WARN: Return bad value {} from {}".format(value, arg))
+                value = default
         return value
 
     def download_octopus_rates(self, url):
@@ -1922,8 +1930,8 @@ class PredBat(hass.Hass):
 
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
-        self.metric_export = self.get_arg('metric_export', 4)
-        self.metric_min_improvement = self.get_arg('metric_min_improvement', 5)
+        self.metric_export = self.get_arg('metric_export', 4.0)
+        self.metric_min_improvement = self.get_arg('metric_min_improvement', 5.0)
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
@@ -1932,7 +1940,7 @@ class PredBat(hass.Hass):
         self.cost_today_sofar = 0
 
         # Car charging information
-        self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100))
+        self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
         self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
 
         # Basic rates defined by user over time
@@ -1950,8 +1958,8 @@ class PredBat(hass.Hass):
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
 
         # Work out current car SOC and limit
-        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0))
+        self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0.0))
 
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
@@ -1970,7 +1978,7 @@ class PredBat(hass.Hass):
                 self.car_charging_rate = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate))
 
             # Get car charging limit again from car based on new battery size
-            self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100)) * self.car_charging_battery_size) / 100.0
+            self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
 
             # Extract vehicle preference if we can get it
             vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
@@ -1981,7 +1989,7 @@ class PredBat(hass.Hass):
                 self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
 
         # Work out car SOC
-        self.car_charging_soc = (float(self.get_arg('car_charging_soc', 0)) * self.car_charging_battery_size) / 100.0
+        self.car_charging_soc = (self.get_arg('car_charging_soc', 0.0) * self.car_charging_battery_size) / 100.0
 
         # Log vehicle info
         if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
@@ -2163,7 +2171,7 @@ class PredBat(hass.Hass):
             self.log("Optimise all charge windows n={}".format(record_charge_windows))
             best_soc, best_metric, best_cost, soc_min = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_enable_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_charge_windows)
             if record_charge_windows > 1:
-                best_soc = min(best_soc + self.get_arg('best_soc_pass_margin', 0), self.soc_max)
+                best_soc = min(best_soc + self.get_arg('best_soc_pass_margin', 0.0), self.soc_max)
 
             # Set all to optimisation
             self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
