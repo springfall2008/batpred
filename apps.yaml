@@ -246,6 +246,10 @@ pred_bat:
   set_reserve_notify: True
   set_reserve_min: 4
   
+  # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
+  #notify_devices: 
+  #  - mobile_app_my_iphone10
+  
   # Set the frequency in minutes that this plugin is run
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 5
