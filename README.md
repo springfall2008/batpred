@@ -162,6 +162,7 @@ These are configuration items that you can modify to fit your needs:
   - set_reserve_notify - When true notification will be sent about reserve % changes
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
   
+  - notify_devices - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
   - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - debug_enable - option to print lots of debug messages
    
