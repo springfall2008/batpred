@@ -183,7 +183,7 @@ class Inverter():
                     else:
                         self.base.log("WARN: Inverter {} Unable to get entity to set reserve target".format(self.id))
                 if self.base.get_arg('set_reserve_notify', False):
-                    self.base.call_service("notify/notify", message='Predbat: Inverter {} Target Reserve has been changed to {} at {}'.format(self.id, reserve, self.base.time_now_str()))
+                    self.base.call_notify('Predbat: Inverter {} Target Reserve has been changed to {} at {}'.format(self.id, reserve, self.base.time_now_str()))
                 self.base.record_status("Inverter {} set reserve to {} at {}".format(self.id, reserve, self.base.time_now_str()))
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
@@ -213,7 +213,7 @@ class Inverter():
                     else:
                         entity_soc.call_service("set_value", value=soc)
                     if self.base.get_arg('set_soc_notify', False):
-                        self.base.call_service("notify/notify", message='Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
+                        self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
                 self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
             else:
                 self.base.log("WARN: Inverter {} Unable to get entity to set SOC target".format(self.id))
@@ -320,7 +320,7 @@ class Inverter():
 
                 # Notify
                 if self.base.get_arg('set_discharge_notify', False):
-                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
+                    self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
 
             self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
             self.base.log("Inverter {} Changing force discharge to {}".format(self.id, force_discharge))
@@ -346,7 +346,7 @@ class Inverter():
                     entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     entity_start.call_service("turn_off")
                 if self.base.get_arg('set_soc_notify', False):
-                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
+                    self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
                 self.base.sim_charge_schedule_enable = 'off'
 
@@ -390,7 +390,7 @@ class Inverter():
                     entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     entity_start.call_service("turn_on")
                 if self.base.get_arg('set_soc_notify', False):
-                    self.base.call_service("notify/notify", message="Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
+                    self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
                 self.base.sim_charge_schedule_enable = 'on'
 
@@ -422,7 +422,7 @@ class Inverter():
             if self.rest_api:
                 self.rest_setChargeSlot1(new_start, new_end)
             if self.base.get_arg('set_window_notify', False) and not SIMULATE:
-                self.base.call_service("notify/notify", message="Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.record_status("Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
@@ -525,6 +525,13 @@ class PredBat(hass.Hass):
     The battery prediction class itself 
     """
 
+    def call_notify(self, message):
+        """
+        Send HA notifications
+        """
+        for device in self.notify_devices:
+            self.call_service("notify/" + device, message=message)
+
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None):
         """
         Resolve argument templates and state instances
@@ -585,6 +592,12 @@ class PredBat(hass.Hass):
             except ValueError:
                 self.log("WARN: Return bad value {} from {}".format(value, arg))
                 value = default
+
+        # Convert to list?
+        if isinstance(default, list):
+            if not isinstance(value, list):
+                value = [value]
+                
         return value
 
     def download_octopus_rates(self, url):
@@ -1704,6 +1717,7 @@ class PredBat(hass.Hass):
         self.sim_discharge_end = "23:59"
         self.sim_charge_schedule_enable = 'on'
         self.sim_soc_charge = []
+        self.notify_devices = ['notify']
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_enable, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = 0):
         """
@@ -1932,6 +1946,7 @@ class PredBat(hass.Hass):
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4.0)
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 5.0)
+        self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
