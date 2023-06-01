@@ -126,7 +126,7 @@ These are configuration items that you can modify to fit your needs:
   - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
   - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
   
-  - car_charging_hold - When true car charging data is removed from the simulation, as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
+  - car_charging_hold - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
   - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
