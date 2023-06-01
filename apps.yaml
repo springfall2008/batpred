@@ -90,7 +90,9 @@ pred_bat:
 
   # Days previous is the number of days back to find historical load data
   # Recommended is 7 to capture day of the week but 1 can also be used
-  days_previous: 7
+  # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
+  days_previous: 
+    - 7
 
   # Scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
   # Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
