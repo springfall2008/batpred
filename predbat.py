@@ -1012,7 +1012,7 @@ class PredBat(hass.Hass):
                 load_yesterday = max(0, load_yesterday - car_energy)
             elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
                 # Car charging hold - ignore car charging in computation based on threshold
-                load_yesterday = 0
+                load_yesterday = max(load_yesterday - (self.car_charging_rate * step / 60.0), 0)
 
             # Simulate car charging
             car_load = 0.0
