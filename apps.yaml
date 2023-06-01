@@ -110,7 +110,7 @@ pred_bat:
   # tariffs like Agile
   forecast_plan_hours: 24
   
-  # When car charging hold is enable loads of above theshold kwh are ignored in the simulation
+  # When car charging hold is enable loads of above theshold kwh are assumed to be car charging and car_charging_rate will be subtracted (default 7.4)
   # Or if an incrementing energy sensor is provided actuals can be subtracted
   # The wallbox sensor is an example, automatically added if you have one, or comment our or replace with your own
   # Car charging energy scale - 1.0 if in Kwh or enter a different figure to scale the data accordingly (2.0 would double the data)
@@ -140,7 +140,8 @@ pred_bat:
     - 'locked'
     - 'plugged in'
   # Sets the car charging rate in kw, can also be pulled automatically from Ocotpus Intelligent if enabled
-  car_charging_rate: 7.5
+  # Also used to define the rate for car-charging hold
+  car_charging_rate: 7.4
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent you don't need to use this as it allocate slots, but it may help to get a more accurate figure
