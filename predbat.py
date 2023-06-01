@@ -30,7 +30,7 @@ class Inverter():
         self.charge_window = []
         self.discharge_window = []
         self.discharge_enable = []
-        self.current_charge_limit = 0
+        self.current_charge_limit = 0.0
         self.soc_kw = 0
         self.rest_data = None
 
@@ -137,9 +137,9 @@ class Inverter():
             if self.rest_data:
                 self.current_charge_limit = float(self.rest_data['Control']['Target_SOC'])
             else:
-                self.current_charge_limit = self.base.get_arg('charge_limit', index=self.id, default=100)
+                self.current_charge_limit = self.base.get_arg('charge_limit', index=self.id, default=100.0)
         else:
-            self.current_charge_limit = 0
+            self.current_charge_limit = 0.0
 
         if self.charge_enable_time:
             self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate_max * 60.0))
@@ -670,8 +670,8 @@ class PredBat(hass.Hass):
 
         load_minutes = {}
         for entity_id in entity_ids:
-            load_minutes = self.minute_data(self.get_history(entity_id = entity_id, days = self.days_previous + 1)[0], 
-                                            self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
+            load_minutes = self.minute_data(self.get_history(entity_id = entity_id, days = self.max_days_previous)[0], 
+                                            self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
         return load_minutes
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
@@ -683,7 +683,7 @@ class PredBat(hass.Hass):
         mdata = {}
         newest_state = 0
         last_state = 0
-        newest_age = 99999
+        newest_age = 999999
         prev_last_updated_time = None
 
         # Check history is valid
@@ -857,6 +857,21 @@ class PredBat(hass.Hass):
 
         return new_data
 
+    def get_historical(self, data, minute):
+        """
+        Get historical data across N previous days in days_previous array based on current minute 
+        """
+        total = 0
+        num_points = 0
+
+        for days in self.days_previous:
+            full_days = 24*60*(days - 1)
+            minute_previous = 24 * 60 - minute + full_days
+            value = self.get_from_incrementing(data, minute_previous)
+            total += value
+            num_points += 1
+        return total / num_points
+
     def get_from_incrementing(self, data, index):
         """
         Get a single value from an incrementing series e.g. kwh today -> kwh this minute
@@ -924,7 +939,6 @@ class PredBat(hass.Hass):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
-        six_days = 24*60*(self.days_previous - 1)
         predict_soc = {}
         predict_soc_time = {}
         predict_car_soc_time = {}
@@ -961,7 +975,6 @@ class PredBat(hass.Hass):
 
         # Simulate each forward minute
         while minute < self.forecast_minutes:
-            minute_yesterday = 24 * 60 - minute + six_days
             # Minute yesterday can wrap if days_previous is only 1 
             minute_absolute = minute + self.minutes_now
             minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute_absolute)
@@ -977,7 +990,7 @@ class PredBat(hass.Hass):
             load_yesterday = 0
             for offset in range(0, step):
                 pv_now += pv_forecast_minute.get(minute_absolute + offset, 0.0)
-                load_yesterday += self.get_from_incrementing(load_minutes, minute_yesterday - offset)
+                load_yesterday += self.get_historical(load_minutes, minute - offset)
 
             if record:
                 pv_kwh += pv_now
@@ -987,7 +1000,7 @@ class PredBat(hass.Hass):
                 # Hold based on data
                 car_energy = 0
                 for offset in range(0, step):
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_yesterday - offset)
+                    car_energy += self.get_historical(self.car_charging_energy, minute - offset)
                 load_yesterday = max(0, load_yesterday - car_energy)
             elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
                 # Car charging hold - ignore car charging in computation based on threshold
@@ -1687,7 +1700,7 @@ class PredBat(hass.Hass):
         self.debug_enable = False
         self.import_today = {}
         self.export_today = {}
-        self.current_charge_limit = 0
+        self.current_charge_limit = 0.0
         self.charge_window = []
         self.charge_limit = []
         self.charge_window_best = []
@@ -1935,7 +1948,9 @@ class PredBat(hass.Hass):
         self.minutes_now = int((now - self.midnight).seconds / 60)
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
-        self.days_previous = self.get_arg('days_previous', 7)
+        self.days_previous = self.get_arg('days_previous', [7])
+        self.max_days_previous = max(self.days_previous) + 1
+
         forecast_hours = self.get_arg('forecast_hours', 24)
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
@@ -2072,16 +2087,17 @@ class PredBat(hass.Hass):
 
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
-        self.inverter_limit = 0
+        self.inverter_limit = 0.0
         self.inverters = []
         self.charge_window = []
         self.discharge_window = []
         self.discharge_enable = []
-        self.soc_kw = 0
-        self.soc_max = 0
-        self.reserve = 0
-        self.charge_rate_max = 0
-        self.discharge_rate_max = 0
+        self.current_charge_limit = 0.0
+        self.soc_kw = 0.0
+        self.soc_max = 0.0
+        self.reserve = 0.0
+        self.charge_rate_max = 0.0
+        self.discharge_rate_max = 0.0
         found_first = False
 
         # For each inverter get the details
@@ -2164,8 +2180,8 @@ class PredBat(hass.Hass):
 
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.days_previous + 1)[0], 
-                                                        self.days_previous + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.get_arg('car_charging_energy_scale', 1.0))
+            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)[0], 
+                                                        self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.get_arg('car_charging_energy_scale', 1.0))
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
