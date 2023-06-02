@@ -590,15 +590,15 @@ class PredBat(hass.Hass):
             try:
                 value = float(value)
             except ValueError:
-                self.log("WARN: Return bad float value {} from {}".format(value, arg))
+                self.log("WARN: Return bad float value {} from {} using default {}".format(value, arg, default))
                 value = default
 
         # Convert to int?
-        if isinstance(default, int):
+        if isinstance(default, int) and not isinstance(default, bool):
             try:
                 value = int(value)
             except ValueError:
-                self.log("WARN: Return bad int value {} from {}".format(value, arg))
+                self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
                 value = default
 
         # Convert to list?
