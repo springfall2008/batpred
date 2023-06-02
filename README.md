@@ -30,8 +30,8 @@ To install:
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
    - Set the time_zone correctly in appdeamon.yml (e.g. Europe/London)
    - Add 'thread_duration_warning_threshold: 30' to the appdeamon.yml file in the appdeamon section
-- Copy predbat.py to 'config/appdeamon/apps' directory in home assistant
-- Edit config/appdemon/apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
+- Copy apps/predbat/predbat.py to 'config/appdeamon/apps' directory in home assistant
+- Edit config/appdemon/example_apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
 - If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
   or you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
