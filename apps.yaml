@@ -46,8 +46,6 @@ pred_bat:
     - number.givtcp_{geserial}_battery_power_reserve
   inverter_mode: 
    - select.givtcp_{geserial}_mode
-  soc_percent: 
-   - number.givtcp_{geserial}_target_soc
   charge_start_time: 
    - select.givtcp_{geserial}_charge_start_time_slot_1
   charge_end_time: 
