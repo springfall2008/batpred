@@ -46,7 +46,7 @@ class Inverter():
             self.charge_rate_max = self.rest_data['Control']['Battery_Charge_Rate'] / 1000.0 / 60.0
             self.discharge_rate_max = self.rest_data['Control']['Battery_Discharge_Rate'] / 1000.0 / 60.0
         else:
-            self.soc_max = self.base.get_arg('soc_max', default=0.0, index=self.id) * self.base.battery_scaling
+            self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.charge_rate_max = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
             self.discharge_rate_max = self.base.get_arg('discharge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
 
