@@ -1,4 +1,5 @@
 {
   "name" : "predbat",
   "render_readme" : true
+  "persistent_directory" : "apps/config"
 }
