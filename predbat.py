@@ -199,11 +199,11 @@ class Inverter():
             if self.rest_data:
                 current_soc = float(self.rest_data['Power']['Power']['SOC'])
             else:
-                current_soc = self.base.get_arg('soc_percent', indirect=False, index=self.id, default=100.0)
+                current_soc = self.base.get_arg('charge_limit', index=self.id, default=100.0)
 
         if current_soc != soc:
             self.base.log("Inverter {} Current SOC is {} % and new target is {} %".format(self.id, current_soc, soc))
-            entity_soc = self.base.get_entity(self.base.get_arg('soc_percent', indirect=False, index=self.id))
+            entity_soc = self.base.get_entity(self.base.get_arg('charge_limit', indirect=False, index=self.id))
             if entity_soc:
                 if SIMULATE:
                     self.base.sim_soc = soc
