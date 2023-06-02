@@ -30,8 +30,14 @@ To install:
 - Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
    - Set the time_zone correctly in appdeamon.yml (e.g. Europe/London)
    - Add 'thread_duration_warning_threshold: 30' to the appdeamon.yml file in the appdeamon section
-- Copy apps/predbat/predbat.py to 'config/appdeamon/apps' directory in home assistant
-- Edit config/appdemon/example_apps.yml and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
+- HACS Method - Once installed you will get automatic updates from each release!
+   - Enable AppDeamon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
+   - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDeamon'
+   - Click on the Repo and Download the app
+   - Copy from example_apps_yml.txt and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
+- Manual method - You will have to update manually
+   - Copy apps/predbat/predbat.py to 'config/appdeamon/apps' directory in home assistant
+   - Copy from example_apps_yml.txt and put into it the contents of apps.yml, but change the entity names to match your own inverter serial number
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
 - If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
   or you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
