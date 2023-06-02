@@ -69,10 +69,10 @@ REST Interface
 Control per inverter (only used if REST isn't set):
   - soc_kw - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
   - soc_max - GivTCP Entity name for the maximum charge level for the battery
-  - soc_percent - GivTCP Entity name for used to set the SOC target for the battery in percentage
   - reserve - GivTCP sensor name for the reserve setting in %
   - inverter_mode - GivTCP inverter mode control
   - charge_enable - GivTCP charge enable entity - says if the battery will be charged in the time window
+  - charge_limit - GivTCP Entity name for used to set the SOC target for the battery in percentage
   - charge_start_time - GivTCP battery charge start time entity
   - charge_end_time - GivTCP battery charge end time entity
   - charge_rate - GivTCP battery charge rate entity in watts 
