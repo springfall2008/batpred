@@ -41,7 +41,7 @@ To install:
 FAQ:
   - I've installed Batbred but I don't see the correct entities:
     - First look at AppDeamon.log (can be found in the list of logfiles in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
-    - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions)
+    - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions). The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names (some people don't have the solcast_ bit in their names)
   - Why is my predicted charge % higher or lower than I might expect?
     - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
     - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm. If you do something like have export>import then Batpred will try to export as much as possible.
@@ -49,6 +49,7 @@ FAQ:
     - Have you tuned the metric_min_improvement, best_soc_min and best_soc_keep settings?
     - Do you have predicted car charging during the time period?
     - You can also tune load_scaling and pv_scaling to adjust predictions up and down a bit
+    - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
   - Why didn't the slot actually get configured?
      - make sure set_charge_window and set_soc_enable is turned out
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
@@ -82,7 +83,7 @@ Control per inverter (only used if REST isn't set):
   - discharge_end_time - GivTCP scheduled discharge slot_1 end time
 
 Other per inverter:
-  - inverter_limit - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600)
+  - inverter_limit - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 
 The following are entity names in Solcast, unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking:  
   - pv_forecast_today - Entity name for solcast today's forecast
@@ -90,7 +91,7 @@ The following are entity names in Solcast, unlikely to need changing although a 
   - pv_forecast_d3 - Entity name for solcast forecast for day 3
   - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   
-The following are entity names in the Ocotpus Energy plugin and the Octopus Intelligent plugin.
+The following are entity names in the Octopus Energy plugin and the Octopus Intelligent plugin.
 They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
   - metric_octopus_import - Import rates from the Octopus plugin
   - metric_octopus_export - Export rates from the Octopus plugin
@@ -111,7 +112,7 @@ Or you can override these by manually supplying an octopus pricing URL (expert f
   - rates_import_octopus_url
   - rates_export_octopus_url
    
-Or set assumed rates for the house, battery charging and export. You can't enable automatic charging windows with this option.
+Or set assumed rates for the house, battery charging and export. You can't enable automatic charging windows with this option, it only works for a fixed charge time.
   - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
   - metric_battery - Set to the cost per Kwh of charging the battery
   - metric_export - Set to the price per Kwh you get for exporting
@@ -138,7 +139,7 @@ These are configuration items that you can modify to fit your needs:
   - car_charging_limit - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
   - car_charging_soc - The cars current % charge level, link to a suitable sensor. Default is 0%
    
-  - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight
+  - calculate_best - When true the algorithm tries to calculate the target % to charge the battery to overnight and creates all the 'best' sensors.
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight.
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
   - best_soc_min - Sets the minimum battery level SOC to propose for the prediction (best to disable for variable tariffs like Agile)
@@ -221,6 +222,6 @@ Example charts:
 ![image](https://user-images.githubusercontent.com/48591903/236629117-8f05e050-d43d-4a52-a2a7-b5e97b961e3c.png)
 
 Todo list:
-  - Add ability to average load over a number of days
-  - More user testing on different tariffs
-  
+  - Add the ability to take car charging data from power sensor (rather than just from energy)
+  - Improve documentation
+  - Consider using MQTT interface to HA  
