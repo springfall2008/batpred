@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------
-# This is an example configuration, copy it into apps.yml and modify
+# This is an example configuration, please modify it
 # ------------------------------------------------------------------
 ---
 pred_bat:
