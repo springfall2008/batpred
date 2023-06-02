@@ -1,3 +1,6 @@
+# ------------------------------------------------------------------
+# This is an example configuration, copy it into apps.yml and modify
+# ------------------------------------------------------------------
 ---
 pred_bat:
   module: predbat
