@@ -6,6 +6,38 @@ This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 For support please raise a Github ticket or use the GivTCP Facebook page
 
+- [predbat](#predbat)
+  * [Operation](#operation)
+  * [Install](#install)
+    + [HACS install](#hacs-install)
+    + [Manual install](#manual-install)
+  * [Solar forecast](#solar-forecast)
+    + [Solcast](#solcast)
+  * [Energy rates](#energy-rates)
+    + [Octopus Energy Plugin](#octopus-energy-plugin)
+    + [Rate bands](#rate-bands)
+    + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
+  * [FAQ](#faq)
+  * [config.yml - details:](#configyml---details-)
+    + [Inverter information](#inverter-information)
+    + [Historical load](#historical-load)
+    + [Import and Export data](#import-and-export-data)
+    + [Inverter control](#inverter-control)
+      - [REST Interface inverter control](#rest-interface-inverter-control)
+      - [Home-assistant Inverter control](#home-assistant-inverter-control)
+    + [Solcast](#solcast-1)
+    + [Octopus energy](#octopus-energy)
+    + [Manual energy rates](#manual-energy-rates)
+    + [No energy tariff data (legacy)](#no-energy-tariff-data--legacy-)
+    + [Car charging filtering](#car-charging-filtering)
+    + [Planned car charging](#planned-car-charging)
+    + [Customisation](#customisation)
+    + [Controlling the battery charging/discharging](#controlling-the-battery-charging-discharging)
+    + [Other config](#other-config)
+  * [Output data](#output-data)
+  * [Creating the charts](#creating-the-charts)
+  * [Todo list](#todo-list)
+
 ## Operation
 
 The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 10 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction. When enable it will tune the charging percentage (SOC) for each of the slots to achieve the lowest cost possible.
@@ -234,6 +266,8 @@ These are configuration items that you can modify to fit your needs:
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
   
   - notify_devices - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
+
+### Other config
   - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - debug_enable - option to print lots of debug messages
 
