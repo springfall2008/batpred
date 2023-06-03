@@ -59,9 +59,9 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - You must have GivTCP installed and running first
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
-- Install AppDeamon add-on https://github.com/hassio-addons/addon-appdaemon
-   - Set the time_zone correctly in appdeamon.yml (e.g. Europe/London)
-   - Add 'thread_duration_warning_threshold: 30' to the appdeamon.yml file in the appdeamon section
+- Install AppDaemon add-on https://github.com/hassio-addons/addon-appdaemon
+   - Set the time_zone correctly in appdaemon.yml (e.g. Europe/London)
+   - Add 'thread_duration_warning_threshold: 30' to the appdaemon.yml file in the appdaemon section
 
 ### HACS install
 
@@ -69,19 +69,19 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - Once installed you will get automatic updates from each release!
 - Enable AppDeamon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
-- Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDeamon'
+- Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
-- Edit in Homeassistant config/appdeamon/apps/predbat/config/apps.yml to configure
+- Edit in Homeassistant config/appdaemon/apps/predbat/config/apps.yml to configure
 - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
 
 ### Manual install
 
-- Copy apps/predbat/predbat.py to 'config/appdeamon/apps/' directory in home assistant
-- Copy apps/predbat/apps.yml to 'config/appdeamon/apps' directory in home assistant
-- Edit in Homeassistant config/appdeamon/apps/apps.yml to configure
+- Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant
+- Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant
+- Edit in Homeassistant config/appdaemon/apps/apps.yml to configure
 
-- If you later install with HACS then you must move the apps.yml into config/appdeamon/apps/predbat/config
+- If you later install with HACS then you must move the apps.yml into config/appdaemon/apps/predbat/config
 
 ## Solar forecast
 
