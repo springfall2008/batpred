@@ -157,12 +157,16 @@ pred_bat:
   octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
   octopus_intelligent_charging: True
 
-  # Enable calculate best to work out the best battery SOC % based on cost
+  # Enable calculate best to work out the best scenarion prediction
   calculate_best: True
+  # Enable calculate best to work out the best SOC charging % - default is enabled 
+  # calculate_best_charge: True
+  # Enable calculate best to work out the best discharging % - default is enabled only when discharge window is enabled
+  # calculate_best_discharge: True
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
-  # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot (set to 0 if you want to skip some slots)
-  # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time
+  # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
+  # best_soc_keep : is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint)
   # best_soc_step: is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
   # best_soc_pass_margin: Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0)
   best_soc_margin: 0
