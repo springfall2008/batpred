@@ -1859,7 +1859,6 @@ class PredBat(hass.Hass):
 
             # Never go below the minimum level
             this_discharge_limit = max(self.best_soc_min * 100.0 / self.soc_max, this_discharge_limit)
-            this_discharge_limit = min(this_discharge_limit, self.soc_max)
 
             was_debug = self.debug_enable
             self.debug_enable = False
