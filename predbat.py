@@ -2452,7 +2452,7 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         global SIMULATE
-        self.log("Predbat Startup")
+        self.log("Predbat: Startup")
         self.reset()
         self.auto_config()
         
@@ -2477,12 +2477,20 @@ class PredBat(hass.Hass):
             # Run every N minutes aligned to the minute
             now = datetime.now()
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            seconds_now = (now - midnight).seconds
+            run_every = self.get_arg('run_every', 5) * 60
+
+            # Calculate next run time to exactly align with the run_every time
+            seconds_offset = seconds_now % run_every
+            seconds_next = seconds_now + (run_every - seconds_offset)
+            next_time = midnight + timedelta(seconds=seconds_next)
+            self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
             # First run is now
             self.run_in(self.run_time_loop, 0)
 
             # And then every N minutes
-            self.run_every(self.run_time_loop, midnight, self.get_arg('run_every', 5) * 60)
+            self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
 
     def run_time_loop(self, cb_args):
         """
