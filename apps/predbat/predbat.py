@@ -2298,7 +2298,7 @@ class PredBat(hass.Hass):
                 best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_discharge_windows, end_record = end_record)
 
                 self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
-                self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+                self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
                 if record_discharge_windows > 1:
                     # Optimise in price order, most expensive first try to increase each one, only required for more than 1 window
@@ -2308,7 +2308,7 @@ class PredBat(hass.Hass):
 
                         self.discharge_limits_best[window_n] = best_discharge
                         if self.debug_enable or 1:
-                            self.log("Best discharge limit window {} discharge {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                            self.log("Best discharge limit window {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
 
         if self.get_arg('calculate_best', False):
             # Final simulation of best, do 10% and normal scenario
