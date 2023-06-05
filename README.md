@@ -249,6 +249,10 @@ These are configuration items that you can modify to fit your needs:
   - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly). This is a soft constraint (slots will not be forced to charge/discharge based on this number).
   - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
   
+  - combine_charge_slots -  Control if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - combine_discharge_slots - Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
+  
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
  
  ### Controlling the battery charging/discharging
