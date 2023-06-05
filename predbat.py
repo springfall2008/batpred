@@ -1284,12 +1284,16 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if (not find_high and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)):
-                    if rate_low_start >= 0 and self.dp2(rate) != self.dp2(rate_low_rate):
+                    if not self.get_arg('combine_mixed_rates', False) and rate_low_start >= 0 and (self.dp2(rate) != self.dp2(rate_low_rate)):
                         # Refuse mixed rates
                         rate_low_end = minute
                         break
-                    if find_high and rate_low_start >= 0 and (minute - rate_low_start) >= 30:
-                        # For export slots make them all 30 minutes so we can select some not all
+                    if find_high and not self.get_arg('combine_discharge_slots', False) and rate_low_start >= 0 and (minute - rate_low_start) >= 30:
+                        # If combine is disabled, for export slots make them all 30 minutes so we can select some not all
+                        rate_low_end = minute
+                        break
+                    if not find_high and not self.get_arg('combine_charge_slots', False) and rate_low_start >= 0 and (minute - rate_low_start) >= 30:
+                        # If combine is disabled, for import slots make them all 30 minutes so we can select some not all
                         rate_low_end = minute
                         break
                     if rate_low_start < 0:
@@ -1772,7 +1776,7 @@ class PredBat(hass.Hass):
         """
         loop_soc = self.soc_max
         best_soc = self.soc_max
-        best_soc_min = self.soc_max
+        best_soc_min = 0
         best_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
@@ -1826,7 +1830,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min <= self.best_soc_min)):
+            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= self.best_soc_min)):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -1853,10 +1857,10 @@ class PredBat(hass.Hass):
         best_discharge = False
         best_metric = 9999999
         best_cost = 0
-        best_soc_min = self.soc_max
+        best_soc_min = 0
         
         for this_discharge_limit in [100.0, 90.0, 80.0, 70.0, 60.0, 50.0, 40.0, 30.0, 20.0, 10.0, 4.0]:
-
+ 
             # Never go below the minimum level
             this_discharge_limit = max(self.best_soc_min * 100.0 / self.soc_max, this_discharge_limit)
 
@@ -1894,7 +1898,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep or soc_min <= self.best_soc_min):
+            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (soc_min >= self.best_soc_keep or soc_min >= self.best_soc_min):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
