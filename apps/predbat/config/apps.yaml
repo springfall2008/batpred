@@ -174,7 +174,16 @@ pred_bat:
   best_soc_keep: 2
   best_soc_step: 0.25
   best_soc_pass_margin: 0
-    
+  
+  # Control if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  # Default is enabled (True)
+  combine_charge_slots: True
+  # Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  # Default is enabled (True)
+  combine_discharge_slots: True
+  # Allow mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
+  combine_mixed_rates : False
+  
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
   # If it's 0 then this is disabled. 
   # A figure of around 5 (which is 5p) is a good one to use if enabled.
