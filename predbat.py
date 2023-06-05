@@ -1417,7 +1417,7 @@ class PredBat(hass.Hass):
                 rate_high_end = window['end']
                 rate_high_average = window['average']
 
-                self.log("High rate period {} to {} @{} !".format(self.time_abs_str(rate_high_start), self.time_abs_str(rate_high_end), rate_high_average))
+                self.log("High export rate window:{} - {} to {} @{} !".format(window_n, self.time_abs_str(rate_high_start), self.time_abs_str(rate_high_end), rate_high_average))
 
                 rate_high_start_date = self.midnight_utc + timedelta(minutes=rate_high_start)
                 rate_high_end_date = self.midnight_utc + timedelta(minutes=rate_high_end)
@@ -1541,7 +1541,7 @@ class PredBat(hass.Hass):
                 rate_low_end = window['end']
                 rate_low_average = window['average']
 
-                self.log("Low rate period {} to {} @{} !".format(self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average))
+                self.log("Low import rate window:{} - {} to {} @{} !".format(window_n, self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average))
 
                 rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
                 rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
@@ -1923,22 +1923,23 @@ class PredBat(hass.Hass):
         """
         Helper sort index function
         """
-        return window['average']
+        return window['key']
 
     def sort_window_by_price(self, windows):
         """
-        Sort the charge windows by lowest price first, return a list of window IDs
+        Sort the charge windows by highest price first, return a list of window IDs
         """
         window_with_id = windows[:]
         wid = 0
         for window in window_with_id:
             window['id'] = wid
+            window['key'] = "%04.2f.%02d" % (1000 - window['average'], window['id'])
             wid += 1
         window_with_id.sort(key=self.window_sort_func)
         id_list = []
         for window in window_with_id:
             id_list.append(window['id'])
-        # self.log("Sorted window ids {}".format(id_list))
+        #  self.log("Sorted window list {} ids {}".format(window_with_id, id_list))
         return id_list
 
     def discard_unused_charge_slots(self, charge_limit_best, charge_window_best, reserve):
@@ -2262,9 +2263,7 @@ class PredBat(hass.Hass):
                 if record_charge_windows > 1:
                     # Optimise in price order, most expensive first try to reduce each one, only required for more than 1 window
                     price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows])
-                    price_sorted.reverse()
                     for window_n in price_sorted:
-                        self.log("Optimise charge window: {}".format(window_n))
                         best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
 
                         self.charge_limit_best[window_n] = best_soc
@@ -2290,7 +2289,6 @@ class PredBat(hass.Hass):
                 if record_discharge_windows > 1:
                     # Optimise in price order, most expensive first try to increase each one, only required for more than 1 window
                     price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows])
-                    price_sorted.reverse()
                     for window_n in price_sorted:
                         best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
 
