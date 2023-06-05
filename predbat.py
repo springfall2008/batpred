@@ -42,7 +42,13 @@ class Inverter():
 
         # Battery size, charge and discharge rates
         if self.rest_data:
-            self.soc_max = float(self.rest_data['Invertor_Details']['Battery_Capacity_kWh']) * self.base.battery_scaling
+            self.nominal_capacity = float(self.rest_data['raw']['invertor']['battery_nominal_capacity']) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+            self.soc_max = float(self.rest_data['Invertor_Details']['Battery_Capacity_kWh'])
+            if abs(self.soc_max - self.nominal_capacity) > 1.0:
+                # XXX: Weird workaround for battery reporting wrong capacity issue
+                self.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                self.soc_max = self.nominal_capacity
+            self.soc_max *= self.base.battery_scaling
             self.charge_rate_max = self.rest_data['Control']['Battery_Charge_Rate'] / 1000.0 / 60.0
             self.discharge_rate_max = self.rest_data['Control']['Battery_Discharge_Rate'] / 1000.0 / 60.0
         else:
@@ -63,7 +69,7 @@ class Inverter():
         # Max inverter rate
         self.inverter_limit = self.base.get_arg('inverter_limit', 7500.0, index=self.id) / (1000 * 60.0)
 
-        self.base.log("New Inverter {} with soc_max {} charge_rate {} kw discharge_rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.charge_rate_max * 60.0), self.base.dp2(self.discharge_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
+        self.base.log("New Inverter {} with soc_max {} nominal_capacity {} charge_rate {} kw discharge_rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.nominal_capacity), self.base.dp2(self.charge_rate_max * 60.0), self.base.dp2(self.discharge_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
         
     def update_status(self, minutes_now):
         """
@@ -702,8 +708,11 @@ class PredBat(hass.Hass):
 
         load_minutes = {}
         for entity_id in entity_ids:
-            load_minutes = self.minute_data(self.get_history(entity_id = entity_id, days = self.max_days_previous)[0], 
-                                            self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
+            history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
+            if history:
+                load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
+            else:
+                self.log("WARN: Unable to fetch history for {}".format(entity_id))
         return load_minutes
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
