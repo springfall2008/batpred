@@ -598,24 +598,28 @@ class PredBat(hass.Hass):
         value = self.args.get(arg, default)
         value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
 
-        # Convert to float?
         if isinstance(default, float):
+            # Convert to float?
             try:
                 value = float(value)
             except ValueError:
                 self.log("WARN: Return bad float value {} from {} using default {}".format(value, arg, default))
                 value = default
-
-        # Convert to int?
-        if isinstance(default, int) and not isinstance(default, bool):
+        elif isinstance(default, int) and not isinstance(default, bool):
+            # Convert to int?
             try:
                 value = int(value)
             except ValueError:
                 self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
                 value = default
-
-        # Convert to list?
-        if isinstance(default, list):
+        elif isinstance(default, bool) and isinstance(value, str):
+            # Convert to Boolean
+            if value.lower() in ['on', 'true', 'yes', 'enabled', 'enable', 'connected']:
+                value = True
+            else:
+                value = False
+        elif isinstance(default, list):
+            # Convert to list?
             if not isinstance(value, list):
                 value = [value]
                 
