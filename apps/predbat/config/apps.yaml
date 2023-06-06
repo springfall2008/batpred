@@ -157,12 +157,27 @@ pred_bat:
   octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
   octopus_intelligent_charging: True
 
-  # Enable calculate best to work out the best scenarion prediction
+  # Enable calculate best to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed
   calculate_best: True
-  # Enable calculate best to work out the best SOC charging % - default is enabled 
-  # calculate_best_charge: True
-  # Enable calculate best to work out the best discharging % - default is enabled only when discharge window is enabled
+
+  # calculate_best_charge:      If set to False then charge windows will not be calculated and the default inverter settings are used
+  # calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first
+  # calculate_charge_all:       When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
+  # calculate_charge_passes:    Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  calculate_best_charge: True
+  calculate_charge_oldest: False
+  calculate_charge_all: True
+  calculate_charge_passes: 1
+
+  # calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
+  # calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
+  # calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  # calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
   # calculate_best_discharge: True
+  calculate_discharge_all: False
+  calculate_discharge_oldest: True
+  calculate_discharge_passes: 2
+
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
   # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
