@@ -88,10 +88,11 @@ class Inverter():
             self.soc_kw = self.base.sim_soc_kw
         else:
             if self.rest_data:
-                self.soc_kw = self.rest_data['Power']['Power']['SOC_kWh']
-                self.base.log("Inverter {} SOC_Kwh {}".format(self.id, self.soc_kw))
+                self.soc_kw = self.rest_data['Power']['Power']['SOC_kWh'] * self.base.battery_scaling
             else:
                 self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
+
+        self.base.log("Inverter {} SOC_Kwh {}".format(self.id, self.soc_kw))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -210,20 +211,20 @@ class Inverter():
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge Limit is {} % and new target is {} %".format(self.id, current_soc, soc))
-            entity_soc = self.base.get_entity(self.base.get_arg('charge_limit', indirect=False, index=self.id))
-            if entity_soc:
-                if SIMULATE:
-                    self.base.sim_soc = soc
-                else:
-                    if self.rest_api:
-                        self.rest_setChargeTarget(soc)
-                    else:
-                        entity_soc.call_service("set_value", value=soc)
-                    if self.base.get_arg('set_soc_notify', False):
-                        self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
-                self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
+            if SIMULATE:
+                self.base.sim_soc = soc
             else:
-                self.base.log("WARN: Inverter {} Unable to get entity to set SOC target".format(self.id))
+                if self.rest_api:
+                    self.rest_setChargeTarget(soc)
+                else:
+                    entity_soc = self.base.get_entity(self.base.get_arg('charge_limit', indirect=False, index=self.id))
+                    if entity_soc:
+                        entity_soc.call_service("set_value", value=soc)
+                    else:
+                        self.base.log("WARN: Inverter {} Unable to get entity to set SOC target".format(self.id))
+                if self.base.get_arg('set_soc_notify', False):
+                    self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
+            self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
         else:
             self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
 
