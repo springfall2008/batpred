@@ -700,8 +700,12 @@ class PredBat(hass.Hass):
 
         import_today = {}    
         for entity_id in entity_ids:
-            import_today = self.minute_data(self.get_history(entity_id = entity_id, days = self.forecast_days + 1)[0], 
-                                                self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
+            history = self.get_history(entity_id = entity_id, days = self.forecast_days + 1)
+            if history:
+                import_today = self.minute_data(history[0], self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
+            else:
+                self.log("WARN: Unable to fetch history for {}".format(entity_id))
+
         return import_today
 
     def minute_data_load(self, now_utc):
@@ -716,7 +720,7 @@ class PredBat(hass.Hass):
         for entity_id in entity_ids:
             history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
             if history:
-                load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.get_arg('load_scaling', 1.0), clean_increment=True, accumulate=load_minutes)
+                load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
         return load_minutes
@@ -864,13 +868,13 @@ class PredBat(hass.Hass):
         """
         Round to 2 decimal places
         """
-        return math.ceil(value*100)/100
+        return round(value*100)/100
 
     def dp3(self, value):
         """
         Round to 3 decimal places
         """
-        return math.ceil(value*1000)/1000
+        return round(value*1000)/1000
 
     def in_charge_window(self, charge_window, minute_abs):
         """
@@ -1419,6 +1423,7 @@ class PredBat(hass.Hass):
         self.rate_export_min_minute = rate_min_minute
         self.rate_export_max_minute = rate_max_minute
         self.rate_export_average = rate_average
+        self.rate_export_threshold = rate_average * rate_high_threshold
 
         # Find discharging windows
         self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_high_threshold, True)
@@ -1442,23 +1447,23 @@ class PredBat(hass.Hass):
                 if window_n == 0 and not SIMULATE:
                     self.set_state("predbat.high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_cost", state=rate_high_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("predbat.high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state("predbat.high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_cost_2", state=rate_high_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("predbat.high_rate_export_cost_2", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 window_n += 1
 
         # Clear rates that aren't available
         if not self.high_export_rates and not SIMULATE:
-            self.log("No high export rate period found")
+            self.log("No high rate period found")
             self.set_state("predbat.high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost", state=self.rate_export_average, attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.high_rate_export_cost", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         if len(self.high_export_rates) < 2 and not SIMULATE:
             self.set_state("predbat.high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost_2", state=self.rate_export_average, attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("predbat.high_rate_export_cost_2", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
 
     def rate_minmax(self, rates):
@@ -1519,7 +1524,7 @@ class PredBat(hass.Hass):
         Scan the rates and work out min/max and charging windows
         """
         rate_low_min_window = 5
-        rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
+        rate_low_threshold = self.rate_low_threshold
         self.low_rates = []
         
         rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
@@ -1530,6 +1535,7 @@ class PredBat(hass.Hass):
         self.rate_min_minute = rate_min_minute
         self.rate_max_minute = rate_max_minute
         self.rate_average = rate_average
+        self.rate_threshold = rate_average * rate_low_threshold
 
         # Add in any planned octopus slots
         if octopus_slots:
@@ -1593,7 +1599,7 @@ class PredBat(hass.Hass):
         for minute in range(0, self.forecast_minutes+24*60, 30):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            rates_time[stamp] = rates[minute]
+            rates_time[stamp] = self.dp2(rates[minute])
 
         if export:
             self.publish_rates_export()
@@ -1602,9 +1608,9 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             if export:
-                self.set_state("predbat.rates_export", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                self.set_state("predbat.rates_export", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_export_min), 'max' : self.dp2(self.rate_export_max), 'average' : self.dp2(self.rate_export_average), 'threshold' : self.dp2(self.rate_export_threshold), 'results' : rates_time, 'friendly_name' : 'Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             else:
-                self.set_state("predbat.rates", state=rates[self.minutes_now], attributes = {'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                self.set_state("predbat.rates", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_min), 'max' : self.dp2(self.rate_max), 'average' : self.dp2(self.rate_average), 'threshold' : self.dp2(self.rate_threshold), 'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         return rates
 
     def today_cost(self, import_today, export_today):
@@ -1834,7 +1840,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metricmid:
                 metric_diff = metric10 - metricmid
-                metric_diff *= self.get_arg('pv_metric10_weight', 0.0)
+                metric_diff *= self.pv_metric10_weight
                 metric += metric_diff
                 metric = self.dp2(metric)
 
@@ -1859,7 +1865,7 @@ class PredBat(hass.Hass):
             
             prev_soc = try_soc
             prev_metric = metric
-            loop_soc -= max(self.get_arg('best_soc_step', 0.5), 0.1)
+            loop_soc -= max(self.best_soc_step, 0.1)
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -1908,7 +1914,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metricmid:
                 metric_diff = metric10 - metricmid
-                metric_diff *= self.get_arg('pv_metric10_weight', 0.0)
+                metric_diff *= self.pv_metric10_weight
                 metric += metric_diff
                 metric = self.dp2(metric)
 
@@ -2020,19 +2026,43 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
 
-        load_minutes = self.minute_data_load(now_utc)
-
+        # Metric config
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4.0)
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 5.0)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
+        self.pv_scaling = self.get_arg('pv_scaling', 1.0)
+        self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.0)
+        self.load_scaling = self.get_arg('load_scaling', 1.0)
+        self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
+        self.best_soc_step = self.get_arg('best_soc_step', 0.5)
+
+        # Battery charging options
+        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0)
+        self.battery_scaling = self.get_arg('battery_scaling', 1.0)
+        self.best_soc_margin = self.get_arg('best_soc_margin', 0)
+        self.best_soc_min = self.get_arg('best_soc_min', 0.5)
+        self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
+        self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
+        self.set_window_minutes = self.get_arg('set_window_minutes', 30)
+
+        # Car options
+        self.car_charging_hold = self.get_arg('car_charging_hold', False)
+        self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
+        self.car_charging_energy_scale = self.get_arg('car_charging_energy_scale', 1.0)
+
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
         self.low_rates = []
         self.octopus_slots = []
         self.cost_today_sofar = 0
+
+        # Load previous load data
+        load_minutes = self.minute_data_load(now_utc)
 
         # Car charging information
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
@@ -2140,16 +2170,6 @@ class PredBat(hass.Hass):
         if self.import_today:
             self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
 
-        # Battery charging options
-        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
-        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0)
-        self.battery_scaling = self.get_arg('battery_scaling', 1.0)
-        self.best_soc_margin = self.get_arg('best_soc_margin', 0)
-        self.best_soc_min = self.get_arg('best_soc_min', 0.5)
-        self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
-        self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
-        self.set_window_minutes = self.get_arg('set_window_minutes', 30)
-
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
         self.inverter_limit = 0.0
@@ -2233,20 +2253,17 @@ class PredBat(hass.Hass):
                 pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
             if 'pv_forecast_d7' in self.args:
                 pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
-            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.get_arg('pv_scaling', 1.0))
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
+            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
         else:
             pv_forecast_minute = {}
             pv_forecast_minute10 = {}
 
         # Car charging hold - when enabled battery is held during car charging in simulation
-        self.car_charging_hold = self.get_arg('car_charging_hold', False)
-        self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
-
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
             self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)[0], 
-                                                        self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.get_arg('car_charging_energy_scale', 1.0))
+                                                        self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
             self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
@@ -2269,7 +2286,7 @@ class PredBat(hass.Hass):
                 self.log("Optimise all charge windows n={}".format(record_charge_windows))
                 best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_charge_windows, end_record = end_record)
                 if record_charge_windows > 1:
-                    best_soc = min(best_soc + self.get_arg('best_soc_pass_margin', 0.0), self.soc_max)
+                    best_soc = min(best_soc + self.best_soc_pass_margin, self.soc_max)
 
                 # Set all to optimisation
                 self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
