@@ -239,9 +239,15 @@ These are configuration items that you can modify to fit your needs:
   - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
   - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
 
-  - calculate_best - When true the algorithm tries to calculate the best scenario for the battery and create all the best sensors
-  - calculate_best_charge - When true calculate the best target % to charge the battery to overnight - Default is True
-  - calculate_best_discharge - When true calculate the discharge % - Default is True only when discharge window is enabled
+  - calculate_best_charge:      If set to False then charge windows will not be calculated and the default inverter settings are used
+  - calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first
+  - calculate_charge_all:       When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
+  - calculate_charge_passes:    Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+   
+  - calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
+  - calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
+  - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
 
   - metric_min_improvement - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight.
   - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
