@@ -260,6 +260,11 @@ class Inverter():
                 old_start = self.base.get_arg('discharge_start_time', index=self.id)
                 old_end = self.base.get_arg('discharge_end_time', index=self.id)
 
+        # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
+        if old_inverter_mode == 'Eco (Paused)':
+            old_inverter_mode = 'Eco'
+
+        # Force discharge or Eco mode?
         if force_discharge:
             new_inverter_mode = 'Timed Export'
         else:
