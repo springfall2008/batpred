@@ -72,7 +72,7 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
->>> CAUTION <<< After an update with HACS you may need to reboot AppDeamon as it sometimes reads the config wrongly during the update
+== After an update with HACS you may need to reboot AppDeamon as it sometimes reads the config wrongly during the update ==
 
 - Edit in Homeassistant config/appdaemon/apps/predbat/config/apps.yml to configure
 - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
