@@ -1045,6 +1045,18 @@ class PredBat(hass.Hass):
             if minute >= end_record and record:
                 record = False
 
+            # Store data before the next simulation step to align timestamps
+            if (minute % 10) == 0:
+                stamp = minute_timestamp.strftime(TIME_FORMAT)
+                predict_soc_time[stamp] = self.dp3(soc)
+                metric_time[stamp] = self.dp2(metric)
+                load_kwh_time[stamp] = self.dp3(load_kwh)
+                pv_kwh_time[stamp] = self.dp2(pv_kwh)
+                import_kwh_time[stamp] = self.dp2(import_kwh)
+                export_kwh_time[stamp] = self.dp2(export_kwh)
+                predict_car_soc_time[stamp] = self.dp2(car_soc / self.car_charging_battery_size * 100.0)
+                record_time[stamp] = 0 if record else self.soc_max
+
             # Get load and pv forecast, total up for all values in the step
             pv_now = 0
             load_yesterday = 0
@@ -1168,18 +1180,6 @@ class PredBat(hass.Hass):
             predict_soc[minute] = self.dp3(soc)
             if save and save=='best':
                 self.predict_soc_best[minute] = self.dp3(soc)
-
-            # Only store every 10 minutes for data-set size
-            if (minute % 10) == 0:
-                stamp = minute_timestamp.strftime(TIME_FORMAT)
-                predict_soc_time[stamp] = self.dp3(soc)
-                metric_time[stamp] = self.dp2(metric)
-                load_kwh_time[stamp] = self.dp3(load_kwh)
-                pv_kwh_time[stamp] = self.dp2(pv_kwh)
-                import_kwh_time[stamp] = self.dp2(import_kwh)
-                export_kwh_time[stamp] = self.dp2(export_kwh)
-                predict_car_soc_time[stamp] = self.dp2(car_soc / self.car_charging_battery_size * 100.0)
-                record_time[stamp] = 0 if record else self.soc_max
 
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
