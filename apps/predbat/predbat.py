@@ -1057,6 +1057,11 @@ class PredBat(hass.Hass):
                 predict_car_soc_time[stamp] = self.dp2(car_soc / self.car_charging_battery_size * 100.0)
                 record_time[stamp] = 0 if record else self.soc_max
 
+            # Save Soc prediction data as minutes for later use
+            predict_soc[minute] = self.dp3(soc)
+            if save and save=='best':
+                self.predict_soc_best[minute] = self.dp3(soc)
+
             # Get load and pv forecast, total up for all values in the step
             pv_now = 0
             load_yesterday = 0
@@ -1177,10 +1182,6 @@ class PredBat(hass.Hass):
                         metric -= self.metric_export * energy
                 diff = 0
                 
-            predict_soc[minute] = self.dp3(soc)
-            if save and save=='best':
-                self.predict_soc_best[minute] = self.dp3(soc)
-
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
                 minute_left = max(minute, minute_left)
