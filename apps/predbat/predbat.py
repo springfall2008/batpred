@@ -1853,6 +1853,7 @@ class PredBat(hass.Hass):
         self.metric_battery = 0
         self.metric_export = 0
         self.metric_min_improvement = 0
+        self.metric_min_improvement_discharge = 0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
@@ -1979,7 +1980,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+            if ((metric + self.metric_min_improvement) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -2062,7 +2063,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
-            if (metric + (self.metric_min_improvement / record_charge_windows)) <= best_metric and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+            if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
@@ -2140,19 +2141,35 @@ class PredBat(hass.Hass):
             elif window_length > 0:
                 predict_minute = int((window_start - minutes_now) / 5) * 5
                 soc = predict_soc[predict_minute]
-                self.log("Examine window {} from {} - {} limit {} - starting soc {}".format(window_n, window_start, window_end, limit, soc))
+
+                if self.debug_enable:
+                    self.log("Examine window {} from {} - {} limit {} - starting soc {}".format(window_n, window_start, window_end, limit, soc))
+
+                """
                 for minute in range(window_start, window_end, step):
                     predict_minute = int((minute - minutes_now) / 5) * 5
                     soc = predict_soc[predict_minute]
-                    if soc <= limit_soc:
+                    if soc < limit_soc:
                         if (minute - window_start) < step:
-                            self.log("Clip discharge window {} from {} - {} limit {} - discarded".format(window_n, window_start, window_end, limit))
+                            self.log("Clip discharge window {} from {} - {} limit {} - discarded as too short after clipping".format(window_n, window_start, window_end, limit))
                             discharge_limits_best[window_n] = 100
                             break
                         else:
                             window['end'] = minute                            
                             self.log("Clip discharge window {} from {} - {} to {} limit {}".format(window_n, window_start, window_end, minute, limit))
                             break
+                """
+
+                # Discharge level adjustments for safety
+                predict_minute = int((window_end - minutes_now) / 5) * 5
+                soc = predict_soc[predict_minute]
+                if soc > limit_soc:
+                    # Give it 5 minute margin
+                    limit_soc = max(limit_soc, soc - 5 * self.battery_rate_max)
+                    discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
+                    if limit != discharge_limits_best[window_n]:
+                        self.log("Clip discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+
             else:
                 self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
                 discharge_limits_best[window_n] = 100
@@ -2208,7 +2225,8 @@ class PredBat(hass.Hass):
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4.0)
-        self.metric_min_improvement = self.get_arg('metric_min_improvement', 5.0)
+        self.metric_min_improvement = self.get_arg('metric_min_improvement', 0)
+        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
         self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.0)
@@ -2510,21 +2528,12 @@ class PredBat(hass.Hass):
                         price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.get_arg('calculate_discharge_oldest', True))
                         for window_n in price_sorted:
                             best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
-                            #  self.clip_discharge_slots(self.minutes_now, self.predict_soc, self.discharge_window_best, self.discharge_limits_best, record_discharge_windows, PREDICT_STEP) 
 
                             self.discharge_limits_best[window_n] = best_discharge
                             if self.debug_enable or 1:
                                 self.log("Best discharge limit window {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
-                # Discharge slot clipping
-                # self.clip_discharge_slots(self.minutes_now, self.predict_soc, self.discharge_window_best, self.discharge_limits_best, record_discharge_windows, PREDICT_STEP) 
 
         if self.get_arg('calculate_best', False):
-            # Final simulation of best, do 10% and normal scenario
-            best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute10, save='best10')
-            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, save='best')
-            self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
-            (self.charge_limit_best, self.discharge_limits_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
-
             # Filter out any unused charge windows
             if self.get_arg('set_charge_window', False):
                 self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
@@ -2536,8 +2545,24 @@ class PredBat(hass.Hass):
             if self.get_arg('set_discharge_window', False) and self.discharge_window_best:
                 # Filter out the windows we disabled
                 self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
+
+                # Work out new record end
+                end_record = self.record_length(self.charge_window_best)
+                record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
+
+                # Discharge slot clipping
+                self.clip_discharge_slots(self.minutes_now, self.predict_soc, self.discharge_window_best, self.discharge_limits_best, record_discharge_windows, PREDICT_STEP) 
+
+                # Filter out the windows we disabled during clipping
+                self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
                 self.log("Discharge windows now {} {}".format(self.discharge_limits_best, self.discharge_window_best))
         
+            # Final simulation of best, do 10% and normal scenario
+            best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute10, save='best10')
+            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, save='best')
+            self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
+            (self.charge_limit_best, self.discharge_limits_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
+
             # Publish charge and discharge window best
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
