@@ -16,7 +16,7 @@ import requests
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-MAX_CHARGE_LIMITS = 16
+MAX_CHARGE_LIMITS = 24
 PREDICT_STEP = 5
 
 SIMULATE = False         # Debug option, when set don't write to entities but simulate each 30 min period
@@ -1546,12 +1546,12 @@ class PredBat(hass.Hass):
                         # Refuse mixed rates
                         rate_low_end = minute
                         break
-                    if find_high and (not self.get_arg('combine_discharge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
-                        # If combine is disabled, for export slots make them all 30 minutes so we can select some not all
+                    if find_high and (not self.get_arg('combine_discharge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.get_arg('discharge_slot_split', 15)):
+                        # If combine is disabled, for export slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (not find_high) and (not self.get_arg('combine_charge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
-                        # If combine is disabled, for import slots make them all 30 minutes so we can select some not all
+                    if (not find_high) and (not self.get_arg('combine_charge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.get_arg('charge_slot_split', 30)):
+                        # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
                     if rate_low_start < 0:
@@ -2190,10 +2190,13 @@ class PredBat(hass.Hass):
                 if self.debug_enable:
                     self.log("Not Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_limit, soc_min, self.best_soc_keep))
 
-            # Loop in steps of 10%
+            # Loop in steps of 10% or just on/off for combined slots
             prev_discharge_limit = this_discharge_limit
-            this_discharge_limit -= 10.0
- 
+            if self.get_arg('combine_discharge_slots', False):
+                this_discharge_limit -= 10.0
+            else:
+                this_discharge_limit = 0
+
         return best_discharge, best_metric, best_cost, best_soc_min, best_soc_min_minute
 
     def window_sort_func(self, window):
@@ -2280,7 +2283,7 @@ class PredBat(hass.Hass):
                 soc = predict_soc[predict_minute]
                 if soc > limit_soc:
                     # Give it 5 minute margin
-                    limit_soc = max(limit_soc, soc - 5 * self.battery_rate_max)
+                    limit_soc = max(limit_soc, soc - 10 * self.battery_rate_max)
                     discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                     if limit != discharge_limits_best[window_n]:
                         self.log("Clip discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
@@ -2762,9 +2765,10 @@ class PredBat(hass.Hass):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max * 60 * 1000)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
-                        inverter.adjust_reserve(self.discharge_limits_best[0])
+                        if self.get_arg('set_reserve_enable', False):
+                            inverter.adjust_reserve(self.discharge_limits_best[0])
+                            setReserve = True
                         status = "Discharging"
-                        setReserve = True
                     else:
                         self.log("Setting ECO mode as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                         inverter.adjust_force_discharge(False)
@@ -2803,7 +2807,7 @@ class PredBat(hass.Hass):
                     resetReserve = False
             
             # Reset reserve as discharge is enable but not running right now
-            if resetReserve and not setReserve:
+            if self.get_arg('set_reserve_enable', False) and resetReserve and not setReserve:
                 inverter.adjust_reserve(0)
 
         self.log("Completed run status {}".format(status))
