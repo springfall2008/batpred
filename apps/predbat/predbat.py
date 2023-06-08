@@ -59,12 +59,12 @@ class Inverter():
 
         # Get the current reserve setting or consider the minimum if we are overriding it
         if self.base.get_arg('set_reserve_enable', False):
-            self.reserve_percent = min(self.base.get_arg('set_reserve_min', 4.0), 4.0)
+            self.reserve_percent = max(self.base.get_arg('set_reserve_min', 4.0), 4.0)
         else:
             if self.rest_data:
                 self.reserve_percent = float(self.rest_data['Control']['Battery_Power_Reserve'])
             else:
-                self.reserve_percent = min(self.base.get_arg('reserve', default=0.0, index=self.id), 4.0)
+                self.reserve_percent = max(self.base.get_arg('reserve', default=0.0, index=self.id), 4.0)
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate
