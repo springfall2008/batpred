@@ -164,20 +164,22 @@ pred_bat:
   # calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first
   # calculate_charge_all:       When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   # calculate_charge_passes:    Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  
   calculate_best_charge: True
   calculate_charge_oldest: False
   calculate_charge_all: True
-  calculate_charge_passes: 1
-
+  calculate_charge_passes: 2
+  
   # calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
   # calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
-  # calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  # calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
   # calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
+
   # calculate_best_discharge: True
   calculate_discharge_all: False
   calculate_discharge_oldest: True
   calculate_discharge_passes: 1
-
+  
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
   # best_soc_min : sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
@@ -191,11 +193,21 @@ pred_bat:
   best_soc_pass_margin: 0
   
   # Control if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  # Not recommended to set to False when best_soc_min set to True or all slots will be kept
   # Default is enabled (True)
   combine_charge_slots: True
+
+  # When combine charge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
+  charge_slot_split: 30
+
   # Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
   # Default is enabled (True)
   combine_discharge_slots: False
+
+  # When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
+  # A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
+  discharge_slot_split: 15
+
   # Allow mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
   combine_mixed_rates : False
   
