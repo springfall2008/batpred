@@ -248,7 +248,7 @@ These are configuration items that you can modify to fit your needs:
    
   - calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
   - calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
-  - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
+  - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
   - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
 
   - metric_min_improvement           - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight or have multiple slots
@@ -260,7 +260,9 @@ These are configuration items that you can modify to fit your needs:
   - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
   
   - combine_charge_slots -  Control if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - charge_slot_split - When combine charge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
   - combine_discharge_slots - Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
   - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
