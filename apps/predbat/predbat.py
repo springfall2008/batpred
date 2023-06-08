@@ -19,10 +19,35 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 MAX_CHARGE_LIMITS = 16
 PREDICT_STEP = 5
 
-SIMULATE = False        # Debug option, when set don't write to entities but simulate each 30 min period
-SIMULATE_LENGTH = 23*60 # How many periods to simulate, set to 0 for just current
+SIMULATE = False         # Debug option, when set don't write to entities but simulate each 30 min period
+SIMULATE_LENGTH = 23*60  # How many periods to simulate, set to 0 for just current
+INVERTER_TEST = False     # Run inverter control self test
 
 class Inverter():
+    def self_test(self):
+        self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
+        self.adjust_battery_target(99)
+        self.adjust_battery_target(100)
+        self.adjust_reserve(6)
+        self.adjust_reserve(4)
+        self.disable_charge_window()
+        timea = datetime.strptime("23:00:00", "%H:%M:%S")
+        timeb = datetime.strptime("23:01:00", "%H:%M:%S")
+        timec = datetime.strptime("05:00:00", "%H:%M:%S")
+        timed = datetime.strptime("05:01:00", "%H:%M:%S")
+        self.adjust_charge_window(timeb, timed)
+        self.adjust_charge_window(timea, timec)
+        self.adjust_force_discharge(False, timec, timed)
+        self.adjust_force_discharge(True, timea, timeb)
+        self.adjust_force_discharge(False)
+        self.base.log("======= INVERTER CONTROL SELF TEST END ========")
+
+        if self.rest_api:
+            self.rest_api = None
+            self.rest_data = None
+            self.self_test()
+        exit
+
     def __init__(self, base, id=0):
         self.id = id
         self.base = base
@@ -182,10 +207,14 @@ class Inverter():
         # Pre-fill best discharge enable with Off
         self.discharge_limits = [100.0 for i in range(0, len(self.discharge_window))]
 
+        if INVERTER_TEST:
+            self.self_test()
+
     def adjust_reserve(self, reserve):
         """
         Adjust the reserve target % in GivTCP
         """
+        
         if SIMULATE:
             current_reserve = float(self.base.sim_reserve)
         else:
@@ -195,6 +224,7 @@ class Inverter():
                 current_reserve = self.base.get_arg('reserve', index=self.id, default=0.0)
 
         # Clamp to minimum
+        reserve = int(reserve)
         if reserve < self.reserve_percent:
             reserve = self.reserve_percent
 
@@ -206,12 +236,8 @@ class Inverter():
                 if self.rest_api:
                     self.rest_setReserve(reserve)
                 else:
-                    entity_id = self.base.get_arg('reserve', indirect=False, index=self.id)
-                    entity_soc = self.base.get_entity(entity_id)
-                    if entity_soc:
-                        entity_soc.call_service("set_value", value=reserve)
-                    else:
-                        self.base.log("WARN: Inverter {} Unable to get entity to set reserve target".format(self.id))
+                    entity_soc = self.base.get_entity(self.base.get_arg('reserve', indirect=False, index=self.id))
+                    self.write_and_poll_value('reserve', entity_soc, reserve)
                 if self.base.get_arg('set_reserve_notify', False):
                     self.base.call_notify('Predbat: Inverter {} Target Reserve has been changed to {} at {}'.format(self.id, reserve, self.base.time_now_str()))
                 self.base.record_status("Inverter {} set reserve to {} at {}".format(self.id, reserve, self.base.time_now_str()))
@@ -241,10 +267,7 @@ class Inverter():
                     self.rest_setChargeRate(new_rate)
                 else:
                     entity = self.base.get_entity(self.base.get_arg('charge_rate', indirect=False, index=self.id))
-                    if entity:
-                        entity.call_service("set_value", value=new_rate)
-                    else:
-                        self.base.log("WARN: Inverter {} Unable to get entity to set Charge rate target".format(self.id))
+                    self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
             self.base.record_status("Inverter {} charge rate changed to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
@@ -272,10 +295,7 @@ class Inverter():
                     self.rest_setDischargeRate(new_rate)
                 else:
                     entity = self.base.get_entity(self.base.get_arg('discharge_rate', indirect=False, index=self.id))
-                    if entity:
-                        entity.call_service("set_value", value=new_rate)
-                    else:
-                        self.base.log("WARN: Inverter {} Unable to get entity to set Charge rate target".format(self.id))
+                    self.write_and_poll_value('discharge_rate', entity, new_rate, fuzzy=100)
                 if self.base.get_arg('set_discharge_notify', False):
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
             self.base.record_status("Inverter {} discharge rate changed to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
@@ -295,7 +315,7 @@ class Inverter():
             if self.rest_data:
                 current_soc = float(self.rest_data['Control']['Target_SOC'])
             else:
-                current_soc = self.base.get_arg('charge_limit', index=self.id, default=100.0)
+                current_soc = self.base.get_arg('charge_limit', index=self.id)
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge Limit is {} % and new target is {} %".format(self.id, current_soc, soc))
@@ -306,29 +326,64 @@ class Inverter():
                     self.rest_setChargeTarget(soc)
                 else:
                     entity_soc = self.base.get_entity(self.base.get_arg('charge_limit', indirect=False, index=self.id))
-                    if entity_soc:
-                        entity_soc.call_service("set_value", value=soc)
-                    else:
-                        self.base.log("WARN: Inverter {} Unable to get entity to set SOC target".format(self.id))
+                    self.write_and_poll_value('charge_limit', entity_soc, soc)
+    
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
             self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
         else:
             self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
 
+    def write_and_poll_switch(self, name, entity, new_value):
+        """
+        GivTCP Workaround, keep writing until correct
+        """
+        tries = 6
+        for retry in range(0, 6):
+            if new_value:
+                entity.call_service('turn_on')
+            else:
+                entity.call_service('turn_off')
+            time.sleep(10)
+            old_value = entity.get_state()
+            if isinstance(old_value, str):
+                if old_value.lower() in ['on', 'enable', 'true']:
+                    old_value = True
+                else:
+                    old_value = False
+            if old_value == new_value:
+                self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
+                return True
+        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+        return False
+
+    def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
+        """
+        GivTCP Workaround, keep writing until correct
+        """
+        for retry in range(0, 6):
+            entity.call_service("set_value", value=new_value)
+            time.sleep(10)
+            old_value = int(entity.get_state())
+            if (abs(old_value - new_value) <= fuzzy):
+                self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(entity.get_state())))
+                return True
+        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, int(entity.get_state())))
+        return False
+
     def write_and_poll_option(self, name, entity, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
-        old_value = ""
-        tries = 12
-        while old_value != new_value and tries > 0:
+        for retry in range(0, 6):
             entity.call_service("select_option", option=new_value)
-            time.sleep(5)
+            time.sleep(10)
             old_value = entity.get_state()
-            tries -=1
-        if tries == 0:
-            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete".format(self.id, name, new_value))
+            if old_value == new_value:
+                self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
+                return True
+        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+        return False
 
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
         """
@@ -421,15 +476,15 @@ class Inverter():
                 if self.rest_api:
                     self.rest_setBatteryMode(new_inverter_mode)
                 else:
-                    entity_inverter_mode = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
-                    entity_inverter_mode.call_service("select_option", option=new_inverter_mode)
+                    entity = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
+                    self.write_and_poll_option('inverter_mode', entity, new_inverter_mode)
 
                 # Notify
                 if self.base.get_arg('set_discharge_notify', False):
                     self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
 
             self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
-            self.base.log("Inverter {} Changing force discharge to {}".format(self.id, force_discharge))
+            self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
     def disable_charge_window(self):
         """
@@ -449,8 +504,8 @@ class Inverter():
                 if self.rest_api:
                     self.rest_enableChargeSchedule(False)
                 else:
-                    entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
-                    entity_start.call_service("turn_off")
+                    entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                    self.write_and_poll_switch('scheduled_charge_enable', entity, False)
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
@@ -493,8 +548,8 @@ class Inverter():
                 if self.rest_api:
                     self.rest_enableChargeSchedule(True)
                 else:
-                    entity_start = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
-                    entity_start.call_service("turn_on")
+                    entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                    self.write_and_poll_switch('scheduled_charge_enable', entity, True)
                 if self.base.get_arg('set_soc_notify', False):
                     self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
@@ -563,7 +618,7 @@ class Inverter():
         data = {"chargeToPercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(5)
+            time.sleep(10)
             self.rest_data = self.rest_runAll()
             if float(self.rest_data['Control']['Target_SOC']) == target:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
@@ -618,7 +673,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(5)
+            time.sleep(10)
             self.rest_data = self.rest_runAll()
             if inverter_mode == self.rest_data['Control']['Mode']:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
@@ -636,7 +691,7 @@ class Inverter():
         data = {"reservePercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(5)
+            time.sleep(10)
             self.rest_data = self.rest_runAll()
             if float(self.rest_data['Control']['Battery_Power_Reserve']) == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
@@ -651,11 +706,23 @@ class Inverter():
         """
         url = self.rest_api + '/enableChargeSchedule'
         data = {"state": "enable" if enable else "disable"}
-        r = requests.post(url, json=data)
-        time.sleep(5)
-        r = requests.post(url, json=data)
-        self.base.log("Enable charge schedule {} - {} via REST returned {}".format(enable, data, r))
-        return r.status_code == 200
+
+        for retry in range(0, 5):
+            r = requests.post(url, json=data)
+            time.sleep(10)
+            self.rest_data = self.rest_runAll()
+            new_value = self.rest_data['Control']['Enable_Charge_Schedule']
+            if isinstance(new_value, str):
+                if new_value.lower() in ['enable', 'on', 'true']:
+                    new_value = True
+                else:
+                    new_value = False
+            if new_value == enable:
+                self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
+                return True
+
+        self.base.log("WARN: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data['Control']['Enable_Charge_Schedule']))
+        return False
 
     def rest_setChargeSlot1(self, start, finish):
         """
@@ -666,7 +733,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(5)
+            time.sleep(10)
             self.rest_data = self.rest_runAll()
             if self.rest_data['Timeslots']['Charge_start_time_slot_1'] == start and self.rest_data['Timeslots']['Charge_end_time_slot_1'] == finish:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -684,7 +751,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(5)
+            time.sleep(10)
             self.rest_data = self.rest_runAll()
             if self.rest_data['Timeslots']['Discharge_start_time_slot_1'] == start and self.rest_data['Timeslots']['Discharge_end_time_slot_1'] == finish:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -745,6 +812,7 @@ class PredBat(hass.Hass):
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and '.' in value:
+            ovalue = value
             if attribute:
                 value = self.get_state(entity_id = value, default=default, attribute=attribute)
             else:
@@ -2832,7 +2900,8 @@ class PredBat(hass.Hass):
             # self.listen_state(self.state_change, "input_number")            
 
             # And then every N minutes
-            self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
+            if not INVERTER_TEST:
+                self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
 
     def run_time_loop(self, cb_args):
         """
