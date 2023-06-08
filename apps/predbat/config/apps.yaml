@@ -176,7 +176,7 @@ pred_bat:
   # calculate_best_discharge: True
   calculate_discharge_all: False
   calculate_discharge_oldest: True
-  calculate_discharge_passes: 2
+  calculate_discharge_passes: 1
 
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
@@ -195,17 +195,23 @@ pred_bat:
   combine_charge_slots: True
   # Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
   # Default is enabled (True)
-  combine_discharge_slots: True
+  combine_discharge_slots: False
   # Allow mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
   combine_mixed_rates : False
   
   # Metric min improvement sets the minimum cost improvement that it's worth lowering the battery SOC % for
-  # If it's 0 then this is disabled. 
+  # If it's 0 then this is disabled.
+  #
   # A figure of around 5 (which is 5p) is a good one to use if enabled.
   # If you use pv_metric10_weight then you probably don't need to enable this as the 10% forecast does the same thing better 
+  # Do not use if you have multiple charge windows in a given period as it won't lead to good results
   # or you could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
   metric_min_improvement: -0.1
 
+  # Min improvement metric for discharge
+  # Do not use if you have multiple discharge windows in a given period as it won't lead to good results
+  metric_min_improvement_discharge: 0
+  
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
   
