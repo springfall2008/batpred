@@ -896,14 +896,24 @@ class PredBat(hass.Hass):
         """
         mdata = []
 
-        for page in range(1, 4):
-            r = requests.get(url + "?page={}".format(page))
+        pages = 0
+
+        while url and pages < 3:
+            if self.debug_enable:
+                self.log("Download {}".format(url))
+            r = requests.get(url)
             try:
                 data = r.json()       
             except requests.exceptions.JSONDecodeError:
                 self.log("WARN: Error downloading Octopus data from url {}".format(url))
                 return {}
-            mdata += data['results']
+            if 'results' in data:
+                mdata += data['results']
+            else:
+                self.log("WARN: Error downloading Octopus data from url {}".format(url))
+                return {}
+            url = data.get('next', None)
+            pages += 1
         pdata = self.minute_data(mdata, self.forecast_days + 1, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
         return pdata
 
@@ -1006,7 +1016,11 @@ class PredBat(hass.Hass):
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
             if to_key:
-                to_time = self.str2time(item[to_key])
+                to_value = item[to_key]
+                if not to_value:
+                    to_time = now + timedelta(minutes=24*60*self.forecast_days)
+                else:
+                    to_time = self.str2time(item[to_key])
             else:
                 if backwards:
                     to_time = prev_last_updated_time
