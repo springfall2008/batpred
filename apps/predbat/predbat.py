@@ -1510,6 +1510,7 @@ class PredBat(hass.Hass):
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
         minute = 0
+        rate_last = 0
         # Add 12 extra hours to make sure charging period will end
         while minute < (self.forecast_minutes + 24*60):
             if minute not in rates:
@@ -1517,8 +1518,10 @@ class PredBat(hass.Hass):
                 if minute_mod in rates:
                     rates[minute] = rates[minute_mod]
                 else:
-                    # Missing rate within 24 hours - fill with dummy high rate
-                    rates[minute] = self.metric_house
+                    # Missing rate within 24 hours - fill with dummy last rate
+                    rates[minute] = rate_last
+            else:
+                rate_last = rates[minute]
             minute += 1
         return rates
 
@@ -2282,7 +2285,7 @@ class PredBat(hass.Hass):
                 predict_minute = int((window_end - minutes_now) / 5) * 5
                 soc = predict_soc[predict_minute]
                 if soc > limit_soc:
-                    # Give it 5 minute margin
+                    # Give it 10 minute margin
                     limit_soc = max(limit_soc, soc - 10 * self.battery_rate_max)
                     discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                     if limit != discharge_limits_best[window_n]:
