@@ -2595,9 +2595,10 @@ class PredBat(hass.Hass):
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            self.car_charging_energy = self.minute_data(self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)[0], 
-                                                        self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
-            self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
+            history = self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)
+            if history:
+                self.car_charging_energy = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
+                self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
 
