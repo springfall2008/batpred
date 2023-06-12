@@ -23,6 +23,54 @@ SIMULATE = False         # Debug option, when set don't write to entities but si
 SIMULATE_LENGTH = 23*60  # How many periods to simulate, set to 0 for just current
 INVERTER_TEST = False     # Run inverter control self test
 
+CONFIG_ITEMS = [
+    {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'pv_scaling',                    'friendly_name' : 'PV Scaling',                     'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple'},
+    {'name' : 'load_scaling',                  'friendly_name' : 'Load Scaling',                   'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple'},
+    {'name' : 'battery_loss',                  'friendly_name' : 'Battery loss charge ',           'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging treshhold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
+    {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
+    {'name' : 'car_charging_loss',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'best_soc_margin',               'friendly_name' : 'Best SOC Margin',                'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
+    {'name' : 'best_soc_min',                  'friendly_name' : 'Best SOC Min',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
+    {'name' : 'best_soc_keep',                 'friendly_name' : 'Best SOC Keep',                  'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
+    {'name' : 'best_soc_step',                 'friendly_name' : 'Best SOC Step',                  'type' : 'input_number', 'min' : 0.1, 'max' : 1.0,  'step' : 0.05, 'unit' : 'kwh'},
+    {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p'},
+    {'name' : 'metric_min_improvement_discharge', 'friendly_name' : 'Metric Min Improvement Discharge',    'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p'},
+    {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
+    {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
+    {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : 'percent'},
+    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Treshold',              'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'fraction'},
+    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Treshold',             'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'fraction'},    
+    {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
+    {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
+    {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
+    {'name' : 'calculate_charge_oldest',       'friendly_name' : 'Calculate Charge Oldest',        'type' : 'switch'},
+    {'name' : 'calculate_charge_all',          'friendly_name' : 'Calculate Charge All',           'type' : 'switch'},
+    {'name' : 'calculate_charge_passes',       'friendly_name' : 'Calculate Charge Passes',        'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
+    {'name' : 'calculate_discharge_oldest',    'friendly_name' : 'Calculate Disharge Oldest',      'type' : 'switch'},
+    {'name' : 'calculate_discharge_all',       'friendly_name' : 'Calculate Disharge All',         'type' : 'switch'},
+    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Disharge Passes',      'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Disharge Passes',      'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
+    {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
+    {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
+    {'name' : 'set_charge_window',             'friendly_name' : 'Set Charge Window',              'type' : 'switch'},
+    {'name' : 'set_window_notify',             'friendly_name' : 'Set Window Notify',              'type' : 'switch'},
+    {'name' : 'set_discharge_window',          'friendly_name' : 'Set Discharge Window',           'type' : 'switch'},
+    {'name' : 'set_discharge_notify',          'friendly_name' : 'Set Discharge Notify',           'type' : 'switch'},
+    {'name' : 'set_soc_enable',                'friendly_name' : 'Set Charge Enable',              'type' : 'switch'},
+    {'name' : 'set_soc_notify',                'friendly_name' : 'Set Charge Notify',              'type' : 'switch'},
+    {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
+    {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
+    {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch'},
+    {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
+    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},    
+]
+
 class Inverter():
     def self_test(self):
         self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
@@ -85,11 +133,13 @@ class Inverter():
         # Get the current reserve setting or consider the minimum if we are overriding it
         if self.base.get_arg('set_reserve_enable', False):
             self.reserve_percent = max(self.base.get_arg('set_reserve_min', 4.0), 4.0)
+            self.base.log("Inverter {} Set reserve is enabled, using min reserve {}".format(self.id, self.reserve_percent))
         else:
             if self.rest_data:
                 self.reserve_percent = float(self.rest_data['Control']['Battery_Power_Reserve'])
             else:
                 self.reserve_percent = max(self.base.get_arg('reserve', default=0.0, index=self.id), 4.0)
+            self.base.log("Inverter {} Set reserve is disable, using current reserve {}".format(self.id, self.reserve_percent))
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate
@@ -823,8 +873,16 @@ class PredBat(hass.Hass):
         """
         Argument getter that can use HA state as well as fixed values
         """
-        value = self.args.get(arg, default)
-        value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
+        value = None
+
+        # Get From HA config
+        if self.args.get('user_config_enable', False):
+            value = self.get_ha_config(arg)
+
+        # Resolve locally if no HA config
+        if value is None:
+            value = self.args.get(arg, default)
+            value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
 
         if isinstance(default, float):
             # Convert to float?
@@ -851,6 +909,9 @@ class PredBat(hass.Hass):
             if not isinstance(value, list):
                 value = [value]
                 
+        # Set to user config
+        if self.args.get('user_config_enable', False):
+            self.expose_config(arg, value)
         return value
 
     def download_octopus_rates(self, url):
@@ -1324,12 +1385,12 @@ class PredBat(hass.Hass):
 
             # Simulate car charging
             car_load = 0.0
-            if self.octopus_slots and self.get_arg('octopus_intelligent_charging', True):
+            if self.octopus_slots and self.octopus_intelligent_charging:
                 # Octopus slot car charging?
                 car_load = self.in_octopus_slot(minute_absolute)
             elif self.in_low_rate_slot(minute_absolute, self.low_rates) >= 0 and (minute < 24*60):
                 # Planned low rate charging, don't consider beyond 24 hours due to wrapping of slots, and the car is likey unplugged before then
-                planned = self.get_arg('car_charging_planned', False)
+                planned = self.car_charging_planned
                 if isinstance(planned, str):
                     if planned.lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
                         planned = True
@@ -1559,15 +1620,15 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)):
-                    if (not self.get_arg('combine_mixed_rates', False)) and (rate_low_start >= 0) and (self.dp2(rate) != self.dp2(rate_low_rate)):
+                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (self.dp2(rate) != self.dp2(rate_low_rate)):
                         # Refuse mixed rates
                         rate_low_end = minute
                         break
-                    if find_high and (not self.get_arg('combine_discharge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.get_arg('discharge_slot_split', 15)):
+                    if find_high and (not self.combine_discharge_slots) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.discharge_slot_split):
                         # If combine is disabled, for export slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (not find_high) and (not self.get_arg('combine_charge_slots', False)) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.get_arg('charge_slot_split', 30)):
+                    if (not find_high) and (not self.combine_charge_slots) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.charge_slot_split):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
@@ -1668,7 +1729,7 @@ class PredBat(hass.Hass):
         Scan the rates and work out min/max and charging windows for export
         """
         rate_low_min_window = 5
-        rate_high_threshold = 1.2
+        rate_high_threshold = self.get_arg('rate_high_threshold', 1.2)
 
         rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
         self.log("Export rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
@@ -1969,6 +2030,8 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.prediction_started = False
+        self.update_pending = True
         self.midnight = None
         self.midnight_utc = None
         self.difference_minutes = 0
@@ -2209,7 +2272,7 @@ class PredBat(hass.Hass):
 
             # Loop in steps of 10% or just on/off for combined slots
             prev_discharge_limit = this_discharge_limit
-            if self.get_arg('combine_discharge_slots', False):
+            if self.combine_discharge_slots:
                 this_discharge_limit -= 10.0
             else:
                 this_discharge_limit = 0
@@ -2360,8 +2423,8 @@ class PredBat(hass.Hass):
         self.metric_house = self.get_arg('metric_house', 38.0)
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4.0)
-        self.metric_min_improvement = self.get_arg('metric_min_improvement', 0)
-        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0)
+        self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
+        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.0)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
         self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.0)
@@ -2379,6 +2442,13 @@ class PredBat(hass.Hass):
         self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
         self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
+        self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
+        self.car_charging_planned = self.get_arg('car_charging_planned', False)
+        self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
+        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
+        self.combine_charge_slots = self.get_arg('combine_charge_slots', False)
+        self.discharge_slot_split = self.get_arg('discharge_slot_split', 15)
+        self.charge_slot_split = self.get_arg('charge_slot_split', 30)
 
         # Car options
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
@@ -2448,7 +2518,7 @@ class PredBat(hass.Hass):
         self.car_charging_soc = (self.get_arg('car_charging_soc', 0.0) * self.car_charging_battery_size) / 100.0
 
         # Log vehicle info
-        if (self.args.get('car_charging_planned', False)) or ('octopus_intelligent_slot' in self.args):
+        if self.car_charging_planned or ('octopus_intelligent_slot' in self.args):
             self.log('Vehicle details: battery size {} rate {} limit {} current soc {}'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, self.car_charging_soc))
 
         # Fixed URL for rate import
@@ -2831,6 +2901,124 @@ class PredBat(hass.Hass):
         self.log("Completed run status {}".format(status))
         self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
+
+    def number_event(self, event, data, kwargs):
+        """
+        Catch HA Input number updates
+        """
+        entity = data['service_data']['entity_id']
+        value = data['service_data']['value']
+
+        for item in CONFIG_ITEMS:
+            if entity == item['entity']:
+                self.log("number_event: {} = {}".format(entity, value))
+                self.expose_config(item['name'], value)
+                self.update_pending = True
+                return
+
+    def switch_event(self, event, data, kwargs):
+        """
+        Catch HA Switch toggle
+        """
+        entity = data['service_data']['entity_id']
+        service = data['service']
+
+        for item in CONFIG_ITEMS:
+            if entity == item['entity']:
+                value = item['value']
+
+                if service == 'turn_on':
+                    value = True
+                elif service == 'turn_off':
+                    value = False
+                elif service == 'toggle' and isinstance(value, bool):
+                    value = not value
+                
+                self.log("switch_event: {} = {}".format(entity, value))
+                self.expose_config(item['name'], value)
+                self.update_pending = True
+                return
+
+    def get_ha_config(self, name):
+        """
+        Get Home assistant config
+        """
+        for item in CONFIG_ITEMS:
+            if item['name'] == name:
+                value = item.get('value')
+                return value
+        return None
+
+    def expose_config(self, name, value):
+        """
+        Share the config with HA
+        """
+        for item in CONFIG_ITEMS:
+            if item['name'] == name:
+                entity = item['entity']
+                if (item.get('value') is None) or (value != item['value']):
+                    item['value'] = value
+                    self.log("Updating HA config {} to {}".format(name, value))
+                    if item['type'] == 'input_number':
+                        self.set_state(entity_id = entity, state = value, attributes={'friendly_name' : item['friendly_name'], 'min' : item['min'], 'max' : item['max'], 'step' : item['step']})
+                    elif item['type'] == 'switch':
+                        self.set_state(entity_id = entity, state = ('on' if value else 'off'), attributes = {'friendly_name' : item['friendly_name']})
+
+    def load_user_config(self):
+        """
+        Load config from HA
+        """
+
+        # Register HA services
+        self.fire_event('service_registered', domain="input_number", service="set_value")
+        self.fire_event('service_registered', domain="input_number", service="increment")
+        self.fire_event('service_registered', domain="input_number", service="decrement")
+        self.fire_event('service_registered', domain="switch", service="turn_on")
+        self.fire_event('service_registered', domain="switch", service="turn_off")
+        self.fire_event('service_registered', domain="switch", service="toggle")        
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_on')
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_off')
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='toggle')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='set_value')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='increment')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='decrement')
+
+        # Find values and monitor config
+        for item in CONFIG_ITEMS:
+            name = item['name']
+            type = item['type']
+            entity = type + "." + "predbat_" + name
+            item['entity'] = entity
+            ha_value = None
+
+            # Get from current state?
+            if not self.args.get('user_config_reset', False):
+                ha_value = self.get_state(entity)
+
+                # Get from history?
+                if ha_value is None:
+                    history = self.get_history(entity_id = entity)
+                    if history:
+                        history = history[0]
+                        ha_value = history[-1]['state']
+
+            # Switch convert to text
+            if type == 'switch' and isinstance(ha_value, str):
+                if ha_value.lower() in ['on', 'true', 'enable']:
+                    ha_value = True
+                else:
+                    ha_value = False
+
+            if type == 'input_number' and ha_value is not None:
+                try:
+                    ha_value = float(ha_value)
+                except ValueError:
+                    ha_value = None
+
+            # Push back into current state
+            if ha_value is not None:
+                self.expose_config(item['name'], ha_value)
+
     def auto_config(self):
         """
         Auto configure
@@ -2882,6 +3070,8 @@ class PredBat(hass.Hass):
         self.log("Predbat: Startup")
         self.reset()
         self.auto_config()
+        if self.args.get('user_config_enable', False):
+            self.load_user_config()
         
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
@@ -2914,7 +3104,8 @@ class PredBat(hass.Hass):
             self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
             # First run is now
-            self.run_in(self.run_time_loop, 0)
+            # self.run_in(self.run_time_loop, 0)
+            self.update_pending = True
 
             # Monitor state for inputs
             # self.listen_state(self.state_change, "input_boolean")
@@ -2924,10 +3115,30 @@ class PredBat(hass.Hass):
             # And then every N minutes
             if not INVERTER_TEST:
                 self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
+                self.run_every(self.update_time_loop, now, 15, random_start=0, random_end=0)
+
+    def update_time_loop(self, cb_args):
+        """
+        Called every 15 seconds
+        """
+        if self.update_pending and not self.prediction_started:
+            self.prediction_started = True
+            try:
+                self.update_pred()
+            finally:
+                self.prediction_started = False
+            self.prediction_started = False
+            self.update_pending = False
 
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
         """
-        self.update_pred()
-    
+        if not self.prediction_started:
+            self.prediction_started = True
+            try:
+                self.update_pred()
+            finally:
+                self.prediction_started = False
+            self.prediction_started = False
+            self.update_pending = False
