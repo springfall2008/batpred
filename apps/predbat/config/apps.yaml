@@ -9,6 +9,10 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
   
+  # User config - when enabled create and use values in home assistant for certain config elements, and thus the values
+  # in this config become defaults only for many settings apart from entity names and energy rates
+  user_config_enable: True
+  
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
