@@ -2910,7 +2910,7 @@ class PredBat(hass.Hass):
         value = data['service_data']['value']
 
         for item in CONFIG_ITEMS:
-            if entity == item['entity']:
+            if ('entity' in item) and (entity == item['entity']):
                 self.log("number_event: {} = {}".format(entity, value))
                 self.expose_config(item['name'], value)
                 self.update_pending = True
@@ -2924,7 +2924,7 @@ class PredBat(hass.Hass):
         service = data['service']
 
         for item in CONFIG_ITEMS:
-            if entity == item['entity']:
+            if ('entity' in item) and (entity == item['entity']):
                 value = item['value']
 
                 if service == 'turn_on':
@@ -2955,8 +2955,8 @@ class PredBat(hass.Hass):
         """
         for item in CONFIG_ITEMS:
             if item['name'] == name:
-                entity = item['entity']
-                if (item.get('value') is None) or (value != item['value']):
+                entity = item.get('entity')
+                if entity and ((item.get('value') is None) or (value != item['value'])):
                     item['value'] = value
                     self.log("Updating HA config {} to {}".format(name, value))
                     if item['type'] == 'input_number':
@@ -2968,20 +2968,6 @@ class PredBat(hass.Hass):
         """
         Load config from HA
         """
-
-        # Register HA services
-        self.fire_event('service_registered', domain="input_number", service="set_value")
-        self.fire_event('service_registered', domain="input_number", service="increment")
-        self.fire_event('service_registered', domain="input_number", service="decrement")
-        self.fire_event('service_registered', domain="switch", service="turn_on")
-        self.fire_event('service_registered', domain="switch", service="turn_off")
-        self.fire_event('service_registered', domain="switch", service="toggle")        
-        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_on')
-        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_off')
-        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='toggle')
-        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='set_value')
-        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='increment')
-        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='decrement')
 
         # Find values and monitor config
         for item in CONFIG_ITEMS:
@@ -3018,6 +3004,20 @@ class PredBat(hass.Hass):
             # Push back into current state
             if ha_value is not None:
                 self.expose_config(item['name'], ha_value)
+                
+        # Register HA services
+        self.fire_event('service_registered', domain="input_number", service="set_value")
+        self.fire_event('service_registered', domain="input_number", service="increment")
+        self.fire_event('service_registered', domain="input_number", service="decrement")
+        self.fire_event('service_registered', domain="switch", service="turn_on")
+        self.fire_event('service_registered', domain="switch", service="turn_off")
+        self.fire_event('service_registered', domain="switch", service="toggle")        
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_on')
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_off')
+        self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='toggle')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='set_value')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='increment')
+        self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='decrement')
 
     def auto_config(self):
         """
