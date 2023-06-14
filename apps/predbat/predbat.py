@@ -2773,15 +2773,17 @@ class PredBat(hass.Hass):
                 # Filter out the windows we disabled
                 self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
 
-                # Work out new record end
-                end_record = self.record_length(self.charge_window_best)
-                record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
+                # Clipping windows
+                if self.discharge_window_best:
+                    # Work out new record end
+                    end_record = self.record_length(self.charge_window_best)
+                    record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
 
-                # Discharge slot clipping
-                self.clip_discharge_slots(self.minutes_now, self.predict_soc, self.discharge_window_best, self.discharge_limits_best, record_discharge_windows, PREDICT_STEP) 
+                    # Discharge slot clipping
+                    self.clip_discharge_slots(self.minutes_now, self.predict_soc, self.discharge_window_best, self.discharge_limits_best, record_discharge_windows, PREDICT_STEP) 
 
-                # Filter out the windows we disabled during clipping
-                self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
+                    # Filter out the windows we disabled during clipping
+                    self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
                 self.log("Discharge windows now {} {}".format(self.discharge_limits_best, self.discharge_window_best))
         
             # Final simulation of best, do 10% and normal scenario
