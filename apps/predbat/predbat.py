@@ -3144,12 +3144,12 @@ class PredBat(hass.Hass):
         """
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
+            self.update_pending = False
             try:
                 self.update_pred()
             finally:
                 self.prediction_started = False
             self.prediction_started = False
-            self.update_pending = False
 
     def run_time_loop(self, cb_args):
         """
@@ -3157,9 +3157,10 @@ class PredBat(hass.Hass):
         """
         if not self.prediction_started:
             self.prediction_started = True
+            self.update_pending = False
             try:
                 self.update_pred()
             finally:
                 self.prediction_started = False
             self.prediction_started = False
-            self.update_pending = False
+ 
