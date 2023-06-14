@@ -2137,6 +2137,7 @@ class PredBat(hass.Hass):
 
             # Stop when we won't change the soc anymore
             if try_soc >= prev_soc:
+                self.debug_enable = was_debug
                 break
 
             # Store try value into the window, either all or just this one
@@ -2217,6 +2218,7 @@ class PredBat(hass.Hass):
 
             # Exit when we repeat the same level again
             if this_discharge_limit == prev_discharge_limit:
+                self.debug_enable = was_debug
                 break
 
             was_debug = self.debug_enable
