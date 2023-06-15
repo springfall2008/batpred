@@ -56,15 +56,15 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - Multiple inverter support depends on running all inverters in lockstep, that is each will charge at the same time to the same %
 
-- When user_config_enable is set to True a set of input_number and switch configurations are created in Home Assistant which can be used to tune the predictions and charging/discharging
+- When **user_config_enable** is set to True a set of input_number and switch configurations are created in Home Assistant which can be used to tune the predictions and charging/discharging
 
 ## Install
 
 - You must have GivTCP installed and running first
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 - Install AppDaemon add-on https://github.com/hassio-addons/addon-appdaemon
-   - Set the time_zone correctly in appdaemon.yml (e.g. Europe/London)
-   - Add 'thread_duration_warning_threshold: 30' to the appdaemon.yml file in the appdaemon section
+   - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
+   - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
 
 ### HACS install
 
@@ -75,7 +75,7 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
-== After an update with HACS you may need to reboot AppDeamon as it sometimes reads the config wrongly during the update ==
+> After an update with HACS you may need to reboot AppDeamon as it sometimes reads the config wrongly during the update
 
 - Edit in Homeassistant config/appdaemon/apps/predbat/config/apps.yml to configure
 - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
@@ -91,7 +91,7 @@ The app runs every N minutes (default 5), it will automatically update its predi
 ## Solar forecast
 
 Predbat needs a solar forecast in order to predict battery levels.
-If you don't have solar then comment out the Solar forecast part of the config (pv_forecast_*)
+If you don't have solar then comment out the Solar forecast part of the config: **pv_forecast_* **
 
 ### Solcast
 
@@ -126,7 +126,7 @@ There are two ways to plan car charging slots
   - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly
   - Set **car_charging_plan_time** in the config or in HA to the time you want the car ready by
   - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
-  - Use an automation based on binary_sensor.predbat_car_charging_slot to control when your car charges
+  - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
 
 ## FAQ
 
@@ -139,10 +139,10 @@ There are two ways to plan car charging slots
     - Have you tuned Solcast to match your output accurately?
     - Have you tuned the **metric_min_improvement**, **best_soc_min** and **best_soc_keep settings**?
     - Do you have predicted car charging during the time period?
-    - You can also tune load_scaling and pv_scaling to adjust predictions up and down a bit
+    - You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
     - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
   - Why didn't the slot actually get configured?
-     - make sure set_charge_window and **set_soc_enable** is turned on
+     - make sure **set_charge_window** and **set_soc_enable** is turned on
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
   - The charge limit keeps increasing/decreasing in the charge window or is unstable
      - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
@@ -183,41 +183,41 @@ Data per inverter
 #### Home-assistant Inverter control
 
 Control per inverter (only used if REST isn't set):
-  - soc_kw - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
-  - soc_max - GivTCP Entity name for the maximum charge level for the battery
-  - reserve - GivTCP sensor name for the reserve setting in %
-  - inverter_mode - GivTCP inverter mode control
-  - charge_enable - GivTCP charge enable entity - says if the battery will be charged in the time window
-  - charge_limit - GivTCP Entity name for used to set the SOC target for the battery in percentage
-  - charge_start_time - GivTCP battery charge start time entity
-  - charge_end_time - GivTCP battery charge end time entity
-  - charge_rate - GivTCP battery charge rate entity in watts 
-  - discharge_rate - GivTCP battery discharge max rate entity in watts
-  - scheduled_charge_enable - GivTCP Scheduled charge enable config
-  - discharge_start_time - GivTCP scheduled discharge slot_1 start time
-  - discharge_end_time - GivTCP scheduled discharge slot_1 end time
+  - **soc_kw** - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
+  - **soc_max** - GivTCP Entity name for the maximum charge level for the battery
+  - **reserve** - GivTCP sensor name for the reserve setting in %
+  - **inverter_mode** - GivTCP inverter mode control
+  - **charge_enable** - GivTCP charge enable entity - says if the battery will be charged in the time window
+  - **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
+  - **charge_start_time** - GivTCP battery charge start time entity
+  - **charge_end_time** - GivTCP battery charge end time entity
+  - **charge_rate** - GivTCP battery charge rate entity in watts 
+  - **discharge_rate** - GivTCP battery discharge max rate entity in watts
+  - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
+  - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
+  - **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
 
 ### Solcast
 
 The following are entity names in Solcast, unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking:  
-  - pv_forecast_today - Entity name for solcast today's forecast
-  - pv_forecast_tomorrow - Entity name for solcast forecast for tomorrow
-  - pv_forecast_d3 - Entity name for solcast forecast for day 3
-  - pv_forecast_d4 - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
+  - **pv_forecast_today** - Entity name for solcast today's forecast
+  - **pv_forecast_tomorrow** - Entity name for solcast forecast for tomorrow
+  - **pv_forecast_d3** - Entity name for solcast forecast for day 3
+  - **pv_forecast_d4** - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
   
 ### Octopus energy
 
 The following are entity names in the Octopus Energy plugin and the Octopus Intelligent plugin.
 They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
-  - metric_octopus_import - Import rates from the Octopus plugin
-  - metric_octopus_export - Export rates from the Octopus plugin
-  - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
-  - octopus_intelligent_charge_rate - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots using this or the data reported by Octopus
-  - octopus_intelligent_charging - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
+  - **metric_octopus_import** - Import rates from the Octopus plugin
+  - **metric_octopus_export** - Export rates from the Octopus plugin
+  - **octopus_intelligent_slot** - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
+  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots using this or the data reported by Octopus
+  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
 
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
-  - rates_import_octopus_url
-  - rates_export_octopus_url
+  - **rates_import_octopus_url**
+  - **rates_export_octopus_url**
 
 ### Manual energy rates
 
@@ -236,36 +236,36 @@ Or manually set your rates in a 24-hour period using these:
 Or set assumed rates for the house, battery charging and export.
 You can't enable automatic charging windows with this option, it only works for a fixed charge time.
 
-  - metric_house - Set to the cost per Kwh of importing energy when you could have used the battery
-  - metric_battery - Set to the cost per Kwh of charging the battery
-  - metric_export - Set to the price per Kwh you get for exporting
+  - **metric_house** - Set to the cost per Kwh of importing energy when you could have used the battery
+  - **metric_battery** - Set to the cost per Kwh of charging the battery
+  - **metric_export** - Set to the price per Kwh you get for exporting
 
 ### Car charging filtering
 
 You might want to remove your electric car charging data from the historical load as to not bias the calculations, otherwise you will get high charge levels when the car was charged previously (e.g. last week)
 
-  - car_charging_hold - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
-  - car_charging_threshold - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
-  - car_charging_energy - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
+  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
+  - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
+  - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
 ### Planned car charging
 
 These features allow Predbat to know when you plan to charge your car. If you have Octopus Intelligent set up you won't need to change these as it's done automatically via their app and the Intelligent plugin.
 
-  - octopus_intelligent_charging - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
+  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
 
 Only needed if you don't use Intelligent:
-  - car_charging_planned - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
-  - car_charging_planned_response - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
-  - car_charging_rate - Set to the cars charging rate (normally 7.5 for 7.5kw). 
-  - car_charging_battery_size - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops. 
+  - **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
+  - **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
+  - **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw). 
+  - **car_charging_battery_size** - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops. 
 
-  - car_charging_plan_time - When using Batpred led planning set this to the time you want the car to be charged by
-  - car_charging_plan_smart - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
+  - **car_charging_plan_time** - When using Batpred led planning set this to the time you want the car to be charged by
+  - **car_charging_plan_smart** - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
   
 Connect to your cars sensors for accurate data:
-  - car_charging_limit - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
-  - car_charging_soc - The cars current % charge level, link to a suitable sensor. Default is 0%
+  - **car_charging_limit** - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
+  - **car_charging_soc** - The cars current % charge level, link to a suitable sensor. Default is 0%
 
 ### Customisation 
 
