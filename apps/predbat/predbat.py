@@ -1748,7 +1748,6 @@ class PredBat(hass.Hass):
                 new_slot['kwh'] = kwh
                 plan.append(new_slot)
 
-
         # Return sorted back in time order
         return self.sort_window_by_time(plan)
 
@@ -2670,6 +2669,9 @@ class PredBat(hass.Hass):
             # Use octopus slots for charging?
             if self.octopus_intelligent_charging:
                 self.car_charging_slots = self.load_octopus_slots(self.octopus_slots)
+        else:
+            # Disable octopus charging if we don't have the slot sensor
+            self.octopus_intelligent_charging = False
 
         # Work out car SOC
         self.car_charging_soc = (self.get_arg('car_charging_soc', 0.0) * self.car_charging_battery_size) / 100.0
