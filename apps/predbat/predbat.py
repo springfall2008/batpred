@@ -1767,13 +1767,14 @@ class PredBat(hass.Hass):
             slot_hours = slot_minutes / 60.0
 
             # The load expected is stored in chargeKwh for the period in use
-            kwh = float(slot.get('chargeKwh', self.car_charging_rate * slot_hours))
+            kwh = abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours)))
 
-            new_slot = {}
-            new_slot['start'] = start_minutes
-            new_slot['end'] = end_minutes
-            new_slot['kwh'] = kwh
-            new_slots.append(new_slot)
+            if end_minutes > self.minutes_now:
+                new_slot = {}
+                new_slot['start'] = start_minutes
+                new_slot['end'] = end_minutes
+                new_slot['kwh'] = kwh
+                new_slots.append(new_slot)
         return new_slots
 
     def in_car_slot(self, minute):
@@ -1929,7 +1930,6 @@ class PredBat(hass.Hass):
                 minute = rate_low_end
             else:
                 break
-        self.log("Found rates {}".format(found_rates))
         return found_rates
 
     def rate_scan(self, rates, octopus_slots):
