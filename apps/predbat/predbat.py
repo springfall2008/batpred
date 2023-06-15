@@ -22,6 +22,16 @@ SIMULATE = False         # Debug option, when set don't write to entities but si
 SIMULATE_LENGTH = 23*60  # How many periods to simulate, set to 0 for just current
 INVERTER_TEST = False     # Run inverter control self test
 
+"""
+Create an array of times
+"""
+OPTIONS_TIME = []
+BASE_TIME = datetime.strptime("00:00:00", '%H:%M:%S')
+for minute in range(0, 24*60, 5):
+    timeobj = BASE_TIME + timedelta(seconds=minute*60)
+    timestr = timeobj.strftime("%H:%M:%S")
+    OPTIONS_TIME.append(timestr)
+
 CONFIG_ITEMS = [
     {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'pv_scaling',                    'friendly_name' : 'PV Scaling',                     'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple'},
@@ -45,6 +55,7 @@ CONFIG_ITEMS = [
     {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Treshold',             'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'fraction'},    
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
+    {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
     {'name' : 'calculate_best',                'friendly_name' : 'Calculate Best',                 'type' : 'switch'},
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
     {'name' : 'calculate_charge_oldest',       'friendly_name' : 'Calculate Charge Oldest',        'type' : 'switch'},
@@ -67,7 +78,8 @@ CONFIG_ITEMS = [
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch'},
     {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},    
+    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
+    {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME}
 ]
 
 class Inverter():
@@ -1384,26 +1396,17 @@ class PredBat(hass.Hass):
 
             # Simulate car charging
             car_load = 0.0
-            if self.octopus_slots and self.octopus_intelligent_charging:
+            if self.car_charging_slots:
                 # Octopus slot car charging?
-                car_load = self.in_octopus_slot(minute_absolute)
-            elif self.in_low_rate_slot(minute_absolute, self.low_rates) >= 0 and (minute < 24*60):
-                # Planned low rate charging, don't consider beyond 24 hours due to wrapping of slots, and the car is likey unplugged before then
-                planned = self.car_charging_planned
-                if isinstance(planned, str):
-                    if planned.lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
-                        planned = True
-                    else:
-                        planned = False
-                if planned:
-                    car_load = self.car_charging_rate
+                car_load = self.in_car_slot(minute_absolute)
 
             # Car charging?
             if car_load > 0.0:
                 car_load_scale = car_load * step / 60.0
+                car_load_scale = car_load_scale * self.car_charging_loss
                 car_load_scale = max(min(car_load_scale, self.car_charging_limit - car_soc), 0)
-                car_soc += car_load_scale * self.car_charging_loss
-                load_yesterday += car_load_scale
+                car_soc += car_load_scale
+                load_yesterday += car_load_scale / self.car_charging_loss
 
             # Count load
             if record:
@@ -1683,44 +1686,111 @@ class PredBat(hass.Hass):
 
         return rates
 
-    def in_low_rate_slot(self, minute, low_rates):
+    def plan_car_charging(self, low_rates):
         """
-        Check if minute (absolute) falls within low rate slow, returns the slot or -1 otherwise
+        Plan when the car will charge, taking into account ready time and pricing
         """
-        window_n = 0
-        for window in low_rates:
-            if minute >= window['start'] and minute <= window['end']:
-                return window_n
-            window_n += 1
-        return -1
+        plan = []
+        car_soc = self.car_charging_soc
+        
+        if self.car_charging_plan_smart:
+            price_sorted = self.sort_window_by_price(low_rates)
+        else:
+            price_sorted = range(0, len(low_rates))
 
-    def in_octopus_slot(self, minute):
-        """
-        Is the given minute inside an Octopus slot
-        """
-        if self.octopus_slots:
-            for slot in self.octopus_slots:
-                if 'start_minutes' in slot:
-                    start_minutes = slot['start_minutes']
-                else:
-                    start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
-                    start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
-                    slot['start_minutes'] = start_minutes
+        ready_time = datetime.strptime(self.car_charging_plan_time, "%H:%M:%S")
+        ready_minutes = ready_time.hour * 60 + ready_time.minute
+        self.log("Ready time {} minutes {}".format(ready_time, ready_minutes))
 
-                if 'end_minutes' in slot:
-                    end_minutes = slot['end_minutes']
-                else:
-                    end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
-                    end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
-                    slot['end_minutes'] = end_minutes
+        # Ready minutes wrap?
+        if ready_minutes < self.minutes_now:
+            ready_minutes += 24*60
 
+        for window_n in price_sorted:
+            window = low_rates[window_n]
+            start = max(window['start'], self.minutes_now)
+            end = min(window['end'], ready_minutes)
+            length = 0
+            kwh = 0
+
+            if car_soc >= self.car_charging_limit:
+                break
+
+            if end <= start:
+                continue
+
+            length = end - start
+            hours = length / 60
+            kwh = self.car_charging_rate * hours
+
+            kwh_add = kwh * self.car_charging_loss
+            kwh_left = self.car_charging_limit - car_soc
+
+            # Clamp length to required amount (shorten the window)
+            if kwh_add > kwh_left:
+                percent = kwh_left / kwh_add
+                length = int((length * percent) / 5 + 2.5) * 5
+                end = start + length
+                hours = length / 60
+                kwh = self.car_charging_rate * hours
+                kwh_add = kwh * self.car_charging_loss
+
+            # Work out how much to add to the battery, include losses
+            kwh_add = max(min(kwh_add, self.car_charging_limit - car_soc), 0)
+            kwh = kwh_add / self.car_charging_loss
+
+            # Work out charging amounts
+            if kwh > 0:
+                car_soc += kwh_add
+                new_slot = {}
+                new_slot['start'] = start
+                new_slot['end'] = end
+                new_slot['kwh'] = kwh
+                plan.append(new_slot)
+
+
+        # Return sorted back in time order
+        return self.sort_window_by_time(plan)
+
+    def load_octopus_slots(self, octopus_slots):
+        """
+        Turn octopus slots into charging plan
+        """
+        new_slots = []
+
+        for slot in octopus_slots:
+            start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+            start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
+            end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
+            end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
+            slot_minutes = end_minutes - start_minutes
+            slot_hours = slot_minutes / 60.0
+
+            # The load expected is stored in chargeKwh for the period in use
+            kwh = float(slot.get('chargeKwh', self.car_charging_rate * slot_hours))
+
+            new_slot = {}
+            new_slot['start'] = start_minutes
+            new_slot['end'] = end_minutes
+            new_slot['kwh'] = kwh
+            new_slots.append(new_slot)
+        return new_slots
+
+    def in_car_slot(self, minute):
+        """
+        Is the given minute inside a car slot
+        """
+        if self.car_charging_slots:
+            for slot in self.car_charging_slots:
+                start_minutes = slot['start']
+                end_minutes = slot['end']
+                kwh = slot['kwh']
                 slot_minutes = end_minutes - start_minutes
                 slot_hours = slot_minutes / 60.0
 
                 # Return the load in that slot
                 if minute >= start_minutes and minute < end_minutes:
-                    # The load expected is stored in chargeKwh for the period or use the default set by the user if not which is hourly
-                    return abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours))) / slot_hours
+                    return abs(kwh / slot_hours)
         return 0
 
     def rate_scan_export(self, rates):
@@ -1743,6 +1813,33 @@ class PredBat(hass.Hass):
         # Find discharging windows
         self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_high_threshold, True)
         return rates
+
+    def publish_car_plan(self):
+        """
+        Publish the car charging plan
+        """
+        plan = []
+
+        if not self.car_charging_slots:
+            self.set_state("binary_sensor.predbat_car_charging_slot", state=False, attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+        else:
+            window = self.car_charging_slots[0]
+            if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
+                slot = True
+            else:
+                slot = False
+
+            for window in self.car_charging_slots:
+                start = self.time_abs_str(window['start'])
+                end = self.time_abs_str(window['end'])
+                kwh = self.dp2(window['kwh'])
+                show = {}
+                show['start'] = start
+                show['end'] = end
+                show['kwh'] = kwh
+                plan.append(show)
+
+            self.set_state("binary_sensor.predbat_car_charging_slot", state=slot, attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
         if self.high_export_rates:
@@ -2054,6 +2151,7 @@ class PredBat(hass.Hass):
         self.low_rates = []
         self.cost_today_sofar = 0
         self.octopus_slots = []
+        self.car_charging_slots = []
         self.reserve = 0
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
@@ -2286,6 +2384,20 @@ class PredBat(hass.Hass):
         """
         return window['key']
 
+    def window_sort_func_start(self, window):
+        """
+        Helper sort index function
+        """
+        return window['start']
+
+    def sort_window_by_time(self, windows):
+        """
+        Sort windows in start time order, return a new list of windows
+        """
+        window_sorted = windows[:]
+        window_sorted.sort(key=self.window_sort_func_start)
+        return window_sorted
+
     def sort_window_by_price(self, windows, reverse_time=False):
         """
         Sort the charge windows by highest price first, return a list of window IDs
@@ -2448,7 +2560,16 @@ class PredBat(hass.Hass):
         self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
         self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
-        self.car_charging_planned = self.get_arg('car_charging_planned', False)
+        self.car_charging_planned = self.get_arg('car_charging_planned', "no")
+        self.log("Car charging planned returns {}".format(self.car_charging_planned))
+        if isinstance(self.car_charging_planned , str):
+            if self.car_charging_planned .lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
+                self.car_charging_planned  = True
+            else:
+                self.car_charging_planned  = False
+        self.car_charging_plan_smart = self.get_arg('car_charging_plan_smart', False)
+        self.car_charging_plan_time = self.get_arg('car_charging_plan_time', "07:00:00")
+       
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
         self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
         self.combine_charge_slots = self.get_arg('combine_charge_slots', False)
@@ -2484,6 +2605,7 @@ class PredBat(hass.Hass):
         self.rate_slots = []
         self.low_rates = []
         self.octopus_slots = []
+        self.car_charging_slots = []
         self.cost_today_sofar = 0
 
         # Load previous load data
@@ -2532,18 +2654,24 @@ class PredBat(hass.Hass):
 
             # Extract vehicle preference if we can get it
             vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
-            if vehicle_pref:
+            if vehicle_pref and self.octopus_intelligent_charging:
                 octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
+                octopus_ready_time = vehicle_pref.get('weekdayTargetTime', None)
+                if not octopus_ready_time:
+                    octopus_ready_time = self.car_charging_plan_time
+                else:
+                    octopus_ready_time += ":00"
+                self.car_charging_plan_time = octopus_ready_time
                 octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size / 100.0)
                 self.log("Car charging limit {} and Octopus limit {} - select min - battery size {}".format(self.car_charging_limit, octopus_limit, self.car_charging_battery_size))
                 self.car_charging_limit = min(self.car_charging_limit, octopus_limit)
+            
+            # Use octopus slots for charging?
+            if self.octopus_intelligent_charging:
+                self.car_charging_slots = self.load_octopus_slots(self.octopus_slots)
 
         # Work out car SOC
         self.car_charging_soc = (self.get_arg('car_charging_soc', 0.0) * self.car_charging_battery_size) / 100.0
-
-        # Log vehicle info
-        if self.car_charging_planned or ('octopus_intelligent_slot' in self.args):
-            self.log('Vehicle details: battery size {} rate {} limit {} current soc {}'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, self.car_charging_soc))
 
         # Fixed URL for rate import
         if 'rates_import_octopus_url' in self.args:
@@ -2578,6 +2706,27 @@ class PredBat(hass.Hass):
             self.publish_rates(self.rate_export, True)
         else:
             self.log("No export rate data provided - using default metric")
+
+        # Log vehicle info
+        if self.car_charging_planned or ('octopus_intelligent_slot' in self.args):
+            self.log('Vehicle details: battery size {} rate {} limit {} current soc {}'.format(self.car_charging_battery_size, self.car_charging_rate, self.car_charging_limit, self.car_charging_soc))
+
+        # Work out car plan?
+        if self.car_charging_planned and not self.octopus_intelligent_charging:
+            self.log("Plan car charging from {} to {} with slots {} from soc {} to {} ready by {}".format(self.car_charging_soc, self.car_charging_limit, self.low_rates, self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time))
+            self.car_charging_slots = self.plan_car_charging(self.low_rates)
+        else:
+            if self.octopus_intelligent_charging:
+                self.log("Not planning car charging, Octopus intelligent is enabled, check it's scheduling first")
+            else:
+                self.log("Not planning car charging - car charging planned is False")
+
+        # Log the charging plan
+        if self.car_charging_slots:
+            self.log("Car charging plan is: {}".format(self.car_charging_slots))
+
+        # Publish the car plan
+        self.publish_car_plan()
 
         # Load import today data 
         if 'import_today' in self.args and self.rate_import:
@@ -2927,6 +3076,19 @@ class PredBat(hass.Hass):
         self.log("Completed run status {}".format(status))
         self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
+    def select_event(self, event, data, kwargs):
+        """
+        Catch HA Input select updates
+        """
+        value = data['service_data']['option']
+        entities = data['service_data']['entity_id']
+        for entity in entities:
+            for item in CONFIG_ITEMS:
+                if ('entity' in item) and (entity == item['entity']):
+                    self.log("select_event: {} = {}".format(entity, value))
+                    self.expose_config(item['name'], value)
+                    self.update_pending = True
+                    return
 
     def number_event(self, event, data, kwargs):
         """
@@ -2989,6 +3151,8 @@ class PredBat(hass.Hass):
                         self.set_state(entity_id = entity, state = value, attributes={'friendly_name' : item['friendly_name'], 'min' : item['min'], 'max' : item['max'], 'step' : item['step']})
                     elif item['type'] == 'switch':
                         self.set_state(entity_id = entity, state = ('on' if value else 'off'), attributes = {'friendly_name' : item['friendly_name']})
+                    elif item['type'] == 'select':
+                        self.set_state(entity_id = entity, state = value, attributes = {'friendly_name' : item['friendly_name'], 'options' : item['options']})
 
     def load_user_config(self):
         """
@@ -3038,12 +3202,22 @@ class PredBat(hass.Hass):
         self.fire_event('service_registered', domain="switch", service="turn_on")
         self.fire_event('service_registered', domain="switch", service="turn_off")
         self.fire_event('service_registered', domain="switch", service="toggle")        
+        self.fire_event('service_registered', domain="select", service="select_option")
+        self.fire_event('service_registered', domain="select", service="select_first")
+        self.fire_event('service_registered', domain="select", service="select_last")
+        self.fire_event('service_registered', domain="select", service="select_next")
+        self.fire_event('service_registered', domain="select", service="select_previous")
         self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_on')
         self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='turn_off')
         self.listen_select_handle = self.listen_event(self.switch_event, event='call_service', domain="switch", service='toggle')
         self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='set_value')
         self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='increment')
         self.listen_select_handle = self.listen_event(self.number_event, event='call_service', domain="input_number", service='decrement')
+        self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_option')
+        self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_first')
+        self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_last')
+        self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_next')
+        self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_previous')
 
     def auto_config(self):
         """
