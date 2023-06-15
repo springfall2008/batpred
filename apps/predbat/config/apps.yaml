@@ -225,7 +225,13 @@ pred_bat:
   # car_charging_loss gives the amount of energy lost when charging the car (load in the home vs energy added to the battery) 
   # 0.08 is 8%
   car_charging_loss: 0.08
-
+  
+  # Car charging planning - these are used if Octopus intelligent isn't enabled and car_charging_planned is connected correctly
+  # car_charging_plan_time is the time that charging should be ready for.
+  # car_charging_plan_smart when enabled the cheapest slots are used first regardless of order, when false it's just the next low rate slot
+  car_charging_plan_time: "07:00:00"
+  car_charging_plan_smart: False
+  
   # Used to enable/disable octopus intelligent charging feature, you must have set octopus_intelligent_slot (above) to enable this
   octopus_intelligent_charging: True
 
