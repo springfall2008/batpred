@@ -141,6 +141,7 @@ Basic configuration items
   - user_config_enable - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
   - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
   - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
+  - max_windows - Maximum number of charge and discharge windows, the default is 24.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes).
   
 ### Inverter information
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
