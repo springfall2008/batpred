@@ -15,6 +15,7 @@ For support please raise a Github ticket or use the GivTCP Facebook page
     + [Solcast](#solcast)
   * [Energy rates](#energy-rates)
     + [Octopus Energy Plugin](#octopus-energy-plugin)
+    + [Car charging planning](#car-charging-planning)
     + [Rate bands](#rate-bands)
     + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
   * [FAQ](#faq)
@@ -111,6 +112,22 @@ If you don't have solar then comment out the Solar forecast part of the config (
 - If you are on Intelligent and want to include charging slots outside the normal period or account in your predictions for your car charging then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). 
 - Batpred may decide to charge in these slots as well.
 
+### Car charging planning
+
+There are two ways to plan car charging slots
+- Enable Octopus Intelligent plugin - in which case Predbat will use the slots allocated by Intelligent in battery prediction
+  - Ensure octopus_intelligent_slot points to the Intelligent plugin
+  - Set octopus_intelligent_charging to True
+  - Information about the cars battery size will also be extracted from the Intelligent plugin
+  - You will need to set the cars current soc sensor (car_charging_soc) correctly to have accurate results
+  - If you set car_charging_limit then Batpred can also know if the cars limit is set lower than Intelligent 
+  - Let the intelligent app control when your car charges
+- Predbat led charging - Here Predbat plans the charging based on the upcoming low rate slots
+  - Ensure car_charging_limit, car_charging_soc and car_charging_planned are set correctly
+  - Set car_charging_plan_time in the config or in HA to the time you want the car ready by
+  - Enable car_charging_plan_smart if you want to use the cheapest slots only
+  - Use an automation based on binary_sensor.predbat_car_charging_slot to control when your car charges
+
 ## FAQ
 
   - I've installed Batbred but I don't see the correct entities:
@@ -196,6 +213,7 @@ They are set to a regular expression and auto-discovered but you can comment out
   - metric_octopus_export - Export rates from the Octopus plugin
   - octopus_intelligent_slot - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
   - octopus_intelligent_charge_rate - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots using this or the data reported by Octopus
+  - octopus_intelligent_charging - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
 
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
   - rates_import_octopus_url
@@ -234,11 +252,18 @@ You might want to remove your electric car charging data from the historical loa
 
 These features allow Predbat to know when you plan to charge your car. If you have Octopus Intelligent set up you won't need to change these as it's done automatically via their app and the Intelligent plugin.
 
+  - octopus_intelligent_charging - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
+
+Only needed if you don't use Intelligent:
   - car_charging_planned - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
   - car_charging_planned_response - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
-  - car_charging_rate - Set to the rate it's assumed the car charges at in low rate slots
+  - car_charging_rate - Set to the cars charging rate (normally 7.5 for 7.5kw). 
+  - car_charging_battery_size - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops. 
 
-  - car_charging_battery_size - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops.
+  - car_charging_plan_time - When using Batpred led planning set this to the time you want the car to be charged by
+  - car_charging_plan_smart - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
+  
+Connect to your cars sensors for accurate data:
   - car_charging_limit - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
   - car_charging_soc - The cars current % charge level, link to a suitable sensor. Default is 0%
 
