@@ -55,6 +55,8 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - Multiple inverter support depends on running all inverters in lockstep, that is each will charge at the same time to the same %
 
+- When user_config_enable is set to True a set of input_number and switch configurations are created in Home Assistant which can be used to tune the predictions and charging/discharging
+
 ## Install
 
 - You must have GivTCP installed and running first
@@ -130,6 +132,16 @@ If you don't have solar then comment out the Solar forecast part of the config (
 
 ## config.yml - details:
 
+### Basics
+
+Basic configuration items
+  - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
+  - notify_devices - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
+  - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
+  - user_config_enable - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
+  - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
+  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
+  
 ### Inverter information
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
   - num_inverters - If you increase this above 1 you must provide multiple of each of these entities
@@ -229,14 +241,13 @@ These features allow Predbat to know when you plan to charge your car. If you ha
   - car_charging_limit - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
   - car_charging_soc - The cars current % charge level, link to a suitable sensor. Default is 0%
 
-### Customisation
+### Customisation 
 
-These are configuration items that you can modify to fit your needs:
-  - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
-  - battery_loss - The percent of energy lost when charing the battery, default is 0.05 (5%)
+These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly if user_config_enable is set to True
+
+  - battery_loss - The percent of energy lost when charging the battery, default is 0.05 (5%)
+  - battery_loss_discharge - The percent of energy lost when discharging the battery, default is 0.05 (5%)
   - battery_scaling - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use predbat.soc_kw_h0 as your current status rather than the GivTCP entity so everything lines up
-  - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
-  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
   - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
   - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
   - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
@@ -265,9 +276,8 @@ These are configuration items that you can modify to fit your needs:
   - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
   - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
   
-  - rate_low_threshold - Sets the threshold for price per Kwh below average price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window. Only works with Octopus price data (see metric_octopus_import)
- 
- ### Controlling the battery charging/discharging
+  - rate_low_threshold - Sets the threshold for price per Kwh below average import price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window.
+  - rate_high_threshold - Sets the threshold for price per Kwh above average export price where a discharge window is identified. Default of 1.2 means 20% above the average.
  
   - set_charge_window - When true automatically configure the next charge window in GivTCP, charge windows can also be disabled by Predbat when this is enabled.
   - set_window_minutes - Number of minutes before charging/discharging the window should be configured in GivTCP (default 30 - recommended)
@@ -284,10 +294,6 @@ These are configuration items that you can modify to fit your needs:
   - set_reserve_notify - When true notification will be sent about reserve % changes
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
   
-  - notify_devices - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
-
-### Other config
-  - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - debug_enable - option to print lots of debug messages
 
 ## Output data
