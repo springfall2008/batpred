@@ -168,6 +168,10 @@ pred_bat:
   # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
   # tariffs like Agile
   forecast_plan_hours: 24
+
+  # Maximum number of charge and discharge windows
+  # Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes)
+  max_windows: 24
   
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices: 
