@@ -1612,11 +1612,11 @@ class PredBat(hass.Hass):
         rate_low_rate = 0
         rate_low_count = 0
 
-        stop_at = self.forecast_minutes + 12*60
+        stop_at = self.forecast_minutes + self.minutes_now + 12*60
         # Scan for lower rate start and end
         while minute < stop_at:
             # Don't allow starts beyond the forecast window
-            if minute >= self.forecast_minutes and rate_low_start < 0:
+            if minute >= (self.forecast_minutes + self.minutes_now) and (rate_low_start < 0):
                 break
 
             if minute in rates:
@@ -1929,6 +1929,7 @@ class PredBat(hass.Hass):
                 minute = rate_low_end
             else:
                 break
+        self.log("Found rates {}".format(found_rates))
         return found_rates
 
     def rate_scan(self, rates, octopus_slots):
