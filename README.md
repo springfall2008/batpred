@@ -116,16 +116,16 @@ If you don't have solar then comment out the Solar forecast part of the config (
 
 There are two ways to plan car charging slots
 - Enable Octopus Intelligent plugin - in which case Predbat will use the slots allocated by Intelligent in battery prediction
-  - Ensure octopus_intelligent_slot points to the Intelligent plugin
-  - Set octopus_intelligent_charging to True
+  - Ensure **octopus_intelligent_slot** points to the Intelligent plugin
+  - Set **octopus_intelligent_charging** to True
   - Information about the cars battery size will also be extracted from the Intelligent plugin
-  - You will need to set the cars current soc sensor (car_charging_soc) correctly to have accurate results
-  - If you set car_charging_limit then Batpred can also know if the cars limit is set lower than Intelligent 
+  - You will need to set the cars current soc sensor, **car_charging_soc** correctly to have accurate results
+  - If you set **car_charging_limit** then Batpred can also know if the cars limit is set lower than Intelligent 
   - Let the intelligent app control when your car charges
 - Predbat led charging - Here Predbat plans the charging based on the upcoming low rate slots
-  - Ensure car_charging_limit, car_charging_soc and car_charging_planned are set correctly
-  - Set car_charging_plan_time in the config or in HA to the time you want the car ready by
-  - Enable car_charging_plan_smart if you want to use the cheapest slots only
+  - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly
+  - Set **car_charging_plan_time** in the config or in HA to the time you want the car ready by
+  - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
   - Use an automation based on binary_sensor.predbat_car_charging_slot to control when your car charges
 
 ## FAQ
@@ -137,12 +137,12 @@ There are two ways to plan car charging slots
     - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
     - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm. If you do something like have export>import then Batpred will try to export as much as possible.
     - Have you tuned Solcast to match your output accurately?
-    - Have you tuned the metric_min_improvement, best_soc_min and best_soc_keep settings?
+    - Have you tuned the **metric_min_improvement**, **best_soc_min** and **best_soc_keep settings**?
     - Do you have predicted car charging during the time period?
     - You can also tune load_scaling and pv_scaling to adjust predictions up and down a bit
     - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
   - Why didn't the slot actually get configured?
-     - make sure set_charge_window and set_soc_enable is turned out
+     - make sure set_charge_window and **set_soc_enable** is turned on
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
   - The charge limit keeps increasing/decreasing in the charge window or is unstable
      - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
@@ -152,33 +152,33 @@ There are two ways to plan car charging slots
 ### Basics
 
 Basic configuration items
-  - timezone - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
-  - notify_devices - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
-  - run_every - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
-  - user_config_enable - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
-  - days_previous - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
-  - forecast_hours - the number of hours to forecast ahead, 48 is the suggested amount.
-  - max_windows - Maximum number of charge and discharge windows, the default is 24.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes).
+  - **timezone** - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
+  - **notify_devices** - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
+  - **run_every** - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
+  - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
+  - **days_previous** - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
+  - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
+  - **max_windows** - Maximum number of charge and discharge windows, the default is 24.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes).
   
 ### Inverter information
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
-  - num_inverters - If you increase this above 1 you must provide multiple of each of these entities
-  - geserial - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
+  - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
+  - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
 Data per inverter
 
 ### Historical load
-  - load_today - GivTCP Entity name for the house load in kwh today (must be incrementing)
+  - **load_today** - GivTCP Entity name for the house load in kwh today (must be incrementing)
 
 ### Import and Export data 
-  - import_today - GivTCP Imported energy today in Kwh (incrementing)
-  - export_today - GivTCP Exported energy today in Kwh (incrementing) 
+  - **import_today** - GivTCP Imported energy today in Kwh (incrementing)
+  - **export_today** - GivTCP Exported energy today in Kwh (incrementing) 
 
 ### Inverter control
 
-  - inverter_limit - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 
 #### REST Interface inverter control
-  - givtcp_rest - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
+  - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
 
 #### Home-assistant Inverter control
 
