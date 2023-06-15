@@ -16,7 +16,6 @@ import requests
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-MAX_CHARGE_LIMITS = 24
 PREDICT_STEP = 5
 
 SIMULATE = False         # Debug option, when set don't write to entities but simulate each 30 min period
@@ -1820,7 +1819,7 @@ class PredBat(hass.Hass):
         minute = 0
         found_rates = []
 
-        while len(found_rates) < MAX_CHARGE_LIMITS:
+        while len(found_rates) < self.max_windows:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
             window = {}
             window['start'] = rate_low_start
@@ -2405,6 +2404,8 @@ class PredBat(hass.Hass):
         self.log("--------------- PredBat - update at: " + str(now_utc))
 
         self.debug_enable = self.get_arg('debug_enable', False)
+        self.max_windows = self.get_arg('max_windows', 24)
+
         self.log("Debug enable is {}".format(self.debug_enable))
 
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
