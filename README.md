@@ -15,9 +15,9 @@ For support please raise a Github ticket or use the GivTCP Facebook page
     + [Solcast](#solcast)
   * [Energy rates](#energy-rates)
     + [Octopus Energy Plugin](#octopus-energy-plugin)
-    + [Car charging planning](#car-charging-planning)
     + [Rate bands](#rate-bands)
     + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
+  * [Car charging planning](#car-charging-planning)
   * [FAQ](#faq)
   * [config.yml - details:](#configyml---details-)
     + [Inverter information](#inverter-information)
@@ -112,7 +112,7 @@ If you don't have solar then comment out the Solar forecast part of the config (
 - If you are on Intelligent and want to include charging slots outside the normal period or account in your predictions for your car charging then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). 
 - Batpred may decide to charge in these slots as well.
 
-### Car charging planning
+## Car charging planning
 
 There are two ways to plan car charging slots
 - Enable Octopus Intelligent plugin - in which case Predbat will use the slots allocated by Intelligent in battery prediction
