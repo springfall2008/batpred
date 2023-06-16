@@ -1821,7 +1821,7 @@ class PredBat(hass.Hass):
         plan = []
 
         if not self.car_charging_slots:
-            self.set_state("binary_sensor.predbat_car_charging_slot", state=False, attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor.predbat_car_charging_slot", state='off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         else:
             window = self.car_charging_slots[0]
             if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
@@ -1839,7 +1839,7 @@ class PredBat(hass.Hass):
                 show['kwh'] = kwh
                 plan.append(show)
 
-            self.set_state("binary_sensor.predbat_car_charging_slot", state=slot, attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor.predbat_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
         if self.high_export_rates:
