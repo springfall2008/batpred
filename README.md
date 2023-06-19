@@ -148,6 +148,8 @@ There are two ways to plan car charging slots
   - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
   - The charge limit keeps increasing/decreasing in the charge window or is unstable
      - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
+  - I changed a config item but it made no difference?
+     - If **user_config_enable** is True then many config items are now inside Home Assistant, in which case change it there instead.
 
 ## config.yml - details:
 
