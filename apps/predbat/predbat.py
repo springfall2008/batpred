@@ -2266,6 +2266,16 @@ class PredBat(hass.Hass):
                 metric += metric_diff
                 metric = self.dp2(metric)
 
+            # Metric adjustment based on current charge limit, try to avoid
+            # constant changes by weighting the base setting a little
+            if window_n == 0:
+                if try_soc == self.reserve:
+                    try_percent = 0
+                else:
+                    try_percent = try_soc / self.soc_max * 100.0
+                if int(self.current_charge_limit) == int(try_percent):
+                    metric -= 0.1
+
             self.debug_enable = was_debug
             if self.debug_enable:
                 self.log("Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {}".format
