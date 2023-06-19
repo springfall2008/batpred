@@ -2439,7 +2439,11 @@ class PredBat(hass.Hass):
 
         for window_n in range(0, max_slots):
             # Only keep slots > than reserve, or keep the last one so we don't have zero slots
-            if charge_limit_best[window_n] > self.dp2(reserve):
+            # Also keep a slot if we are already inside it
+            window = charge_window_best[window_n]
+            start = window['start']
+            end = window['end']
+            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end):
                 new_limit_best.append(charge_limit_best[window_n])
                 new_window_best.append(charge_window_best[window_n])
         return new_limit_best, new_window_best 
