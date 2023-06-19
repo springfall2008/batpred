@@ -6,6 +6,8 @@ This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 For support please raise a Github ticket or use the GivTCP Facebook page
 
+** Please note from release v5.0 onwards many configuration options are now inside Home Assistant (if **user_config_enable** is set to True), for these options changing the apps.yml will have no effect once installed ** 
+
 - [predbat](#predbat)
   * [Operation](#operation)
   * [Install](#install)
@@ -269,7 +271,7 @@ Connect to your cars sensors for accurate data:
 
 ### Customisation 
 
-These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly if user_config_enable is set to True
+These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly if **user_config_enable** is set to True. Once the user config is enabled then changing the items in apps.yml will have no effect.
 
   - battery_loss - The percent of energy lost when charging the battery, default is 0.05 (5%)
   - battery_loss_discharge - The percent of energy lost when discharging the battery, default is 0.05 (5%)
