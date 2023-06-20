@@ -98,7 +98,26 @@ If you don't have solar then comment out the Solar forecast part of the config: 
 ### Solcast
 
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
-- Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit) in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and just before your nightly charge slot). 
+ 
+- Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit) in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and just before your nightly charge slot).
+
+- Example Solcast update script:
+
+    alias: Solcast update
+    description: ""
+    trigger:
+      - platform: time
+        at: "23:00:00"
+      - platform: time
+        at: "12:00:00"
+      - platform: time
+        at: "04:00:00"
+    condition: []
+    action:
+      - service: solcast_solar.update_forecasts
+        data: {}
+    mode: single
+
 
 ## Energy rates
 
