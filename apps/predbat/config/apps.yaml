@@ -251,11 +251,12 @@ pred_bat:
   # calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   # calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
   # calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
-
-  # calculate_best_discharge: True
+  # calculate_discharge_first:  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to False
+  calculate_best_discharge: True
   calculate_discharge_all: False
   calculate_discharge_oldest: True
   calculate_discharge_passes: 1
+  calculate_discharge_first: False
 
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
@@ -307,6 +308,9 @@ pred_bat:
 
   # Threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
   rate_high_threshold: 1.2
+  
+  # rate_low_match_export - When enabled consider import rates that are lower than the highest export rate (minus any battery losses)
+  rate_low_match_export: False
   
   # When enabled the next charge window will be automatically configured based on the incoming rates
   # Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
