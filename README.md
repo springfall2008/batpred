@@ -385,12 +385,13 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.rates_export - The current energy export rates in P (also be be charted)
   - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
   - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
-  
+
+
 Example data out:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
 
-## Creating the charts
+## Creating the charts
 
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
