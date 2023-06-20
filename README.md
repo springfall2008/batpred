@@ -268,7 +268,7 @@ You can't enable automatic charging windows with this option, it only works for 
 
 You might want to remove your electric car charging data from the historical load as to not bias the calculations, otherwise you will get high charge levels when the car was charged previously (e.g. last week)
 
-  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with car_charging_threshold)
+  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
   - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
@@ -311,6 +311,7 @@ These are configuration items that you can modify to fit your needs, you can con
   - calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
   - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
+  - calculate_discharge_first:  When True give priority to profits from discharging ahead of charging. Default is False.
 
   - metric_min_improvement           - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight or have multiple slots
   - metric_min_improvement_discharge - Set a threshold for increasing discharge level. Set to 0 if you have multiple discharge slots
@@ -328,6 +329,7 @@ These are configuration items that you can modify to fit your needs, you can con
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average import price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window.
   - rate_high_threshold - Sets the threshold for price per Kwh above average export price where a discharge window is identified. Default of 1.2 means 20% above the average.
+  - rate_low_match_export - When True consider imports that could be profitable for exports even above the low rate threshold
  
   - set_charge_window - When true automatically configure the next charge window in GivTCP, charge windows can also be disabled by Predbat when this is enabled.
   - set_window_minutes - Number of minutes before charging/discharging the window should be configured in GivTCP (default 30 - recommended)
