@@ -62,9 +62,10 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_charge_all',          'friendly_name' : 'Calculate Charge All',           'type' : 'switch'},
     {'name' : 'calculate_charge_passes',       'friendly_name' : 'Calculate Charge Passes',        'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
     {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
-    {'name' : 'calculate_discharge_oldest',    'friendly_name' : 'Calculate Disharge Oldest',      'type' : 'switch'},
-    {'name' : 'calculate_discharge_all',       'friendly_name' : 'Calculate Disharge All',         'type' : 'switch'},
-    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Disharge Passes',      'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'calculate_discharge_oldest',    'friendly_name' : 'Calculate Discharge Oldest',     'type' : 'switch'},
+    {'name' : 'calculate_discharge_all',       'friendly_name' : 'Calculate Discharge All',        'type' : 'switch'},
+    {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
+    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Discharge Passes',     'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -79,7 +80,8 @@ CONFIG_ITEMS = [
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch'},
     {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
     {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME}
+    {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME},
+    {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
 ]
 
 class Inverter():
@@ -1948,6 +1950,9 @@ class PredBat(hass.Hass):
         self.rate_max_minute = rate_max_minute
         self.rate_average = rate_average
         self.rate_threshold = rate_average * rate_low_threshold
+        if self.rate_low_match_export:
+            # When enabled the low rate could be anything up-to the export rate (less battery losses)
+            self.rate_threshold = max(self.rate_threshold, self.rate_export_max * self.battery_loss * self.battery_loss_discharge)
 
         # Add in any planned octopus slots
         if octopus_slots:
@@ -1962,7 +1967,7 @@ class PredBat(hass.Hass):
                     rates[minute] = self.rate_min
 
         # Find charging window
-        self.low_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_low_threshold, False)
+        self.low_rates = self.rate_scan_window(rates, rate_low_min_window, self.rate_threshold, False)
         return rates
 
     def publish_rates_import(self):
@@ -2515,6 +2520,81 @@ class PredBat(hass.Hass):
                     new_enable.append(discharge_limits_best[window_n])
 
         return new_enable, new_best
+    
+    def optimise_discharge_windows(self, end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10):
+        """
+        Optimize the discharge windows
+        """
+        # Try different discharge options
+        if self.discharge_window_best and self.calculate_best_discharge:
+            record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
+
+            # Set all to off
+            self.discharge_limits_best = [100.0 for n in range(0, len(self.discharge_window_best))]
+
+            # First do rough optimisation of all windows
+            if self.calculate_discharge_all or record_discharge_windows==1:
+                
+                self.log("Optimise all discharge windows n={}".format(record_discharge_windows))
+                best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_discharge_windows, end_record = end_record)
+
+                self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
+                self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+
+            if record_discharge_windows > 1:
+                for discharge_pass in range(0, self.calculate_discharge_passes):
+                    # Optimise in price order, most expensive first try to increase each one, only required for more than 1 window
+                    self.log("Optimise discharge pass {}".format(discharge_pass))
+                    price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
+                    for window_n in price_sorted:
+                        best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
+
+                        self.discharge_limits_best[window_n] = best_discharge
+                        if self.debug_enable or 1:
+                            self.log("Best discharge limit window {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+
+
+    def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10):
+        """
+        Reset the charge windows to max
+        """
+        if self.charge_window_best and self.calculate_best_charge:
+            # Set all to max
+            self.charge_limit_best = [self.soc_max for n in range(0, len(self.charge_limit_best))]
+
+    def optimise_charge_windows(self, end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10):
+        """
+        Optimise the charge windows
+        """
+        if self.charge_window_best and self.calculate_best_charge:
+            record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+            self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
+            # Set all to min
+            self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
+
+            if self.calculate_charge_all or record_charge_windows==1:
+                # First do rough optimisation of all windows
+                self.log("Optimise all charge windows n={}".format(record_charge_windows))
+                best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_charge_windows, end_record = end_record)
+                if record_charge_windows > 1:
+                    best_soc = min(best_soc + self.best_soc_pass_margin, self.soc_max)
+
+                # Set all to optimisation
+                self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
+                self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+
+            if record_charge_windows > 1:
+                for charge_pass in range(0, self.calculate_charge_passes):
+                    self.log("Optimise charge pass {}".format(charge_pass))
+                    # Optimise in price order, most expensive first try to reduce each one, only required for more than 1 window
+                    price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows], reverse_time=self.calculate_charge_oldest)
+                    for window_n in price_sorted:
+                        best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
+
+                        self.charge_limit_best[window_n] = best_soc
+                        if self.debug_enable or 1:
+                            self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+
 
     def update_pred(self):
         """
@@ -2562,6 +2642,7 @@ class PredBat(hass.Hass):
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
         self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
         self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.2)
+        self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
         self.best_soc_step = self.get_arg('best_soc_step', 0.5)
 
         # Battery charging options
@@ -2608,6 +2689,7 @@ class PredBat(hass.Hass):
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', self.set_discharge_window)
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
+        self.calculate_discharge_first = self.get_arg('calculate_discharge_first', False)
 
         # Car options
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
@@ -2695,14 +2777,6 @@ class PredBat(hass.Hass):
             self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
 
-        # Replicate and scan rates
-        if self.rate_import:
-            self.rate_import = self.rate_replicate(self.rate_import)
-            self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
-            self.publish_rates(self.rate_import, False)
-        else:
-            self.log("No import rate data provided - using default metric")
-
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
             data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
@@ -2716,13 +2790,21 @@ class PredBat(hass.Hass):
             self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
 
-        # Replicate rates for export
+        # Replicate and scan export rates
         if self.rate_export:
             self.rate_export = self.rate_replicate(self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export)
             self.publish_rates(self.rate_export, True)
         else:
             self.log("No export rate data provided - using default metric")
+
+        # Replicate and scan import rates
+        if self.rate_import:
+            self.rate_import = self.rate_replicate(self.rate_import)
+            self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
+            self.publish_rates(self.rate_import, False)
+        else:
+            self.log("No import rate data provided - using default metric")
 
         # Log vehicle info
         if self.car_charging_planned or ('octopus_intelligent_slot' in self.args):
@@ -2867,69 +2949,16 @@ class PredBat(hass.Hass):
         metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes, pv_forecast_minute, save='base', end_record=end_record)
 
         # Try different battery SOCs to get the best result
-        if self.calculate_best and self.charge_window_best:
-            record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
-            self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
-
-            # Calculate the best charge windows
-            if self.calculate_best_charge:
-                # Set all to min
-                self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
-
-                if self.calculate_charge_all or record_charge_windows==1:
-                    # First do rough optimisation of all windows
-                    self.log("Optimise all charge windows n={}".format(record_charge_windows))
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_charge_windows, end_record = end_record)
-                    if record_charge_windows > 1:
-                        best_soc = min(best_soc + self.best_soc_pass_margin, self.soc_max)
-
-                    # Set all to optimisation
-                    self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
-                    self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
-                if record_charge_windows > 1:
-                    for charge_pass in range(0, self.calculate_charge_passes):
-                        self.log("Optimise charge pass {}".format(charge_pass))
-                        # Optimise in price order, most expensive first try to reduce each one, only required for more than 1 window
-                        price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows], reverse_time=self.calculate_charge_oldest)
-                        for window_n in price_sorted:
-                            best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
-
-                            self.charge_limit_best[window_n] = best_soc
-                            if self.debug_enable or 1:
-                                self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
-        # Try different discharge options
-        if self.calculate_best and self.discharge_window_best:
-            end_record = self.record_length(self.charge_window_best)
-            record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
-
-            if self.calculate_best_discharge:                
-                # Set all to off
-                self.discharge_limits_best = [100.0 for n in range(0, len(self.discharge_window_best))]
-
-                # First do rough optimisation of all windows
-                if self.calculate_discharge_all or record_discharge_windows==1:
-                   
-                   self.log("Optimise all discharge windows n={}".format(record_discharge_windows))
-                   best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_discharge_windows, end_record = end_record)
-
-                   self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
-                   self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
-                if record_discharge_windows > 1:
-                    for discharge_pass in range(0, self.calculate_discharge_passes):
-                        # Optimise in price order, most expensive first try to increase each one, only required for more than 1 window
-                        self.log("Optimise discharge pass {}".format(discharge_pass))
-                        price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
-                        for window_n in price_sorted:
-                            best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
-
-                            self.discharge_limits_best[window_n] = best_discharge
-                            if self.debug_enable or 1:
-                                self.log("Best discharge limit window {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
-
         if self.calculate_best:
+            if self.calculate_discharge_first:
+                self.log("Calculate discharge first is set")
+                self.optimise_charge_windows_reset(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_discharge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_charge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+            else:
+                self.optimise_charge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_discharge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+
             # Filter out any unused charge windows
             if self.set_charge_window:
                 self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
