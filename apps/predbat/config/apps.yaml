@@ -198,6 +198,10 @@ pred_bat:
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling: 1.0
 
+  # Battery rate scaling adjusts your maximum charge/discharge rate from that reported by GivTCP
+  # e.g. a value of 1.1 would give you 10% faster charge/discharge than reported
+  battery_rate_max_scaling: 1.0
+
   # Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
   # Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
   load_scaling: 1.0
