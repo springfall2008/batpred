@@ -298,6 +298,7 @@ These are configuration items that you can modify to fit your needs, you can con
   - battery_loss - The percent of energy lost when charging the battery, default is 0.05 (5%)
   - battery_loss_discharge - The percent of energy lost when discharging the battery, default is 0.05 (5%)
   - battery_scaling - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use predbat.soc_kw_h0 as your current status rather than the GivTCP entity so everything lines up
+  - battery_rate_max_scaling - Scales the maximum battery charging/discharging rate for calibration if GivTCP is wrong
   - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
   - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
   - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
