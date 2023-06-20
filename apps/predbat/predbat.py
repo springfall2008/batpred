@@ -3099,23 +3099,33 @@ class PredBat(hass.Hass):
         """
         value = data['service_data']['option']
         entities = data['service_data']['entity_id']
-        for entity in entities:
-            for item in CONFIG_ITEMS:
-                if ('entity' in item) and (entity == item['entity']):
-                    self.log("select_event: {} = {}".format(entity, value))
-                    self.expose_config(item['name'], value)
-                    self.update_pending = True
-                    return
+
+        # Can be a string or an array        
+        if isinstance(entities, str):
+            entities = [entities]
+
+        for item in CONFIG_ITEMS:
+            if ('entity' in item) and (item['entity'] in entities):
+                entity = item['entity']
+                self.log("select_event: {} = {}".format(entity, value))
+                self.expose_config(item['name'], value)
+                self.update_pending = True
+                return
 
     def number_event(self, event, data, kwargs):
         """
         Catch HA Input number updates
         """
-        entity = data['service_data']['entity_id']
         value = data['service_data']['value']
+        entities = data['service_data']['entity_id']
+
+        # Can be a string or an array        
+        if isinstance(entities, str):
+            entities = [entities]
 
         for item in CONFIG_ITEMS:
-            if ('entity' in item) and (entity == item['entity']):
+            if ('entity' in item) and (item['entity'] in entities):
+                entity = item['entity']
                 self.log("number_event: {} = {}".format(entity, value))
                 self.expose_config(item['name'], value)
                 self.update_pending = True
@@ -3125,12 +3135,17 @@ class PredBat(hass.Hass):
         """
         Catch HA Switch toggle
         """
-        entity = data['service_data']['entity_id']
         service = data['service']
+        entities = data['service_data']['entity_id']
+
+        # Can be a string or an array        
+        if isinstance(entities, str):
+            entities = [entities]
 
         for item in CONFIG_ITEMS:
-            if ('entity' in item) and (entity == item['entity']):
+            if ('entity' in item) and (item['entity'] in entities):
                 value = item['value']
+                entity = item['entity']
 
                 if service == 'turn_on':
                     value = True
