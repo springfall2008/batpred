@@ -1617,7 +1617,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state("predbat.best10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
-        return metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute
+        return final_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute
 
     def time_now_str(self):
         """
