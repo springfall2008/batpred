@@ -2386,7 +2386,7 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             # Adjust to try to keep existing windows
-            if (this_discharge_limit < 100.0) and self.discharge_window and (self.minutes_now >= self.discharge_window[0]['start']) and (self.minutes_now < self.discharge_window[0]['end']):
+            if (window_n == 0) and (this_discharge_limit < 100.0) and self.discharge_window and (self.minutes_now >= self.discharge_window[0]['start']) and (self.minutes_now < self.discharge_window[0]['end']):
                 metric -= min(0.1, self.metric_min_improvement_discharge)
 
             self.debug_enable = was_debug
