@@ -173,10 +173,12 @@ class Inverter():
 
         if self.rest_data:
             self.charge_enable_time = self.rest_data['Control']['Enable_Charge_Schedule'] == 'enable'
+            self.discharge_enable_time = self.rest_data['Control']['Enable_Discharge_Schedule'] == 'enable'
             self.charge_rate_max = self.rest_data['Control']['Battery_Charge_Rate'] / 1000.0 / 60.0
             self.discharge_rate_max = self.rest_data['Control']['Battery_Discharge_Rate'] / 1000.0 / 60.0
         else:
             self.charge_enable_time = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id) == 'on'
+            self.discharge_enable_time = self.base.get_arg('scheduled_discharge_enable', 'off', index=self.id) == 'on'
             self.charge_rate_max = self.base.get_arg('charge_rate', index=self.id, default=2600.0) / 1000.0 / 60.0
             self.discharge_rate_max = self.base.get_arg('discharge_rate', index=self.id, default=2600.0) / 1000.0 / 60.0
 
@@ -270,9 +272,28 @@ class Inverter():
                 self.discharge_start_time_minutes -= 60 * 24
             else:
                 self.discharge_end_time_minutes += 60 * 24
+        
+        self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
+        # Pre-fill current discharge window
+        # Store it even when discharge timed isn't enabled as it won't be outside the actual slot
+        if True:
+            minute = max(0, self.discharge_start_time_minutes)  # Max is here is start could be before midnight now
+            minute_end = self.discharge_end_time_minutes
+            while minute < self.base.forecast_minutes:
+                window = {}
+                window['start'] = minute
+                window['end']   = minute_end
+                self.discharge_window.append(window)
+                minute += 24 * 60
+                minute_end += 24 * 60
 
-        # Pre-fill best discharge enable with Off
-        self.discharge_limits = [100.0 for i in range(0, len(self.discharge_window))]
+         # Pre-fill best discharge enables
+        if self.discharge_enable_time:
+            self.discharge_limits = [self.reserve_percent for i in range(0, len(self.discharge_window))]
+        else:
+            self.discharge_limits = [100.0 for i in range(0, len(self.discharge_window))]
+
+        self.base.log('Inverter {} discharge windows currently {}'.format(self.id, self.discharge_window))
 
         if INVERTER_TEST:
             self.self_test()
@@ -2283,7 +2304,7 @@ class PredBat(hass.Hass):
                 else:
                     try_percent = try_soc / self.soc_max * 100.0
                 if int(self.current_charge_limit) == int(try_percent):
-                    metric -= 0.1
+                    metric -= min(0.1, self.metric_min_improvement)
 
             self.debug_enable = was_debug
             if self.debug_enable:
@@ -2298,11 +2319,6 @@ class PredBat(hass.Hass):
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
-                if self.debug_enable:
-                    self.log("Selecting metric {} cost {} soc {} - soc_min {} and keep {}".format(metric, cost, try_soc, soc_min, self.best_soc_keep))
-            else:
-                if self.debug_enable:
-                    self.log("Not Selecting metric {} cost {} soc {} - soc_min {} and keep {}".format(metric, cost, try_soc, soc_min, self.best_soc_keep))
             
             prev_soc = try_soc
             prev_metric = metric
@@ -2329,8 +2345,8 @@ class PredBat(hass.Hass):
         while True:
             # Never go below the minimum level
             this_discharge_limit = max(max(self.best_soc_min, self.reserve) * 100.0 / self.soc_max, this_discharge_limit)
+            this_discharge_limit = float(int(this_discharge_limit + 0.5))
             this_discharge_limit = min(this_discharge_limit, 100.0)
-            this_discharge_limit = float(int(this_discharge_limit))
 
             # Exit when we repeat the same level again
             if this_discharge_limit == prev_discharge_limit:
@@ -2369,6 +2385,10 @@ class PredBat(hass.Hass):
                 metric += metric_diff
                 metric = self.dp2(metric)
 
+            # Adjust to try to keep existing windows
+            if (this_discharge_limit < 100.0) and self.discharge_window and (self.minutes_now >= self.discharge_window[0]['start']) and (self.minutes_now < self.discharge_window[0]['end']):
+                metric -= min(0.1, self.metric_min_improvement_discharge)
+
             self.debug_enable = was_debug
             if self.debug_enable:
                 self.log("Sim: Discharge {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
@@ -2382,11 +2402,6 @@ class PredBat(hass.Hass):
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
-                if self.debug_enable:
-                    self.log("Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_limit, soc_min, self.best_soc_keep))
-            else:
-                if self.debug_enable:
-                    self.log("Not Selecting metric {} cost {} discharge {} - soc_min {} and keep {}".format(metric, cost, this_discharge_limit, soc_min, self.best_soc_keep))
 
             # Loop in steps of 10% or just on/off for combined slots
             prev_discharge_limit = this_discharge_limit
@@ -2478,21 +2493,6 @@ class PredBat(hass.Hass):
 
                 if self.debug_enable:
                     self.log("Examine window {} from {} - {} limit {} - starting soc {}".format(window_n, window_start, window_end, limit, soc))
-
-                """
-                for minute in range(window_start, window_end, step):
-                    predict_minute = int((minute - minutes_now) / 5) * 5
-                    soc = predict_soc[predict_minute]
-                    if soc < limit_soc:
-                        if (minute - window_start) < step:
-                            self.log("Clip discharge window {} from {} - {} limit {} - discarded as too short after clipping".format(window_n, window_start, window_end, limit))
-                            discharge_limits_best[window_n] = 100
-                            break
-                        else:
-                            window['end'] = minute                            
-                            self.log("Clip discharge window {} from {} - {} to {} limit {}".format(window_n, window_start, window_end, minute, limit))
-                            break
-                """
 
                 # Discharge level adjustments for safety
                 predict_minute = int((window_end - minutes_now) / 5) * 5
@@ -2893,7 +2893,9 @@ class PredBat(hass.Hass):
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
         self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
+
         self.log("Base charge limit {} percent {}".format(self.charge_limit, self.charge_limit_percent))
+        self.log("Base discharge limit {}".format(self.discharge_limits))
 
         # Calculate best charge windows
         if self.low_rates:
