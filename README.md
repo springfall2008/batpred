@@ -218,6 +218,7 @@ Control per inverter (only used if REST isn't set):
   - **charge_rate** - GivTCP battery charge rate entity in watts 
   - **discharge_rate** - GivTCP battery discharge max rate entity in watts
   - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
+  - **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
   - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
   - **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
 
