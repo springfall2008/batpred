@@ -2326,7 +2326,7 @@ class PredBat(hass.Hass):
                 else:
                     try_percent = try_soc / self.soc_max * 100.0
                 if int(self.current_charge_limit) == int(try_percent):
-                    metric -= min(0.1, self.metric_min_improvement)
+                    metric -= max(0.1, self.metric_min_improvement)
 
             self.debug_enable = was_debug
             if self.debug_enable:
@@ -2409,7 +2409,8 @@ class PredBat(hass.Hass):
 
             # Adjust to try to keep existing windows
             if (window_n == 0) and (this_discharge_limit < 100.0) and self.discharge_window and (self.minutes_now >= self.discharge_window[0]['start']) and (self.minutes_now < self.discharge_window[0]['end']):
-                metric -= min(0.1, self.metric_min_improvement_discharge)
+                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot".format(window_n))
+                metric -= max(0.1, self.metric_min_improvement_discharge)
 
             self.debug_enable = was_debug
             if self.debug_enable:
