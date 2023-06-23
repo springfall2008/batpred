@@ -2411,13 +2411,13 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             # Adjust to try to keep existing windows
-            if window_n == 0 and this_discharge_limit < 100.0 and self.discharge_window:
-                pwindow = discharge_window[0]
+            if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
+                pwindow = discharge_window[window_n]
                 dwindow = self.discharge_window[0]
                 if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
                     self.log("Sim: Proposed discharge window {} is aligned with current time".format(window_n))
-                    if self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']:
-                        self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot".format(window_n))
+                    if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
+                        self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                         metric -= max(0.1, self.metric_min_improvement_discharge)
                     else:
                         if self.debug_enable:
