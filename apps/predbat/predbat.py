@@ -1973,7 +1973,7 @@ class PredBat(hass.Hass):
             window['average'] = rate_low_average
 
             if rate_low_start >= 0:
-                if rate_low_end >= self.minutes_now and (rate_low_end - rate_low_start) >= rate_low_min_window:
+                if rate_low_end > self.minutes_now and (rate_low_end - rate_low_start) >= rate_low_min_window:
                     found_rates.append(window)
                 minute = rate_low_end
             else:
@@ -2391,6 +2391,9 @@ class PredBat(hass.Hass):
             # Simulate with 10% PV 
             metric10, charge_limit_percent10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute10, end_record = end_record)
 
+            # Put back debug enable
+            self.debug_enable = was_debug
+
             # Store simulated mid value
             metric = metricmid
             cost = metricmid
@@ -2408,11 +2411,21 @@ class PredBat(hass.Hass):
                 metric = self.dp2(metric)
 
             # Adjust to try to keep existing windows
-            if (window_n == 0) and (this_discharge_limit < 100.0) and self.discharge_window and (self.minutes_now >= self.discharge_window[0]['start']) and (self.minutes_now < self.discharge_window[0]['end']):
-                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot".format(window_n))
-                metric -= max(0.1, self.metric_min_improvement_discharge)
+            if window_n == 0 and this_discharge_limit < 100.0 and self.discharge_window:
+                pwindow = discharge_window[0]
+                dwindow = self.discharge_window[0]
+                if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
+                    self.log("Sim: Proposed discharge window {} is aligned with current time".format(window_n))
+                    if self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']:
+                        self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot".format(window_n))
+                        metric -= max(0.1, self.metric_min_improvement_discharge)
+                    else:
+                        if self.debug_enable:
+                            self.log("Sim: Discharge window {} - does not overlap with current discharge setting {} minutes now {}".format(window_n, dwindow, self.minutes_now))
+                else:
+                    if self.debug_enable:
+                        self.log("Sim: Discharge window {} - does not overlap with proposed window {} minutes now {}".format(window_n, pwindow, self.minutes_now))
 
-            self.debug_enable = was_debug
             if self.debug_enable:
                 self.log("Sim: Discharge {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
                         (this_discharge_limit, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
@@ -2917,8 +2930,8 @@ class PredBat(hass.Hass):
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
         self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
 
-        self.log("Base charge limit {} percent {}".format(self.charge_limit, self.charge_limit_percent))
-        self.log("Base discharge limit {}".format(self.discharge_limits))
+        self.log("Base charge limit {} window {} percent {}".format(self.charge_limit, self.charge_window, self.charge_limit_percent))
+        self.log("Base discharge limit {} window {}".format(self.discharge_limits, self.discharge_window))
 
         # Calculate best charge windows
         if self.low_rates:
