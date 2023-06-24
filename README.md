@@ -403,7 +403,8 @@ To create the fancy chart
 - Customise as you like
 
 Example charts:
-![image](https://github.com/springfall2008/batpred/assets/48591903/39b6a1d5-8865-4855-9e60-6d8c4a3fbf12)
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/f24cf5cf-8520-4843-8695-e8d59b25ce30)
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a10e570d-373e-4fce-aebf-dc6463067e3b)
 
