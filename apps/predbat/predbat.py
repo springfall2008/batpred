@@ -1349,6 +1349,7 @@ class PredBat(hass.Hass):
         predict_pv_power = {}
         predict_state = {}
         predict_grid_power = {}
+        predict_load_power = {}
         minute = 0
         minute_left = self.forecast_minutes
         soc = self.soc_kw
@@ -1579,6 +1580,7 @@ class PredBat(hass.Hass):
                 predict_battery_power[stamp] = battery_draw * (60 / step)
                 predict_pv_power[stamp] = pv_now  * (60 / step)
                 predict_grid_power[stamp] = diff * (60 / step)
+                predict_load_power[stamp] = load_yesterday * (60 / step)
 
             minute += step
 
@@ -1607,6 +1609,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.battery_power", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.pv_power", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.grid_power", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state("predbat.load_power", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
             self.set_state("predbat.export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
@@ -1626,6 +1629,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.battery_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.pv_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.grid_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state("predbat.load_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h1", state=self.dp3(self.predict_soc[60]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 1h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h8", state=self.dp3(self.predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
@@ -2445,7 +2449,8 @@ class PredBat(hass.Hass):
                 pwindow = discharge_window[window_n]
                 dwindow = self.discharge_window[0]
                 if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
-                    self.log("Sim: Proposed discharge window {} is aligned with current time".format(window_n))
+                    if self.debug_enable:
+                        self.log("Sim: Proposed discharge window {} is aligned with current time".format(window_n))
                     if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
                         self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                         metric -= max(0.1, self.metric_min_improvement_discharge)
@@ -2459,6 +2464,13 @@ class PredBat(hass.Hass):
             if self.debug_enable:
                 self.log("Sim: Discharge {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
                         (this_discharge_limit, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
+
+            # Chaining rule, if next window is in discharge then weight this one
+            if not all_n and ((window_n + 1) < len(discharge_window)):
+                if (discharge_window[window_n]['end'] == discharge_window[window_n + 1]['start']) and (try_discharge[window_n + 1] < 100):
+                    if self.debug_enable:
+                        self.log("Sim: Discharge window {} - weighting due to chaining rule".format(window_n))
+                    metric -= max(0.1, self.metric_min_improvement_discharge)
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold 
