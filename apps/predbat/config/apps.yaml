@@ -173,7 +173,7 @@ pred_bat:
 
   # Maximum number of charge and discharge windows
   # Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes)
-  max_windows: 24
+  max_windows: 32
   
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices: 
@@ -257,12 +257,12 @@ pred_bat:
   # calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   # calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
   # calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
-  # calculate_discharge_first:  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to False
+  # calculate_discharge_first:  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
   calculate_best_discharge: True
   calculate_discharge_all: False
   calculate_discharge_oldest: True
   calculate_discharge_passes: 1
-  calculate_discharge_first: False
+  calculate_discharge_first: True
 
   # best_soc margin : added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). 
   #                   Best not used with multiple charge windows as it tends up limit everything.
@@ -286,10 +286,11 @@ pred_bat:
 
   # Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
   # Default is enabled (True)
-  combine_discharge_slots: False
+  combine_discharge_slots: True
 
   # When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
   # A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
+  # When combine discharge is True then the split amount is used to determine the intervals that the window is re-sized in (must be mutiple of 5)
   discharge_slot_split: 15
 
   # Allow mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
@@ -305,8 +306,7 @@ pred_bat:
   metric_min_improvement: -0.1
 
   # Min improvement metric for discharge
-  # Do not use if you have multiple discharge windows in a given period as it won't lead to good results
-  metric_min_improvement_discharge: 0
+  metric_min_improvement_discharge: 0.1
 
   # Threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
   # If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period (max is 10)
