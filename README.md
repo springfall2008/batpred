@@ -20,6 +20,7 @@ For support please raise a Github ticket or use the GivTCP Facebook page
     + [Rate bands](#rate-bands)
     + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
   * [Car charging planning](#car-charging-planning)
+  * [Configuration guide](#configuration-guide)
   * [FAQ](#faq)
   * [config.yml - details:](#configyml---details-)
     + [Inverter information](#inverter-information)
@@ -166,6 +167,7 @@ You should try to tune battery_loss and battery_loss_discharge to the correct % 
 
 Recommended settings (if you have already started Predbat then change them in HA):
 
+```
 set_soc_enable - True              # Allow the tool to configure the charge %
 set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
 calculate_best_charge - True       # You want the tool to calculate charging
@@ -176,6 +178,7 @@ best_soc_keep - 2.0                # Tweak this to control what battery level yo
 best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
 rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
 calculate_discharge_first - False  # You probably only want to discharge any excess 
+```
 
 If you have Intelligent then make sure the intelligent plugin is also set up so the tool can see when you plan to charge your car and take this into account.
 
@@ -185,6 +188,7 @@ Follow the instructions from Cheap Night rate above, but also you will want to h
 
 Recommended settings (if you have already started Predbat then change them in HA):
 
+```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
 calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
@@ -193,15 +197,18 @@ discharge_slot_split - 5               # Allow 5 minute adjustments to the disch
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
+```
 
 ### Half hourly variable rates (e.g. Octopus Agile)
 
 Follow the instructions from Multiple rates for import and export above but then change
 
+```
 combine_discharge_slots - False        # You want the discharge slots split up into smaller chunks
 discharge_slot_split - 15              # Anything less than 15 is likely to create a lot of windows
 max_windows - 32                       # This will give you up to 4 hours of discharge per day (over 2 days)
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
+```
 
 ## FAQ
 
