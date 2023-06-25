@@ -1,10 +1,12 @@
 # predbat
 Home battery prediction and automatic charging for Home Assistant with GivTCP
 
+```
 Copyright (c) Trefor Southwell May 2023 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 For support please raise a Github ticket or use the GivTCP Facebook page
+```
 
 **Please note from release v5.0 onwards many configuration options are now inside Home Assistant (if user_config_enable is set to True), for these options changing the apps.yml will have no effect once installed** 
 
