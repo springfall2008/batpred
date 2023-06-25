@@ -12,6 +12,7 @@ import time
 import pytz
 import appdaemon.plugins.hass.hassapi as hass
 import requests
+import copy
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -2407,7 +2408,7 @@ class PredBat(hass.Hass):
         this_discharge_limit = 100.0
         prev_discharge_limit = 0.0
         window = discharge_window[window_n]
-        try_discharge_window = discharge_window[:]
+        try_discharge_window = copy.deepcopy(discharge_window)
         best_start = window['start']
         
         for loop_limit in [100, 0]:
@@ -2418,12 +2419,10 @@ class PredBat(hass.Hass):
 
                 # Can't optimise all window start slot
                 if all_n and (start != window['start']):
-                    self.log("Skip all")
                     continue
 
                 # Don't optimise start of disabled windows
                 if (this_discharge_limit == 100.0) and (start != window['start']):
-                    self.log("Skip 100")
                     continue
 
                 # Never go below the minimum level
@@ -2510,7 +2509,7 @@ class PredBat(hass.Hass):
         """
         Sort windows in start time order, return a new list of windows
         """
-        window_sorted = windows[:]
+        window_sorted = copy.deepcopy(windows)
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
@@ -2518,7 +2517,7 @@ class PredBat(hass.Hass):
         """
         Sort the charge windows by highest price first, return a list of window IDs
         """
-        window_with_id = windows[:]
+        window_with_id = copy.deepcopy(windows)
         wid = 0
         for window in window_with_id:
             window['id'] = wid
@@ -2632,7 +2631,6 @@ class PredBat(hass.Hass):
                 self.log("Optimise discharge pass {}".format(discharge_pass))
                 price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
                 for window_n in price_sorted:
-                    self.log("Check window {}".format(self.discharge_window_best[window_n]))
                     best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
 
                     self.discharge_limits_best[window_n] = best_discharge
@@ -2984,7 +2982,7 @@ class PredBat(hass.Hass):
         # Calculate best charge windows
         if self.low_rates:
             # If we are using calculated windows directly then save them
-            self.charge_window_best = self.low_rates[:]
+            self.charge_window_best = copy.deepcopy(self.low_rates)
             self.log('Charge windows best will be {}'.format(self.charge_window_best))
         else:
             # Default best charge window as this one
@@ -2992,7 +2990,7 @@ class PredBat(hass.Hass):
 
         # Calculate best discharge windows
         if self.high_export_rates:
-            self.discharge_window_best = self.high_export_rates[:]
+            self.discharge_window_best = copy.deepcopy(self.high_export_rates)
             self.log('Discharge windows best will be {}'.format(self.discharge_window_best))
         else:
             self.discharge_window_best = []
