@@ -1512,8 +1512,12 @@ class PredBat(hass.Hass):
             # Work out left over energy after battery adjustment
             diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
             if diff < 0:
-                # Can not export over inverter limit
-                diff = max(diff, -self.inverter_limit * step)
+                # Can not export over inverter limit, load must be taken out first from the inverter limit
+                inverter_left = self.inverter_limit * step - load_yesterday
+                if inverter_left < 0:
+                    diff += -inverter_left
+                else:
+                    diff = max(diff, -inverter_left)
 
             if diff > 0:
                 # Import
@@ -1643,6 +1647,12 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state("predbat.record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
 
+        if save and save=='debug' and not SIMULATE:
+            self.set_state("predbat.pv_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state("predbat.grid_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state("predbat.load_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state("predbat.battery_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+ 
         if save and save=='best10' and not SIMULATE:
             self.set_state("predbat.soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state("predbat.best10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
@@ -2385,7 +2395,7 @@ class PredBat(hass.Hass):
 
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute
 
-    def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = 0, end_record=None):
+    def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = False, end_record=None):
         """
         Optimise a single discharging window for best discharge %
         """
@@ -2396,99 +2406,93 @@ class PredBat(hass.Hass):
         best_soc_min_minute = 0
         this_discharge_limit = 100.0
         prev_discharge_limit = 0.0
+        window = discharge_window[window_n]
+        try_discharge_window = discharge_window[:]
+        best_start = window['start']
         
-        # Loop over discharge limits
-        while True:
-            # Never go below the minimum level
-            this_discharge_limit = max(max(self.best_soc_min, self.reserve) * 100.0 / self.soc_max, this_discharge_limit)
-            this_discharge_limit = float(int(this_discharge_limit + 0.5))
-            this_discharge_limit = min(this_discharge_limit, 100.0)
+        for loop_limit in [100, 0]:
+            for loop_start in range(window['start'], window['end'], self.discharge_slot_split):
 
-            # Exit when we repeat the same level again
-            if this_discharge_limit == prev_discharge_limit:
-                self.debug_enable = was_debug
-                break
+                this_discharge_limit = loop_limit
+                start = loop_start
 
-            was_debug = self.debug_enable
-            self.debug_enable = False
+                # Can't optimise all window start slot
+                if all_n and (start != window['start']):
+                    self.log("Skip all")
+                    continue
 
-            # Store try value into the window
-            if all_n:
-                for window_id in range(0, all_n):
-                    try_discharge[window_id] = this_discharge_limit
-            else:
-                try_discharge[window_n] = this_discharge_limit
+                # Don't optimise start of disabled windows
+                if (this_discharge_limit == 100.0) and (start != window['start']):
+                    self.log("Skip 100")
+                    continue
 
-            # Simulate with medium PV
-            metricmid, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, end_record = end_record)
+                # Never go below the minimum level
+                this_discharge_limit = max(max(self.best_soc_min, self.reserve) * 100.0 / self.soc_max, this_discharge_limit)
+                this_discharge_limit = float(int(this_discharge_limit + 0.5))
+                this_discharge_limit = min(this_discharge_limit, 100.0)
 
-            # Simulate with 10% PV 
-            metric10, charge_limit_percent10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute10, end_record = end_record)
-
-            # Put back debug enable
-            self.debug_enable = was_debug
-
-            # Store simulated mid value
-            metric = metricmid
-            cost = metricmid
-
-            # Balancing payment to account for battery left over 
-            # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            metric -= soc * self.rate_min
-            metric10 -= soc10 * self.rate_min
-
-            # Metric adjustment based on 10% outcome weighting
-            if metric10 > metric:
-                metric_diff = metric10 - metric
-                metric_diff *= self.pv_metric10_weight
-                metric += metric_diff
-                metric = self.dp2(metric)
-
-            # Adjust to try to keep existing windows
-            if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
-                pwindow = discharge_window[window_n]
-                dwindow = self.discharge_window[0]
-                if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
-                    if self.debug_enable:
-                        self.log("Sim: Proposed discharge window {} is aligned with current time".format(window_n))
-                    if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
-                        self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
-                        metric -= max(0.1, self.metric_min_improvement_discharge)
-                    else:
-                        if self.debug_enable:
-                            self.log("Sim: Discharge window {} - does not overlap with current discharge setting {} minutes now {}".format(window_n, dwindow, self.minutes_now))
+                # Store try value into the window
+                if all_n:
+                    for window_id in range(0, all_n):
+                        try_discharge[window_id] = this_discharge_limit
                 else:
-                    if self.debug_enable:
-                        self.log("Sim: Discharge window {} - does not overlap with proposed window {} minutes now {}".format(window_n, pwindow, self.minutes_now))
+                    try_discharge[window_n] = this_discharge_limit
+                    # Adjust start
+                    start = min(start, window['end'] - self.discharge_slot_split)
+                    try_discharge_window[window_n]['start'] = start
 
-            if self.debug_enable:
-                self.log("Sim: Discharge {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
-                        (this_discharge_limit, window_n, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
+                was_debug = self.debug_enable
+                self.debug_enable = False
 
-            # Chaining rule, if next window is in discharge then weight this one
-            if not all_n and ((window_n + 1) < len(discharge_window)):
-                if (discharge_window[window_n]['end'] == discharge_window[window_n + 1]['start']) and (try_discharge[window_n + 1] < 100):
-                    if self.debug_enable:
-                        self.log("Sim: Discharge window {} - weighting due to chaining rule".format(window_n))
-                    metric -= max(0.1, self.metric_min_improvement_discharge)
+                # Simulate with medium PV
+                metricmid, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes, pv_forecast_minute, end_record = end_record)
 
-            # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            # and it doesn't fall below the soc_keep threshold 
-            if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
-                best_metric = metric
-                best_discharge = this_discharge_limit
-                best_cost = cost
-                best_soc_min = soc_min
-                best_soc_min_minute = soc_min_minute
+                # Simulate with 10% PV 
+                metric10, charge_limit_percent10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes, pv_forecast_minute10, end_record = end_record)
 
-            # Loop in steps of 10% or just on/off for combined slots
-            prev_discharge_limit = this_discharge_limit
-            if self.combine_discharge_slots:
-                this_discharge_limit -= 10.0
-            else:
-                this_discharge_limit = 0
+                # Put back debug enable
+                self.debug_enable = was_debug
 
-        return best_discharge, best_metric, best_cost, best_soc_min, best_soc_min_minute
+                # Store simulated mid value
+                metric = metricmid
+                cost = metricmid
+
+                # Balancing payment to account for battery left over 
+                # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+                metric -= soc * self.rate_min
+                metric10 -= soc10 * self.rate_min
+
+                # Metric adjustment based on 10% outcome weighting
+                if metric10 > metric:
+                    metric_diff = metric10 - metric
+                    metric_diff *= self.pv_metric10_weight
+                    metric += metric_diff
+                    metric = self.dp2(metric)
+
+                # Adjust to try to keep existing windows
+                if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
+                    pwindow = discharge_window[window_n]
+                    dwindow = self.discharge_window[0]
+                    if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
+                        if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
+                            self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
+                            metric -= max(0.1, self.metric_min_improvement_discharge)
+
+                if self.debug_enable:
+                    self.log("Sim: Discharge {} window {} start {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
+                            (this_discharge_limit, window_n, try_discharge_window[window_n]['start'], self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
+
+                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
+                # and it doesn't fall below the soc_keep threshold 
+                if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+                    best_metric = metric
+                    best_discharge = this_discharge_limit
+                    best_cost = cost
+                    best_soc_min = soc_min
+                    best_soc_min_minute = soc_min_minute
+                    best_start = start
+
+        return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute
 
     def window_sort_func(self, window):
         """
@@ -2615,25 +2619,27 @@ class PredBat(hass.Hass):
             self.discharge_limits_best = [100.0 for n in range(0, len(self.discharge_window_best))]
 
             # First do rough optimisation of all windows
-            if self.calculate_discharge_all or record_discharge_windows==1:
+            if self.calculate_discharge_all and record_discharge_windows > 1:
                 
                 self.log("Optimise all discharge windows n={}".format(record_discharge_windows))
-                best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_discharge_windows, end_record = end_record)
+                best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = True, end_record = end_record)
 
                 self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
                 self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
-            if record_discharge_windows > 1:
-                for discharge_pass in range(0, self.calculate_discharge_passes):
-                    # Optimise in price order, most expensive first try to increase each one, only required for more than 1 window
-                    self.log("Optimise discharge pass {}".format(discharge_pass))
-                    price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
-                    for window_n in price_sorted:
-                        best_discharge, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
+            # Optimise in price order, most expensive first try to increase each one
+            for discharge_pass in range(0, self.calculate_discharge_passes):
+                self.log("Optimise discharge pass {}".format(discharge_pass))
+                price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
+                for window_n in price_sorted:
+                    self.log("Check window {}".format(self.discharge_window_best[window_n]))
+                    best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, end_record = end_record)
 
-                        self.discharge_limits_best[window_n] = best_discharge
-                        if self.debug_enable or 1:
-                            self.log("Best discharge limit window {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                    self.discharge_limits_best[window_n] = best_discharge
+                    self.discharge_window_best[window_n]['start'] = best_start
+
+                    if self.debug_enable or 1:
+                        self.log("Best discharge limit window {} time {} - {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'], best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
 
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10):
