@@ -150,6 +150,59 @@ There are two ways to plan car charging slots
   - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
   - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
 
+## Configuration guide
+
+First get the basics set up, ensure you have the inverter controls configured, the historical load data and the solar forecast in place. Make sure your energy rates are configured correctly for import and export.
+
+If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
+
+You should try to tune battery_loss and battery_loss_discharge to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter but AC coupled maybe bigger.
+
+### Fixed daily rates
+- In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
+
+### Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)
+- In this scenario you will want to charge overnight based on the next days solar forecast.
+
+Recommended settings (if you have already started Predbat then change them in HA):
+
+set_soc_enable - True              # Allow the tool to configure the charge %
+set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
+calculate_best_charge - True       # You want the tool to calculate charging
+combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
+metric_min_improvement - 0         # Charge less if it's cost neutral 
+set_charge_window - True           # You want to have Predbat control the charge window
+best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
+best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
+rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
+calculate_discharge_first - False  # You probably only want to discharge any excess 
+
+If you have Intelligent then make sure the intelligent plugin is also set up so the tool can see when you plan to charge your car and take this into account.
+
+### Multiple rates for import and export (e.g. Octopus Flux & Cozy)
+
+Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
+
+Recommended settings (if you have already started Predbat then change them in HA):
+
+calculate_best_discharge - True        # Enable discharge calculation
+calculate_discharge_first - True       # Give priority to discharge when it's profitable
+calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
+combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
+discharge_slot_split - 5               # Allow 5 minute adjustments to the discharge slot length
+set_discharge_window - True            # Allow the tool to control the discharge slots
+metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
+rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
+
+### Half hourly variable rates (e.g. Octopus Agile)
+
+Follow the instructions from Multiple rates for import and export above but then change
+
+combine_discharge_slots - False        # You want the discharge slots split up into smaller chunks
+discharge_slot_split - 15              # Anything less than 15 is likely to create a lot of windows
+max_windows - 32                       # This will give you up to 4 hours of discharge per day (over 2 days)
+rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
+
 ## FAQ
 
   - I've installed Batbred but I don't see the correct entities:
@@ -305,15 +358,15 @@ These are configuration items that you can modify to fit your needs, you can con
   - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
 
   - calculate_best_charge:      If set to False then charge windows will not be calculated and the default inverter settings are used
-  - calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first
+  - calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first.
   - calculate_charge_all:       When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   - calculate_charge_passes:    Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
    
   - calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
   - calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
   - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
-  - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest
-  - calculate_discharge_first:  When True give priority to profits from discharging ahead of charging. Default is False.
+  - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default is True
+  - calculate_discharge_first:  When True give priority to profits from discharging ahead of charging. Default is True.
 
   - metric_min_improvement           - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight or have multiple slots
   - metric_min_improvement_discharge - Set a threshold for increasing discharge level. Set to 0 if you have multiple discharge slots
@@ -323,9 +376,9 @@ These are configuration items that you can modify to fit your needs, you can con
   - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly). This is a soft constraint (slots will not be forced to charge/discharge based on this number).
   - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
   
-  - combine_charge_slots -  Control if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - combine_charge_slots -  Control if adjacent charge slots can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning. Default is True.
   - charge_slot_split - When combine charge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-  - combine_discharge_slots - Control if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+  - combine_discharge_slots - Control if adjacent discharge slots  can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.  Default is True.
   - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
   - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
   
