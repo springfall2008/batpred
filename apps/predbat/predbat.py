@@ -2755,8 +2755,8 @@ class PredBat(hass.Hass):
         self.car_charging_plan_time = self.get_arg('car_charging_plan_time', "07:00:00")
        
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
-        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
-        self.combine_charge_slots = self.get_arg('combine_charge_slots', False)
+        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', True)
+        self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
         self.discharge_slot_split = self.get_arg('discharge_slot_split', 15)
         self.charge_slot_split = self.get_arg('charge_slot_split', 30)
         self.calculate_charge_passes = self.get_arg('calculate_charge_passes', 1)
@@ -2778,7 +2778,7 @@ class PredBat(hass.Hass):
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', self.set_discharge_window)
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
-        self.calculate_discharge_first = self.get_arg('calculate_discharge_first', False)
+        self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
 
         # Car options
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
