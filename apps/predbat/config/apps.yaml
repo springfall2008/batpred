@@ -12,6 +12,8 @@ pred_bat:
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+
   #
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
@@ -27,46 +29,57 @@ pred_bat:
   #
   num_inverters: 1
   #
-  # needs a bit more testing - new feature
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter
   givtcp_rest: 
    - 'http://homeassistant.local:6345'
-  # - 'http://homeassistant.local:6346'
-  # - 'http://homeassistant.local:6347'
-  # - 'http://homeassistant.local:6348'
+   - 'http://homeassistant.local:6346'
 
   # If not using REST then instead set the Control here (one for each inverter)
   # - you can delete this section if using REST
   charge_rate: 
     - number.givtcp_{geserial}_battery_charge_rate
+    - number.givtcp2_{geserial2}_battery_charge_rate
   discharge_rate: 
     - number.givtcp_{geserial}_battery_discharge_rate
+    - number.givtcp2_{geserial2}_battery_discharge_rate
   soc_kw: 
     - sensor.givtcp_{geserial}_soc_kwh
+    - sensor.givtcp2_{geserial2}_soc_kwh
   soc_max: 
     - sensor.givtcp_{geserial}_battery_capacity_kwh
+    - sensor.givtcp2_{geserial2}_battery_capacity_kwh
   reserve: 
     - number.givtcp_{geserial}_battery_power_reserve
+    - number.givtcp2_{geserial2}_battery_power_reserve
   inverter_mode: 
    - select.givtcp_{geserial}_mode
+   - select.givtcp2_{geserial2}_mode
   charge_start_time: 
    - select.givtcp_{geserial}_charge_start_time_slot_1
+   - select.givtcp2_{geserial2}_charge_start_time_slot_1
   charge_end_time: 
    - select.givtcp_{geserial}_charge_end_time_slot_1
+   - select.givtcp2_{geserial2}_charge_end_time_slot_1
   charge_limit: 
    - number.givtcp_{geserial}_target_soc
+   - number.givtcp2_{geserial2}_target_soc
   scheduled_charge_enable: 
    - switch.givtcp_{geserial}_enable_charge_schedule
+   - switch.givtcp2_{geserial2}_enable_charge_schedule
   scheduled_discharge_enable:
    - switch.givtcp_{geserial}_enable_discharge_schedule
+   - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
    - select.givtcp_{geserial}_discharge_start_time_slot_1
+   - select.givtcp2_{geserial2}_discharge_start_time_slot_1
   discharge_end_time: 
    - select.givtcp_{geserial}_discharge_end_time_slot_1
+   - select.givtcp2_{geserial2}_discharge_end_time_slot_1
   
   # Inverter max AC limit (one per inverter)
   inverter_limit: 
+   - 3600
    - 3600
   
   # Set these to match solcast sensor names (unlikely to need changing)
