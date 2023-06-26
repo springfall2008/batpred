@@ -250,7 +250,7 @@ Basic configuration items
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
   - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
   - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
-Data per inverter
+
 
 ### Historical load
   - **load_today** - GivTCP Entity name for the house load in kwh today (must be incrementing)
@@ -259,14 +259,14 @@ Data per inverter
   - **import_today** - GivTCP Imported energy today in Kwh (incrementing)
   - **export_today** - GivTCP Exported energy today in Kwh (incrementing) 
 
-### Inverter control
+### Inverter control - per inverter
 
   - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 
-#### REST Interface inverter control
+#### REST Interface inverter control  - per inverter
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
 
-#### Home-assistant Inverter control
+#### Home-assistant Inverter control  - per inverter
 
 Control per inverter (only used if REST isn't set):
   - **soc_kw** - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
