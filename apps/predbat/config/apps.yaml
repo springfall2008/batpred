@@ -13,7 +13,8 @@ pred_bat:
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
   #
-  # Sensors, currently more than one can be specified (ie one for inverter) and they will be summed up automatically
+  # Sensors, currently more than one can be specified and they will be summed up automatically
+  # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today: 
     - sensor.givtcp_{geserial}_load_energy_today_kwh
