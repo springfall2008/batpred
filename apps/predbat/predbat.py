@@ -953,6 +953,85 @@ class PredBat(hass.Hass):
             self.expose_config(arg, value)
         return value
 
+    def get_ge_url(self, url, headers, now_utc):
+        """
+        Get data from GE Cloud
+        """
+        if url in self.ge_url_cache:
+            stamp = self.ge_url_cache[url]['stamp']
+            pdata = self.ge_url_cache[url]['data']
+            age = now_utc - stamp
+            if age.seconds < (30 * 60):
+                self.log("Return cached GE data for {} age {} minutes".format(url, age.seconds / 60))
+                return pdata
+
+        self.log("Fetching {}".format(url))
+        r = requests.get(url, headers=headers)
+        try:
+            data = r.json()       
+        except requests.exceptions.JSONDecodeError:
+            self.log("WARN: Error downloading GE data from url {}".format(url))
+            return False
+        
+        self.ge_url_cache[url] = {}
+        self.ge_url_cache[url]['stamp'] = now_utc
+        self.ge_url_cache[url]['data'] = data
+        return data
+
+    def download_ge_data(self, now_utc):
+        """
+        Download consumption data from GE Cloud
+        """
+        geserial = self.get_arg('ge_cloud_serial')
+        gekey = self.args.get('ge_cloud_key', None)
+
+        if not geserial:
+            self.log("ERROR: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
+            return False
+        if not gekey:
+            self.log("ERROR: GE Cloud has been enabled but ge_cloud_key is not set to your appkey")
+            return False
+
+        headers = {
+            'Authorization': 'Bearer  ' + gekey,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        mdata = []
+        days_prev = 0
+        while days_prev <= self.max_days_previous:
+            time_value = now_utc - timedelta(days=days_prev)
+            datestr = time_value.strftime("%Y-%m-%d")
+            url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=1024".format(geserial, datestr)
+            while url:
+                data = self.get_ge_url(url, headers, now_utc)
+
+                darray = data.get('data', None)
+                if darray is None:
+                    self.log("WARN: Error downloading GE data from url {}".format(url))
+                    return False
+
+                for item in darray:
+                    timestamp = item['time']
+                    consumption = item['today']['consumption']
+                    dimport = item['today']['grid']['import']
+                    dexport = item['today']['grid']['export']
+
+                    new_data = {}
+                    new_data['last_updated'] = timestamp
+                    new_data['consumption'] = consumption
+                    new_data['import'] = dimport
+                    new_data['export'] = dexport
+                    mdata.append(new_data)
+                url = data['links'].get('next', None)
+            days_prev += 1
+            
+        self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, 'consumption', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True)
+        self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'import', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'export', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.log("Downloaded {} datapoints from GE".format(len(self.load_minutes)))
+        return True
+
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL or return from cache if recent
@@ -1042,9 +1121,9 @@ class PredBat(hass.Hass):
 
         import_today = {}    
         for entity_id in entity_ids:
-            history = self.get_history(entity_id = entity_id, days = self.forecast_days + 1)
+            history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
             if history:
-                import_today = self.minute_data(history[0], self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
+                import_today = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
 
@@ -2306,6 +2385,7 @@ class PredBat(hass.Hass):
         self.sim_soc_charge = []
         self.notify_devices = ['notify']
         self.octopus_url_cache = {}
+        self.ge_url_cache = {}
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = 0, end_record=None):
         """
@@ -2548,7 +2628,7 @@ class PredBat(hass.Hass):
             window = charge_window_best[window_n]
             start = window['start']
             end = window['end']
-            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_limit and self.charge_limit[0]['start'] == start and self.charge_limit[0]['end'] == end):
+            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_limit and self.charge_limit[0]['end'] == end):
                 new_limit_best.append(charge_limit_best[window_n])
                 new_window_best.append(charge_window_best[window_n])
         return new_limit_best, new_window_best 
@@ -2791,9 +2871,31 @@ class PredBat(hass.Hass):
         self.octopus_slots = []
         self.car_charging_slots = []
         self.cost_today_sofar = 0
+        self.import_today = {}
+        self.export_today = {}
+        self.load_minutes = {}
 
         # Load previous load data
-        load_minutes = self.minute_data_load(now_utc)
+        if self.get_arg('ge_cloud_data', False):
+            self.download_ge_data(now_utc)
+        else:
+            # Load data
+            if 'load_today' in self.args:
+                self.load_minutes = self.minute_data_load(now_utc)
+            else:
+                self.log("WARN: You have not set load_today, you will have no load data")
+
+            # Load import today data 
+            if 'import_today' in self.args:
+                self.import_today = self.minute_data_import_export(now_utc, 'import_today')
+            else:
+                self.log("WARN: You have not set import_today, you will have no previous import data")
+
+            # Load export today data 
+            if 'export_today' in self.args:
+                self.export_today = self.minute_data_import_export(now_utc, 'export_today')
+            else:
+                self.log("WARN: You have not set export_today, you will have no previous export data")
 
         # Car charging information
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
@@ -2915,18 +3017,6 @@ class PredBat(hass.Hass):
         # Publish the car plan
         self.publish_car_plan()
 
-        # Load import today data 
-        if 'import_today' in self.args and self.rate_import:
-            self.import_today = self.minute_data_import_export(now_utc, 'import_today')
-        else:
-            self.import_today = {}
-
-        # Load export today data 
-        if 'export_today' in self.args and self.rate_export:
-            self.export_today = self.minute_data_import_export(now_utc, 'export_today')
-        else:
-            self.export_today = {}
-
         # Work out cost today
         if self.import_today:
             self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
@@ -3036,18 +3126,18 @@ class PredBat(hass.Hass):
 
         # Simulate current settings
         end_record = self.record_length(self.charge_window_best)
-        metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes, pv_forecast_minute, save='base', end_record=end_record)
+        metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, self.load_minutes, pv_forecast_minute, save='base', end_record=end_record)
 
         # Try different battery SOCs to get the best result
         if self.calculate_best:
             if self.calculate_discharge_first:
                 self.log("Calculate discharge first is set")
-                self.optimise_charge_windows_reset(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
-                self.optimise_discharge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
-                self.optimise_charge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_charge_windows_reset(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_discharge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_charge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
             else:
-                self.optimise_charge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
-                self.optimise_discharge_windows(end_record, load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_charge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
+                self.optimise_discharge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
 
             # Filter out any unused charge windows
             if self.set_charge_window:
@@ -3075,8 +3165,8 @@ class PredBat(hass.Hass):
                 self.log("Discharge windows now {} {}".format(self.discharge_limits_best, self.discharge_window_best))
         
             # Final simulation of best, do 10% and normal scenario
-            best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute10, save='best10', end_record=end_record)
-            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, save='best', end_record=end_record)
+            best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, self.load_minutes, pv_forecast_minute10, save='best10', end_record=end_record)
+            best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, self.load_minutes, pv_forecast_minute, save='best', end_record=end_record)
             self.log("Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format
             (self.charge_limit_best, self.discharge_limits_best, self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(best_metric), self.dp2(best_metric10)))
 
