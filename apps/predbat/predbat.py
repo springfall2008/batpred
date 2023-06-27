@@ -1044,7 +1044,7 @@ class PredBat(hass.Hass):
         for entity_id in entity_ids:
             history = self.get_history(entity_id = entity_id, days = self.forecast_days + 1)
             if history:
-                import_today = self.minute_data(history[0], self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, accumulate=import_today)
+                import_today = self.minute_data(history[0], self.forecast_days + 1, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
 
@@ -2736,6 +2736,7 @@ class PredBat(hass.Hass):
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.0)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
+        self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.5)
         self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
