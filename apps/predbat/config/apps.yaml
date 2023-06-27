@@ -25,6 +25,15 @@ pred_bat:
   export_today: 
     - sensor.givtcp_{geserial}_export_energy_today_kwh
   #
+  # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
+  # this is usually less efficent and of course prone to internet downtime, but could be useful if you lost your GivTCP data
+  # Set the serial to the inverter serial to pull the data from and the key to your API key
+  # When this is set load_today, import_today and export_today are not used
+  #
+  ge_cloud_data: False
+  ge_cloud_serial: '{geserial}'
+  ge_cloud_key: 'xxxx'
+  #
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
