@@ -1672,8 +1672,8 @@ class PredBat(hass.Hass):
         charge_limit_percent = [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(0, len(charge_limit))]
 
         if self.debug_enable or save:
-            self.log("predict {} end_record {} final soc {} kwh metric {} p min_soc {} @ {} kwh load {} pv {} charge {} limit {}% ({} kwh)".format(
-                      save, self.time_abs_str(end_record + self.minutes_now), self.dp2(final_soc), self.dp2(final_metric), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(final_load_kwh), self.dp2(final_pv_kwh), charge_window, charge_limit_percent, charge_limit))
+            self.log("predict {} end_record {} final soc {} kwh metric {} p min_soc {} @ {} kwh load {} pv {}".format(
+                      save, self.time_abs_str(end_record + self.minutes_now), self.dp2(final_soc), self.dp2(final_metric), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(final_load_kwh), self.dp2(final_pv_kwh)))
             self.log("         [{}]".format(self.scenario_summary_title(record_time)))
             self.log("    SOC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
             self.log("  STATE: [{}]".format(self.scenario_summary(record_time, predict_state)))
@@ -2325,6 +2325,7 @@ class PredBat(hass.Hass):
         self.rate_export = {}
         self.rate_slots = []
         self.low_rates = []
+        self.high_export_rates = []
         self.cost_today_sofar = 0
         self.octopus_slots = []
         self.car_charging_slots = []
@@ -2762,6 +2763,26 @@ class PredBat(hass.Hass):
                             self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
 
+    def window_as_text(self, windows, percents):
+        """
+        Convert window in minutes to text string
+        """
+        txt = "{"
+        for window_n in range(0, len(windows)):
+            window = windows[window_n]
+            percent = percents[window_n]
+            if window_n > 0:
+                txt += ', '
+            start_timestamp = self.midnight_utc + timedelta(minutes=window['start'])
+            start_time = start_timestamp.strftime("%d-%m %H:%M:%S")
+            end_timestamp = self.midnight_utc + timedelta(minutes=window['end'])
+            end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
+            txt += start_time + ' - '
+            txt += end_time
+            txt += " @ {}".format(self.dp2(percent))
+        txt += '}'
+        return txt
+
     def update_pred(self):
         """
         Update the prediction state, everything is called from here right now
@@ -2868,6 +2889,7 @@ class PredBat(hass.Hass):
         self.rate_export = {}
         self.rate_slots = []
         self.low_rates = []
+        self.high_export_rates = []
         self.octopus_slots = []
         self.car_charging_slots = []
         self.cost_today_sofar = 0
@@ -3067,14 +3089,13 @@ class PredBat(hass.Hass):
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
         self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
 
-        self.log("Base charge limit {} window {} percent {}".format(self.charge_limit, self.charge_window, self.charge_limit_percent))
-        self.log("Base discharge limit {} window {}".format(self.discharge_limits, self.discharge_window))
+        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit)))
+        self.log("Base discharge window {}".format(self.window_as_text(self.discharge_window, self.discharge_limits)))
 
         # Calculate best charge windows
         if self.low_rates:
             # If we are using calculated windows directly then save them
             self.charge_window_best = copy.deepcopy(self.low_rates)
-            self.log('Charge windows best will be {}'.format(self.charge_window_best))
         else:
             # Default best charge window as this one
             self.charge_window_best = self.charge_window
@@ -3082,7 +3103,6 @@ class PredBat(hass.Hass):
         # Calculate best discharge windows
         if self.high_export_rates:
             self.discharge_window_best = copy.deepcopy(self.high_export_rates)
-            self.log('Discharge windows best will be {}'.format(self.discharge_window_best))
         else:
             self.discharge_window_best = []
 
@@ -3092,6 +3112,10 @@ class PredBat(hass.Hass):
 
         # Pre-fill best discharge enable with Off
         self.discharge_limits_best = [100.0 for i in range(0, len(self.discharge_window_best))]
+
+        # Show best windows
+        self.log('Best charge    window {}'.format(self.window_as_text(self.charge_window_best, self.charge_limit_best)))
+        self.log('Best discharge window {}'.format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         if 'pv_forecast_today' in self.args:
@@ -3142,9 +3166,9 @@ class PredBat(hass.Hass):
             # Filter out any unused charge windows
             if self.set_charge_window:
                 self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                self.log("Filtered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+                self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
             else:
-                self.log("Unfiltered charge windows {} {} reserve {}".format(self.charge_limit_best, self.charge_window_best, self.reserve))
+                self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
 
             # Filter out any unused discharge windows
             if self.set_discharge_window and self.discharge_window_best:
@@ -3162,7 +3186,7 @@ class PredBat(hass.Hass):
 
                     # Filter out the windows we disabled during clipping
                     self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
-                self.log("Discharge windows now {} {}".format(self.discharge_limits_best, self.discharge_window_best))
+                self.log("Discharge windows filtered {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
         
             # Final simulation of best, do 10% and normal scenario
             best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, self.load_minutes, pv_forecast_minute10, save='best10', end_record=end_record)
