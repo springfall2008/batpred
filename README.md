@@ -198,6 +198,7 @@ calculate_discharge_oldest - True      # Make the discharge as late as possible 
 combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
 discharge_slot_split - 5               # Allow 5 minute adjustments to the discharge slot length
 set_discharge_window - True            # Allow the tool to control the discharge slots
+metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
 ```
