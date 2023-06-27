@@ -197,9 +197,16 @@ pred_bat:
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 5
 
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
+  battery_scaling: 1.0
+  
+  # Can be used to scale import and export data, used for workarounds
+  import_export_scaling: 1.0
+  
   # Enable user configuration inside Home Assistant
   user_config_enable: True  
-
+  
   # ---------------------------------------------------------------------------------------------------
   # User config - these items are configurable inside Home Assistant when user_config_enable is set to True
   # In this case these items only provide default values when the entities are first created
@@ -209,10 +216,6 @@ pred_bat:
   # Battery loss discharge accounts for energy lost discharging the battery, 0.05 is 5%
   battery_loss: 0.05
   battery_loss_discharge: 0.05
-
-  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
-  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
-  battery_scaling: 1.0
 
   # Battery rate scaling adjusts your maximum charge/discharge rate from that reported by GivTCP
   # e.g. a value of 1.1 would give you 10% faster charge/discharge than reported
