@@ -253,13 +253,23 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
   - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
 
+### Historical data
 
-### Historical load
+#### Data from GivTCP
+
+  It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
+  
   - **load_today** - GivTCP Entity name for the house load in kwh today (must be incrementing)
-
-### Import and Export data 
   - **import_today** - GivTCP Imported energy today in Kwh (incrementing)
-  - **export_today** - GivTCP Exported energy today in Kwh (incrementing) 
+  - **export_today** - GivTCP Exported energy today in Kwh (incrementing)
+
+#### GE Cloud Data
+
+   If you have an issue with the GivTCP data you can get this historical data from the Givenergy cloud instead. This data is updated every 30 minutes
+
+  - **ge_cloud_data**   - When True use the GE Cloud for data rather than load_today, import_today and export_today
+  - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
+  - **ge_cloud_key**    - Set to your API Key for GE Cloud (long string)
 
 ### Inverter control - per inverter
 
