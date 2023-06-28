@@ -9,8 +9,7 @@ For support please raise a Github ticket or use the GivTCP Facebook page
 ```
 
 If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
-![image](https://github.com/springfall2008/batpred/assets/48591903/570e6088-11c0-4d23-963f-524b55cc87a6)
-
+![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
 **Please note from release v5.0 onwards many configuration options are now inside Home Assistant (if user_config_enable is set to True), for these options changing the apps.yml will have no effect once installed** 
 
