@@ -90,6 +90,9 @@ pred_bat:
   inverter_limit: 
    - 3600
    - 3600
+
+  # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
+  inverter_clock_skew: 0
   
   # Set these to match solcast sensor names (unlikely to need changing)
   pv_forecast_today: sensor.solcast_forecast_today
