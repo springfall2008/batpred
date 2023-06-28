@@ -208,8 +208,8 @@ class Inverter():
                     charge_end_time = datetime.strptime(self.base.get_arg('charge_end_time', index=self.id), "%H:%M:%S")
 
             # Reverse clock skew
-            charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew * 60)
-            charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew * 60)
+            charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+            charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
 
             # Compute charge window minutes start/end just for the next charge window
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
@@ -268,8 +268,8 @@ class Inverter():
             discharge_end = datetime.strptime(self.base.get_arg('discharge_end_time', index=self.id), "%H:%M:%S")
 
         # Reverse clock skew
-        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew * 60)
-        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew * 60)
+        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
 
         # Compute discharge window minutes start/end just for the next discharge window
         self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
@@ -512,14 +512,14 @@ class Inverter():
 
         # Start time to correct format
         if new_start_time:
-            new_start_time += timedelta(seconds=self.base.inverter_clock_skew * 60)
+            new_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
             new_start = new_start_time.strftime("%H:%M:%S")
         else:
             new_start = None
 
         # End time to correct format
         if new_end_time:
-            new_end_time += timedelta(seconds=self.base.inverter_clock_skew * 60)
+            new_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
             new_end = new_end_time.strftime("%H:%M:%S")
         else:
             new_end = None
@@ -637,8 +637,8 @@ class Inverter():
                 old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)
 
         # Apply clock skew
-        charge_start_time += timedelta(seconds=self.base.inverter_clock_skew * 60)
-        charge_end_time += timedelta(seconds=self.base.inverter_clock_skew * 60)
+        charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+        charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
 
         # Convert to string
         new_start = charge_start_time.strftime("%H:%M:%S")
@@ -2830,7 +2830,12 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
         self.forecast_plan_hours = self.get_arg('forecast_plan_hours', 24)
-        self.inverter_clock_skew = self.get_arg('inverter_clock_skew', 0)
+        self.inverter_clock_skew_start = self.get_arg('inverter_clock_skew_start', 0)
+        self.inverter_clock_skew_end = self.get_arg('inverter_clock_skew_end', 0)
+
+        # Log clock skew
+        if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:
+            self.log("Inverter clock skew start {} end {} applied".format(self.inverter_clock_skew_start, self.inverter_clock_skew_end))
 
         # Metric config
         self.metric_house = self.get_arg('metric_house', 38.0)
