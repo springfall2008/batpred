@@ -495,7 +495,7 @@ Example charts:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5f1f504d-9251-4610-9403-2a5f4d0bf332)
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/73976f52-b426-4bc0-bc15-b09e71619344)
+![image](https://github.com/springfall2008/batpred/assets/48591903/c02d65cf-e502-4484-a58d-cff8fb93d0f3)
 
 ## Todo list
   - Add the ability to take car charging data from power sensor (rather than just from energy)
