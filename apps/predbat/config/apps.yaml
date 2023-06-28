@@ -143,9 +143,9 @@ pred_bat:
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
   
   # Set import and export entity to point to the Octopus Energy plugin
-  # automatically matches your meter number assuming you have only one
+  # automatically matches your meter number assuming you have only one (no need to edit the below)
   # Will be ignored if you don't have the sensor
-  # Or manually set it to the correct sensor names e.g:
+  # Or manually set it to the correct sensor names if the automatic match doesn't work e.g:
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
   metric_octopus_import: 're:sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_current_rate'
