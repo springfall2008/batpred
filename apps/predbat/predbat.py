@@ -2830,7 +2830,7 @@ class PredBat(hass.Hass):
         self.forecast_days = int((forecast_hours + 23)/24)
         self.forecast_minutes = forecast_hours * 60
         self.forecast_plan_hours = self.get_arg('forecast_plan_hours', 24)
-        self.inverter_clock_skew = self.get_arg('inverter_clock_skew', 1)
+        self.inverter_clock_skew = self.get_arg('inverter_clock_skew', 0)
 
         # Metric config
         self.metric_house = self.get_arg('metric_house', 38.0)
