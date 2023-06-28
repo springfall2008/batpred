@@ -489,7 +489,7 @@ To create the fancy chart
 
 Example charts:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/f24cf5cf-8520-4843-8695-e8d59b25ce30)
+![image](https://github.com/springfall2008/batpred/assets/48591903/bed7453c-e93a-4aaa-9a8f-bb0d54959084)
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a10e570d-373e-4fce-aebf-dc6463067e3b)
 
