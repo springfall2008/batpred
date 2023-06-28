@@ -489,9 +489,9 @@ To create the fancy chart
 
 Example charts:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/bed7453c-e93a-4aaa-9a8f-bb0d54959084)
+![image](https://github.com/springfall2008/batpred/assets/48591903/28f29756-2502-4079-9c75-398e8a1a0699)
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/a10e570d-373e-4fce-aebf-dc6463067e3b)
+![image](https://github.com/springfall2008/batpred/assets/48591903/4c3df49c-52e5-443f-b9c5-7a673c96b205)
 
 ![image](https://user-images.githubusercontent.com/48591903/236629117-8f05e050-d43d-4a52-a2a7-b5e97b961e3c.png)
 
