@@ -1438,6 +1438,7 @@ class PredBat(hass.Hass):
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
         predict_soc = {}
+        predict_export = {}
         predict_battery_power = {}
         predict_soc_time = {}
         predict_car_soc_time = {}
@@ -1659,6 +1660,12 @@ class PredBat(hass.Hass):
                 final_import_kwh_house = import_kwh_house
                 final_export_kwh = export_kwh
 
+                # Store export data
+                if diff < 0:
+                    predict_export[minute] = energy
+                else:
+                    predict_export[minute] = 0
+
             # Have we past the charging or discharging time?
             if charge_window_n >= 0:
                 charge_has_started = True
@@ -1741,6 +1748,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best_import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state("predbat.best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state("predbat.record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
+            self.find_spare_energy(predict_soc, predict_export, step)            
 
         if save and save=='debug' and not SIMULATE:
             self.set_state("predbat.pv_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
@@ -2030,6 +2038,9 @@ class PredBat(hass.Hass):
             self.set_state("binary_sensor.predbat_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
+        """
+        Publish the export rates
+        """
         if self.high_export_rates:
             window_n = 0
             for window in self.high_export_rates:
@@ -2048,6 +2059,7 @@ class PredBat(hass.Hass):
                     self.set_state("predbat.high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("binary_sensor.predbat_high_rate_export_slot", state='on' if (self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state("predbat.high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2060,6 +2072,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_cost", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("binary_sensor.predbat_high_rate_export_slot", state='off', attributes = {'friendly_name' : 'Predbat high export rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         if len(self.high_export_rates) < 2 and not SIMULATE:
             self.set_state("predbat.high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2157,6 +2170,9 @@ class PredBat(hass.Hass):
         return rates
 
     def publish_rates_import(self):
+        """
+        Publish the import rates
+        """
         # Output rate info
         if self.low_rates:
             window_n = 0
@@ -2176,6 +2192,8 @@ class PredBat(hass.Hass):
                     self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("predbat.low_rate_active", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("binary_sensor.predbat_low_rate_slot", state='on' if (self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state("predbat.low_rate_start_2", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.low_rate_end_2", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2188,6 +2206,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.low_rate_cost", state=self.rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("binary_sensor.predbat_low_rate_slot", state='off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         if len(self.low_rates) < 2 and not SIMULATE:
             self.set_state("predbat.low_rate_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state("predbat.low_rate_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2648,6 +2667,30 @@ class PredBat(hass.Hass):
                 new_limit_best.append(charge_limit_best[window_n])
                 new_window_best.append(charge_window_best[window_n])
         return new_limit_best, new_window_best 
+
+    def find_spare_energy(self, predict_soc, predict_export, step):
+        """
+        Find spare energy and set triggers
+        """
+        triggers = self.args.get('export_triggers', [])
+        if not isinstance(triggers, list):
+            return
+
+        for trigger in triggers:
+            total_energy = 0
+            name = trigger.get('name', 'trigger')
+            minutes = trigger.get('minutes', 60.0)
+            minutes = min(max(minutes, 0), self.forecast_minutes)
+            energy = trigger.get('energy', 1.0)
+            for minute in range(0, minutes, step):
+                total_energy += predict_export[minute]
+            sensor_name = "binary_sensor.predbat_export_trigger_" + name
+            if total_energy >= energy:
+                state = 'on'
+            else:
+                state = 'off'
+            self.log("Evalute trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
+            self.set_state(sensor_name, state=state, attributes = {'friendly_name' : 'Predbat export trigger ' + name, 'required' : energy, 'available' : self.dp2(total_energy), 'minutes' : minutes, 'icon': 'mdi:clock-start'})
 
     def clip_discharge_slots(self, minutes_now, predict_soc, discharge_window_best, discharge_limits_best, record_discharge_windows, step):
         """
