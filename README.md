@@ -378,6 +378,29 @@ Connect to your cars sensors for accurate data:
   - battery_scaling - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use predbat.soc_kw_h0 as your current status rather than the GivTCP entity so everything lines up
   - import_export_scaling - Scalings the import & export data from GivTCP - used for workarounds
 
+### Triggers
+
+The trigger figure is useful to help trigger your own automation based on having spare solar energy that you would otherwise export
+
+For each trigger give a name, the minutes of export needed and the energy required in that time
+Multiple triggers can be set at once so in total you could use too much energy if all run
+Each trigger create an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
+connect this to your automation to start whatever you want to trigger.
+
+Set the name for each trigger, the number of minutes of solar export you need and the amount of energy in kwH you will need available during that time period.
+
+For example:
+
+```
+ export_triggers:
+     - name: 'large'
+       minutes: 60
+       energy: 1.0
+     - name: 'small'
+       minutes: 15
+       energy: 0.25
+```
+
 ### Customisation 
 
 These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly if **user_config_enable** is set to True. Once the user config is enabled then changing the items in apps.yml will have no effect.
@@ -440,10 +463,11 @@ These are configuration items that you can modify to fit your needs, you can con
 - You will find new entities are created in HA:
   - predbat.status - Gives the current status and logs any adjustments made to your inverter
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
-  - predbat_charge_limit - The current charge limit used for the scenario in %
-  - predbat_charge_limit_kw - The current charge limit used for the scenario in kwH
-  - predbat_duration - The duration of the prediction maximum in hours
-  - predbat_load_energy - Predicted best load energy in Kwh
+  - predbat.charge_limit - The current charge limit used for the scenario in %
+  - predbat.charge_limit_kw - The current charge limit used for the scenario in kwH
+  - predbat.duration - The duration of the prediction maximum in hours
+  - predbat.load_energy - Predicted load energy in Kwh
+  - predbat.pv_energy - Predicted PV energy in Kwh
   - predbat.export_energy - Predicted export energy in Kwh
   - predbat.import_energy - Predicted import energy in Kwh
   - predbat.import_energy_battery - Predicted import energy to charge your home battery in Kwh
@@ -451,14 +475,20 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
   - predbat.soc_min_kwh - The minimum battery level during the time period in Kwh
   - predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
-- When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage: 
-  - predbat.best_export_energy - Predicted exports under best SOC setting
-  - predbat_best_import_energy - Predicted imports under best SOC setting
+  - predbat.battery_power - Predicted battery power per minute, for charting
+  - predbat.pv_power - Predicted PV power per minute, for charting
+  - predbat.grid_power - Predicted Grid power per minute, for charting
+  - predbat.car_soc - Predicted car battery %
+    
+- When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage:
+  - predbat.best_battery_hours_left - Number of hours left under best plan
+  - predbat.best_export_energy - Predicted exports under best plan
+  - predbat_best_import_energy - Predicted imports under best plan
   - predbat_best_load - Predicted best load energy
+  - predbat.best_pv_energy - Predicted Best PV energy in Kwh
   - predbat_best_import_energy_battery - Predicted imports to the battery under best SOC setting
   - predbat_best_import_energy_house - Predicted imports to the house under best SOC setting
   - predbat_soc_kw_best - Predicted best final state of charge (in Kwh), holds minute by minute prediction data (in attributes) to be charted
-  - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
   - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
   - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
   - predbat.soc_kw_best_h12 - Single data point for hte predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
@@ -467,14 +497,41 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
   - predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
   - predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kwH
+  - predbat.battery_power  - Predicted best battery power per minute, for charting
+  - predbat.pv_power - Predicted best PV power per minute, for charting
+  - predbat.grid_power - Predicted best Grid power per minute, for charting
+  - predbat.car_soc_best - Predicated car battery % in  best plan
+
+- The calcuated results under PV 10% scenario
+  - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
+  - predbat.best10_pv_energy - Predicted PV 10% energy in Kwh
+  - predbat.best10_metric - Predicted cost for PV 10%
+  - predbat.best10_export_energy- Predicted export energy for PV 10%
+  - predbat.best10_load_energy - Predicted load energy for PV 10%
+  - predbat.best10_import_energy- Predicted import energy for PV 10%
+
+
+- Energy rate data 
   - predbat.low_rate_cost - The lowest rate cost in P
   - predbat.low_rate_start - Start time of the next low rate
   - predbat.low_rate_end - End time of the next low rate
+  - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low rate slow
+  - binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
+    
+  - predbat.high_export_rate_cost - The highest rate cost in P
+  - predbat.high_export_rate_start - Start time of the next high export rate
+  - predbat.high_export_rate_end - End time of the next high export rate
+  - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slow
+  - binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
+   
   - predbat.rates - The current energy rates in P (also can be charted)
   - predbat.rates_export - The current energy export rates in P (also be be charted)
+  - predbat.cost_today - The total cost of energy so far today (since midnight)
   - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
   - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
 
+- Car data
+  - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
 Example data out:
 
