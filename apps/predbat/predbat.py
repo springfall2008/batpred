@@ -1647,7 +1647,7 @@ class PredBat(hass.Hass):
             
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
-                minute_left = max(minute, minute_left)
+                minute_left = min(minute, minute_left)
 
             # Record final soc & metric
             if record:
@@ -2492,7 +2492,7 @@ class PredBat(hass.Hass):
 
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute
 
-    def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = False, end_record=None):
+    def optimise_discharge(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = 0, end_record=None):
         """
         Optimise a single discharging window for best discharge %
         """
@@ -2717,7 +2717,7 @@ class PredBat(hass.Hass):
             if self.calculate_discharge_all and record_discharge_windows > 1:
                 
                 self.log("Optimise all discharge windows n={}".format(record_discharge_windows))
-                best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = True, end_record = end_record)
+                best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = record_discharge_windows, end_record = end_record)
 
                 self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
                 self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
