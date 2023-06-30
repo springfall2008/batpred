@@ -285,6 +285,10 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 #### REST Interface inverter control  - per inverter
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
 
+  It's recommended you enable Raw register output in GivTCP for added monitoring:
+  
+  ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
+
 #### Home-assistant Inverter control  - per inverter
 
 Control per inverter (only used if REST isn't set):
