@@ -278,18 +278,18 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
   - **ge_cloud_key**    - Set to your API Key for GE Cloud (long string)
 
-### Inverter control - per inverter
+### Inverter control
 
   - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 
-#### REST Interface inverter control  - per inverter
+#### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
 
   It's recommended you enable Raw register output in GivTCP for added monitoring:
   
   ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
 
-#### Home-assistant Inverter control  - per inverter
+#### Home-assistant Inverter control
 
 Control per inverter (only used if REST isn't set):
   - **soc_kw** - GivTCP Entity name of the battery SOC in kwh, should be the inverter one not an individual battery
