@@ -132,12 +132,14 @@ class Inverter():
 
         # Battery size, charge and discharge rates
         if self.rest_data:
-            self.nominal_capacity = float(self.rest_data['raw']['invertor']['battery_nominal_capacity']) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
             self.soc_max = float(self.rest_data['Invertor_Details']['Battery_Capacity_kWh'])
-            if abs(self.soc_max - self.nominal_capacity) > 1.0:
-                # XXX: Weird workaround for battery reporting wrong capacity issue
-                self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
-                self.soc_max = self.nominal_capacity
+            self.nominal_capacity = self.soc_max
+            if 'raw' in self.rest_data:
+                self.nominal_capacity = float(self.rest_data['raw']['invertor']['battery_nominal_capacity']) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+                if abs(self.soc_max - self.nominal_capacity) > 1.0:
+                    # XXX: Weird workaround for battery reporting wrong capacity issue
+                    self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                    self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
             self.battery_rate_max = self.rest_data['Invertor_Details']['Invertor_Max_Rate'] / 1000.0 / 60.0
         else:
@@ -2192,7 +2194,6 @@ class PredBat(hass.Hass):
                     self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-                    self.set_state("predbat.low_rate_active", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                     self.set_state("binary_sensor.predbat_low_rate_slot", state='on' if (self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state("predbat.low_rate_start_2", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
