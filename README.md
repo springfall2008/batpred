@@ -241,6 +241,14 @@ rate_low_match_export - False          # Start with this at False but you can tr
      - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
   - I changed a config item but it made no difference?
      - If **user_config_enable** is True then many config items are now inside Home Assistant, in which case change it there instead.
+  - It's all running but I'm not getting very good results
+    - You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kwh, which is just over 20% on a 9.5kwh battery)
+    - Have a read of the user configuration guide above depending on your tariff different settings maybe required
+    - Check your solar production is well calibrated (you can compare solcast vs actualy in home assistant energy tab or on the Givenergy portal)
+    - Make sure your inverter max AC rate has been set correctly
+    - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
+    - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
+    - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 
 ## config.yml - details:
 
@@ -565,7 +573,8 @@ Example charts:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/c02d65cf-e502-4484-a58d-cff8fb93d0f3)
 
+<img width="1052" alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/a96934d3-753a-49da-800b-925896f87cb6">
+
 ## Todo list
   - Add the ability to take car charging data from power sensor (rather than just from energy)
   - Improve documentation
-  - Consider using MQTT interface to HA  
