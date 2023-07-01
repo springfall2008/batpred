@@ -84,6 +84,12 @@ CONFIG_ITEMS = [
     {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
     {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
+    {'name' : 'iboost_enable',                 'friendly_name' : 'IBoost enble',                   'type' : 'switch'},
+    {'name' : 'iboost_max_energy',             'friendly_name' : 'IBoost max energy',              'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
+    {'name' : 'iboost_today',                  'friendly_name' : 'IBoost today',                   'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
+    {'name' : 'iboost_max_power',              'friendly_name' : 'IBoost max power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
+    {'name' : 'iboost_min_power',              'friendly_name' : 'IBoost min power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
+    {'name' : 'iboost_min_soc',                'friendly_name' : 'IBoost min soc',                 'type' : 'input_number', 'min' : 0,   'max' : 100,   'step' : 5,    'unit' : '%'},
 ]
 
 class Inverter():
@@ -1448,6 +1454,7 @@ class PredBat(hass.Hass):
         predict_state = {}
         predict_grid_power = {}
         predict_load_power = {}
+        predict_iboost = {}
         minute = 0
         minute_left = self.forecast_minutes
         soc = self.soc_kw
@@ -1464,6 +1471,8 @@ class PredBat(hass.Hass):
         final_import_kwh = 0
         final_import_kwh_house = 0
         final_import_kwh_battery = 0
+        iboost_today_kwh = self.iboost_today
+        final_iboost_kwh = iboost_today_kwh
         load_kwh = 0
         final_load_kwh = 0
         pv_kwh = 0
@@ -1514,6 +1523,7 @@ class PredBat(hass.Hass):
                 export_kwh_time[stamp] = self.dp2(export_kwh)
                 predict_car_soc_time[stamp] = self.dp2(car_soc / self.car_charging_battery_size * 100.0)
                 record_time[stamp] = 0 if record else self.soc_max
+                predict_iboost[stamp] = iboost_today_kwh
 
             # Save Soc prediction data as minutes for later use
             self.predict_soc[minute] = self.dp3(soc)
@@ -1564,6 +1574,27 @@ class PredBat(hass.Hass):
 
             pv_ac = min(load_yesterday, pv_now, self.inverter_limit * step)
             pv_dc = pv_now - pv_ac
+
+            # IBoost model
+            if self.iboost_enable:
+                iboost_amount = 0
+                if iboost_today_kwh < self.iboost_max_energy:
+                    if pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc):
+                        iboost_amount = min(pv_dc, self.iboost_max_power * step)
+                        pv_dc -= iboost_amount
+
+                # Cumulative energy
+                iboost_today_kwh += iboost_amount   
+
+                # Model Iboost reset
+                if (minute_absolute % (24*60)) >= (23*60 + 30):
+                    iboost_today_kwh = 0
+
+                # Save Iboost next prediction
+                if minute == 0 and save=='best':
+                    scaled_boost = (iboost_amount / step) * self.get_arg('run_every', 5)
+                    self.iboost_next = self.dp3(self.iboost_today + scaled_boost)
+                    self.log("IBoost model predicts usage {} in this run period taking total to {}".format(self.dp2(scaled_boost), self.iboost_next))
 
             # Battery behaviour
             battery_draw = 0
@@ -1661,6 +1692,7 @@ class PredBat(hass.Hass):
                 final_import_kwh_battery = import_kwh_battery
                 final_import_kwh_house = import_kwh_house
                 final_export_kwh = export_kwh
+                final_iboost_kwh = iboost_today_kwh
 
                 # Store export data
                 if diff < 0:
@@ -1705,6 +1737,8 @@ class PredBat(hass.Hass):
             self.log("     PV: [{}]".format(self.scenario_summary(record_time, pv_kwh_time)))
             self.log(" IMPORT: [{}]".format(self.scenario_summary(record_time, import_kwh_time)))
             self.log(" EXPORT: [{}]".format(self.scenario_summary(record_time, export_kwh_time)))
+            if self.iboost_enable:
+                self.log(" IBOOST: [{}]".format(self.scenario_summary(record_time, predict_iboost)))
             self.log("    CAR: [{}]".format(self.scenario_summary(record_time, predict_car_soc_time)))
             self.log(" METRIC: [{}]".format(self.scenario_summary(record_time, metric_time)))
 
@@ -1750,6 +1784,7 @@ class PredBat(hass.Hass):
             self.set_state("predbat.best_import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state("predbat.best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state("predbat.record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
+            self.set_state("predbat.iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'IBoost energy', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
             self.find_spare_energy(predict_soc, predict_export, step)            
 
         if save and save=='debug' and not SIMULATE:
@@ -2842,7 +2877,7 @@ class PredBat(hass.Hass):
         txt += '}'
         return txt
 
-    def update_pred(self):
+    def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
         """
@@ -2886,7 +2921,7 @@ class PredBat(hass.Hass):
         self.metric_battery = self.get_arg('metric_battery', 7.5)
         self.metric_export = self.get_arg('metric_export', 4.0)
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
-        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.0)
+        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
         self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.0)
@@ -2922,7 +2957,7 @@ class PredBat(hass.Hass):
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
         self.combine_discharge_slots = self.get_arg('combine_discharge_slots', True)
         self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
-        self.discharge_slot_split = self.get_arg('discharge_slot_split', 15)
+        self.discharge_slot_split = self.get_arg('discharge_slot_split', 10)
         self.charge_slot_split = self.get_arg('charge_slot_split', 30)
         self.calculate_charge_passes = self.get_arg('calculate_charge_passes', 1)
         self.calculate_discharge_passes = self.get_arg('calculate_discharge_passes', 1)
@@ -2944,6 +2979,15 @@ class PredBat(hass.Hass):
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
+
+        # Iboost model
+        self.iboost_enable = self.get_arg('iboost_enable', False)
+        self.iboost_max_energy = self.get_arg('iboost_max_energy', 3.0)
+        self.iboost_max_power = self.get_arg('iboost_max_power', 2400) / 1000 / 60.0
+        self.iboost_min_power = self.get_arg('iboost_min_power', 500)  / 1000 / 60.0
+        self.iboost_min_soc = self.get_arg('iboost_min_soc', 0.0)
+        self.iboost_today = self.get_arg('iboost_today', 0.0)
+        self.iboost_next = self.iboost_today
 
         # Car options
         self.car_charging_hold = self.get_arg('car_charging_hold', False)
@@ -3388,6 +3432,15 @@ class PredBat(hass.Hass):
             if self.set_reserve_enable and resetReserve and not setReserve:
                 inverter.adjust_reserve(0)
 
+        # IBoost model update state, only on 5 minute intervals
+        if self.iboost_enable and scheduled:
+            # Reset after 11:30pm
+            if self.minutes_now >= (23*60 + 30):
+                self.iboost_next = 0
+            # Save next IBoost model value
+            self.expose_config('iboost_today', self.iboost_next)
+            self.log("IBoost model today updated to {}".format(self.iboost_next))
+
         self.log("Completed run status {}".format(status))
         self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
@@ -3606,7 +3659,7 @@ class PredBat(hass.Hass):
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
             SIMULATE = False
-            self.update_pred()
+            self.update_pred(scheduled=False)
             soc_best = self.predict_soc_best.copy()
             self.log("Best SOC array {}".format(soc_best))
             SIMULATE = True
@@ -3619,7 +3672,7 @@ class PredBat(hass.Hass):
                 self.simulate_offset = offset + 30 - (minutes_now % 30)
                 self.sim_soc_kw = soc_best[int(self.simulate_offset / 5) * 5]
                 self.log(">>>>>>>>>> Simulated offset {} soc {} <<<<<<<<<<<<".format(self.simulate_offset, self.sim_soc_kw))
-                self.update_pred()
+                self.update_pred(scheduled=True)
         else:
             # Run every N minutes aligned to the minute
             now = datetime.now()
@@ -3655,7 +3708,7 @@ class PredBat(hass.Hass):
             self.prediction_started = True
             self.update_pending = False
             try:
-                self.update_pred()
+                self.update_pred(scheduled=False)
             finally:
                 self.prediction_started = False
             self.prediction_started = False
@@ -3668,7 +3721,7 @@ class PredBat(hass.Hass):
             self.prediction_started = True
             self.update_pending = False
             try:
-                self.update_pred()
+                self.update_pred(scheduled=True)
             finally:
                 self.prediction_started = False
             self.prediction_started = False
