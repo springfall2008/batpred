@@ -84,7 +84,7 @@ CONFIG_ITEMS = [
     {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
     {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
-    {'name' : 'iboost_enable',                 'friendly_name' : 'IBoost enble',                   'type' : 'switch'},
+    {'name' : 'iboost_enable',                 'friendly_name' : 'IBoost enable',                  'type' : 'switch'},
     {'name' : 'iboost_max_energy',             'friendly_name' : 'IBoost max energy',              'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
     {'name' : 'iboost_today',                  'friendly_name' : 'IBoost today',                   'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
     {'name' : 'iboost_max_power',              'friendly_name' : 'IBoost max power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
@@ -1867,6 +1867,10 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
+                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60*2):
+                        # Export slot can never be bigger than 2 hours
+                        rate_low_end = minute
+                        break
                     if rate_low_start < 0:
                         rate_low_start = minute
                         rate_low_end = stop_at
@@ -2044,7 +2048,7 @@ class PredBat(hass.Hass):
         self.rate_export_threshold = rate_average * rate_high_threshold
 
         # Find discharging windows
-        self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, rate_average * rate_high_threshold, True)
+        self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, self.rate_export_threshold, True)
         return rates
 
     def publish_car_plan(self):
