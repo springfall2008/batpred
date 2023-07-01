@@ -1,3 +1,4 @@
+# Battery prediction chart
 type: custom:apexcharts-card
 header:
   show: true
@@ -380,3 +381,47 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value*1000.0]); } return res.sort((a, b) => { return
       a[0] - b[0]  })
+
+# Calibration chart
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Calibration
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: minute
+  offset: '-36h'
+now:
+  show: true
+yaxis:
+  - min: 0
+series:
+  - entity: predbat.soc_kw_h0
+    stroke_width: 1
+    curve: smooth
+    name: actual
+    show:
+      in_header: raw
+  - entity: predbat.soc_kw_best_h1
+    stroke_width: 1
+    curve: smooth
+    name: h1
+    offset: '-1h'
+    show:
+      in_header: raw
+  - entity: predbat.soc_kw_best_h8
+    stroke_width: 1
+    curve: smooth
+    name: h8
+    offset: '-8h'
+    show:
+      in_header: raw
+  - entity: predbat.soc_kw_best_h12
+    stroke_width: 1
+    curve: smooth
+    name: h12
+    offset: '-12h'
+    show:
+      in_header: raw
