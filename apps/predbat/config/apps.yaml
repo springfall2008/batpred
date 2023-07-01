@@ -389,6 +389,18 @@ pred_bat:
   set_reserve_enable: True
   set_reserve_notify: True
   set_reserve_min: 4
+
+  # IBoost model, when enabled tries to model excess solar energy being used to heat hot water (or similar)
+  # Max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kwh
+  # Max Power sets the maximum power in watts to consume - default 2400
+  # Min Power sets the minimum power in watts to consume - default 500
+  # Min soc sets the minimum home battery soc % to enable iboost on, default 0
+  # You will see predbat.iboost_today entity which tracks the estimated amount consumed during the day, and resets at night
+  iboost_enable: False
+  iboost_max_power: 2400
+  iboost_min_power: 500
+  iboost_min_soc: 0
+  iboost_max: 3.0
   
   # Debug enable prints lots of debug, leave off by default
   debug_enable: False
