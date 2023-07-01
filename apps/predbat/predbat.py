@@ -1493,6 +1493,7 @@ class PredBat(hass.Hass):
         grid_state = '-'
 
         # self.log("Sim discharge window {} enable {}".format(discharge_window, discharge_limits))
+        charge_limit, charge_window = self.remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -1598,12 +1599,7 @@ class PredBat(hass.Hass):
 
             # Battery behaviour
             battery_draw = 0
-            if (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
-                # Charge enable
-                charge_rate_max = self.battery_rate_max  # Assume charge becomes enabled here
-                battery_draw = -max(min(charge_rate_max * step, charge_limit[charge_window_n] - soc), 0)
-                battery_state = 'f+'
-            elif (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and soc >= ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0):
+            if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and soc >= ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0):
                 # Discharge enable
                 discharge_rate_max = self.battery_rate_max  # Assume discharge becomes enabled here
                 # It's assumed if SOC hits the expected reserve then it's terminated
@@ -1612,6 +1608,11 @@ class PredBat(hass.Hass):
                 if (soc - reserve_expected) < battery_draw:
                     battery_draw = max(soc - reserve_expected, 0)
                 battery_state = 'f-'
+            elif (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
+                # Charge enable
+                charge_rate_max = self.battery_rate_max  # Assume charge becomes enabled here
+                battery_draw = -max(min(charge_rate_max * step, charge_limit[charge_window_n] - soc), 0)
+                battery_state = 'f+'
             else:
                 # ECO Mode
                 if load_yesterday - pv_ac - pv_dc > 0:
@@ -2688,6 +2689,41 @@ class PredBat(hass.Hass):
         #  self.log("Sorted window list {} ids {}".format(window_with_id, id_list))
         return id_list
 
+    def remove_intersecting_windows(self, charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
+        """
+        Filters and removes intersecting charge windows
+        """
+        new_limit_best = []
+        new_window_best = []
+        max_slots = len(charge_limit_best)
+        max_dslots = len(discharge_limit_best)
+
+        for window_n in range(0, max_slots):
+            window = charge_window_best[window_n]
+            start = window['start']
+            end = window['end']
+
+            for dwindow_n in range(0, max_dslots):
+                dwindow = discharge_window_best[dwindow_n]
+                dlimit = discharge_limit_best[dwindow_n]
+                dstart = dwindow['start']
+                dend = dwindow['end']
+
+                # Overlapping window with enabled discharge?
+                if dlimit < 100.0 and dstart < end and dend >= start:
+                    if dstart > start:
+                        end = dstart
+                    else:
+                        start = dend
+                
+            if (end - start) >= 5:
+                new_window = {}
+                new_window['start'] = start
+                new_window['end'] = end
+                new_window_best.append(new_window)
+                new_limit_best.append(charge_limit_best[window_n])
+        return new_limit_best, new_window_best 
+
     def discard_unused_charge_slots(self, charge_limit_best, charge_window_best, reserve):
         """
         Filter out unused charge slots (those set at reserve)
@@ -3275,6 +3311,9 @@ class PredBat(hass.Hass):
             else:
                 self.optimise_charge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
                 self.optimise_discharge_windows(end_record, self.load_minutes, pv_forecast_minute, pv_forecast_minute10)
+
+            # Remove charge windows that overlap with discharge windows
+            self.charge_limit_best, self.charge_window_best = self.remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best)
 
             # Filter out any unused charge windows
             if self.set_charge_window:
