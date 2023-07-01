@@ -459,6 +459,12 @@ These are configuration items that you can modify to fit your needs, you can con
   - set_reserve_enable - When true the reserve % will be set to the same as the SOC target % during charging windows and back to the minimum outside these windows
   - set_reserve_notify - When true notification will be sent about reserve % changes
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
+
+  - iboost_enable - When True enables a model of a solar divertor which takes excess energy and diverts it to hot water rather than the battery or exporting
+  - iboost_max_power - Set to the maximum power in Watts that the divertor can use - default 2400
+  - iboost_min_power - Set to the minimum power in Watts that the divertor can use - default 500
+  - iboost_min_soc - Sets minimum home battery % for which iBoost will enable on - default 0 
+  - iboost_max - Sets the maximum kwH of energy the diverter will use in a day
   
   - debug_enable - option to print lots of debug messages
 
@@ -505,6 +511,8 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.pv_power - Predicted best PV power per minute, for charting
   - predbat.grid_power - Predicted best Grid power per minute, for charting
   - predbat.car_soc_best - Predicated car battery % in  best plan
+  - predbat.iboost_best - Gives the predicted energy going into the iBoost - for charter
+  - input_number.iboost_today - Gives the amount of energy modelled into the diverter today, resets at 11:30pm each night. Increments in the day.
 
 - The calcuated results under PV 10% scenario
   - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
@@ -513,7 +521,6 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.best10_export_energy- Predicted export energy for PV 10%
   - predbat.best10_load_energy - Predicted load energy for PV 10%
   - predbat.best10_import_energy- Predicted import energy for PV 10%
-
 
 - Energy rate data 
   - predbat.low_rate_cost - The lowest rate cost in P
