@@ -221,6 +221,13 @@ max_windows - 32                       # This will give you up to 4 hours of dis
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
 ```
 
+If you have a fixed export rate then instead set:
+
+combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
+discharge_slot_split - 5               # Optimise discharge length in 5 minute chunks
+calculate_discharge_first - True       # Set to true to force export often or False to only export excess
+rate_high_threshold: 1.0               # Consider all slots for export
+
 ## FAQ
 
   - I've installed Batbred but I don't see the correct entities:
