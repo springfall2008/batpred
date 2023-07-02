@@ -203,7 +203,6 @@ calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
 calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
 combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
-discharge_slot_split - 5               # Allow 5 minute adjustments to the discharge slot length
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
@@ -212,20 +211,22 @@ rate_high_threshold: 1.2               # Rates at least 20% above the average co
 
 ### Half hourly variable rates (e.g. Octopus Agile)
 
-Follow the instructions from Multiple rates for import and export above but then change
-
 ```
-combine_discharge_slots - False        # You want the discharge slots split up into smaller chunks
-discharge_slot_split - 15              # Anything less than 15 is likely to create a lot of windows
-max_windows - 32                       # This will give you up to 4 hours of discharge per day (over 2 days)
+calculate_best_discharge - True        # Enable discharge calculation
+calculate_discharge_first - True       # Give priority to discharge when it's profitable
+calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
+set_discharge_window - True            # Allow the tool to control the discharge slots
+combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
+discharge_slot_split - 30              # 30 minute split matches slots
+metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
+max_windows - 128                      # Ensure you have enough slots
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
+rate_high_threshold: 1.2               # Consider more valuable export slots only
 ```
 
-If you have a fixed export rate then instead set:
+If you have a fixed export rate then follow the above for variable rates but change:
 
-combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
-discharge_slot_split - 5               # Optimise discharge length in 5 minute chunks
-calculate_discharge_first - True       # Set to true to force export often or False to only export excess
 rate_high_threshold: 1.0               # Consider all slots for export
 
 ## FAQ
@@ -452,8 +453,8 @@ These are configuration items that you can modify to fit your needs, you can con
   
   - combine_charge_slots -  Control if adjacent charge slots can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning. Default is True.
   - charge_slot_split - When combine charge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-  - combine_discharge_slots - Control if adjacent discharge slots  can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.  Default is True.
-  - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 15
+  - combine_discharge_slots - Control if adjacent discharge slots can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.  Default is True.
+  - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
   - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
   
   - rate_low_threshold - Sets the threshold for price per Kwh below average import price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window.
