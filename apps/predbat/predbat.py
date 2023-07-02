@@ -53,8 +53,8 @@ CONFIG_ITEMS = [
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : 'percent'},
-    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Treshold',              'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'fraction'},
-    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Treshold',             'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'fraction'},    
+    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'fraction'},
+    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'fraction'},    
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
     {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
@@ -276,8 +276,8 @@ class Inverter():
             discharge_end = datetime.strptime(self.base.get_arg('discharge_end_time', index=self.id), "%H:%M:%S")
 
         # Reverse clock skew
-        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
-        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
+        discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
+        discharge_end -= timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
 
         # Compute discharge window minutes start/end just for the next discharge window
         self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
@@ -520,14 +520,14 @@ class Inverter():
 
         # Start time to correct format
         if new_start_time:
-            new_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
+            new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
             new_start = new_start_time.strftime("%H:%M:%S")
         else:
             new_start = None
 
         # End time to correct format
         if new_end_time:
-            new_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
+            new_end_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
             new_end = new_end_time.strftime("%H:%M:%S")
         else:
             new_end = None
@@ -1868,8 +1868,8 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60*2):
-                        # Export slot can never be bigger than 2 hours
+                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60*6):
+                        # Export slot can never be bigger than 6 hours
                         rate_low_end = minute
                         break
                     if rate_low_start < 0:
@@ -2033,10 +2033,8 @@ class PredBat(hass.Hass):
 
     def rate_scan_export(self, rates):
         """
-        Scan the rates and work out min/max and charging windows for export
+        Scan the rates and work out min/max
         """
-        rate_low_min_window = 5
-        rate_high_threshold = self.rate_high_threshold
 
         rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
         self.log("Export rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
@@ -2046,10 +2044,6 @@ class PredBat(hass.Hass):
         self.rate_export_min_minute = rate_min_minute
         self.rate_export_max_minute = rate_max_minute
         self.rate_export_average = rate_average
-        self.rate_export_threshold = rate_average * rate_high_threshold
-
-        # Find discharging windows
-        self.high_export_rates = self.rate_scan_window(rates, rate_low_min_window, self.rate_export_threshold, True)
         return rates
 
     def publish_car_plan(self):
@@ -2174,12 +2168,24 @@ class PredBat(hass.Hass):
                 break
         return found_rates
 
+    def set_rate_thresholds(self):
+        """
+        Set the high and low rate thresholds
+        """
+        self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
+        if self.rate_low_match_export:
+            # When enabled the low rate could be anything up-to the export rate (less battery losses)
+            self.rate_threshold = self.dp2(max(self.rate_threshold, self.rate_export_max * self.battery_loss * self.battery_loss_discharge))
+
+        # Rule out exports if the import rate is already higher
+        self.rate_export_threshold = self.dp2(max(self.rate_export_average * self.rate_high_threshold, self.dp2(self.rate_min)))
+
+        self.log("Rate thresholds (for charge/discharge) are import {} export {}".format(self.rate_threshold, self.rate_export_threshold))
+
     def rate_scan(self, rates, octopus_slots):
         """
-        Scan the rates and work out min/max and charging windows
+        Scan the rates and work out min/max
         """
-        rate_low_min_window = 5
-        rate_low_threshold = self.rate_low_threshold
         self.low_rates = []
         
         rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
@@ -2190,10 +2196,6 @@ class PredBat(hass.Hass):
         self.rate_min_minute = rate_min_minute
         self.rate_max_minute = rate_max_minute
         self.rate_average = rate_average
-        self.rate_threshold = rate_average * rate_low_threshold
-        if self.rate_low_match_export:
-            # When enabled the low rate could be anything up-to the export rate (less battery losses)
-            self.rate_threshold = max(self.rate_threshold, self.rate_export_max * self.battery_loss * self.battery_loss_discharge)
 
         # Add in any planned octopus slots
         if octopus_slots:
@@ -2207,8 +2209,6 @@ class PredBat(hass.Hass):
                 for minute in range(start_minutes, end_minutes):
                     rates[minute] = self.rate_min
 
-        # Find charging window
-        self.low_rates = self.rate_scan_window(rates, rate_low_min_window, self.rate_threshold, False)
         return rates
 
     def publish_rates_import(self):
@@ -2415,6 +2415,8 @@ class PredBat(hass.Hass):
         self.rate_min_minute = 0
         self.rate_max = 0
         self.rate_max_minute = 0
+        self.rate_export_threshold = 99
+        self.rate_threshold = 99
         self.rate_average = 0
         self.rate_export_min = 0
         self.rate_export_min_minute = 0
@@ -2568,10 +2570,18 @@ class PredBat(hass.Hass):
         best_start = window['start']
         
         for loop_limit in [100, 0]:
-            for loop_start in range(window['start'], window['end'], self.discharge_slot_split):
-
+            loop_start = window['start']
+            while loop_start < window['end']:
                 this_discharge_limit = loop_limit
                 start = loop_start
+
+                # Scan the window in larger sections and then get smaller as it gets smaller
+                if (window['end'] - loop_start) > 120:
+                    loop_start += 30
+                elif (window['end'] - loop_start) > 30:
+                    loop_start += 15
+                else:
+                    loop_start += 5
 
                 # Can't optimise all window start slot
                 if all_n and (start != window['start']):
@@ -2593,7 +2603,7 @@ class PredBat(hass.Hass):
                 else:
                     try_discharge[window_n] = this_discharge_limit
                     # Adjust start
-                    start = min(start, window['end'] - self.discharge_slot_split)
+                    start = min(start, window['end'] - 5)
                     try_discharge_window[window_n]['start'] = start
 
                 was_debug = self.debug_enable
@@ -2634,8 +2644,8 @@ class PredBat(hass.Hass):
                             metric -= max(0.1, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
-                    self.log("Sim: Discharge {} window {} start {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
-                            (this_discharge_limit, window_n, try_discharge_window[window_n]['start'], self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
+                    self.log("Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
+                            (this_discharge_limit, window_n, try_discharge_window[window_n]['start'], try_discharge_window[window_n]['end'], self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
@@ -2931,7 +2941,7 @@ class PredBat(hass.Hass):
         self.log("--------------- PredBat - update at: " + str(now_utc))
 
         self.debug_enable = self.get_arg('debug_enable', False)
-        self.max_windows = self.get_arg('max_windows', 24)
+        self.max_windows = self.get_arg('max_windows', 128)
 
         self.log("Debug enable is {}".format(self.debug_enable))
 
@@ -2951,10 +2961,14 @@ class PredBat(hass.Hass):
         self.forecast_plan_hours = self.get_arg('forecast_plan_hours', 24)
         self.inverter_clock_skew_start = self.get_arg('inverter_clock_skew_start', 0)
         self.inverter_clock_skew_end = self.get_arg('inverter_clock_skew_end', 0)
+        self.inverter_clock_skew_discharge_start = self.get_arg('inverter_clock_skew_discharge_start', 0)
+        self.inverter_clock_skew_discharge_end = self.get_arg('inverter_clock_skew_discharge_end', 0)
 
         # Log clock skew
         if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:
             self.log("Inverter clock skew start {} end {} applied".format(self.inverter_clock_skew_start, self.inverter_clock_skew_end))
+        if self.inverter_clock_skew_discharge_start != 0 or self.inverter_clock_skew_discharge_end != 0:
+            self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
 
         # Metric config
         self.metric_house = self.get_arg('metric_house', 38.0)
@@ -2997,7 +3011,7 @@ class PredBat(hass.Hass):
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
         self.combine_discharge_slots = self.get_arg('combine_discharge_slots', True)
         self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
-        self.discharge_slot_split = self.get_arg('discharge_slot_split', 10)
+        self.discharge_slot_split = self.get_arg('discharge_slot_split', 30)
         self.charge_slot_split = self.get_arg('charge_slot_split', 30)
         self.calculate_charge_passes = self.get_arg('calculate_charge_passes', 1)
         self.calculate_discharge_passes = self.get_arg('calculate_discharge_passes', 1)
@@ -3151,21 +3165,34 @@ class PredBat(hass.Hass):
             self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
 
-        # Replicate and scan export rates
-        if self.rate_export:
-            self.rate_export = self.rate_replicate(self.rate_export)
-            self.rate_export = self.rate_scan_export(self.rate_export)
-            self.publish_rates(self.rate_export, True)
-        else:
-            self.log("No export rate data provided - using default metric")
-
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_import = self.rate_replicate(self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
-            self.publish_rates(self.rate_import, False)
         else:
             self.log("No import rate data provided - using default metric")
+
+        # Replicate and scan export rates
+        if self.rate_export:
+            self.rate_export = self.rate_replicate(self.rate_export)
+            self.rate_export = self.rate_scan_export(self.rate_export)
+        else:
+            self.log("No export rate data provided - using default metric")
+
+        # Set rate thresholds
+        if self.rate_import or self.rate_export:
+            self.set_rate_thresholds()
+
+        # Find discharging windows
+        if self.rate_export:
+            self.high_export_rates = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            self.publish_rates(self.rate_export, True)
+
+        # Find charging windows
+        if self.rate_import:
+            # Find charging window
+            self.low_rates = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
+            self.publish_rates(self.rate_import, False)
 
         # Log vehicle info
         if self.car_charging_planned or ('octopus_intelligent_slot' in self.args):
