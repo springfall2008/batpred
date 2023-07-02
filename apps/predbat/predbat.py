@@ -2511,8 +2511,8 @@ class PredBat(hass.Hass):
 
             # Balancing payment to account for battery left over 
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            metric -= soc * self.rate_min
-            metric10 -= soc10 * self.rate_min
+            metric -= soc * max(self.rate_min, 1.0)
+            metric10 -= soc10 * max(self.rate_min, 1.0)
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
@@ -2576,9 +2576,9 @@ class PredBat(hass.Hass):
                 start = loop_start
 
                 # Scan the window in larger sections and then get smaller as it gets smaller
-                if (window['end'] - loop_start) > 120:
-                    loop_start += 30
-                elif (window['end'] - loop_start) > 30:
+                if record_charge_windows <= 6:
+                    loop_start += 5
+                elif (window['end'] - loop_start) > 60:
                     loop_start += 15
                 else:
                     loop_start += 5
@@ -2624,8 +2624,8 @@ class PredBat(hass.Hass):
 
                 # Balancing payment to account for battery left over 
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                metric -= soc * self.rate_min
-                metric10 -= soc10 * self.rate_min
+                metric -= soc * max(self.rate_min, 1.0)
+                metric10 -= soc10 * max(self.rate_min, 1.0)
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -2663,13 +2663,13 @@ class PredBat(hass.Hass):
         """
         Helper sort index function
         """
-        return window['key']
+        return float(window['key'])
 
     def window_sort_func_start(self, window):
         """
         Helper sort index function
         """
-        return window['start']
+        return float(window['start'])
 
     def sort_window_by_time(self, windows):
         """
@@ -2688,15 +2688,15 @@ class PredBat(hass.Hass):
         for window in window_with_id:
             window['id'] = wid
             if reverse_time:
-                window['key'] = "%04.2f.%02d" % (1000 - window['average'], 99 - window['id'])
+                window['key'] = "%04.2f%02d" % (5000 - window['average'], 999 - window['id'])
             else:
-                window['key'] = "%04.2f.%02d" % (1000 - window['average'], window['id'])
+                window['key'] = "%04.2f%02d" % (5000 - window['average'], window['id'])
             wid += 1
         window_with_id.sort(key=self.window_sort_func)
         id_list = []
         for window in window_with_id:
             id_list.append(window['id'])
-        #  self.log("Sorted window list {} ids {}".format(window_with_id, id_list))
+        self.log("Sorted window list {} ids {}".format(window_with_id, id_list))
         return id_list
 
     def remove_intersecting_windows(self, charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
