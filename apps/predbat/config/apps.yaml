@@ -96,11 +96,13 @@ pred_bat:
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   
-  # Set these to match solcast sensor names (unlikely to need changing)
-  pv_forecast_today: sensor.solcast_forecast_today
-  pv_forecast_tomorrow: sensor.solcast_forecast_tomorrow
-  pv_forecast_d3: sensor.solcast_forecast_d3
-  pv_forecast_d4: sensor.solcast_forecast_d4
+  # Set these to match solcast sensor names
+  # The regular expression (re:) makes the solcast bit optional
+  # If these don't match find your own names in Home Assistant
+  pv_forecast_today: re:(sensor.(solcast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)forecast_d3)
+  pv_forecast_d4: re:(sensor.(solcast_|)forecast_d4)
 
   # car_charging_energy defines an incrementing sensor which measures the charge added to your car
   # is used for car_charging_hold feature to filter out car charging from the previous load data
