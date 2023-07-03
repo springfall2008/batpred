@@ -110,12 +110,11 @@ pred_bat:
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
   
-  # car_charging_planned is set to a sensor which when positive indicates the car will charge in the low rate slots at the rate of car_charging_rate kw
+  # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
+  # This should not be needed if you use Octopus Intelligent Slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response
-  # This should not be used if you use Octopus Intelligent Slots which will take priority if enabled
-  # car_charging_planned: binary_sensor.tsunami_charger
-  # car_charging_planned: sensor.wallbox_portal_status_description
-  car_charging_planned: False
+  # Auto matches Zappi and Wallbox, or change it for your own
+  car_charging_planned: 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
   car_charging_planned_response:
     - 'yes'
     - 'on'
@@ -125,6 +124,7 @@ pred_bat:
     - 'charging'
     - 'paused'
     - 'waiting for car demand'
+    - 'waiting for ev'
     - 'scheduled'
     - 'enabled'
     - 'latched'
