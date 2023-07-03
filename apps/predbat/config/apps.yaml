@@ -106,8 +106,10 @@ pred_bat:
 
   # car_charging_energy defines an incrementing sensor which measures the charge added to your car
   # is used for car_charging_hold feature to filter out car charging from the previous load data
-  # car_charging_energy: 're:sensor.wallbox_portal_added_energy'
-
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  
   # car_charging_planned is set to a sensor which when positive indicates the car will charge in the low rate slots at the rate of car_charging_rate kw
   # The list of possible values is in car_charging_planned_response
   # This should not be used if you use Octopus Intelligent Slots which will take priority if enabled
