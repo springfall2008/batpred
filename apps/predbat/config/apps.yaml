@@ -150,8 +150,8 @@ pred_bat:
   # Or manually set it to the correct sensor names if the automatic match doesn't work e.g:
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
-  metric_octopus_import: 're:sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_current_rate'
-  metric_octopus_export: 're:sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate'
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
   
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
