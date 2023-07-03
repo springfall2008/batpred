@@ -460,6 +460,7 @@ class Inverter():
                 self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
                 return True
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
     def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
@@ -474,6 +475,7 @@ class Inverter():
                 self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(entity.get_state())))
                 return True
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, int(entity.get_state())))
+        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
     def write_and_poll_option(self, name, entity, new_value):
@@ -488,6 +490,7 @@ class Inverter():
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
                 return True
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
@@ -737,6 +740,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Inverter {} charge target {} via REST failed".format(self.id, target))
+        self.base.record_status("Warn - Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
         return False
 
     def rest_setChargeRate(self, rate):
@@ -756,6 +760,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data['Control']['Battery_Charge_Rate']))
+        self.base.record_status("Warn - Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
         return False
 
     def rest_setDischargeRate(self, rate):
@@ -774,6 +779,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data['Control']['Battery_Discharge_Rate']))
+        self.base.record_status("Warn - Inverter {} REST failed to setDischargeRate".format(self.id), had_errors=True)
         return False
 
     def rest_setBatteryMode(self, inverter_mode):
@@ -792,6 +798,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Set inverter {} mode {} via REST failed".format(self.id, inverter_mode))
+        self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
         return False
 
     def rest_setReserve(self, target):
@@ -810,6 +817,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Set inverter {} reserve {} via REST failed".format(self.id, target, retry))
+        self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
         return False
 
     def rest_enableChargeSchedule(self, enable):
@@ -834,6 +842,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data['Control']['Enable_Charge_Schedule']))
+        self.base.record_status("Warn - Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
         return False
 
     def rest_setChargeSlot1(self, start, finish):
@@ -852,6 +861,7 @@ class Inverter():
                 return True
         
         self.base.log("WARN: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn - Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
         return False
 
     def rest_setDischargeSlot1(self, start, finish):
@@ -870,6 +880,7 @@ class Inverter():
                 return True
 
         self.base.log("WARN: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn - Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)
         return False
 
 class PredBat(hass.Hass):
@@ -909,6 +920,7 @@ class PredBat(hass.Hass):
                         final += float(got)
                     except ValueError:
                         self.log("WARN: Return bad value {} from {} arg {}".format(got, item, arg))
+                        self.record_status("Warn - Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True) 
                 return final
             else:
                 final = []
@@ -952,6 +964,7 @@ class PredBat(hass.Hass):
                 value = float(value)
             except ValueError:
                 self.log("WARN: Return bad float value {} from {} using default {}".format(value, arg, default))
+                self.record_status("Warn - Return bad float value {} from {}".format(value, arg), had_errors=True)
                 value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
@@ -959,6 +972,7 @@ class PredBat(hass.Hass):
                 value = int(value)
             except ValueError:
                 self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
+                self.record_status("Warn - Return bad int value {} from {}".format(value, arg), had_errors=True)
                 value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
@@ -994,6 +1008,7 @@ class PredBat(hass.Hass):
             data = r.json()       
         except requests.exceptions.JSONDecodeError:
             self.log("WARN: Error downloading GE data from url {}".format(url))
+            self.record_status("Warn - Error downloading GE data from cloud", debug=url, had_errors=True)
             return False
         
         self.ge_url_cache[url] = {}
@@ -1010,9 +1025,11 @@ class PredBat(hass.Hass):
 
         if not geserial:
             self.log("ERROR: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
+            self.record_status("Warn - GE Cloud has been enabled but ge_cloud_serial is not set to your serial", had_errors=True)
             return False
         if not gekey:
             self.log("ERROR: GE Cloud has been enabled but ge_cloud_key is not set to your appkey")
+            self.record_status("Warn - GE Cloud has been enabled but ge_cloud_key is not set to your appkey", had_errors=True)
             return False
 
         headers = {
@@ -1032,6 +1049,7 @@ class PredBat(hass.Hass):
                 darray = data.get('data', None)
                 if darray is None:
                     self.log("WARN: Error downloading GE data from url {}".format(url))
+                    self.record_status("Warn - Error downloading GE data from cloud", debug=url)
                     return False
 
                 for item in darray:
@@ -1080,6 +1098,7 @@ class PredBat(hass.Hass):
         # Download failed?
         if not pdata:
             self.log("WARN: Unable to download Octopus data from URL {}".format(url))
+            self.record_status("Warn - Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]['data']
                 return pdata
@@ -1108,11 +1127,13 @@ class PredBat(hass.Hass):
                 data = r.json()       
             except requests.exceptions.JSONDecodeError:
                 self.log("WARN: Error downloading Octopus data from url {}".format(url))
+                self.record_status("Warn - Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if 'results' in data:
                 mdata += data['results']
             else:
                 self.log("WARN: Error downloading Octopus data from url {}".format(url))
+                self.record_status("Warn - Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             url = data.get('next', None)
             pages += 1
@@ -1149,6 +1170,7 @@ class PredBat(hass.Hass):
                 import_today = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
+                self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
 
         return import_today
 
@@ -1167,6 +1189,7 @@ class PredBat(hass.Hass):
                 load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
+                self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
         return load_minutes
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
@@ -1377,7 +1400,7 @@ class PredBat(hass.Hass):
         """
         while index < 0:
             index += 24*60
-        return data[index] - data[index + 1]
+        return data.get(index, 0) - data.get(index + 1, 0)
 
     def record_length(self, charge_window):
         """
@@ -1405,11 +1428,13 @@ class PredBat(hass.Hass):
             window_n += 1
         return charge_windows
 
-    def record_status(self, message, debug=""):
+    def record_status(self, message, debug="", had_errors = False):
         """
         Records status to HA sensor
         """
         self.set_state("predbat.status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
+        if had_errors:
+            self.had_errors = True
 
     def scenario_summary_title(self, record_time):
         txt = ""
@@ -2377,6 +2402,7 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.had_errors = False
         self.prediction_started = False
         self.update_pending = True
         self.midnight = None
@@ -2931,6 +2957,7 @@ class PredBat(hass.Hass):
         """
         Update the prediction state, everything is called from here right now
         """
+        self.had_errors = False
         local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
         now_utc = datetime.now(local_tz)
         now = datetime.now()
@@ -3069,18 +3096,21 @@ class PredBat(hass.Hass):
                 self.load_minutes = self.minute_data_load(now_utc)
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
+                self.record_status(message="Error - load_today not set correctly", had_errors=True)
 
             # Load import today data 
             if 'import_today' in self.args:
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
             else:
                 self.log("WARN: You have not set import_today, you will have no previous import data")
+                self.record_status(message="Error - import_today not set correctly", had_errors=True)
 
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
             else:
                 self.log("WARN: You have not set export_today, you will have no previous export data")
+                self.record_status(message="Error - export_today not set correctly", had_errors=True)
 
         # Car charging information
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
@@ -3094,11 +3124,17 @@ class PredBat(hass.Hass):
 
         # Octopus import rates
         if 'metric_octopus_import' in self.args:
-            data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
+            try:
+                data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
+            except ValueError:
+                self.log("WARN: Unable to fetch import rates from {} check metric_octopus_import setting".format(self.get_arg('metric_octopus_import', indirect=False)))
+                data_import = []
+
             if data_import:
                 self.rate_import = self.minute_data(data_import, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
+                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
 
         # Work out current car SOC and limit
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
@@ -3106,16 +3142,26 @@ class PredBat(hass.Hass):
 
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
+            completed = []
+            planned = []
+            vehicle = []
             entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
-            completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
+            try:
+                completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
+                planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
+                vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
+                vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
+            except ValueError:
+                self.log("WARN: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                self.record_status(message="Error - octopus_intelligent_slot not set correctly", had_errors=True)
+
+            # Completed and planned slots
             if completed:
                 self.octopus_slots += completed
-            planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
             if planned:
                 self.octopus_slots += planned
 
-            # Extract vehicle data if we can get it
-            vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
+            # Extract vehicle data if we can get it            
             if vehicle:
                 self.car_charging_battery_size = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size))
                 self.car_charging_rate = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate))
@@ -3124,7 +3170,6 @@ class PredBat(hass.Hass):
             self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
 
             # Extract vehicle preference if we can get it
-            vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
             if vehicle_pref and self.octopus_intelligent_charging:
                 octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
                 octopus_ready_time = vehicle_pref.get('weekdayTargetTime', None)
@@ -3154,11 +3199,17 @@ class PredBat(hass.Hass):
 
         # Octopus export rates
         if 'metric_octopus_export' in self.args:
-            data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
+            try:
+                data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
+            except ValueError:
+                self.log("WARN: Unable to get export rates from {} - check metric_octopus_export setting".format(self.get_arg('metric_octopus_export', indirect=False)))
+                data_export = []
+
             if data_export:
                 self.rate_export = self.minute_data(data_export, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
             else:
                 self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
+                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
 
         # Fixed URL for rate export
         if 'rates_export_octopus_url' in self.args:
@@ -3294,30 +3345,49 @@ class PredBat(hass.Hass):
         self.log('Best discharge window {}'.format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
+        pv_forecast_minute = {}
+        pv_forecast_minute10 = {}
+        pv_forecast_data = []
         if 'pv_forecast_today' in self.args:
-            pv_forecast_data    = self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_tomorrow' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_d3' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_d4' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_d5' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d5', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_d6' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
-            if 'pv_forecast_d7' in self.args:
-                pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
+            try:
+                pv_forecast_data    += self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute='detailedForecast')
+            except ValueError:
+                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_today".format(self.get_arg('pv_forecast_today', indirect=False)))                
+                self.record_status("Error - pv_forecast_today not be set correctly", debug=self.get_arg('pv_forecast_today', indirect=False), had_errors=True)
+
+            try:
+                if 'pv_forecast_tomorrow' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute='detailedForecast')
+                if 'pv_forecast_d3' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute='detailedForecast')
+                if 'pv_forecast_d4' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute='detailedForecast')
+                if 'pv_forecast_d5' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d5', indirect=False), attribute='detailedForecast')
+                if 'pv_forecast_d6' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
+                if 'pv_forecast_d7' in self.args:
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
+            except ValueError:
+                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
+                self.record_status("Error - pv_forecast_tomorrow or d2/d3 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
+                
             pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
             pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
         else:
-            pv_forecast_minute = {}
-            pv_forecast_minute10 = {}
+            self.log("WARN: No solar data has been configured.")
+
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = {}
         if 'car_charging_energy' in self.args:
-            history = self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)
+            history = []
+            try:
+                history = self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)
+            except ValueError:
+                self.log("WARN: Unable to fetch history from sensor {} - car_charging_energy may not be set correctly".format(self.get_arg('car_charging_energy', indirect=False)))
+                self.record_status("Error - car_charging_energy not be set correctly", debug=self.get_arg('car_charging_energy', indirect=False), had_errors=True)
+
             if history:
                 self.car_charging_energy = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
                 self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
@@ -3511,8 +3581,11 @@ class PredBat(hass.Hass):
             self.expose_config('iboost_today', self.iboost_next)
             self.log("IBoost model today updated to {}".format(self.iboost_next))
 
-        self.log("Completed run status {}".format(status))
-        self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
+        if self.had_errors:
+            self.log("Completed run status {} with Errors reported (check log)".format(status))
+        else:
+            self.log("Completed run status {}".format(status))
+            self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
 
     def select_event(self, event, data, kwargs):
         """
