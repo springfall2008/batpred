@@ -1165,7 +1165,11 @@ class PredBat(hass.Hass):
 
         import_today = {}    
         for entity_id in entity_ids:
-            history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
+            try:
+                history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
+            except ValueError:
+                history = []
+
             if history:
                 import_today = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
             else:
@@ -3103,14 +3107,12 @@ class PredBat(hass.Hass):
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
             else:
                 self.log("WARN: You have not set import_today, you will have no previous import data")
-                self.record_status(message="Error - import_today not set correctly", had_errors=True)
 
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
             else:
                 self.log("WARN: You have not set export_today, you will have no previous export data")
-                self.record_status(message="Error - export_today not set correctly", had_errors=True)
 
         # Car charging information
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
@@ -3144,7 +3146,8 @@ class PredBat(hass.Hass):
         if 'octopus_intelligent_slot' in self.args:
             completed = []
             planned = []
-            vehicle = []
+            vehicle = {}
+            vehicle_pref = {}
             entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
             try:
                 completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
@@ -3371,7 +3374,7 @@ class PredBat(hass.Hass):
             except ValueError:
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
                 self.record_status("Error - pv_forecast_tomorrow or d2/d3 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
-                
+
             pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
             pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
         else:
