@@ -86,10 +86,11 @@ pred_bat:
    - select.givtcp_{geserial}_discharge_end_time_slot_1
    - select.givtcp2_{geserial2}_discharge_end_time_slot_1
   
-  # Inverter max AC limit (one per inverter)
+  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
+  # If you have a second inverter for PV only please add the two values together
   inverter_limit: 
-   - 3600
-   - 3600
+   - 7500
+   - 7500
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Seperate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
