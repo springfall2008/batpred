@@ -94,8 +94,11 @@ pred_bat:
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Seperate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
+  # Seperate discharge skew for discharge windows only
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
   
   # Set these to match solcast sensor names
   # The regular expression (re:) makes the solcast bit optional
