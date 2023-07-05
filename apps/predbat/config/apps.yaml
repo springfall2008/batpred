@@ -387,11 +387,13 @@ pred_bat:
   set_soc_notify: True
   set_soc_minutes: 30
 
-  # When set_reserve_enable is true the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
+  # When set_reserve_enable is True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
   # to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % which is often 4%.
   # The feature applies with set_soc_enable or set_discharge_window is True 
+  # When set_reserve_hold is True then if the current charge % is above the target charging will be disabled and the reserve will be used to hold the level (Good for gen3 workaround)
   set_reserve_enable: True
   set_reserve_notify: True
+  set_reserve_hold: True
   set_reserve_min: 4
 
   # IBoost model, when enabled tries to model excess solar energy being used to heat hot water (or similar)
