@@ -180,6 +180,7 @@ Recommended settings (if you have already started Predbat then change them in HA
 ```
 set_soc_enable - True              # Allow the tool to configure the charge %
 set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
+set_reserve_hold - True            # Means if you don't need to charge then charging won't be enabled
 calculate_best_charge - True       # You want the tool to calculate charging
 combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
 metric_min_improvement - 0         # Charge less if it's cost neutral 
@@ -397,8 +398,8 @@ Connect to your cars sensors for accurate data:
 
 ### Workarounds
 
-  - battery_scaling - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use predbat.soc_kw_h0 as your current status rather than the GivTCP entity so everything lines up
-  - import_export_scaling - Scalings the import & export data from GivTCP - used for workarounds
+  - **battery_scaling** - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
+  - **import_export_scaling** - Scalings the import & export data from GivTCP - used for workarounds
 
 ### Triggers
 
@@ -476,6 +477,7 @@ These are configuration items that you can modify to fit your needs, you can con
 
   - set_reserve_enable - When true the reserve % will be set to the same as the SOC target % during charging windows and back to the minimum outside these windows
   - set_reserve_notify - When true notification will be sent about reserve % changes
+  - set_reserve_hold - When true if in the charge window the current battery level is above the charge target then charging will be disabled and the reserve used to hold the battery level.
   - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
 
   - iboost_enable - When True enables a model of a solar divertor which takes excess energy and diverts it to hot water rather than the battery or exporting
@@ -488,7 +490,9 @@ These are configuration items that you can modify to fit your needs, you can con
 
 ## Output data
 
-- You will find new entities are created in HA:
+You can find an example dashboard with all the entities here: https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml
+
+- Basic status:
   - predbat.status - Gives the current status and logs any adjustments made to your inverter
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
   - predbat.charge_limit - The current charge limit used for the scenario in %
@@ -540,7 +544,7 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.best10_load_energy - Predicted load energy for PV 10%
   - predbat.best10_import_energy- Predicted import energy for PV 10%
 
-- Energy rate data 
+- Energy rate data:
   - predbat.low_rate_cost - The lowest rate cost in P
   - predbat.low_rate_start - Start time of the next low rate
   - predbat.low_rate_end - End time of the next low rate
@@ -559,7 +563,7 @@ These are configuration items that you can modify to fit your needs, you can con
   - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
   - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
 
-- Car data
+- Car data:
   - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
 Example data out:
