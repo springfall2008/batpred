@@ -3489,7 +3489,7 @@ class PredBat(hass.Hass):
                         status = "Charging"
 
                     # Hold charge mode when enabled
-                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (int(self.inverter.soc_kw * 100.0 / self.inverter.soc_max)) >= self.charge_limit_percent_best[0]:
+                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (int(inverter.soc_kw * 100.0 / inverter.soc_max)) >= self.charge_limit_percent_best[0]:
                         status = "Hold charging"
                         inverter.disable_charge_window()
                         self.log("Holding current charge level using reserve: {}".format(self.charge_limit_percent_best[0]))
@@ -3574,7 +3574,7 @@ class PredBat(hass.Hass):
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
                 # In the window then set it, otherwise put it back
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (self.minutes_now >= inverter.charge_start_time_minutes):
-                    self.log("Adjust reserve to target charge % (as set_reserve_enable is true".format(self.charge_limit_percent_best[0]))
+                    self.log("Adjust reserve to target charge % (set_reserve_enable is true)".format(self.charge_limit_percent_best[0]))
                     inverter.adjust_reserve(self.charge_limit_percent_best[0])
                     resetReserve = False
                 else:
