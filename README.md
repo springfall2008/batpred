@@ -257,6 +257,7 @@ rate_high_threshold: 1.0               # Consider all slots for export
     - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
     - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
     - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
+    - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below) 
 
 ## config.yml - details:
 
@@ -269,7 +270,8 @@ Basic configuration items
   - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
   - **days_previous** - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
   - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
-  - **max_windows** - Maximum number of charge and discharge windows, the default is 24.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes).
+  - **forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
+  - **max_windows** - Maximum number of charge and discharge windows, the default is 32.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes). 
   
 ### Inverter information
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
@@ -296,7 +298,7 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
 ### Inverter control
 
-  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a seperate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount. 
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
