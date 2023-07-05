@@ -3320,7 +3320,7 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60)))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw loss charge {} % loss discharge {} %".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
