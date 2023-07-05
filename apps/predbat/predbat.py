@@ -78,6 +78,7 @@ CONFIG_ITEMS = [
     {'name' : 'set_soc_enable',                'friendly_name' : 'Set Charge Enable',              'type' : 'switch'},
     {'name' : 'set_soc_notify',                'friendly_name' : 'Set Charge Notify',              'type' : 'switch'},
     {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
+    {'name' : 'set_reserve_hold',              'friendly_name' : 'Set Reserve Hold',             'type' : 'switch'},
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch'},
     {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
@@ -932,7 +933,12 @@ class PredBat(hass.Hass):
         # Resolve templated data
         for repeat in range(0, 2):
             if isinstance(value, str) and '{' in value:
-                value = value.format(**self.args)
+                try:
+                    value = value.format(**self.args)
+                except KeyError:
+                    self.log("WARN: can not resolve {} value {}".format(arg, value))
+                    self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
+                    value = default
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and '.' in value:
@@ -3031,11 +3037,11 @@ class PredBat(hass.Hass):
         self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
         self.car_charging_planned = self.get_arg('car_charging_planned', "no")
         self.log("Car charging planned returns {}".format(self.car_charging_planned))
-        if isinstance(self.car_charging_planned , str):
-            if self.car_charging_planned .lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
-                self.car_charging_planned  = True
+        if isinstance(self.car_charging_planned, str):
+            if self.car_charging_planned.lower() in self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true']):
+                self.car_charging_planned = True
             else:
-                self.car_charging_planned  = False
+                self.car_charging_planned = False
         self.car_charging_plan_smart = self.get_arg('car_charging_plan_smart', False)
         self.car_charging_plan_time = self.get_arg('car_charging_plan_time', "07:00:00")
        
@@ -3048,15 +3054,16 @@ class PredBat(hass.Hass):
         self.calculate_discharge_passes = self.get_arg('calculate_discharge_passes', 1)
 
         # Enables
-        self.calculate_best = self.get_arg('calculate_best', False)
-        self.set_soc_enable = self.get_arg('set_soc_enable', False)
+        self.calculate_best = self.get_arg('calculate_best', True)
+        self.set_soc_enable = self.get_arg('set_soc_enable', True)
         self.set_reserve_enable = self.get_arg('set_reserve_enable', False)
-        self.set_reserve_notify = self.get_arg('set_reserve_notify', False)
-        self.set_soc_notify = self.get_arg('set_soc_notify', False)
-        self.set_window_notify = self.get_arg('set_window_notify', False)
-        self.set_charge_window = self.get_arg('set_charge_window', False)
-        self.set_discharge_window = self.get_arg('set_discharge_window', False)
-        self.set_discharge_notify = self.get_arg('set_discharge_notify', False)
+        self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
+        self.set_reserve_hold   = self.get_arg('set_reserve_hold', True)
+        self.set_soc_notify = self.get_arg('set_soc_notify', True)
+        self.set_window_notify = self.get_arg('set_window_notify', True)
+        self.set_charge_window = self.get_arg('set_charge_window', True)
+        self.set_discharge_window = self.get_arg('set_discharge_window', True)
+        self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
         self.calculate_charge_oldest = self.get_arg('calculate_charge_oldest', False)
         self.calculate_charge_all = self.get_arg('calculate_charge_all', True)
@@ -3481,12 +3488,16 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(inverter.battery_rate_max * 60 * 1000)
                         status = "Charging"
 
-                    # We must re-program if we are about to start a new charge window
-                    # or the currently configured window is about to start but hasn't yet started (don't change once it's started)
-                    if (self.minutes_now < minutes_end) and (
+                    # Hold charge mode when enabled
+                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (int(self.inverter.soc_kw * 100.0 / self.inverter.soc_max)) >= self.charge_limit_percent_best[0]:
+                        status = "Hold charging"
+                        inverter.disable_charge_window()
+                        self.log("Holding current charge level using reserve: {}".format(self.charge_limit_percent_best[0]))
+                    elif (self.minutes_now < minutes_end) and (
                         (minutes_start - self.minutes_now) <= self.set_window_minutes or 
                         (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
+                        # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
                         self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                         inverter.adjust_charge_window(charge_start_time, charge_end_time)                        
                     else:
@@ -3757,6 +3768,14 @@ class PredBat(hass.Hass):
         states = self.get_state()
         state_keys = states.keys()
         disabled = []
+
+        if 0:
+            predbat_keys = []
+            for key in state_keys:
+                if 'predbat' in str(key):
+                    predbat_keys.append(key)
+            predbat_keys.sort()
+            self.log("Keys:\n  - entity: {}".format('\n  - entity: '.join(predbat_keys)))
 
         # Find each arg re to match
         for arg in self.args:
