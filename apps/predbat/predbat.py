@@ -129,6 +129,7 @@ class Inverter():
         self.discharge_limits = []
         self.current_charge_limit = 0.0
         self.soc_kw = 0
+        self.soc_percent = 0
         self.rest_data = None
 
         # Rest API?
@@ -200,7 +201,8 @@ class Inverter():
             else:
                 self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
-        self.base.log("Inverter {} SOC_Kwh {} charge rate {} kw discharge rate kw {}".format(self.id, self.soc_kw, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
+        self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
+        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw discharge rate kw {}".format(self.id, self.soc_kw, self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -956,8 +958,7 @@ class PredBat(hass.Hass):
         value = None
 
         # Get From HA config
-        if self.args.get('user_config_enable', False):
-            value = self.get_ha_config(arg)
+        value = self.get_ha_config(arg)
 
         # Resolve locally if no HA config
         if value is None:
@@ -992,8 +993,7 @@ class PredBat(hass.Hass):
                 value = [value]
                 
         # Set to user config
-        if self.args.get('user_config_enable', False):
-            self.expose_config(arg, value)
+        self.expose_config(arg, value)
         return value
 
     def get_ge_url(self, url, headers, now_utc):
@@ -1442,7 +1442,7 @@ class PredBat(hass.Hass):
         """
         Records status to HA sensor
         """
-        self.set_state("predbat.status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
+        self.set_state(self.prefix + ".status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
         if had_errors:
             self.had_errors = True
 
@@ -1780,62 +1780,62 @@ class PredBat(hass.Hass):
 
         # Save data to HA state
         if save and save=='base' and not SIMULATE:
-            self.set_state("predbat.battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:timelapse'})
-            self.set_state("predbat.car_soc", state=self.dp2(final_car_soc / self.car_charging_battery_size * 100.0), attributes = {'results' : predict_car_soc_time, 'friendly_name' : 'Car battery SOC', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw_h0", state=self.dp3(self.predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.battery_power", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.pv_power", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.grid_power", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.load_power", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
+            self.set_state(self.prefix + ".battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:timelapse'})
+            self.set_state(self.prefix + ".car_soc", state=self.dp2(final_car_soc / self.car_charging_battery_size * 100.0), attributes = {'results' : predict_car_soc_time, 'friendly_name' : 'Car battery SOC', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_h0", state=self.dp3(self.predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".battery_power", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".pv_power", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".grid_power", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".load_power", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
-            self.set_state("predbat.export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
-            self.set_state("predbat.load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
-            self.set_state("predbat.pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
-            self.set_state("predbat.import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.set_state("predbat.import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.set_state("predbat.import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state(self.prefix + ".pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
+            self.set_state(self.prefix + ".import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.log("Battery has {} hours left - now at {}".format(hours_left, self.dp2(self.soc_kw)))
-            self.set_state("predbat.metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state("predbat.duration", state=self.dp2(end_record/60), attributes = {'friendly_name' : 'Prediction duration', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:arrow-split-vertical'})
+            self.set_state(self.prefix + ".metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".duration", state=self.dp2(end_record/60), attributes = {'friendly_name' : 'Prediction duration', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:arrow-split-vertical'})
 
         if save and save=='best' and not SIMULATE:
-            self.set_state("predbat.best_battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left best', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:timelapse'})
-            self.set_state("predbat.car_soc_best", state=self.dp2(final_car_soc / self.car_charging_battery_size * 100.0), attributes = {'results' : predict_car_soc_time, 'friendly_name' : 'Car battery SOC best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw_best", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.battery_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.pv_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.grid_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.load_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw_best_h1", state=self.dp3(self.predict_soc[60]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 1h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw_best_h8", state=self.dp3(self.predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
-            self.set_state("predbat.best_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
-            self.set_state("predbat.best_load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
-            self.set_state("predbat.best_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
-            self.set_state("predbat.best_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.set_state("predbat.best_import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.set_state("predbat.best_import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.set_state("predbat.best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state("predbat.record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
-            self.set_state("predbat.iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'IBoost energy', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
+            self.set_state(self.prefix + ".best_battery_hours_left", state=self.dp2(hours_left), attributes = {'friendly_name' : 'Predicted Battery Hours left best', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:timelapse'})
+            self.set_state(self.prefix + ".car_soc_best", state=self.dp2(final_car_soc / self.car_charging_battery_size * 100.0), attributes = {'results' : predict_car_soc_time, 'friendly_name' : 'Car battery SOC best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_best", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".battery_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".pv_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".grid_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".load_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_best_h1", state=self.dp3(self.predict_soc[60]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 1h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_best_h8", state=self.dp3(self.predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
+            self.set_state(self.prefix + ".best_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".best_load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state(self.prefix + ".best_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
+            self.set_state(self.prefix + ".best_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".best_import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".best_import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
+            self.set_state(self.prefix + ".iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'IBoost energy', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
             self.find_spare_energy(predict_soc, predict_export, step)            
 
         if save and save=='debug' and not SIMULATE:
-            self.set_state("predbat.pv_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.grid_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.load_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.battery_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".pv_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".grid_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_grid_power, 'friendly_name' : 'Predicted Grid Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".load_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".battery_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
  
         if save and save=='best10' and not SIMULATE:
-            self.set_state("predbat.soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state("predbat.best10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
-            self.set_state("predbat.best10_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state("predbat.best10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
-            self.set_state("predbat.best10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
-            self.set_state("predbat.best10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".best10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
+            self.set_state(self.prefix + ".best10_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".best10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".best10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state(self.prefix + ".best10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
         return final_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute
 
@@ -2088,7 +2088,7 @@ class PredBat(hass.Hass):
         plan = []
 
         if not self.car_charging_slots:
-            self.set_state("binary_sensor.predbat_car_charging_slot", state='off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state='off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         else:
             window = self.car_charging_slots[0]
             if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
@@ -2106,7 +2106,7 @@ class PredBat(hass.Hass):
                 show['kwh'] = kwh
                 plan.append(show)
 
-            self.set_state("binary_sensor.predbat_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
         """
@@ -2127,27 +2127,27 @@ class PredBat(hass.Hass):
                 time_format_time = '%H:%M:%S'
 
                 if window_n == 0 and not SIMULATE:
-                    self.set_state("predbat.high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-                    self.set_state("binary_sensor.predbat_high_rate_export_slot", state='on' if (self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    self.set_state(self.prefix + ".high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='on' if (self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                 if window_n == 1 and not SIMULATE:
-                    self.set_state("predbat.high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.high_rate_export_cost_2", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state(self.prefix + ".high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".high_rate_export_cost_2", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 window_n += 1
 
         # Clear rates that aren't available
         if not self.high_export_rates and not SIMULATE:
             self.log("No high rate period found")
-            self.set_state("predbat.high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state("binary_sensor.predbat_high_rate_export_slot", state='off', attributes = {'friendly_name' : 'Predbat high export rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state(self.prefix + ".high_rate_export_start", state='undefined', attributes = {'friendly_name' : 'Next high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".high_rate_export_cost", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='off', attributes = {'friendly_name' : 'Predbat high export rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         if len(self.high_export_rates) < 2 and not SIMULATE:
-            self.set_state("predbat.high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.high_rate_export_cost_2", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".high_rate_export_cost_2", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
 
     def rate_minmax(self, rates):
@@ -2266,27 +2266,27 @@ class PredBat(hass.Hass):
                 time_format_time = '%H:%M:%S'
 
                 if window_n == 0 and not SIMULATE:
-                    self.set_state("predbat.low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-                    self.set_state("binary_sensor.predbat_low_rate_slot", state='on' if (self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    self.set_state(self.prefix + ".low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state("binary_sensor." + self.prefix + "_low_rate_slot", state='on' if (self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                 if window_n == 1 and not SIMULATE:
-                    self.set_state("predbat.low_rate_start_2", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.low_rate_end_2", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
-                    self.set_state("predbat.low_rate_cost_2", state=rate_low_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                    self.set_state(self.prefix + ".low_rate_start_2", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".low_rate_end_2", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
+                    self.set_state(self.prefix + ".low_rate_cost_2", state=rate_low_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 window_n += 1
 
         # Clear rates that aren't available
         if not self.low_rates and not SIMULATE:
             self.log("No low rate period found")
-            self.set_state("predbat.low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_cost", state=self.rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state("binary_sensor.predbat_low_rate_slot", state='off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state(self.prefix + ".low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".low_rate_cost", state=self.rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state("binary_sensor." + self.prefix + "_low_rate_slot", state='off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         if len(self.low_rates) < 2 and not SIMULATE:
-            self.set_state("predbat.low_rate_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
-            self.set_state("predbat.low_rate_cost_2", state=self.rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".low_rate_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".low_rate_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
+            self.set_state(self.prefix + ".low_rate_cost_2", state=self.rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
     def publish_rates(self, rates, export):
         """
@@ -2306,9 +2306,9 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             if export:
-                self.set_state("predbat.rates_export", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_export_min), 'max' : self.dp2(self.rate_export_max), 'average' : self.dp2(self.rate_export_average), 'threshold' : self.dp2(self.rate_export_threshold), 'results' : rates_time, 'friendly_name' : 'Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                self.set_state(self.prefix + ".rates_export", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_export_min), 'max' : self.dp2(self.rate_export_max), 'average' : self.dp2(self.rate_export_average), 'threshold' : self.dp2(self.rate_export_threshold), 'results' : rates_time, 'friendly_name' : 'Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             else:
-                self.set_state("predbat.rates", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_min), 'max' : self.dp2(self.rate_max), 'average' : self.dp2(self.rate_average), 'threshold' : self.dp2(self.rate_threshold), 'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+                self.set_state(self.prefix + ".rates", state=self.dp2(rates[self.minutes_now]), attributes = {'min' : self.dp2(self.rate_min), 'max' : self.dp2(self.rate_max), 'average' : self.dp2(self.rate_average), 'threshold' : self.dp2(self.rate_threshold), 'results' : rates_time, 'friendly_name' : 'Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         return rates
 
     def today_cost(self, import_today, export_today):
@@ -2343,7 +2343,7 @@ class PredBat(hass.Hass):
                 day_cost_time[stamp] = self.dp2(day_cost)
 
         if not SIMULATE:
-            self.set_state("predbat.cost_today", state=self.dp2(day_cost), attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".cost_today", state=self.dp2(day_cost), attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         self.log("Todays energy import {} kwh export {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost)))
         return day_cost
 
@@ -2370,11 +2370,11 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             if best:
-                self.set_state("predbat.best_discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
-                self.set_state("predbat.best_discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".best_discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".best_discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
             else:
-                self.set_state("predbat.discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
-                self.set_state("predbat.discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
 
     def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
         """
@@ -2402,16 +2402,17 @@ class PredBat(hass.Hass):
                     charge_limit_first = charge_limit[0]
                     charge_limit_percent_first = charge_limit_percent[0]
             if best:
-                self.set_state("predbat.best_charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
-                self.set_state("predbat.best_charge_limit", state=charge_limit_percent_first, attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".best_charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".best_charge_limit", state=charge_limit_percent_first, attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
             else:
-                self.set_state("predbat.charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
-                self.set_state("predbat.charge_limit", state=charge_limit_percent_first, attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".charge_limit", state=charge_limit_percent_first, attributes = {'results' : charge_limit_time, 'friendly_name' : 'Predicted charge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
 
     def reset(self):
         """
         Init stub
         """
+        self.prefix = self.args.get('prefix', "predbat")
         self.had_errors = False
         self.prediction_started = False
         self.update_pending = True
@@ -2806,7 +2807,7 @@ class PredBat(hass.Hass):
             energy = trigger.get('energy', 1.0)
             for minute in range(0, minutes, step):
                 total_energy += predict_export[minute]
-            sensor_name = "binary_sensor.predbat_export_trigger_" + name
+            sensor_name = "binary_sensor." + self.prefix + "_export_trigger_" + name
             if total_energy >= energy:
                 state = 'on'
             else:
@@ -3015,23 +3016,23 @@ class PredBat(hass.Hass):
         self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
-        self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.0)
+        self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.15)
         self.load_scaling = self.get_arg('load_scaling', 1.0)
         self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
         self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
         self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.2)
         self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
-        self.best_soc_step = self.get_arg('best_soc_step', 0.5)
+        self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
         # Battery charging options
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
-        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.0)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.5)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
-        self.best_soc_min = self.get_arg('best_soc_min', 0.5)
-        self.best_soc_keep = self.get_arg('best_soc_keep', 0.5)
+        self.best_soc_min = self.get_arg('best_soc_min', 0.0)
+        self.best_soc_keep = self.get_arg('best_soc_keep', 2.0)
         self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
         self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
@@ -3046,7 +3047,7 @@ class PredBat(hass.Hass):
         self.car_charging_plan_time = self.get_arg('car_charging_plan_time', "07:00:00")
        
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
-        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', True)
+        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
         self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
         self.discharge_slot_split = self.get_arg('discharge_slot_split', 30)
         self.charge_slot_split = self.get_arg('charge_slot_split', 30)
@@ -3056,7 +3057,7 @@ class PredBat(hass.Hass):
         # Enables
         self.calculate_best = self.get_arg('calculate_best', True)
         self.set_soc_enable = self.get_arg('set_soc_enable', True)
-        self.set_reserve_enable = self.get_arg('set_reserve_enable', False)
+        self.set_reserve_enable = self.get_arg('set_reserve_enable', True)
         self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
         self.set_reserve_hold   = self.get_arg('set_reserve_hold', True)
         self.set_soc_notify = self.get_arg('set_soc_notify', True)
@@ -3067,7 +3068,7 @@ class PredBat(hass.Hass):
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
         self.calculate_charge_oldest = self.get_arg('calculate_charge_oldest', False)
         self.calculate_charge_all = self.get_arg('calculate_charge_all', True)
-        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', self.set_discharge_window)
+        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', True)
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
@@ -3082,7 +3083,7 @@ class PredBat(hass.Hass):
         self.iboost_next = self.iboost_today
 
         # Car options
-        self.car_charging_hold = self.get_arg('car_charging_hold', False)
+        self.car_charging_hold = self.get_arg('car_charging_hold', True)
         self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
         self.car_charging_energy_scale = self.get_arg('car_charging_energy_scale', 1.0)
 
@@ -3147,7 +3148,7 @@ class PredBat(hass.Hass):
 
         # Work out current car SOC and limit
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
-        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0.0))
+        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0.08))
 
         # Octopus intelligent slots
         if 'octopus_intelligent_slot' in self.args:
@@ -3489,7 +3490,7 @@ class PredBat(hass.Hass):
                         status = "Charging"
 
                     # Hold charge mode when enabled
-                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (int(inverter.soc_kw * 100.0 / inverter.soc_max)) >= self.charge_limit_percent_best[0]:
+                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
                         status = "Hold charging"
                         inverter.disable_charge_window()
                         self.log("Holding current charge level using reserve: {}".format(self.charge_limit_percent_best[0]))
@@ -3703,7 +3704,7 @@ class PredBat(hass.Hass):
         for item in CONFIG_ITEMS:
             name = item['name']
             type = item['type']
-            entity = type + "." + "predbat_" + name
+            entity = type + "." + self.prefix + "_" + name
             item['entity'] = entity
             ha_value = None
 
@@ -3818,8 +3819,7 @@ class PredBat(hass.Hass):
         self.log("Predbat: Startup")
         self.reset()
         self.auto_config()
-        if self.args.get('user_config_enable', False):
-            self.load_user_config()
+        self.load_user_config()
         
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
