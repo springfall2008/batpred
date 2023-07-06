@@ -235,6 +235,8 @@ rate_high_threshold: 1.0               # Consider all slots for export
 
 Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
 
+AppDeamon log files:
+   - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
 Historical data:
    - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
 
