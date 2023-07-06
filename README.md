@@ -230,6 +230,13 @@ If you have a fixed export rate then follow the above for variable rates but cha
 
 rate_high_threshold: 1.0               # Consider all slots for export
 
+## Video Guides
+
+Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
+
+Historical data:
+   - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
+
 ## FAQ
 
   - I've installed Batbred but I don't see the correct entities:
