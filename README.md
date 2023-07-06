@@ -92,25 +92,26 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 Please see the sections below for how to achieve each step. This is just a checklist of things:
 
-1. Make sure GivTCP is installed and running - #givtcp-install 
-2. Install AppDeamon if you haven't already  - #appdaemon-install
+1. Make sure GivTCP is installed and running - (#givtcp-install)
+2. Install AppDeamon if you haven't already  - (#appdaemon-install)
 3. Install HACS if you haven't already - 
-4. Install Predbat using HACS - #hacs-install
-5. Install Solcast if you haven't already #solcast-install
+4. Install Predbat using HACS - (#hacs-install)
+5. Install Solcast if you haven't already (#solcast-install)
    - Also check Solcast is being auto-updated a few times a day and that you see the data in Home Assistant
-6. If you have Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - #octopus-energy
+6. If you have Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - (#octopus-energy)
    - If you have Octopus Intelligent also install the Intelligent plugin
-7. Go and edit apps.yml (in config/appdeamon/apps/predbat/config/apps.yml) to match your system - #configyml-settings
+7. Go and edit apps.yml (in config/appdeamon/apps/predbat/config/apps.yml) to match your system - (#configyml-settings)
    - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
      - You have set the right number of inverters (**num_inverters**)
      - Adjust your **inverter_limit** as required
    - You have your energy rates set correctly either using Octopus Plugin or entered manually
-   - That the Solcast plugin is matching the configuration correctly
+   - That the Solcast plugin is matching the configuration correctly - should be automatic
+   - If you have a car charging sensor you might want to add that also to help make predictions more accurate
    - Then check the AppDeamon logfile and make sure you have no errors or warnings that are unexpected
    - And check **predbat.status** in Home Assistant to check it's now Idle (errors are reported here too)
-8. Add the Predbat entities to your dashboard  - #output-data
-9. Follow the configuration guide to tune things for your system  - #configuration-guide
-10. Set up the Apex Charts so you can check what Predbat is doing - #creating-the-charts
+8. Add the Predbat entities to your dashboard  - (#output-data)
+9. Follow the configuration guide to tune things for your system  - (#configuration-guide)
+10. Set up the Apex Charts so you can check what Predbat is doing - (#creating-the-charts)
 11. Look at the #faq and #video-guides for help
 
 ## Install
