@@ -2162,8 +2162,8 @@ class PredBat(hass.Hass):
         rate_n = 0
 
         # Scan rates and find min/max/average
-        minute = 0
-        while minute < self.forecast_minutes:
+        minute = self.minutes_now
+        while minute < self.forecast_minutes + self.minutes_now:
             if minute in rates:
                 rate = rates[minute]
                 if rate > rate_max:
