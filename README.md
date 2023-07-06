@@ -30,6 +30,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
   * [Car charging planning](#car-charging-planning)
   * [Configuration guide](#configuration-guide)
+  * [Video Guides](#video-guides)
   * [FAQ](#faq)
   * [config.yml - details:](#configyml---details-)
     + [Inverter information](#inverter-information)
@@ -230,7 +231,7 @@ If you have a fixed export rate then follow the above for variable rates but cha
 
 rate_high_threshold: 1.0               # Consider all slots for export
 
-## Video Guides
+## Video Guides
 
 Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
 
