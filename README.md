@@ -436,67 +436,152 @@ For example:
 
 ### Customisation 
 
-These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly if **user_config_enable** is set to True. Once the user config is enabled then changing the items in apps.yml will have no effect.
+These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly.
+Changing the items in apps.yml will have no effect.
 
-  - battery_loss - The percent of energy lost when charging the battery, default is 0.05 (5%)
-  - battery_loss_discharge - The percent of energy lost when discharging the battery, default is 0.05 (5%)
-  - battery_rate_max_scaling - Scales the maximum battery charging/discharging rate for calibration if GivTCP is wrong
-  - load_scaling - scales the load by a fixed percentage (default is 1.0, set up e.g. 1.2 if you want to add a % margin to your load)
-  - pv_scaling - scales the PV data by a fixed percentage (default is 1.0 for no adjustment, set down e.g. 0.80 if you want to scale back)
-  - pv_metric10_weight - adds in a pecentage weighting to the 10% PV forecast, recommended to take into account more worst case scenario (e.g. use 0.15 for 15% weighting)
+Each config item has an input_number or switch associated with it, see the example dashboard for their exact names (https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml)
 
-  - calculate_best_charge:      If set to False then charge windows will not be calculated and the default inverter settings are used
-  - calculate_charge_oldest:    If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first.
-  - calculate_charge_all:       When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
-  - calculate_charge_passes:    Sets the number of discharge calculation passes to run (for multi-window only), the default is 2 (more than 2 has no impact)
-   
-  - calculate_best_discharge:   If set to False then discharge windows will not be calculated - defaults to 'set_discharge_window'
-  - calculate_discharge_all:    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window)
-  - calculate_discharge_passes: Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 (more than 2 has no impact)
-  - calculate_discharge_oldest: When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default is True
-  - calculate_discharge_first:  When True give priority to profits from discharging ahead of charging. Default is True.
+#### Battery loss
 
-  - metric_min_improvement           - Set a threshold for reducing the battery charge level, e.g. set to 5 it will only reduce further if it saves at least 5p. Best set to 0 if you use pv_metric10_weight or have multiple slots
-  - metric_min_improvement_discharge - Set a threshold for increasing discharge level. Set to 0 if you have multiple discharge slots
+**battery_loss** accounts for energy lost charging the battery, 0.05 is 5%
+**battery_loss_discharge accounts** for energy lost discharging the battery, 0.05 is 5%
 
-  - best_soc_margin - Sets the number of Kwh of battery margin you want for the best SOC prediction, it's added to battery charge amount for safety. Best set to 0 if you use multiple charge slots or pv_metric10_weight.
-  - best_soc_min - Sets the minimum battery level SOC to propose for the prediction (best to disable for variable tariffs like Agile) for charge and discharge. This is hard constraint for all slots.
-  - best_soc_keep - Sets the minimum battery level to try to keep above during the whole period of the simulation time (charging levels will be adjusted accordingly). This is a soft constraint (slots will not be forced to charge/discharge based on this number).
-  - best_soc_step - Sets the accuracy of calculating the SOC, the larger values run quicker. Recommended 0.5 or 0.25.
+#### Scaling and weights
+
+**battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
+e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported by the inverter
+
+**load_scaling** is a Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
+Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
+
+**pv_scaling ** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
+Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
+
+**pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
+A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost. 
+A value of 0.15 is recommended.
+
+#### Car charging hold
+
+When **car_charging_hold** is enabled loads of above the power threshold **car_charging_treshold** then you are assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
+
+For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml then historical data will be subtracted from the load data instead.
+**car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instgead.
+
+**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Ocotpus Intelligent if enabled
+**car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
+
+#### Car charging plan
+
+Car charging planning - is only used if Octopus intelligent isn't enabled and car_charging_planned is connected correctly. 
+
+This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
+
+**car_charging_plan_time** Is set to the time you expect your car to be fully charged by
+**car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times, when disabled all low rate slots will be used in time order.
+
+**octopus_intelligent_charging** when true enables the octopus intelligent charging feature which will make Predbat create a car charging plan which is taken from the Octopus Intelligent plan
+you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this feature.
+
+#### Calculations
+
+**calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed. 
+This must be enabled to get all the 'best' sensors.
+
+**calculate_best_charge**     If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
+**calculate_charge_oldest**   If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first. Recommended to keep disabled.
+**calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to keep enabled.
+**calculate_charge_passes**   Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
+
+**calculate_best_discharge**   If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
+**calculate_discharge_all**    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to leave as False.
+**calculate_discharge_passes** Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
+**calculate_discharge_oldest** When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default True (recommended).
+**calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
+
+#### Battery margins and metrics
+
+**best_soc margin** is added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). Recommended to leave this as 0.
+**best_soc_min** sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
+**best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin in case you use more energy than planned between charge slots.
+**best_soc_step** is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
+**best_soc_pass_margin** Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0 - recommended).
+
+**combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is enabled (True)
+
+**charge_slot_split** When combine charge is False charge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
+
+**combine_discharge_slots** Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+**discharge_slot_split** When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
+A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
+
+**combine_mixed_rates** When True allows mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
+A better plan is achieved leaving this false but it can speed up run time to have it True.
+
+**metric_min_improvement** sets the minimum cost improvement that it's worth lowering the battery SOC % for.
+If it's 0 then this is disabled and the battery will be charged less if it's cost neutral.
+If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better 
+Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
+You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
+
+**metric_min_improvement_discharge** Sets the minimum cost improvement it's worth discharging for. A value of 0 or 1 is generally good.
+
+**rate_low_threshold** sets the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
+If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period.
+
+**rate_low_match_export** - When enabled consider import rates that are lower than the highest export rate (minus any battery losses). 
+This is if you want to be really aggressive about importing just to export, default is False (recommended).
+
+**rate_high_threshold** Sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
+If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
   
-  - combine_charge_slots -  Control if adjacent charge slots can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning. Default is True.
-  - charge_slot_split - When combine charge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-  - combine_discharge_slots - Control if adjacent discharge slots can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.  Default is True.
-  - discharge_slot_split -  When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-  - combine_mixed_rates - When True multiple 30 minute slots can be combined even if they have a different rate, default is False
-  
-  - rate_low_threshold - Sets the threshold for price per Kwh below average import price where a charge window is identified. Default of 0.8 means 80% of the average to select a charge window.
-  - rate_high_threshold - Sets the threshold for price per Kwh above average export price where a discharge window is identified. Default of 1.2 means 20% above the average.
-  - rate_low_match_export - When True consider imports that could be profitable for exports even above the low rate threshold
- 
-  - set_charge_window - When true automatically configure the next charge window in GivTCP, charge windows can also be disabled by Predbat when this is enabled.
-  - set_window_minutes - Number of minutes before charging/discharging the window should be configured in GivTCP (default 30 - recommended)
-  - set_window_notify - When True notifications about the charge window are raised to HA
- 
-  - set_discharge_window - When true automatic forced export slots will be calculated and programmed (assuming you have a variable export rate that is worth using).
-  - set_discharge_notify - When true notifications for discharge windows are raised to HA
-  
-  - set_soc_enable - When true the best SOC Target will be automatically programmed
-  - set_soc_minutes - Sets the number of minutes before the charge window to set the SOC Target, between this time and the charge window start the SOC will be auto-updated, and thus if it's changed manually it will be overriden.
-  - set_soc_notify - When true a notification is sent with the new SOC target once set
+**set_charge_window**
 
-  - set_reserve_enable - When true the reserve % will be set to the same as the SOC target % during charging windows and back to the minimum outside these windows
-  - set_reserve_notify - When true notification will be sent about reserve % changes
-  - set_reserve_hold - When true if in the charge window the current battery level is above the charge target then charging will be disabled and the reserve used to hold the battery level.
-  - set_reserve_min - Must be set to your minimum soc % for your system, the default is 4%. Do not set to zero if this is not allowed (most systems have a non-zero minimum)
+When enabled the next charge window will be automatically configured based on the incoming rates
+Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
+Will also automatically disable charging if not required and re-enable it when required. 
+If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on.
 
-  - iboost_enable - When True enables a model of a solar divertor which takes excess energy and diverts it to hot water rather than the battery or exporting
-  - iboost_max_power - Set to the maximum power in Watts that the divertor can use - default 2400
-  - iboost_min_power - Set to the minimum power in Watts that the divertor can use - default 500
-  - iboost_min_soc - Sets minimum home battery % for which iBoost will enable on - default 0 
-  - iboost_max - Sets the maximum kwH of energy the diverter will use in a day
+**set_window_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
+**set_window_notify** enables mobile notifications about changes to the charge window
+
+**set_discharge_window**
+
+When enabled automatically discharge (forced export) for export during high rate periods.
+
+**set_discharge_notify** enables mobile notifications about changes to the discharge window.
+
+**set_soc_enable**
+
+When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
+NOTE: it maybe set more than once if things change
+
+**set_soc_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
+**set_soc_notify** enables mobile notifications about changes to the charge %
+
+**set_reserve_enable**
+
+When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
+to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % which is often 4%.
+The feature applies with **set_soc_enable** or **set_discharge_window** is True 
+
+**set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the minimum and recommended to make use of the full battery
+
+When **set_reserve_hold** is True then if the current charge % is above the target charging will be disabled and the reserve will be used to hold the level (Good for gen3 workaround)
+
+#### IBoost model
+
+IBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat hot water (or similar)
+**iboost_max** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kwh
+
+**iboost_max_power** Sets the maximum power in watts to consume - default 2400
+**iboost_min_power** Sets the minimum power in watts to consume - default 500
+**iboost_min_soc** sets the minimum home battery soc % to enable iboost on, default 0
+
+You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
   
-  - debug_enable - option to print lots of debug messages
+**debug_enable** when on prints lots of debug, leave off by default
 
 ## Output data
 
