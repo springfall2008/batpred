@@ -458,6 +458,8 @@ AppDeamon log files:
    - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
 Historical data:
    - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
+Charts:
+   - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
 
 ## FAQ
 
