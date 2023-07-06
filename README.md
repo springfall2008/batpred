@@ -730,7 +730,7 @@ Example data out:
 
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
-- Create a new apexcharts card and copy the YML from example_chart.yml into the chart settings, updating the serial number to match your inverter
+- There are mutiple charts, for each section of the example file create a new apexcharts card and copy the YAML into it
 - Customise as you like
 
 Example charts:
