@@ -19,39 +19,57 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
 
 - [predbat](#predbat)
   * [Operation](#operation)
+  * [Step by step guide](#step-by-step-guide)
   * [Install](#install)
+    + [GivTCP install](#givtcp-install)
+    + [AppDaemon install](#appdaemon-install)
     + [HACS install](#hacs-install)
-    + [Manual install](#manual-install)
-  * [Solar forecast](#solar-forecast)
-    + [Solcast](#solcast)
+    + [Predbat install](#predbat-install)
+    + [Predbat manual install](#predbat-manual-install)
+    + [Solcast install](#solcast-install)
   * [Energy rates](#energy-rates)
     + [Octopus Energy Plugin](#octopus-energy-plugin)
     + [Rate bands](#rate-bands)
     + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
   * [Car charging planning](#car-charging-planning)
-  * [Configuration guide](#configuration-guide)
-  * [Video Guides](#video-guides)
-  * [FAQ](#faq)
-  * [config.yml - details:](#configyml---details-)
+  * [config.yml settings](#configyml-settings)
+    + [Basics](#basics)
     + [Inverter information](#inverter-information)
-    + [Historical load](#historical-load)
-    + [Import and Export data](#import-and-export-data)
+    + [Historical data](#historical-data)
+      - [Data from GivTCP](#data-from-givtcp)
+      - [GE Cloud Data](#ge-cloud-data)
     + [Inverter control](#inverter-control)
       - [REST Interface inverter control](#rest-interface-inverter-control)
       - [Home-assistant Inverter control](#home-assistant-inverter-control)
-    + [Solcast](#solcast-1)
+    + [Solcast](#solcast)
     + [Octopus energy](#octopus-energy)
     + [Manual energy rates](#manual-energy-rates)
-    + [No energy tariff data (legacy)](#no-energy-tariff-data--legacy-)
+    + [No energy tariff data (legacy)](#no-energy-tariff-data-legacy)
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
-  * [Customisation](#customisation)
-    + [Controlling the battery charging/discharging](#controlling-the-battery-charging-discharging)
-    + [Other config](#other-config)
+    + [Triggers](#triggers)
+  * [Configuration guide](#configuration-guide)
+    + [Fixed daily rates](#fixed-daily-rates)
+    + [Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)](#cheap-night-rate-eg-octopus-go-intelligent-economy-7-etc)
+    + [Multiple rates for import and export (e.g. Octopus Flux & Cozy)](#multiple-rates-for-import-and-export-eg-octopus-flux-cozy)
+    + [Half hourly variable rates (e.g. Octopus Agile)](#half-hourly-variable-rates-eg-octopus-agile)
+  * [Video Guides](#video-guides)
+  * [FAQ](#faq)
+  * [Customisation ](#customisation)
+    + [Battery loss options](#battery-loss-options)
+    + [Scaling and weight options](#scaling-and-weight-options)
+    + [Car charging hold options](#car-charging-hold-options)
+    + [Car charging plan options](#car-charging-plan-options)
+    + [Calculation options](#calculation-options)
+    + [Battery margins and metrics options](#battery-margins-and-metrics-options)
+    + [Inverter control options](#inverter-control-options)
+    + [IBoost model options](#iboost-model-options)
+    + [Debug](#debug)
   * [Output data](#output-data)
   * [Creating the charts](#creating-the-charts)
   * [Todo list](#todo-list)
+
 
 ## Operation
 
@@ -72,20 +90,55 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - When **user_config_enable** is set to True a set of input_number and switch configurations are created in Home Assistant which can be used to tune the predictions and charging/discharging
 
+## Step by step guide
+
+Please see the sections below for how to achieve each step. This is just a checklist of things:
+
+1. Make sure GivTCP is installed and running - #givtcp-install 
+2. Install AppDeamon if you haven't already  - #appdaemon-install
+3. Install HACS if you haven't already - 
+4. Install Predbat using HACS - #hacs-install
+5. Install Solcast if you haven't already #solcast-install
+   - Also check Solcast is being auto-updated a few times a day and that you see the data in Home Assistant
+6. If you have Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - #octopus-energy
+   - If you have Octopus Intelligent also install the Intelligent plugin
+7. Go and edit apps.yml (in config/appdeamon/apps/predbat/config/apps.yml) to match your system - #configyml-settings
+   - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
+     - You have set the right number of inverters (**num_inverters**)
+     - Adjust your **inverter_limit** as required
+   - You have your energy rates set correctly either using Octopus Plugin or entered manually
+   - That the Solcast plugin is matching the configuration correctly
+   - Then check the AppDeamon logfile and make sure you have no errors or warnings that are unexpected
+   - And check **predbat.status** in Home Assistant to check it's now Idle (errors are reported here too)
+8. Add the Predbat entities to your dashboard  - #output-data
+9. Follow the configuration guide to tune things for your system  - #configuration-guide
+10. Set up the Apex Charts so you can check what Predbat is doing - #creating-the-charts
+11. Look at the #faq and #video-guides for help
+
 ## Install
 
-- You must have GivTCP installed and running first
+### GivTCP install
+
+- You must have GivTCP installed and running first (https://github.com/britkat1980/giv_tcp/tree/main)
   - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
+
+### AppDaemon install
+
 - Install AppDaemon add-on https://github.com/hassio-addons/addon-appdaemon
    - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
    - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
 
 ### HACS install
 
+- Install HACS if you haven't already (https://hacs.xyz/docs/setup/download)
+- Enable AppDeamon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
+- 
+### Predbat install
+
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
 - Once installed you will get automatic updates from each release!
-- Enable AppDeamon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
+
 - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
@@ -94,7 +147,9 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - Edit in Homeassistant config/appdaemon/apps/predbat/config/apps.yml to configure
 - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
 
-### Manual install
+### Predbat manual install
+
+**Not recommended if you have HACS**
 
 - Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant
 - Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant
@@ -102,12 +157,11 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - If you later install with HACS then you must move the apps.yml into config/appdaemon/apps/predbat/config
 
-## Solar forecast
+### Solcast install
 
 Predbat needs a solar forecast in order to predict battery levels.
-If you don't have solar then comment out the Solar forecast part of the config: **pv_forecast_* **
 
-### Solcast
+If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv_forecast_* **
 
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
  
@@ -162,115 +216,7 @@ There are two ways to plan car charging slots
   - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
   - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
 
-## Configuration guide
-
-First get the basics set up, ensure you have the inverter controls configured, the historical load data and the solar forecast in place. Make sure your energy rates are configured correctly for import and export.
-
-If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
-
-You should try to tune battery_loss and battery_loss_discharge to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter but AC coupled maybe bigger.
-
-### Fixed daily rates
-- In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
-
-### Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)
-- In this scenario you will want to charge overnight based on the next days solar forecast.
-
-Recommended settings (if you have already started Predbat then change them in HA):
-
-```
-set_soc_enable - True              # Allow the tool to configure the charge %
-set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
-set_reserve_hold - True            # Means if you don't need to charge then charging won't be enabled
-calculate_best_charge - True       # You want the tool to calculate charging
-combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
-metric_min_improvement - 0         # Charge less if it's cost neutral 
-set_charge_window - True           # You want to have Predbat control the charge window
-best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
-rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
-calculate_discharge_first - False  # You probably only want to discharge any excess 
-```
-
-If you have Intelligent then make sure the intelligent plugin is also set up so the tool can see when you plan to charge your car and take this into account.
-
-### Multiple rates for import and export (e.g. Octopus Flux & Cozy)
-
-Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
-
-Recommended settings (if you have already started Predbat then change them in HA):
-
-```
-calculate_best_discharge - True        # Enable discharge calculation
-calculate_discharge_first - True       # Give priority to discharge when it's profitable
-calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
-combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
-set_discharge_window - True            # Allow the tool to control the discharge slots
-metric_min_improvement - 0             # Charge less if it's cost neutral 
-metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
-rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
-```
-
-### Half hourly variable rates (e.g. Octopus Agile)
-
-```
-calculate_best_discharge - True        # Enable discharge calculation
-calculate_discharge_first - True       # Give priority to discharge when it's profitable
-calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
-set_discharge_window - True            # Allow the tool to control the discharge slots
-combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
-discharge_slot_split - 30              # 30 minute split matches slots
-metric_min_improvement - 0             # Charge less if it's cost neutral 
-metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
-max_windows - 128                      # Ensure you have enough slots
-rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
-rate_high_threshold: 1.2               # Consider more valuable export slots only
-```
-
-If you have a fixed export rate then follow the above for variable rates but change:
-
-rate_high_threshold: 1.0               # Consider all slots for export
-
-## Video Guides
-
-Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
-
-AppDeamon log files:
-   - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
-Historical data:
-   - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
-
-## FAQ
-
-  - I've installed Batbred but I don't see the correct entities:
-    - First look at AppDeamon.log (can be found in the list of logfiles in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
-    - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions). The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names (some people don't have the solcast_ bit in their names)
-  - Why is my predicted charge % higher or lower than I might expect?
-    - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
-    - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm. If you do something like have export>import then Batpred will try to export as much as possible.
-    - Have you tuned Solcast to match your output accurately?
-    - Have you tuned the **metric_min_improvement**, **best_soc_min** and **best_soc_keep settings**?
-    - Do you have predicted car charging during the time period?
-    - You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
-    - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
-  - Why didn't the slot actually get configured?
-     - make sure **set_charge_window** and **set_soc_enable** is turned on
-  - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
-  - The charge limit keeps increasing/decreasing in the charge window or is unstable
-     - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
-  - I changed a config item but it made no difference?
-     - If **user_config_enable** is True then many config items are now inside Home Assistant, in which case change it there instead.
-  - It's all running but I'm not getting very good results
-    - You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kwh, which is just over 20% on a 9.5kwh battery)
-    - Have a read of the user configuration guide above depending on your tariff different settings maybe required
-    - Check your solar production is well calibrated (you can compare solcast vs actualy in home assistant energy tab or on the Givenergy portal)
-    - Make sure your inverter max AC rate has been set correctly
-    - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
-    - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
-    - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
-    - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below) 
-
-## config.yml - details:
+## config.yml settings
 
 ### Basics
 
@@ -433,6 +379,116 @@ For example:
        minutes: 15
        energy: 0.25
 ```
+
+## Configuration guide
+
+First get the basics set up, ensure you have the inverter controls configured, the historical load data and the solar forecast in place. Make sure your energy rates are configured correctly for import and export.
+
+If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
+
+You should try to tune battery_loss and battery_loss_discharge to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter but AC coupled maybe bigger.
+
+### Fixed daily rates
+- In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
+
+### Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)
+- In this scenario you will want to charge overnight based on the next days solar forecast.
+
+Recommended settings - these must be changed in Home Assistant once Predbat is running:
+
+```
+set_soc_enable - True              # Allow the tool to configure the charge %
+set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
+set_reserve_hold - True            # Means if you don't need to charge then charging won't be enabled
+calculate_best_charge - True       # You want the tool to calculate charging
+combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
+metric_min_improvement - 0         # Charge less if it's cost neutral 
+set_charge_window - True           # You want to have Predbat control the charge window
+best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
+best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
+rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
+calculate_discharge_first - False  # You probably only want to discharge any excess 
+```
+
+If you have Intelligent then make sure the intelligent plugin is also set up so the tool can see when you plan to charge your car and take this into account.
+
+### Multiple rates for import and export (e.g. Octopus Flux & Cozy)
+
+Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
+
+Recommended settings - these must be changed in Home Assistant once Predbat is running:
+
+```
+calculate_best_discharge - True        # Enable discharge calculation
+calculate_discharge_first - True       # Give priority to discharge when it's profitable
+calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
+combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
+set_discharge_window - True            # Allow the tool to control the discharge slots
+metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
+rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
+```
+
+### Half hourly variable rates (e.g. Octopus Agile)
+
+Recommended settings - these must be changed in Home Assistant once Predbat is running:
+
+```
+calculate_best_discharge - True        # Enable discharge calculation
+calculate_discharge_first - True       # Give priority to discharge when it's profitable
+calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
+set_discharge_window - True            # Allow the tool to control the discharge slots
+combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
+discharge_slot_split - 30              # 30 minute split matches slots
+metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
+max_windows - 128                      # Ensure you have enough slots
+rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
+rate_high_threshold: 1.2               # Consider more valuable export slots only
+```
+
+If you have a fixed export rate then follow the above for variable rates but change:
+
+rate_high_threshold: 1.0               # Consider all slots for export
+
+## Video Guides
+
+Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
+
+AppDeamon log files:
+   - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
+Historical data:
+   - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
+
+## FAQ
+
+  - I've installed Batbred but I don't see the correct entities:
+    - First look at AppDeamon.log (can be found in the list of logfiles in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
+    - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions). The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names (some people don't have the solcast_ bit in their names)
+  - Why is my predicted charge % higher or lower than I might expect?
+    - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
+    - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm. If you do something like have export>import then Batpred will try to export as much as possible.
+    - Have you tuned Solcast to match your output accurately?
+    - Have you tuned the **metric_min_improvement**, **best_soc_min** and **best_soc_keep settings**?
+    - Do you have predicted car charging during the time period?
+    - You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
+    - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
+  - Why didn't the slot actually get configured?
+     - make sure **set_charge_window** and **set_soc_enable** is turned on
+  - If you are still having trouble feel free to raise a ticket for support to post on the GivTCP facebook group.
+  - The charge limit keeps increasing/decreasing in the charge window or is unstable
+     - Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had a script that changes the reserve %, this will cause problems - please disable other automations and retry.
+  - I changed a config item but it made no difference?
+     - If **user_config_enable** is True then many config items are now inside Home Assistant, in which case change it there instead.
+  - It's all running but I'm not getting very good results
+    - You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kwh, which is just over 20% on a 9.5kwh battery)
+    - Have a read of the user configuration guide above depending on your tariff different settings maybe required
+    - Check your solar production is well calibrated (you can compare solcast vs actualy in home assistant energy tab or on the Givenergy portal)
+    - Make sure your inverter max AC rate has been set correctly
+    - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
+    - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
+    - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
+    - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below) 
 
 ## Customisation 
 
