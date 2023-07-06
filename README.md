@@ -46,7 +46,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
-    + [Customisation](#customisation)
+  * [Customisation](#customisation)
     + [Controlling the battery charging/discharging](#controlling-the-battery-charging-discharging)
     + [Other config](#other-config)
   * [Output data](#output-data)
@@ -434,19 +434,19 @@ For example:
        energy: 0.25
 ```
 
-### Customisation 
+## Customisation 
 
 These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly.
 Changing the items in apps.yml will have no effect.
 
 Each config item has an input_number or switch associated with it, see the example dashboard for their exact names (https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml)
 
-#### Battery loss
+### Battery loss options
 
 **battery_loss** accounts for energy lost charging the battery, 0.05 is 5%
 **battery_loss_discharge accounts** for energy lost discharging the battery, 0.05 is 5%
 
-#### Scaling and weights
+### Scaling and weight options
 
 **battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
 e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported by the inverter
@@ -461,7 +461,9 @@ Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
 A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost. 
 A value of 0.15 is recommended.
 
-#### Car charging hold
+### Car charging hold options
+
+Car charging hold is a feature where you try to filter out previous car charging from your historical data so that future predictions are more accurate.
 
 When **car_charging_hold** is enabled loads of above the power threshold **car_charging_treshold** then you are assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
 
@@ -471,7 +473,7 @@ For more accurate results can you use an incrementing energy sensor set with **c
 **car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Ocotpus Intelligent if enabled
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
-#### Car charging plan
+### Car charging plan options
 
 Car charging planning - is only used if Octopus intelligent isn't enabled and car_charging_planned is connected correctly. 
 
@@ -483,7 +485,7 @@ This feature allows Predbat to create a plan for when you car will charge, but y
 **octopus_intelligent_charging** when true enables the octopus intelligent charging feature which will make Predbat create a car charging plan which is taken from the Octopus Intelligent plan
 you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this feature.
 
-#### Calculations
+### Calculation options
 
 **calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed. 
 This must be enabled to get all the 'best' sensors.
@@ -499,7 +501,7 @@ This must be enabled to get all the 'best' sensors.
 **calculate_discharge_oldest** When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default True (recommended).
 **calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
 
-#### Battery margins and metrics
+### Battery margins and metrics options
 
 **best_soc margin** is added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). Recommended to leave this as 0.
 **best_soc_min** sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
@@ -535,7 +537,9 @@ This is if you want to be really aggressive about importing just to export, defa
 
 **rate_high_threshold** Sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
-  
+
+### Inverter control options
+
 **set_charge_window**
 
 When enabled the next charge window will be automatically configured based on the incoming rates
@@ -570,7 +574,7 @@ The feature applies with **set_soc_enable** or **set_discharge_window** is True
 
 When **set_reserve_hold** is True then if the current charge % is above the target charging will be disabled and the reserve will be used to hold the level (Good for gen3 workaround)
 
-#### IBoost model
+### IBoost model options
 
 IBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat hot water (or similar)
 **iboost_max** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kwh
@@ -580,7 +584,9 @@ IBoost model, when enabled with **iboost_enable** tries to model excess solar en
 **iboost_min_soc** sets the minimum home battery soc % to enable iboost on, default 0
 
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
-  
+
+### Debug
+
 **debug_enable** when on prints lots of debug, leave off by default
 
 ## Output data
