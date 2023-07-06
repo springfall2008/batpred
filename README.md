@@ -88,8 +88,6 @@ The app runs every N minutes (default 5), it will automatically update its predi
 
 - Multiple inverter support depends on running all inverters in lockstep, that is each will charge at the same time to the same %
 
-- When **user_config_enable** is set to True a set of input_number and switch configurations are created in Home Assistant which can be used to tune the predictions and charging/discharging
-
 ## Step by step guide
 
 Please see the sections below for how to achieve each step. This is just a checklist of things:
