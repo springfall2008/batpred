@@ -1,4 +1,10 @@
+###################################################################################################################
+There are multiple charts in this file, please copy each section into a different chart (starts with a comment)
+####################################################################################################################
+
+###############################################
 # Battery prediction chart
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -102,7 +108,9 @@ series:
     show:
       in_header: raw
       
+###############################################
 # This is a cost chart
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -162,7 +170,9 @@ series:
     show:
       in_header: raw
 
+###############################################
 # Energy rate chart
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -202,7 +212,9 @@ series:
     show:
       in_header: raw
 
+###############################################
 # Data prediction chart (import/export/pv/load)
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -285,7 +297,10 @@ series:
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
       
+##############################################################################################
 # Example car battery prediction chart  
+# Change sensor.tsunami_battery to your own car battery % sensor
+##############################################################################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -330,7 +345,9 @@ series:
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
 
+###############################################
 ## Power chart
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
@@ -385,7 +402,9 @@ series:
       Date(key).getTime(), value*1000.0]); } return res.sort((a, b) => { return
       a[0] - b[0]  })
 
+###############################################
 # Calibration chart
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
