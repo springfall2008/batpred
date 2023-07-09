@@ -40,6 +40,7 @@ CONFIG_ITEMS = [
     {'name' : 'battery_rate_max_scaling',      'friendly_name' : 'Battery rate max scaling',       'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'battery_loss',                  'friendly_name' : 'Battery loss charge ',           'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging treshhold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
     {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
@@ -202,7 +203,7 @@ class Inverter():
                 self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
         self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
-        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw discharge rate kw {}".format(self.id, self.soc_kw, self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
+        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw discharge rate kw {}".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -1608,8 +1609,14 @@ class PredBat(hass.Hass):
             if record:
                 final_load_kwh = load_kwh
 
-            pv_ac = min(load_yesterday, pv_now, self.inverter_limit * step)
+            # Work out how much PV is used to satisfy home demand
+            pv_ac = min(load_yesterday / self.inverter_loss, pv_now, self.inverter_limit * step)
+
+            # And hence how much maybe left for DC charging
             pv_dc = pv_now - pv_ac
+
+            # Scale down PV AC for losses
+            pv_ac *= self.inverter_loss
 
             # IBoost model
             if self.iboost_enable:
@@ -1678,7 +1685,7 @@ class PredBat(hass.Hass):
             diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
-                inverter_left = self.inverter_limit * step - load_yesterday
+                inverter_left = self.inverter_limit * step - (load_yesterday / self.inverter_loss)
                 if inverter_left < 0:
                     diff += -inverter_left
                 else:
@@ -1705,11 +1712,11 @@ class PredBat(hass.Hass):
             else:
                 # Export
                 energy = -diff
-                export_kwh += energy
+                export_kwh += energy * self.inverter_loss
                 if minute_absolute in self.rate_export:
-                    metric -= self.rate_export[minute_absolute] * energy
+                    metric -= self.rate_export[minute_absolute] * energy * self.inverter_loss
                 else:
-                    metric -= self.metric_export * energy
+                    metric -= self.metric_export * energy * self.inverter_loss
                 if diff != 0:
                     grid_state = '>'
                 else:
@@ -2053,6 +2060,8 @@ class PredBat(hass.Hass):
                 new_slot['start'] = start_minutes
                 new_slot['end'] = end_minutes
                 new_slot['kwh'] = kwh
+                new_slot['average'] = self.rate_min  # Assume price in minimum 
+                new_slot['cost'] = new_slot['average'] * kwh
                 new_slots.append(new_slot)
         return new_slots
 
@@ -2460,6 +2469,7 @@ class PredBat(hass.Hass):
         self.reserve = 0
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
+        self.inverter_loss = 1.0
         self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_margin = 0
@@ -3043,7 +3053,8 @@ class PredBat(hass.Hass):
 
         # Battery charging options
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
-        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.5)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
+        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.03)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
@@ -3337,7 +3348,8 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw loss charge {} % loss discharge {} %".format(len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100)))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
