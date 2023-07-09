@@ -1662,30 +1662,40 @@ class PredBat(hass.Hass):
                     battery_state = 'e-'
                 else:
                     battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_max * step)
-                    if battery_draw > 0:
+                    if battery_draw < 0:
                         battery_state = 'e+'
                     else:
                         battery_state = 'e~'
 
-            # Clamp battery at reserve
+            # Clamp battery at reserve for discharge 
             if battery_draw > 0:
-                soc -= battery_draw / self.battery_loss_discharge
+                soc -= battery_draw / (self.battery_loss_discharge * self.inverter_loss)
                 if soc < self.reserve:
-                    battery_draw -= (self.reserve - soc) * self.battery_loss_discharge
+                    battery_draw -= (self.reserve - soc) * (self.battery_loss_discharge * self.inverter_loss)
                     soc = self.reserve
 
-            # Clamp battery at max
+            # Clamp battery at max when charging
             if battery_draw < 0:
-                soc -= battery_draw * self.battery_loss
+                battery_draw_dc = max(-pv_dc, battery_draw)
+                battery_draw_ac = battery_draw - battery_draw_dc
+
+                soc -= battery_draw_dc * self.battery_loss 
                 if soc > self.soc_max:
-                    battery_draw += (soc - self.soc_max) / self.battery_loss
+                    battery_draw_dc += (soc - self.soc_max) / self.battery_loss
                     soc = self.soc_max
+
+                soc -= battery_draw_ac * self.battery_loss * self.inverter_loss
+                if soc > self.soc_max:
+                    battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
+                    soc = self.soc_max
+                
+                battery_draw = battery_draw_ac + battery_draw_dc
 
             # Work out left over energy after battery adjustment
             diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
-                inverter_left = self.inverter_limit * step - (load_yesterday / self.inverter_loss)
+                inverter_left = self.inverter_limit * step - load_yesterday
                 if inverter_left < 0:
                     diff += -inverter_left
                 else:
@@ -1712,11 +1722,11 @@ class PredBat(hass.Hass):
             else:
                 # Export
                 energy = -diff
-                export_kwh += energy * self.inverter_loss
+                export_kwh += energy
                 if minute_absolute in self.rate_export:
-                    metric -= self.rate_export[minute_absolute] * energy * self.inverter_loss
+                    metric -= self.rate_export[minute_absolute] * energy
                 else:
-                    metric -= self.metric_export * energy * self.inverter_loss
+                    metric -= self.metric_export * energy
                 if diff != 0:
                     grid_state = '>'
                 else:
@@ -3054,7 +3064,7 @@ class PredBat(hass.Hass):
         # Battery charging options
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
-        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.03)
+        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
