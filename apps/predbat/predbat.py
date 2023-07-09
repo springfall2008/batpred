@@ -1968,8 +1968,11 @@ class PredBat(hass.Hass):
         
         if self.car_charging_plan_smart:
             price_sorted = self.sort_window_by_price(low_rates)
+            price_sorted.reverse()
         else:
             price_sorted = range(0, len(low_rates))
+
+        self.log("Car price sorted {}".format(price_sorted))
 
         ready_time = datetime.strptime(self.car_charging_plan_time, "%H:%M:%S")
         ready_minutes = ready_time.hour * 60 + ready_time.minute
@@ -2019,10 +2022,14 @@ class PredBat(hass.Hass):
                 new_slot['start'] = start
                 new_slot['end'] = end
                 new_slot['kwh'] = kwh
+                new_slot['average'] = window['average']
+                new_slot['cost'] = new_slot['average'] * kwh
                 plan.append(new_slot)
 
+
         # Return sorted back in time order
-        return self.sort_window_by_time(plan)
+        plan = self.sort_window_by_time(plan)
+        return plan
 
     def load_octopus_slots(self, octopus_slots):
         """
@@ -2096,17 +2103,26 @@ class PredBat(hass.Hass):
             else:
                 slot = False
 
+            total_kwh = 0
+            total_cost = 0
             for window in self.car_charging_slots:
                 start = self.time_abs_str(window['start'])
                 end = self.time_abs_str(window['end'])
                 kwh = self.dp2(window['kwh'])
+                average = self.dp2(window['average'])
+                cost = self.dp2(window['cost'])
+                
                 show = {}
                 show['start'] = start
                 show['end'] = end
                 show['kwh'] = kwh
+                show['average'] = average
+                show['cost'] = cost
+                total_cost += cost
+                total_kwh += kwh
                 plan.append(show)
 
-            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state="on" if slot else 'off', attributes = {'planned' : plan, 'cost' : self.dp2(total_cost), 'kwh' : self.dp2(total_kwh), 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
         """
