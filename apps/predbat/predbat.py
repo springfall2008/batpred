@@ -41,6 +41,7 @@ CONFIG_ITEMS = [
     {'name' : 'battery_loss',                  'friendly_name' : 'Battery loss charge ',           'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'inverter_hybrid',               'friendly_name' : 'Inverter Hybrid',                'type' : 'switch'},
     {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging treshhold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
     {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
@@ -1615,8 +1616,9 @@ class PredBat(hass.Hass):
             # And hence how much maybe left for DC charging
             pv_dc = pv_now - pv_ac
 
-            # Scale down PV AC for losses
+            # Scale down PV AC and DC for inverter loss (if hybrid we will reverse the DC loss later)
             pv_ac *= self.inverter_loss
+            pv_dc *= self.inverter_loss
 
             # IBoost model
             if self.iboost_enable:
@@ -1669,9 +1671,10 @@ class PredBat(hass.Hass):
 
             # Clamp battery at reserve for discharge 
             if battery_draw > 0:
+                # All battery discharge must go through the inverter too
                 soc -= battery_draw / (self.battery_loss_discharge * self.inverter_loss)
                 if soc < self.reserve:
-                    battery_draw -= (self.reserve - soc) * (self.battery_loss_discharge * self.inverter_loss)
+                    battery_draw -= (self.reserve - soc) * self.battery_loss_discharge * self.inverter_loss
                     soc = self.reserve
 
             # Clamp battery at max when charging
@@ -1679,22 +1682,33 @@ class PredBat(hass.Hass):
                 battery_draw_dc = max(-pv_dc, battery_draw)
                 battery_draw_ac = battery_draw - battery_draw_dc
 
-                soc -= battery_draw_dc * self.battery_loss 
+                if self.inverter_hybrid:
+                    inverter_loss = self.inverter_loss
+                else:
+                    inverter_loss = 1.0
+
+                # In the hybrid case only we remove the inverter loss for PV charging (as it's DC to DC), and inverter loss was already applied
+                soc -= battery_draw_dc * self.battery_loss / inverter_loss
                 if soc > self.soc_max:
-                    battery_draw_dc += (soc - self.soc_max) / self.battery_loss
+                    battery_draw_dc += ((soc - self.soc_max) / self.battery_loss) * inverter_loss
                     soc = self.soc_max
 
+                # The rest of this charging must be from the grid (pv_dc was the left over PV)
                 soc -= battery_draw_ac * self.battery_loss * self.inverter_loss
                 if soc > self.soc_max:
                     battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
                     soc = self.soc_max
                 
+                #if (minute % 30) == 0:
+                #    self.log("Minute {} pv_ac {} pv_dc {} battery_ac {} battery_dc {} battery b4 {} after {} soc {}".format(minute, pv_ac, pv_dc, battery_draw_ac, battery_draw_dc, battery_draw, battery_draw_ac + battery_draw_dc, soc))
+
                 battery_draw = battery_draw_ac + battery_draw_dc
 
             # Work out left over energy after battery adjustment
             diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
+                # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
                 inverter_left = self.inverter_limit * step - load_yesterday
                 if inverter_left < 0:
                     diff += -inverter_left
@@ -1703,6 +1717,7 @@ class PredBat(hass.Hass):
 
             if diff > 0:
                 # Import
+                # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
                 import_kwh += diff
                 if charge_window_n >= 0:
                     # If the battery is on charge anyhow then imports are at battery charging rate
@@ -2480,6 +2495,7 @@ class PredBat(hass.Hass):
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
+        self.inverter_hybrid = False
         self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_margin = 0
@@ -3065,6 +3081,7 @@ class PredBat(hass.Hass):
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
         self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
+        self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
