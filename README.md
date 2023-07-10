@@ -385,7 +385,7 @@ First get the basics set up, ensure you have the inverter controls configured, t
 
 If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
 
-You should try to tune battery_loss and battery_loss_discharge to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter but AC coupled maybe bigger.
+You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_discharge** to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter. Also set **inverter_hybrid** to True or False depending on if you have a Hybrid or AC Coupled battery.
 
 ### Fixed daily rates
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
@@ -502,8 +502,10 @@ Each config item has an input_number or switch associated with it, see the examp
 
 ### Battery loss options
 
-**battery_loss** accounts for energy lost charging the battery, 0.05 is 5%
-**battery_loss_discharge accounts** for energy lost discharging the battery, 0.05 is 5%
+**battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
+**battery_loss_discharge** accounts for energy lost discharging the battery, default 0.05 is 5%
+**inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
+**inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
 
 ### Scaling and weight options
 
@@ -513,7 +515,7 @@ e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported b
 **load_scaling** is a Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
-**pv_scaling ** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
+**pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
 
 **pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
