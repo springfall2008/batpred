@@ -2822,7 +2822,7 @@ class PredBat(hass.Hass):
             window = charge_window_best[window_n]
             start = window['start']
             end = window['end']
-            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_limit and self.charge_limit[0]['end'] == end):
+            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]['end'] == end):
                 new_limit_best.append(charge_limit_best[window_n])
                 new_window_best.append(charge_window_best[window_n])
         return new_limit_best, new_window_best 
