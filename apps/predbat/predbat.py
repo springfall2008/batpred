@@ -1383,7 +1383,7 @@ class PredBat(hass.Hass):
 
         for index in range(0, length):
             rindex = length - index - 1
-            nxt = data[rindex]
+            nxt = data.get(rindex, last)
             if nxt >= last:
                 increment += nxt - last
             last = nxt
