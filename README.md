@@ -116,8 +116,7 @@ Please see the sections below for how to achieve each step. This is just a check
 
 Overview of the key configuration elements:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/843951dc-e631-47cc-942d-7151020ae5de)
-
+![image](https://github.com/springfall2008/batpred/assets/48591903/7c9350e0-2b6d-49aa-8f61-93d0547ae6d0)
 
 ## Install
 
