@@ -114,6 +114,11 @@ Please see the sections below for how to achieve each step. This is just a check
 10. Set up the Apex Charts so you can check what Predbat is doing - [Creating the charts](#creating-the-charts)
 11. Look at the [FAQ](#faq) and [Video Guides](#video-guides) for help
 
+Overview of the key configuration elements:
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/843951dc-e631-47cc-942d-7151020ae5de)
+
+
 ## Install
 
 ### GivTCP install
