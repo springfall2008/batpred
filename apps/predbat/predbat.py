@@ -1048,7 +1048,7 @@ class PredBat(hass.Hass):
         mdata = []
         days_prev = 0
         while days_prev <= self.max_days_previous:
-            time_value = now_utc - timedelta(days=days_prev)
+            time_value = now_utc - timedelta(days=self.max_days_previous - days_prev)
             datestr = time_value.strftime("%Y-%m-%d")
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=1024".format(geserial, datestr)
             while url:
@@ -1075,10 +1075,22 @@ class PredBat(hass.Hass):
                 url = data['links'].get('next', None)
             days_prev += 1
             
+        # Find how old the data is
+        item = mdata[0]
+        try:
+            last_updated_time = self.str2time(item['last_updated'])
+        except ValueError:
+            last_updated_time = now_utc
+
+        self.log("time {} {} {}".format(mdata[0]['last_updated'], mdata[1]['last_updated'], mdata[2]['last_updated']))
+
+        age = now_utc - last_updated_time
+        self.load_minutes_age = age.days
+
         self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, 'consumption', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True)
         self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'import', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'export', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
-        self.log("Downloaded {} datapoints from GE".format(len(self.load_minutes)))
+        self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
     def download_octopus_rates(self, url):
@@ -1195,14 +1207,25 @@ class PredBat(hass.Hass):
             entity_ids = [entity_ids]
 
         load_minutes = {}
+        age_days = None
         for entity_id in entity_ids:
             history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
             if history:
+                item = history[0][0]
+                try:
+                    last_updated_time = self.str2time(item['last_updated'])
+                except ValueError:
+                    last_updated_time = now_utc
+                age = now_utc - last_updated_time
+                if age_days is None:
+                    age_days = age.days
+                else:
+                    age_days = min(age_days, age.days)
                 load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
-        return load_minutes
+        return load_minutes, age_days
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
                     backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[]):
@@ -1396,15 +1419,27 @@ class PredBat(hass.Hass):
         Get historical data across N previous days in days_previous array based on current minute 
         """
         total = 0
-        num_points = 0
+        total_weight = 0
+        this_point = 0
 
         for days in self.days_previous:
-            full_days = 24*60*(days - 1)
-            minute_previous = 24 * 60 - minute + full_days
-            value = self.get_from_incrementing(data, minute_previous)
-            total += value
-            num_points += 1
-        return total / num_points
+            use_days = max(days, self.load_minutes_age)
+            weight = 1.0
+            if this_point < len(self.days_previous_weight):
+                weight = self.days_previous_weight[this_point]                
+            if use_days > 0:
+                full_days = 24*60*(use_days - 1)
+                minute_previous = 24 * 60 - minute + full_days
+                value = self.get_from_incrementing(data, minute_previous)
+                total += value * weight
+                total_weight += weight
+            this_point += 1
+    
+        # Zero data?
+        if total_weight == 0:
+            return 0
+        else:
+            return total / total_weight
 
     def get_from_incrementing(self, data, index):
         """
@@ -2471,7 +2506,8 @@ class PredBat(hass.Hass):
         self.difference_minutes = 0
         self.minutes_now = 0
         self.minutes_to_midnight = 0
-        self.days_previous = 0
+        self.days_previous = [7]
+        self.days_previous_weight = [1]
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
@@ -2553,6 +2589,8 @@ class PredBat(hass.Hass):
         self.notify_devices = ['notify']
         self.octopus_url_cache = {}
         self.ge_url_cache = {}
+        self.load_minutes = {}
+        self.load_minutes_age = 0
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes, pv_forecast_minute, pv_forecast_minute10, all_n = 0, end_record=None):
         """
@@ -3043,6 +3081,7 @@ class PredBat(hass.Hass):
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
         self.days_previous = self.get_arg('days_previous', [7])
+        self.days_previous_weight = self.get_arg('days_previous_weight', [1])
         self.max_days_previous = max(self.days_previous) + 1
 
         forecast_hours = self.get_arg('forecast_hours', 48)
@@ -3152,6 +3191,7 @@ class PredBat(hass.Hass):
         self.import_today = {}
         self.export_today = {}
         self.load_minutes = {}
+        self.load_minutes_age = 0
 
         # Load previous load data
         if self.get_arg('ge_cloud_data', False):
@@ -3159,7 +3199,8 @@ class PredBat(hass.Hass):
         else:
             # Load data
             if 'load_today' in self.args:
-                self.load_minutes = self.minute_data_load(now_utc)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc)
+                self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
                 self.record_status(message="Error - load_today not set correctly", had_errors=True)
