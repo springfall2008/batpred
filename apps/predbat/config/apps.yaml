@@ -202,6 +202,12 @@ pred_bat:
   days_previous: 
     - 7
 
+  # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
+  # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
+  # Include one value for each days_previous value
+  days_previous_weight:
+    - 1
+  
   # Number of hours forward to forecast, best left as-is unless you have specific reason
   forecast_hours: 48
 
