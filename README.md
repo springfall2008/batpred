@@ -228,7 +228,8 @@ Basic configuration items
   - **notify_devices** - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
   - **run_every** - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
-  - **days_previous** - sets the number of days to go back in the history to predict your load, recommended settings are 7 or 1 (can't be 0). Can also be a list of days which will be averaged. Keep in mind HA default history is only 10 days.
+  - **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**. Keep in mind HA default history is only 10 days.
+  - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
   - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
   - **forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
   - **max_windows** - Maximum number of charge and discharge windows, the default is 32.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes). 
