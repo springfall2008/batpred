@@ -9,7 +9,7 @@ Also known by some as Batpred or Batman!
 Copyright (c) Trefor Southwell May 2023 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
-For support please raise a Github ticket or use the GivTCP Facebook page
+For support please raise a Github ticket or use the GivTCP Facebook page: https://www.facebook.com/groups/615579009972782
 ```
 
 If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
