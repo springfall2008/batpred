@@ -1764,11 +1764,6 @@ class PredBat(hass.Hass):
 
                 if minute_absolute in self.rate_import:
                     metric += self.rate_import[minute_absolute] * diff
-                else:
-                    if charge_window_n >= 0:
-                        metric += self.metric_battery * diff
-                    else:
-                        metric += self.metric_house * diff
                 grid_state = '<'
             else:
                 # Export
@@ -1776,8 +1771,6 @@ class PredBat(hass.Hass):
                 export_kwh += energy
                 if minute_absolute in self.rate_export:
                     metric -= self.rate_export[minute_absolute] * energy
-                else:
-                    metric -= self.metric_export * energy
                 if diff != 0:
                     grid_state = '>'
                 else:
@@ -2005,16 +1998,16 @@ class PredBat(hass.Hass):
         """
         rates = {}
 
-        # Default to house value
+        # Set to zero for missing rates
         for minute in range(0, 24*60):
-            rates[minute] = self.metric_house
+            rates[minute] = 0
 
         self.log("Adding {} rate info {}".format(rtype, info))
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
             start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
             end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
-            rate = this_rate.get('rate', self.metric_house)
+            rate = this_rate.get('rate', 0)
             start_minutes = max(self.mintes_to_time(start, midnight), 0)
             end_minutes   = min(self.mintes_to_time(end, midnight), 24*60-1)
 
@@ -2515,9 +2508,6 @@ class PredBat(hass.Hass):
         self.soc_max = 0
         self.predict_soc = {}
         self.predict_soc_best = {}
-        self.metric_house = 0
-        self.metric_battery = 0
-        self.metric_export = 0
         self.metric_min_improvement = 0
         self.metric_min_improvement_discharge = 0
         self.rate_import = {}
@@ -3106,9 +3096,6 @@ class PredBat(hass.Hass):
             self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
 
         # Metric config
-        self.metric_house = self.get_arg('metric_house', 38.0)
-        self.metric_battery = self.get_arg('metric_battery', 7.5)
-        self.metric_export = self.get_arg('metric_export', 4.0)
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
         self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
@@ -3228,14 +3215,12 @@ class PredBat(hass.Hass):
         self.car_charging_battery_size = float(self.get_arg('car_charging_battery_size', 100.0))
         self.car_charging_rate = (float(self.get_arg('car_charging_rate', 7.4)))
 
-        # Basic rates defined by user over time
-        if 'rates_import' in self.args:
-            self.rate_import = self.basic_rates(self.get_arg('rates_import', indirect=False), 'import')
-        if 'rates_export' in self.args:
-            self.rate_export = self.basic_rates(self.get_arg('rates_export', indirect=False), 'export')
-
-        # Octopus import rates
-        if 'metric_octopus_import' in self.args:
+        if 'rates_import_octopus_url' in self.args:
+            # Fixed URL for rate import
+            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
+            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
+        elif 'metric_octopus_import' in self.args:
+            # Octopus import rates
             try:
                 data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
             except ValueError:
@@ -3247,6 +3232,9 @@ class PredBat(hass.Hass):
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
+        else:
+            # Basic rates defined by user over time
+            self.rate_import = self.basic_rates(self.get_arg('rates_import', [], indirect=False), 'import')
 
         # Work out current car SOC and limit
         self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
@@ -3305,13 +3293,12 @@ class PredBat(hass.Hass):
         # Work out car SOC
         self.car_charging_soc = (self.get_arg('car_charging_soc', 0.0) * self.car_charging_battery_size) / 100.0
 
-        # Fixed URL for rate import
-        if 'rates_import_octopus_url' in self.args:
-            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
-            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
-
-        # Octopus export rates
-        if 'metric_octopus_export' in self.args:
+        if 'rates_export_octopus_url' in self.args:
+            # Fixed URL for rate export
+            self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
+            self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
+        elif 'metric_octopus_export' in self.args:
+            # Octopus export rates
             try:
                 data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
             except ValueError:
@@ -3323,11 +3310,9 @@ class PredBat(hass.Hass):
             else:
                 self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
-
-        # Fixed URL for rate export
-        if 'rates_export_octopus_url' in self.args:
-            self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
-            self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
+        else:
+            # Basic rates defined by user over time
+            self.rate_export = self.basic_rates(self.get_arg('rates_export', [], indirect=False), 'export')
 
         # Replicate and scan import rates
         if self.rate_import:
