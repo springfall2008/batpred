@@ -2209,7 +2209,10 @@ class PredBat(hass.Hass):
                     self.set_state(self.prefix + ".high_rate_export_start", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-                    self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='on' if (self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
+                    self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='on' if in_high_rate else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    high_rate_minutes = (rate_high_end - self.minutes_now) if in_high_rate else (rate_high_end - rate_high_start)
+                    self.set_state(self.prefix + ".high_rate_export_duration", state=high_rate_minutes, attributes = {'friendly_name' : 'Next high export rate duration', 'state_class': 'measurement', 'unit_of_measurement': 'minutes', 'icon': 'mdi:table-clock'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state(self.prefix + ".high_rate_export_start_2", state=rate_high_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2223,6 +2226,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".high_rate_export_end", state='undefined', attributes = {'friendly_name' : 'Next high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".high_rate_export_cost", state=self.dp2(self.rate_export_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='off', attributes = {'friendly_name' : 'Predbat high export rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state(self.prefix + ".high_rate_export_duration", state=0, attributes = {'friendly_name' : 'Next high export rate duration', 'state_class': 'measurement', 'unit_of_measurement': 'minutes', 'icon': 'mdi:table-clock'})
         if len(self.high_export_rates) < 2 and not SIMULATE:
             self.set_state(self.prefix + ".high_rate_export_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".high_rate_export_end_2", state='undefined', attributes = {'friendly_name' : 'Next+1 high export rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2348,7 +2352,10 @@ class PredBat(hass.Hass):
                     self.set_state(self.prefix + ".low_rate_start", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".low_rate_end", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".low_rate_cost", state=rate_low_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-                    self.set_state("binary_sensor." + self.prefix + "_low_rate_slot", state='on' if (self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end) else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    in_low_rate = self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end
+                    self.set_state("binary_sensor." + self.prefix + "_low_rate_slot", state='on' if in_low_rate else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    low_rate_minutes = (rate_low_end - self.minutes_now) if in_low_rate else (rate_low_end - rate_low_start)
+                    self.set_state(self.prefix + ".low_rate_duration", state=low_rate_minutes, attributes = {'friendly_name' : 'Next low rate duration', 'state_class': 'measurement', 'unit_of_measurement': 'minutes', 'icon': 'mdi:table-clock'})
                 if window_n == 1 and not SIMULATE:
                     self.set_state(self.prefix + ".low_rate_start_2", state=rate_low_start_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate start', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".low_rate_end_2", state=rate_low_end_date.strftime(time_format_time), attributes = {'friendly_name' : 'Next+1 low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
@@ -2361,6 +2368,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".low_rate_start", state='undefined', attributes = {'friendly_name' : 'Next low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".low_rate_end", state='undefined', attributes = {'friendly_name' : 'Next low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".low_rate_cost", state=self.rate_average, attributes = {'friendly_name' : 'Next low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".low_rate_duration", state=0, attributes = {'friendly_name' : 'Next low rate duration', 'state_class': 'measurement', 'unit_of_measurement': 'minutes', 'icon': 'mdi:table-clock'})
             self.set_state("binary_sensor." + self.prefix + "_low_rate_slot", state='off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         if len(self.low_rates) < 2 and not SIMULATE:
             self.set_state(self.prefix + ".low_rate_start_2", state='undefined', attributes = {'friendly_name' : 'Next+1 low rate start', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
