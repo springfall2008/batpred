@@ -28,10 +28,10 @@ entities:
   - entity: switch.predbat_combine_discharge_slots
   - entity: switch.predbat_combine_mixed_rates
   - entity: switch.predbat_iboost_enable
+  - entity: switch.predbat_inverter_hybrid  
   - entity: input_number.predbat_battery_loss
   - entity: input_number.predbat_battery_loss_discharge
   - entity: input_number.predbat_inverter_loss
-  - entity: switch.predbat_inverter_hybrid  
   - entity: input_number.predbat_battery_rate_max_scaling
   - entity: input_number.predbat_best_soc_keep
   - entity: input_number.predbat_best_soc_margin
@@ -99,12 +99,14 @@ entities:
   - entity: predbat.high_rate_export_start
   - entity: predbat.high_rate_export_end
   - entity: predbat.high_rate_export_cost
+  - entity: predbat.high_rate_export_duration
   - entity: predbat.high_rate_export_end_2
   - entity: predbat.high_rate_export_start_2
   - entity: predbat.high_rate_export_cost_2
   - entity: predbat.low_rate_start
   - entity: predbat.low_rate_end
   - entity: predbat.low_rate_cost
+  - entity: predbat.low_rate_duration
   - entity: predbat.low_rate_end_2
   - entity: predbat.low_rate_start_2
   - entity: predbat.low_rate_cost_2
