@@ -48,6 +48,7 @@ CONFIG_ITEMS = [
     {'name' : 'car_charging_loss',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
     {'name' : 'best_soc_margin',               'friendly_name' : 'Best SOC Margin',                'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
     {'name' : 'best_soc_min',                  'friendly_name' : 'Best SOC Min',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
+    {'name' : 'best_soc_max',                  'friendly_name' : 'Best SOC Max',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
     {'name' : 'best_soc_keep',                 'friendly_name' : 'Best SOC Keep',                  'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
     {'name' : 'best_soc_step',                 'friendly_name' : 'Best SOC Step',                  'type' : 'input_number', 'min' : 0.1, 'max' : 1.0,  'step' : 0.05, 'unit' : 'kwh'},
     {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p'},
@@ -2534,6 +2535,7 @@ class PredBat(hass.Hass):
         self.inverter_hybrid = False
         self.battery_scaling = 1.0
         self.best_soc_min = 0
+        self.best_soc_max = 0
         self.best_soc_margin = 0
         self.best_soc_keep = 0
         self.rate_min = 0
@@ -2604,6 +2606,10 @@ class PredBat(hass.Hass):
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
+        
+        # Start the loop at the max soc setting
+        if self.best_soc_max > 0:
+            loop_soc = min(loop_soc, self.best_soc_max)
         
         while loop_soc >= 0:
             was_debug = self.debug_enable
@@ -3019,7 +3025,7 @@ class PredBat(hass.Hass):
 
                 # Set all to optimisation
                 self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
-                self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+                self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
             if record_charge_windows > 1:
                 for charge_pass in range(0, self.calculate_charge_passes):
@@ -3031,7 +3037,7 @@ class PredBat(hass.Hass):
 
                         self.charge_limit_best[window_n] = best_soc
                         if self.debug_enable or 1:
-                            self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+                            self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
 
 
     def window_as_text(self, windows, percents):
@@ -3125,6 +3131,7 @@ class PredBat(hass.Hass):
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.0)
+        self.best_soc_max = self.get_arg('best_soc_max', 0.0)
         self.best_soc_keep = self.get_arg('best_soc_keep', 2.0)
         self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
         self.set_window_minutes = self.get_arg('set_window_minutes', 30)
