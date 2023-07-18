@@ -44,7 +44,6 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Solcast](#solcast)
     + [Octopus energy](#octopus-energy)
     + [Manual energy rates](#manual-energy-rates)
-    + [No energy tariff data (legacy)](#no-energy-tariff-data-legacy)
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
@@ -319,15 +318,6 @@ Or manually set your rates in a 24-hour period using these:
     - start
       end
       rate
-
-### No energy tariff data (legacy)
-
-Or set assumed rates for the house, battery charging and export.
-You can't enable automatic charging windows with this option, it only works for a fixed charge time.
-
-  - **metric_house** - Set to the cost per Kwh of importing energy when you could have used the battery
-  - **metric_battery** - Set to the cost per Kwh of charging the battery
-  - **metric_export** - Set to the price per Kwh you get for exporting
 
 ### Car charging filtering
 
