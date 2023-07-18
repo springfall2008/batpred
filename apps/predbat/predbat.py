@@ -3977,6 +3977,10 @@ class PredBat(hass.Hass):
             self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
+            except Exception as e:
+                self.log("ERROR: Exception raised {}".format(e))
+                self.record_status('ERROR: Exception raised {}'.format(e))
+                raise e
             finally:
                 self.prediction_started = False
             self.prediction_started = False
@@ -3990,6 +3994,10 @@ class PredBat(hass.Hass):
             self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
+            except Exception as e:
+                self.log("ERROR: Exception raised {}".format(e))
+                self.record_status('ERROR: Exception raised {}'.format(e))
+                raise e
             finally:
                 self.prediction_started = False
             self.prediction_started = False
