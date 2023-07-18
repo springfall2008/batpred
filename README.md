@@ -571,6 +571,7 @@ This must be enabled to get all the 'best' sensors.
 
 **best_soc margin** is added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). Recommended to leave this as 0.
 **best_soc_min** sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
+**best_soc_max** sets the maximum charge level (in kwh) for charging during each slot. A value of 0 disables this feature.
 **best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin in case you use more energy than planned between charge slots.
 **best_soc_step** is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
 **best_soc_pass_margin** Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0 - recommended).
