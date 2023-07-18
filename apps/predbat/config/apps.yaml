@@ -164,7 +164,7 @@ pred_bat:
   
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
-  # Gaps are filled with metric_house from above
+  # Gaps are filled with zero rate
   #rates_import:
   #  -  start: "00:30:00"
   #     end: "04:30:00"
@@ -185,12 +185,6 @@ pred_bat:
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
-
-  # Or set rates to be assumed for imports for the house, charging the battery and exports
-  # this method will not allow automatic setting of charging windows
-  # metric_house: 38
-  # metric_battery: 7.5
-  # metric_export: 4.2
 
   # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
   # If you use 10 then disable pv_metric10_weight below
