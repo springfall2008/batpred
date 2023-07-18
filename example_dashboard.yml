@@ -36,6 +36,7 @@ entities:
   - entity: input_number.predbat_best_soc_keep
   - entity: input_number.predbat_best_soc_margin
   - entity: input_number.predbat_best_soc_min
+  - entity: input_number.predbat_best_soc_max
   - entity: input_number.predbat_best_soc_step
   - entity: input_number.predbat_calculate_charge_passes
   - entity: input_number.predbat_calculate_discharge_passes
