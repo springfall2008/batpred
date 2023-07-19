@@ -2295,8 +2295,12 @@ class PredBat(hass.Hass):
             # When enabled the low rate could be anything up-to the export rate (less battery losses)
             self.rate_threshold = self.dp2(max(self.rate_threshold, self.rate_export_max * self.battery_loss * self.battery_loss_discharge))
 
-        # Rule out exports if the import rate is already higher
-        self.rate_export_threshold = self.dp2(max(self.rate_export_average * self.rate_high_threshold, self.dp2(self.rate_min)))
+        # Compute the export rate threshold
+        self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
+
+        # Rule out exports if the import rate is already higher unless it's a variable export tariff
+        if self.rate_export_max == self.rate_export_min:
+            self.rate_export_threshold = max(self.rate_export_threshold, self.dp2(self.rate_min))
 
         self.log("Rate thresholds (for charge/discharge) are import {} export {}".format(self.rate_threshold, self.rate_export_threshold))
 
@@ -2659,8 +2663,8 @@ class PredBat(hass.Hass):
                     try_percent = 0
                 else:
                     try_percent = try_soc / self.soc_max * 100.0
-                if int(self.current_charge_limit) == int(try_percent):
-                    metric -= max(0.1, self.metric_min_improvement)
+                if abs(int(self.current_charge_limit) - int(try_percent)) <= 2:
+                    metric -= max(0.5, self.metric_min_improvement)
 
             self.debug_enable = was_debug
             if self.debug_enable:
@@ -2772,7 +2776,7 @@ class PredBat(hass.Hass):
                     if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
                         if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
                             self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
-                            metric -= max(0.1, self.metric_min_improvement_discharge)
+                            metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
                     self.log("Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
