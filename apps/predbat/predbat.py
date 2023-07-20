@@ -34,30 +34,30 @@ for minute in range(0, 24*60, 5):
     OPTIONS_TIME.append(timestr)
 
 CONFIG_ITEMS = [
-    {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'pv_scaling',                    'friendly_name' : 'PV Scaling',                     'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple'},
-    {'name' : 'load_scaling',                  'friendly_name' : 'Load Scaling',                   'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple'},
-    {'name' : 'battery_rate_max_scaling',      'friendly_name' : 'Battery rate max scaling',       'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'battery_loss',                  'friendly_name' : 'Battery loss charge ',           'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
+    {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:percent'},
+    {'name' : 'pv_scaling',                    'friendly_name' : 'PV Scaling',                     'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'load_scaling',                  'friendly_name' : 'Load Scaling',                   'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'battery_rate_max_scaling',      'friendly_name' : 'Battery rate max scaling',       'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'battery_loss',                  'friendly_name' : 'Battery loss charge ',           'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
+    {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
+    {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'inverter_hybrid',               'friendly_name' : 'Inverter Hybrid',                'type' : 'switch'},
-    {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging treshhold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
-    {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw'},
-    {'name' : 'car_charging_loss',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction'},
-    {'name' : 'best_soc_margin',               'friendly_name' : 'Best SOC Margin',                'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
-    {'name' : 'best_soc_min',                  'friendly_name' : 'Best SOC Min',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
-    {'name' : 'best_soc_max',                  'friendly_name' : 'Best SOC Max',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
-    {'name' : 'best_soc_keep',                 'friendly_name' : 'Best SOC Keep',                  'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh'},
-    {'name' : 'best_soc_step',                 'friendly_name' : 'Best SOC Step',                  'type' : 'input_number', 'min' : 0.1, 'max' : 1.0,  'step' : 0.05, 'unit' : 'kwh'},
-    {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p'},
-    {'name' : 'metric_min_improvement_discharge', 'friendly_name' : 'Metric Min Improvement Discharge',    'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p'},
-    {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : 'percent'},
-    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'fraction'},
-    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'fraction'},    
+    {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:multiplication'},
+    {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging threshold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw', 'icon' : 'mdi:ev-station'},
+    {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw', 'icon' : 'mdi:ev-station'},
+    {'name' : 'car_charging_loss',             'friendly_name' : 'Car charging loss',              'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
+    {'name' : 'best_soc_margin',               'friendly_name' : 'Best SOC Margin',                'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
+    {'name' : 'best_soc_min',                  'friendly_name' : 'Best SOC Min',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
+    {'name' : 'best_soc_max',                  'friendly_name' : 'Best SOC Max',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
+    {'name' : 'best_soc_keep',                 'friendly_name' : 'Best SOC Keep',                  'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
+    {'name' : 'best_soc_step',                 'friendly_name' : 'Best SOC Step',                  'type' : 'input_number', 'min' : 0.1, 'max' : 1.0,  'step' : 0.05, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
+    {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
+    {'name' : 'metric_min_improvement_discharge', 'friendly_name' : 'Metric Min Improvement Discharge',    'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
+    {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
+    {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
+    {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
+    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},    
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
     {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
@@ -65,12 +65,12 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
     {'name' : 'calculate_charge_oldest',       'friendly_name' : 'Calculate Charge Oldest',        'type' : 'switch'},
     {'name' : 'calculate_charge_all',          'friendly_name' : 'Calculate Charge All',           'type' : 'switch'},
-    {'name' : 'calculate_charge_passes',       'friendly_name' : 'Calculate Charge Passes',        'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'calculate_charge_passes',       'friendly_name' : 'Calculate Charge Passes',        'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number', 'icon' : 'mdi:repeat-variant'},    
     {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
     {'name' : 'calculate_discharge_oldest',    'friendly_name' : 'Calculate Discharge Oldest',     'type' : 'switch'},
     {'name' : 'calculate_discharge_all',       'friendly_name' : 'Calculate Discharge All',        'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
-    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Discharge Passes',     'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number'},    
+    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Discharge Passes',     'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number', 'icon' : 'mdi:repeat-variant'},    
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -83,17 +83,17 @@ CONFIG_ITEMS = [
     {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
     {'name' : 'set_reserve_hold',              'friendly_name' : 'Set Reserve Hold',               'type' : 'switch'},
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
-    {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch'},
-    {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'minutes'},
-    {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME},
+    {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch', 'icon' : 'mdi:bug-outline'},
+    {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
+    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
+    {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME, 'icon' : 'mdi:clock-end'},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
     {'name' : 'iboost_enable',                 'friendly_name' : 'IBoost enable',                  'type' : 'switch'},
     {'name' : 'iboost_max_energy',             'friendly_name' : 'IBoost max energy',              'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
     {'name' : 'iboost_today',                  'friendly_name' : 'IBoost today',                   'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
     {'name' : 'iboost_max_power',              'friendly_name' : 'IBoost max power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
     {'name' : 'iboost_min_power',              'friendly_name' : 'IBoost min power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
-    {'name' : 'iboost_min_soc',                'friendly_name' : 'IBoost min soc',                 'type' : 'input_number', 'min' : 0,   'max' : 100,   'step' : 5,    'unit' : '%'},
+    {'name' : 'iboost_min_soc',                'friendly_name' : 'IBoost min soc',                 'type' : 'input_number', 'min' : 0,   'max' : 100,   'step' : 5,    'unit' : '%', 'icon' : 'mdi:percent'},
 ]
 
 class Inverter():
@@ -3789,11 +3789,14 @@ class PredBat(hass.Hass):
                     item['value'] = value
                     self.log("Updating HA config {} to {}".format(name, value))
                     if item['type'] == 'input_number':
-                        self.set_state(entity_id = entity, state = value, attributes={'friendly_name' : item['friendly_name'], 'min' : item['min'], 'max' : item['max'], 'step' : item['step']})
+                        icon = item.get('icon', 'mdi:numeric')
+                        self.set_state(entity_id = entity, state = value, attributes={'friendly_name' : item['friendly_name'], 'min' : item['min'], 'max' : item['max'], 'step' : item['step'], 'icon' : icon})
                     elif item['type'] == 'switch':
-                        self.set_state(entity_id = entity, state = ('on' if value else 'off'), attributes = {'friendly_name' : item['friendly_name']})
+                        icon = item.get('icon', 'mdi:light-switch')
+                        self.set_state(entity_id = entity, state = ('on' if value else 'off'), attributes = {'friendly_name' : item['friendly_name'], 'icon' : icon})
                     elif item['type'] == 'select':
-                        self.set_state(entity_id = entity, state = value, attributes = {'friendly_name' : item['friendly_name'], 'options' : item['options']})
+                        icon = item.get('icon', 'mdi:format-list-bulleted')
+                        self.set_state(entity_id = entity, state = value, attributes = {'friendly_name' : item['friendly_name'], 'options' : item['options'], 'icon' : icon})
 
     def load_user_config(self):
         """
@@ -3917,9 +3920,14 @@ class PredBat(hass.Hass):
         """
         global SIMULATE
         self.log("Predbat: Startup")
-        self.reset()
-        self.auto_config()
-        self.load_user_config()
+        try:
+            self.reset()
+            self.auto_config()
+            self.load_user_config()
+        except Exception as e:
+            self.log("ERROR: Exception raised {}".format(e))
+            self.record_status('ERROR: Exception raised {}'.format(e))
+            raise e
         
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
