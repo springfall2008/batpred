@@ -262,7 +262,13 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a seperate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount. 
 
 #### REST Interface inverter control
-  - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT
+  - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
+
+  To check your REST is working open up the readData API point in a Web browser e.g:
+  ```
+      http://homeassistant.local:6345/readData
+  ```
+  If you get a bunch of inverter information back then it's working!
 
   It's recommended you enable Raw register output in GivTCP for added monitoring:
   
