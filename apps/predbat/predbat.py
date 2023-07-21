@@ -1229,12 +1229,13 @@ class PredBat(hass.Hass):
         return load_minutes, age_days
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
-                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[]):
+                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[], adjust_key=None):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
         """
         mdata = {}
+        adata = {}
         newest_state = 0
         last_state = 0
         newest_age = 999999
@@ -1273,6 +1274,12 @@ class PredBat(hass.Hass):
             if not prev_last_updated_time:
                 prev_last_updated_time = last_updated_time
                 last_state = state
+
+            # Intelligent adjusted?
+            if adjust_key:
+                adjusted = item.get(adjust_key, False)
+            else:
+                adjusted = False
 
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
@@ -1330,6 +1337,8 @@ class PredBat(hass.Hass):
                     else:
                         while minute < minutes_to:
                             mdata[minute] = state
+                            if adjusted:
+                                adata[minute] = True
                             minute += 1
             else:
                 mdata[minutes] = state
@@ -1359,6 +1368,8 @@ class PredBat(hass.Hass):
                 else:
                     mdata[minute] = accumulate.get(minute, 0)
 
+        if adjust_key:
+            self.io_adjusted = adata
         return mdata
 
     def minutes_since_yesterday(self, now):
@@ -1912,7 +1923,7 @@ class PredBat(hass.Hass):
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
-    def rate_replicate(self, rates):
+    def rate_replicate(self, rates, rate_io={}):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
@@ -1922,7 +1933,10 @@ class PredBat(hass.Hass):
         while minute < (self.forecast_minutes + 24*60):
             if minute not in rates:
                 minute_mod = minute % (24*60)
-                if minute_mod in rates:
+                if (minute_mod in rate_io) and rate_io[minute_mod]:
+                    # Dont replicate Intelligent rates into the next day as it will be different
+                    rates[minute] = self.rate_max
+                elif minute_mod in rates:
                     rates[minute] = rates[minute_mod]
                 else:
                     # Missing rate within 24 hours - fill with dummy last rate
@@ -2304,33 +2318,40 @@ class PredBat(hass.Hass):
 
         self.log("Rate thresholds (for charge/discharge) are import {} export {}".format(self.rate_threshold, self.rate_export_threshold))
 
-    def rate_scan(self, rates, octopus_slots):
+    def rate_add_io_slots(self, rates, octopus_slots):
         """
-        Scan the rates and work out min/max
-        """
-        self.low_rates = []
-        
-        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
-        self.log("Import rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
-
-        self.rate_min = rate_min
-        self.rate_max = rate_max
-        self.rate_min_minute = rate_min_minute
-        self.rate_max_minute = rate_max_minute
-        self.rate_average = rate_average
-
         # Add in any planned octopus slots
+        """
         if octopus_slots:
+            # Add in IO slots
             for slot in octopus_slots:
                 start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
                 end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
                 start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
                 end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
-                self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate_min))
+                self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min))
                 for minute in range(start_minutes, end_minutes):
                     rates[minute] = self.rate_min
 
+        return rates
+
+    def rate_scan(self, rates, print=True):
+        """
+        Scan the rates and work out min/max
+        """
+        self.low_rates = []
+        
+        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
+
+        if print:
+            self.log("Import rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
+
+        self.rate_min = rate_min
+        self.rate_max = rate_max
+        self.rate_min_minute = rate_min_minute
+        self.rate_max_minute = rate_max_minute
+        self.rate_average = rate_average
         return rates
 
     def publish_rates_import(self):
@@ -2557,6 +2578,7 @@ class PredBat(hass.Hass):
         self.debug_enable = False
         self.import_today = {}
         self.export_today = {}
+        self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_window = []
         self.charge_limit = []
@@ -3189,6 +3211,7 @@ class PredBat(hass.Hass):
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
+        self.io_adjusted = {}
         self.low_rates = []
         self.high_export_rates = []
         self.octopus_slots = []
@@ -3240,7 +3263,7 @@ class PredBat(hass.Hass):
                 data_import = []
 
             if data_import:
-                self.rate_import = self.minute_data(data_import, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+                self.rate_import = self.minute_data(data_import, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to', adjust_key='is_intelligent_adjusted')
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
@@ -3328,8 +3351,11 @@ class PredBat(hass.Hass):
 
         # Replicate and scan import rates
         if self.rate_import:
-            self.rate_import = self.rate_replicate(self.rate_import)
-            self.rate_import = self.rate_scan(self.rate_import, self.octopus_slots)
+            self.log("IO adjusted {}".format(self.io_adjusted))
+            self.rate_import = self.rate_scan(self.rate_import, print=False)
+            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
+            self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
+            self.rate_import = self.rate_scan(self.rate_import)
         else:
             self.log("No import rate data provided - using default metric")
 
