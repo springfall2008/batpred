@@ -134,6 +134,7 @@ class Inverter():
         self.soc_kw = 0
         self.soc_percent = 0
         self.rest_data = None
+        self.inverter_limit = 7500.0
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
@@ -155,12 +156,16 @@ class Inverter():
             self.soc_max *= self.base.battery_scaling
    
             # Max battery rate
-            if 'Inverter_Max_Bat_Rate' in idetails:
-                self.battery_rate_max = idetails['Inverter_Max_Bat_Rate'] / 1000.0 / 60.0
+            if 'Invertor_Max_Bat_Rate' in idetails:
+                self.battery_rate_max = idetails['Invertor_Max_Bat_Rate'] / 1000.0 / 60.0
             elif 'Invertor_Max_Rate' in idetails:
                 self.battery_rate_max = idetails['Invertor_Max_Rate'] / 1000.0 / 60.0
             else:
                 self.battery_rate_max = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
+
+            # Max invertor rate
+            if 'Invertor_Max_Inv_Rate' in idetails:
+                self.inverter_limit = idetails['Invertor_Max_Rate'] / 1000.0 / 60.0
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
@@ -181,8 +186,9 @@ class Inverter():
             self.base.log("Inverter {} Set reserve is disable, using current reserve {}".format(self.id, self.reserve_percent))
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
-        # Max inverter rate
-        self.inverter_limit = self.base.get_arg('inverter_limit', 7500.0, index=self.id) / (1000 * 60.0)
+        # Max inverter rate override
+        if 'inverter_limit' in self.base.args:
+            self.inverter_limit = self.base.get_arg('inverter_limit', self.inverter_limit, index=self.id) / (1000 * 60.0)
 
         self.base.log("New Inverter {} with soc_max {} nominal_capacity {} battery rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
         
