@@ -142,8 +142,9 @@ class Inverter():
             self.rest_data = self.rest_readData()
 
         # Battery size, charge and discharge rates
-        if self.rest_data:
-            self.soc_max = float(self.rest_data['Invertor_Details']['Battery_Capacity_kWh'])
+        if self.rest_data and ('Invertor_Details' in self.rest_data):
+            idetails = self.rest_data['Invertor_Details']
+            self.soc_max = float(idetails['Battery_Capacity_kWh'])
             self.nominal_capacity = self.soc_max
             if 'raw' in self.rest_data:
                 self.nominal_capacity = float(self.rest_data['raw']['invertor']['battery_nominal_capacity']) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
@@ -152,7 +153,14 @@ class Inverter():
                     self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
-            self.battery_rate_max = self.rest_data['Invertor_Details']['Invertor_Max_Rate'] / 1000.0 / 60.0
+   
+            # Max battery rate
+            if 'Inverter_Max_Bat_Rate' in idetails:
+                self.battery_rate_max = idetails['Inverter_Max_Bat_Rate'] / 1000.0 / 60.0
+            elif 'Invertor_Max_Rate' in idetails:
+                self.battery_rate_max = idetails['Invertor_Max_Rate'] / 1000.0 / 60.0
+            else:
+                self.battery_rate_max = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
