@@ -165,7 +165,7 @@ class Inverter():
 
             # Max invertor rate
             if 'Invertor_Max_Inv_Rate' in idetails:
-                self.inverter_limit = idetails['Invertor_Max_Rate'] / 1000.0 / 60.0
+                self.inverter_limit = idetails['Invertor_Max_Inv_Rate'] / 1000.0 / 60.0
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
