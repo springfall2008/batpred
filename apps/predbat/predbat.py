@@ -1576,6 +1576,7 @@ class PredBat(hass.Hass):
         pv_kwh = 0
         final_pv_kwh = 0
         metric = self.cost_today_sofar
+        final_soc = soc
         final_metric = metric
         metric_time = {}
         load_kwh_time = {}
