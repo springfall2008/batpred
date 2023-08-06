@@ -3271,17 +3271,30 @@ class PredBat(hass.Hass):
             self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
         elif 'metric_octopus_import' in self.args:
             # Octopus import rates
-            try:
-                data_import = self.get_state(entity_id = self.get_arg('metric_octopus_import', indirect=False), attribute='rates')
-            except ValueError:
-                self.log("WARN: Unable to fetch import rates from {} check metric_octopus_import setting".format(self.get_arg('metric_octopus_import', indirect=False)))
-                data_import = []
+            entity_id = self.get_arg('metric_octopus_import', None, indirect=False)
+            data_all = []
+            
+            if entity_id:
+                data_import = self.get_state(entity_id = entity_id, attribute='rates')
+                if data_import:
+                    data_all += data_import
+                else:
+                    data_import = self.get_state(entity_id = entity_id, attribute='all_rates')
+                    if data_import:
+                        data_all += data_import
 
-            if data_import:
-                self.rate_import = self.minute_data(data_import, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to', adjust_key='is_intelligent_adjusted')
+            if data_all:
+                rate_key = 'rate'
+                from_key = 'from'
+                to_key = 'to'
+                if rate_key not in data_all[0]:
+                    rate_key = 'value_inc_vat'
+                    from_key = 'valid_from'
+                    to_key = 'valid_to'
+                self.rate_import = self.minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key='is_intelligent_adjusted')
             else:
                 self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
-                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
+                self.record_status(message="Error - metric_octopus_import not set correctly", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_import = self.basic_rates(self.get_arg('rates_import', [], indirect=False), 'import')
@@ -3349,14 +3362,26 @@ class PredBat(hass.Hass):
             self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
         elif 'metric_octopus_export' in self.args:
             # Octopus export rates
-            try:
-                data_export = self.get_state(entity_id = self.get_arg('metric_octopus_export', indirect=False), attribute='rates')
-            except ValueError:
-                self.log("WARN: Unable to get export rates from {} - check metric_octopus_export setting".format(self.get_arg('metric_octopus_export', indirect=False)))
-                data_export = []
+            entity_id = self.get_arg('metric_octopus_export', None, indirect=False)
+            data_all_export = []
 
+            data_export = self.get_state(entity_id = entity_id, attribute='rates')
             if data_export:
-                self.rate_export = self.minute_data(data_export, self.forecast_days + 1, self.midnight_utc, 'rate', 'from', backwards=False, to_key='to')
+                data_all_export += data_export
+            else:
+                data_export = self.get_state(entity_id = entity_id, attribute='all_rates')
+                if data_export:
+                    data_all_export += data_export
+                    
+            if data_all_export:
+                rate_key = 'rate'
+                from_key = 'from'
+                to_key = 'to'
+                if rate_key not in data_all[0]:
+                    rate_key = 'value_inc_vat'
+                    from_key = 'valid_from'
+                    to_key = 'valid_to'
+                self.rate_export = self.minute_data(data_all_export, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key)
             else:
                 self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
@@ -3366,19 +3391,22 @@ class PredBat(hass.Hass):
 
         # Replicate and scan import rates
         if self.rate_import:
-            self.rate_import = self.rate_scan(self.rate_import, print=False)
+            self.log("Import rates {}".format(self.rate_import))
+            self.rate_import = self.rate_scan(self.rate_import, print=True)
             self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.rate_import = self.rate_scan(self.rate_import)
         else:
-            self.log("No import rate data provided - using default metric")
+            self.log("Warning: No import rate data provided")
+            self.record_status(message="Error - No import rate data provided", had_errors=True)
 
         # Replicate and scan export rates
         if self.rate_export:
             self.rate_export = self.rate_replicate(self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export)
         else:
-            self.log("No export rate data provided - using default metric")
+            self.log("Warning: No export rate data provided")
+            self.record_status(message="Error - No export rate data provided", had_errors=True)
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -3622,7 +3650,7 @@ class PredBat(hass.Hass):
                 if (minutes_end - self.minutes_now) < 24*60 and minutes_end > self.minutes_now:
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Charge window will be: {} - {}".format(charge_start_time, charge_end_time))
+                    self.log("Charge window will be: {} - {} - current soc {}.target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
 
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
@@ -3630,7 +3658,7 @@ class PredBat(hass.Hass):
                         status = "Charging"
 
                     # Hold charge mode when enabled
-                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and status == "Charging" and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
+                    if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and (status == "Charging") and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]):
                         status = "Hold charging"
                         inverter.disable_charge_window()
                         self.log("Holding current charge level using reserve: {}".format(self.charge_limit_percent_best[0]))
