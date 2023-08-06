@@ -3391,7 +3391,6 @@ class PredBat(hass.Hass):
 
         # Replicate and scan import rates
         if self.rate_import:
-            self.log("Import rates {}".format(self.rate_import))
             self.rate_import = self.rate_scan(self.rate_import, print=True)
             self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
