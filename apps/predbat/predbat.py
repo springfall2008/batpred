@@ -3527,28 +3527,30 @@ class PredBat(hass.Hass):
         pv_forecast_minute10 = {}
         pv_forecast_data = []
         if 'pv_forecast_today' in self.args:
+            # Found out if detailedForcast is present or not, then set the attribute name
+            # in newer solcast plugings only forecast is used
+            attribute = 'detailedForecast'
+            entity_id = self.get_arg('pv_forecast_today', None, indirect=False)
+            if entity_id:
+                result = self.get_state(entity_id = entity_id, attribute=attribute)
+                if not result:
+                    attribute = 'forecast'
             try:
-                pv_forecast_data    += self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute='detailedForecast')
+                pv_forecast_data    += self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute=attribute)
             except ValueError:
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_today".format(self.get_arg('pv_forecast_today', indirect=False)))                
                 self.record_status("Error - pv_forecast_today not be set correctly", debug=self.get_arg('pv_forecast_today', indirect=False), had_errors=True)
 
             try:
                 if 'pv_forecast_tomorrow' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute='detailedForecast')
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute=attribute)
                 if 'pv_forecast_d3' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute='detailedForecast')
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute=attribute)
                 if 'pv_forecast_d4' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute='detailedForecast')
-                if 'pv_forecast_d5' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d5', indirect=False), attribute='detailedForecast')
-                if 'pv_forecast_d6' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d6', indirect=False), attribute='detailedForecast')
-                if 'pv_forecast_d7' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d7', indirect=False), attribute='detailedForecast')
+                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute=attribute)
             except ValueError:
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
-                self.record_status("Error - pv_forecast_tomorrow or d2/d3 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
+                self.record_status("Error - pv_forecast_tomorrow or d3/d4 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
 
             pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
             pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
