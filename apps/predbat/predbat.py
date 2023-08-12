@@ -135,6 +135,7 @@ class Inverter():
         self.soc_percent = 0
         self.rest_data = None
         self.inverter_limit = 7500.0
+        self.inverter_time = None
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
@@ -166,10 +167,27 @@ class Inverter():
             # Max invertor rate
             if 'Invertor_Max_Inv_Rate' in idetails:
                 self.inverter_limit = idetails['Invertor_Max_Inv_Rate'] / 1000.0 / 60.0
+            
+            # Inverter time
+            if 'Invertor_Time' in idetails:
+                ivtime = idetails['Invertor_Time']
+                self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
             self.battery_rate_max = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0) / 1000.0 / 60.0
+            ivtime = self.base.get_arg('inverter_time', index=self.id, default=None)
+            if ivtime:
+                self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
+
+        # Check inverter time and confirm skew
+        if self.inverter_time:
+            tdiff = self.inverter_time - self.base.now_utc
+            tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60*24)
+            self.base.log("Invertor time {} AppDeamon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
+            if abs(tdiff) >= 5:
+                self.base.log("WARN: Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff))
+                self.base.record_status("Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff), had_errors=True)
 
         # Battery rate max scaling
         self.battery_rate_max *= self.base.battery_rate_max_scaling
@@ -3117,19 +3135,23 @@ class PredBat(hass.Hass):
         """
         self.had_errors = False
         local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
-        now_utc = datetime.now(local_tz)
-        now = datetime.now()
+        skew = self.get_arg('clock_skew', 0)
+        if skew:
+            self.log("WARN: Clock skew is set to {} minutes".format(skew))
+        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
+        now = datetime.now() + timedelta(minutes=skew)
         if SIMULATE:
             now += timedelta(minutes=self.simulate_offset)
             now_utc += timedelta(minutes=self.simulate_offset)
 
-        self.log("--------------- PredBat - update at: " + str(now_utc))
+        self.log("--------------- PredBat - update at {} with clock skew {} minutes".format(now_utc, skew))
 
         self.debug_enable = self.get_arg('debug_enable', False)
         self.max_windows = self.get_arg('max_windows', 128)
 
         self.log("Debug enable is {}".format(self.debug_enable))
 
+        self.now_utc = now_utc
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -4025,7 +4047,8 @@ class PredBat(hass.Hass):
             self.log("Best SOC array {}".format(soc_best))
             SIMULATE = True
 
-            now = datetime.now()
+            skew = self.get_arg('clock_skew', 0)
+            now = datetime.now() + timedelta(minutes=skew)            
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
             minutes_now = int((now - midnight).seconds / 60)
 
@@ -4036,10 +4059,14 @@ class PredBat(hass.Hass):
                 self.update_pred(scheduled=True)
         else:
             # Run every N minutes aligned to the minute
-            now = datetime.now()
+            skew = self.get_arg('clock_skew', 0)
+            if skew:
+                self.log("WARN: Clock skew is set to {} minutes".format(skew))
+            run_every = self.get_arg('run_every', 5) * 60
+            skew = skew % (run_every / 60)
+            now = datetime.now() + timedelta(minutes=skew)
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
             seconds_now = (now - midnight).seconds
-            run_every = self.get_arg('run_every', 5) * 60
 
             # Calculate next run time to exactly align with the run_every time
             seconds_offset = seconds_now % run_every
@@ -4059,7 +4086,7 @@ class PredBat(hass.Hass):
             # And then every N minutes
             if not INVERTER_TEST:
                 self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-                self.run_every(self.update_time_loop, now, 15, random_start=0, random_end=0)
+                self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
 
     def update_time_loop(self, cb_args):
         """
