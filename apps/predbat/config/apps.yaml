@@ -68,6 +68,9 @@ pred_bat:
   inverter_mode: 
    - select.givtcp_{geserial}_mode
    - select.givtcp2_{geserial2}_mode
+  inverter_time:
+   - sensor.givtcp_{geserial}_invertor_time
+   - sensor.givtcp2_{geserial2}_invertor_time
   charge_start_time: 
    - select.givtcp_{geserial}_charge_start_time_slot_1
    - select.givtcp2_{geserial2}_charge_start_time_slot_1
@@ -103,6 +106,12 @@ pred_bat:
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0
   inverter_clock_skew_discharge_end: 0
+  
+  # Clock skew adjusts the Appdeamon time
+  # This is the time that Predbat takes actions like starting discharge/charging
+  # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDeamon issue)
+  # 1 means add 1 minute to AppDeamon time, -1 takes it away
+  clock_skew: 0
   
   # Set these to match solcast sensor names
   # The regular expression (re:) makes the solcast bit optional
