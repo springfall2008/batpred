@@ -6,7 +6,7 @@ Also known by some as Batpred or Batman!
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
 ```
-Copyright (c) Trefor Southwell May 2023 - All rights reserved
+Copyright (c) Trefor Southwell August 2023 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
@@ -279,6 +279,7 @@ Control per inverter (only used if REST isn't set):
   - **soc_max** - GivTCP Entity name for the maximum charge level for the battery
   - **reserve** - GivTCP sensor name for the reserve setting in %
   - **inverter_mode** - GivTCP inverter mode control
+  - **inverter_time** - GivTCP inverter timestamp
   - **charge_enable** - GivTCP charge enable entity - says if the battery will be charged in the time window
   - **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
   - **charge_start_time** - GivTCP battery charge start time entity
