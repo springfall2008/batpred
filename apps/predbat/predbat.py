@@ -745,10 +745,17 @@ class Inverter():
         Get inverter status
         """
         url = self.rest_api + '/readData'
-        r = requests.get(url)
-        if r.status_code == 200:
+        try:
+            r = requests.get(url)
+        except Exception as e:
+            self.log("ERROR: Exception raised {}".format(e))
+            r = None
+
+        if r and (r.status_code == 200):
             return r.json()
         else:
+            self.base.log("WARN: Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url))
+            self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
             return None
 
     def rest_runAll(self):
@@ -1467,7 +1474,7 @@ class PredBat(hass.Hass):
         this_point = 0
 
         for days in self.days_previous:
-            use_days = max(days, self.load_minutes_age)
+            use_days = min(days, self.load_minutes_age)
             weight = 1.0
             if this_point < len(self.days_previous_weight):
                 weight = self.days_previous_weight[this_point]                
