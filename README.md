@@ -352,10 +352,16 @@ Connect to your cars sensors for accurate data:
   - **car_charging_limit** - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
   - **car_charging_soc** - The cars current % charge level, link to a suitable sensor. Default is 0%
 
+Control how your battery behaves during car charging:
+  - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. The home battery can still charge from the grid/solar in either case.
+
 ### Workarounds
 
   - **battery_scaling** - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
   - **import_export_scaling** - Scalings the import & export data from GivTCP - used for workarounds
+  - **inverter_clock_skew_start**, **inverter_clock_skew_end** - Skews the setting of the charge slot registers vs the predicted start time (see apps.yml)
+  - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time (see apps.yml)
+  - **clock_skew** - Skews the local time that Predbat uses (from AppDeamon), will change when real-time actions happen e.g. triggering a discharge.
 
 ### Triggers
 
