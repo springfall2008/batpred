@@ -353,7 +353,7 @@ Connect to your cars sensors for accurate data:
   - **car_charging_soc** - The cars current % charge level, link to a suitable sensor. Default is 0%
 
 Control how your battery behaves during car charging:
-  - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. The home battery can still charge from the grid/solar in either case.
+  - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan, e.g. you are using Octopus Intelligent or you use the car slots in Predbat to control your car charging.
 
 ### Workarounds
 
