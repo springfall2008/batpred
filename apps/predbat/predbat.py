@@ -61,6 +61,7 @@ CONFIG_ITEMS = [
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
     {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
+    {'name' : 'car_charging_from_battery',     'friendly_name' : 'Allow car to charge from battery', 'type' : 'switch'},
     {'name' : 'calculate_best',                'friendly_name' : 'Calculate Best',                 'type' : 'switch'},
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
     {'name' : 'calculate_charge_oldest',       'friendly_name' : 'Calculate Charge Oldest',        'type' : 'switch'},
@@ -818,13 +819,14 @@ class Inverter():
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             time.sleep(10)
+            self.rest_data = self.rest_runAll()
             new = self.rest_data['Control']['Battery_Discharge_Rate']
             if abs(new - rate) <  100:
                 self.base.log("Inverter {} set discharge rate {} via REST succesfull on retry {}".format(self.id, rate, retry))
                 return True
 
         self.base.log("WARN: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data['Control']['Battery_Discharge_Rate']))
-        self.base.record_status("Warn - Inverter {} REST failed to setDischargeRate".format(self.id), had_errors=True)
+        self.base.record_status("Warn - Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data['Control']['Battery_Discharge_Rate']), had_errors=True)
         return False
 
     def rest_setBatteryMode(self, inverter_mode):
@@ -1703,6 +1705,12 @@ class PredBat(hass.Hass):
                 car_load_scale = max(min(car_load_scale, self.car_charging_limit - car_soc), 0)
                 car_soc += car_load_scale
                 load_yesterday += car_load_scale / self.car_charging_loss
+                # Model not allowing the car to charge from the battery
+                if not self.car_charging_from_battery:
+                    discharge_rate_max = 0
+            else:
+                if not self.car_charging_from_battery:
+                    discharge_rate_max = self.battery_rate_max
 
             # Count load
             load_kwh += load_yesterday
@@ -3221,6 +3229,7 @@ class PredBat(hass.Hass):
             else:
                 self.car_charging_planned = False
         self.car_charging_plan_smart = self.get_arg('car_charging_plan_smart', False)
+        self.car_charging_from_battery = self.get_arg('car_charging_from_battery', True)
         self.car_charging_plan_time = self.get_arg('car_charging_plan_time', "07:00:00")
        
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
@@ -3578,7 +3587,7 @@ class PredBat(hass.Hass):
                     attribute = 'forecast'
             try:
                 pv_forecast_data    += self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute=attribute)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_today".format(self.get_arg('pv_forecast_today', indirect=False)))                
                 self.record_status("Error - pv_forecast_today not be set correctly", debug=self.get_arg('pv_forecast_today', indirect=False), had_errors=True)
 
@@ -3589,7 +3598,7 @@ class PredBat(hass.Hass):
                     pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute=attribute)
                 if 'pv_forecast_d4' in self.args:
                     pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute=attribute)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
                 self.record_status("Error - pv_forecast_tomorrow or d3/d4 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
 
@@ -3780,7 +3789,21 @@ class PredBat(hass.Hass):
                 self.log("Setting ECO mode as no discharge window planned")
                 inverter.adjust_force_discharge(False)
                 resetReserve = True
-            
+
+            # Car charging from battery disable?
+            if not self.car_charging_from_battery:
+                car_load = self.in_car_slot(self.minutes_now)
+                if car_load > 0:
+                    if status not in ['Discharging']:
+                        inverter.adjust_discharge_rate(0)
+                        self.log("Disabling battery discharge while the car is charging")
+                        if status != 'Idle':
+                            status += ", Hold for car"
+                        else:
+                            status = "Hold for car"
+                else:
+                    inverter.adjust_discharge_rate(inverter.battery_rate_max * 60 * 1000)
+
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
