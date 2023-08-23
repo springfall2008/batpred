@@ -2241,7 +2241,7 @@ class PredBat(hass.Hass):
         plan = []
 
         if not self.car_charging_slots:
-            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state='off', attributes = {'planned' : plan, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+            self.set_state("binary_sensor." + self.prefix + "_car_charging_slot", state='off', attributes = {'planned' : plan, 'cost' : None, 'kwh' : None, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
         else:
             window = self.car_charging_slots[0]
             if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
@@ -3009,6 +3009,11 @@ class PredBat(hass.Hass):
         if not isinstance(triggers, list):
             return
 
+        # Only run if we have export data
+        if not predict_export:
+            return
+
+        # Check each trigger
         for trigger in triggers:
             total_energy = 0
             name = trigger.get('name', 'trigger')
