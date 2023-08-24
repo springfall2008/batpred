@@ -4206,6 +4206,7 @@ class PredBat(hass.Hass):
         """
         if not self.prediction_started:
             self.prediction_started = True
+            self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
             except Exception as e:
