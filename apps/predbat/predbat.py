@@ -2533,28 +2533,55 @@ class PredBat(hass.Hass):
         """
         discharge_limit_time = {}
         discharge_limit_time_kw = {}
+
         discharge_limit_soc = self.soc_max
         discharge_limit_percent = 100
-        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
-            window_n = self.in_charge_window(discharge_window, minute)
-            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+        discharge_limit_first = False
+
+        for minute in range(0, self.forecast_minutes, 30):
+            window_n = self.in_charge_window(discharge_window, minute + self.minutes_now)
+            minute_timestamp = self.midnight_utc + timedelta(minutes=(minute + self.minutes_now))
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window_n >=0 and (discharge_limits[window_n] < 100.0):
+                soc_kw = (discharge_limits[window_n] * self.soc_max) / 100.0
                 discharge_limit_time[stamp] = discharge_limits[window_n]
-                discharge_limit_time_kw[stamp] = (discharge_limits[window_n] * self.soc_max) / 100.0
-                discharge_limit_soc = 0
-                discharge_limit_percent = 0
+                discharge_limit_time_kw[stamp] = soc_kw
+                if not discharge_limit_first:
+                    discharge_limit_soc = soc_kw
+                    discharge_limit_percent = discharge_limits[window_n]
+                    discharge_limit_first = True
             else:
                 discharge_limit_time[stamp] = 100
                 discharge_limit_time_kw[stamp] = self.soc_max
 
         if not SIMULATE:
+            discharge_start_str = 'undefined'
+            discharge_end_str = 'undefined'
+            discharge_start_date = None
+            discharge_end_date = None
+
+            if discharge_window and (discharge_window[0]['end'] < (24*60 + self.minutes_now)):
+                discharge_start_minutes = discharge_window[0]['start']
+                discharge_end_minutes = discharge_window[0]['end']
+
+                time_format_time = '%H:%M:%S'
+                discharge_startt = self.midnight_utc + timedelta(minutes=discharge_start_minutes)
+                discharge_endt = self.midnight_utc + timedelta(minutes=discharge_end_minutes)
+                discharge_start_str = discharge_startt.strftime(time_format_time)
+                discharge_end_str = discharge_endt.strftime(time_format_time)
+                discharge_start_date = discharge_startt.strftime(TIME_FORMAT)
+                discharge_end_date = discharge_endt.strftime(TIME_FORMAT)
+
             if best:
                 self.set_state(self.prefix + ".best_discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
                 self.set_state(self.prefix + ".best_discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit best', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".best_discharge_start", state=discharge_start_str, attributes = {'timestamp' : discharge_start_date, 'friendly_name' : 'Predicted discharge start time best', 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock', 'unit_of_measurement' : None})
+                self.set_state(self.prefix + ".best_discharge_end", state=discharge_end_str, attributes = {'timestamp' : discharge_end_date, 'friendly_name' : 'Predicted discharge end time best', 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock', 'unit_of_measurement' : None})
             else:
                 self.set_state(self.prefix + ".discharge_limit_kw", state=self.dp2(discharge_limit_soc), attributes = {'results' : discharge_limit_time_kw, 'friendly_name' : 'Predicted discharge limit kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
                 self.set_state(self.prefix + ".discharge_limit", state=discharge_limit_percent, attributes = {'results' : discharge_limit_time, 'friendly_name' : 'Predicted discharge limit', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' :'mdi:battery-charging'})
+                self.set_state(self.prefix + ".discharge_start", state=discharge_start_str, attributes = {'timestamp' : discharge_start_date, 'friendly_name' : 'Predicted discharge start time', 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock', 'unit_of_measurement' : None})
+                self.set_state(self.prefix + ".discharge_end", state=discharge_end_str, attributes = {'timestamp' : discharge_end_date, 'friendly_name' : 'Predicted discharge end time', 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock', 'unit_of_measurement' : None})
 
     def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
         """
@@ -2596,8 +2623,6 @@ class PredBat(hass.Hass):
                     charge_end_str = charge_endt.strftime(time_format_time)
                     charge_start_date = charge_startt.strftime(TIME_FORMAT)
                     charge_end_date = charge_endt.strftime(TIME_FORMAT)
-
-                    self.log("Got charge start end {} {} minutes {} {}".format(charge_start_date, charge_end_date, charge_start_minutes, charge_end_minutes))
 
             if best:
                 self.set_state(self.prefix + ".best_charge_limit_kw", state=self.dp2(charge_limit_first), attributes = {'results' : charge_limit_time_kw, 'friendly_name' : 'Predicted charge limit kwh best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' :'mdi:battery-charging'})
@@ -3050,7 +3075,7 @@ class PredBat(hass.Hass):
                 soc = predict_soc[predict_minute]
 
                 if self.debug_enable:
-                    self.log("Examine window {} from {} - {} limit {} - starting soc {}".format(window_n, window_start, window_end, limit, soc))
+                    self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc))
 
                 # Discharge level adjustments for safety
                 predict_minute = int((window_end - minutes_now) / 5) * 5
@@ -3698,6 +3723,9 @@ class PredBat(hass.Hass):
 
                 # Clipping windows
                 if self.discharge_window_best:
+                    # Re-run prediction to get data for clipping
+                    best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, end_record=end_record)
+
                     # Work out new record end
                     # end_record = self.record_length(self.charge_window_best)
                     record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
