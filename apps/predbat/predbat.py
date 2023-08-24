@@ -1523,6 +1523,8 @@ class PredBat(hass.Hass):
         max_windows = self.max_charge_windows(end_record, charge_window)
         if len(charge_window) > max_windows:
             end_record = min(end_record, charge_window[max_windows]['start'])
+        # Never record less than 8 hours from now
+        end_record = max(end_record, self.minutes_now + 8*60)
         return end_record - self.minutes_now
     
     def max_charge_windows(self, end_record_abs, charge_window):
