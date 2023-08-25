@@ -1276,6 +1276,8 @@ class PredBat(hass.Hass):
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
+        if age_days is None:
+            age_days = 0
         return load_minutes, age_days
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
@@ -1484,6 +1486,10 @@ class PredBat(hass.Hass):
         total_weight = 0
         this_point = 0
 
+        # No data?
+        if not data:
+            return 0
+
         for days in self.days_previous:
             use_days = min(days, self.load_minutes_age)
             weight = 1.0
@@ -1523,8 +1529,9 @@ class PredBat(hass.Hass):
         max_windows = self.max_charge_windows(end_record, charge_window)
         if len(charge_window) > max_windows:
             end_record = min(end_record, charge_window[max_windows]['start'])
-        # Never record less than 8 hours from now
-        end_record = max(end_record, self.minutes_now + 8*60)
+            # If we are within this window then push to the end of it
+            if end_record < self.minutes_now:
+                end_record = charge_window[max_windows]['end']
         return end_record - self.minutes_now
     
     def max_charge_windows(self, end_record_abs, charge_window):
