@@ -511,8 +511,11 @@ Each config item has an input_number or switch associated with it, see the examp
 ### Battery loss options
 
 **battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
+
 **battery_loss_discharge** accounts for energy lost discharging the battery, default 0.05 is 5%
+
 **inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
+
 **inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
 
 ### Scaling and weight options
@@ -537,9 +540,11 @@ Car charging hold is a feature where you try to filter out previous car charging
 When **car_charging_hold** is enabled loads of above the power threshold **car_charging_treshold** then you are assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
 
 For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml then historical data will be subtracted from the load data instead.
+
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instgead.
 
 **car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Ocotpus Intelligent if enabled
+
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
 ### Car charging plan options
@@ -560,23 +565,35 @@ you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this
 This must be enabled to get all the 'best' sensors.
 
 **calculate_best_charge**     If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
+
 **calculate_charge_oldest**   If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first. Recommended to keep disabled.
+
 **calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to keep enabled.
+
 **calculate_charge_passes**   Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
 
 **calculate_best_discharge**   If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
+
 **calculate_discharge_all**    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to leave as False.
+
 **calculate_discharge_passes** Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
+
 **calculate_discharge_oldest** When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default True (recommended).
+
 **calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
 
 ### Battery margins and metrics options
 
 **best_soc margin** is added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). Recommended to leave this as 0.
+
 **best_soc_min** sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
+
 **best_soc_max** sets the maximum charge level (in kwh) for charging during each slot. A value of 0 disables this feature.
+
 **best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin in case you use more energy than planned between charge slots.
+
 **best_soc_step** is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
+
 **best_soc_pass_margin** Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0 - recommended).
 
 **combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
@@ -585,6 +602,7 @@ Not recommended to set to False when best_soc_min set to True or all slots will 
 **charge_slot_split** When combine charge is False charge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
 
 **combine_discharge_slots** Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+
 **discharge_slot_split** When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
 A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
 
@@ -610,33 +628,26 @@ If you set this too high you might not get any export slots. If it's too low you
 
 ### Inverter control options
 
-**set_charge_window**
-
-When enabled the next charge window will be automatically configured based on the incoming rates
+**set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates
 Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
 Will also automatically disable charging if not required and re-enable it when required. 
 If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on.
 
 **set_window_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
+
 **set_window_notify** enables mobile notifications about changes to the charge window
 
-**set_discharge_window**
-
-When enabled automatically discharge (forced export) for export during high rate periods.
+**set_discharge_window** When enabled automatically discharge (forced export) for export during high rate periods.
 
 **set_discharge_notify** enables mobile notifications about changes to the discharge window.
 
-**set_soc_enable**
-
-When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
+**set_soc_enable** When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
 NOTE: it maybe set more than once if things change
 
 **set_soc_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
 **set_soc_notify** enables mobile notifications about changes to the charge %
 
-**set_reserve_enable**
-
-When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
+**set_reserve_enable** When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
 to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % which is often 4%.
 The feature applies with **set_soc_enable** or **set_discharge_window** is True 
 
@@ -650,7 +661,9 @@ IBoost model, when enabled with **iboost_enable** tries to model excess solar en
 **iboost_max** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kwh
 
 **iboost_max_power** Sets the maximum power in watts to consume - default 2400
+
 **iboost_min_power** Sets the minimum power in watts to consume - default 500
+
 **iboost_min_soc** sets the minimum home battery soc % to enable iboost on, default 0
 
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
@@ -716,23 +729,24 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.best10_import_energy- Predicted import energy for PV 10%
 
 - Energy rate data:
-  - predbat.low_rate_cost - The lowest rate cost in P
-  - predbat.low_rate_start - Start time of the next low rate
-  - predbat.low_rate_end - End time of the next low rate
-  - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low rate slow
-  - binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
-    
-  - predbat.high_export_rate_cost - The highest rate cost in P
-  - predbat.high_export_rate_start - Start time of the next high export rate
-  - predbat.high_export_rate_end - End time of the next high export rate
-  - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slow
-  - binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
-   
-  - predbat.rates - The current energy rates in P (also can be charted)
-  - predbat.rates_export - The current energy export rates in P (also be be charted)
-  - predbat.cost_today - The total cost of energy so far today (since midnight)
-  - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
-  - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
+  - Low import rate entities
+    - predbat.low_rate_cost - The lowest import rate cost in P
+    - predbat.low_rate_start - Start time of the next low import rate
+    - predbat.low_rate_end - End time of the next low import rate
+    - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low import rate slot
+    - binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
+  - High export rate entities
+    - predbat.high_export_rate_cost - The highest rate cost in P
+    - predbat.high_export_rate_start - Start time of the next high export rate
+    - predbat.high_export_rate_end - End time of the next high export rate
+    - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
+    - binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
+  - Other rate entities
+    - predbat.rates - The current energy rates in P (also can be charted)
+    - predbat.rates_export - The current energy export rates in P (also be be charted)
+    - predbat.cost_today - The total cost of energy so far today (since midnight)
+    - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
+    - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
 
 - Car data:
   - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
