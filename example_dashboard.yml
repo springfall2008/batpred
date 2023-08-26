@@ -28,7 +28,9 @@ entities:
   - entity: switch.predbat_combine_discharge_slots
   - entity: switch.predbat_combine_mixed_rates
   - entity: switch.predbat_iboost_enable
-  - entity: switch.predbat_inverter_hybrid  
+  - entity: switch.predbat_inverter_hybrid
+  - entity: switch.predbat_battery_capacity_nominal
+  - entity: switch.predbat_car_charging_from_battery
   - entity: input_number.predbat_battery_loss
   - entity: input_number.predbat_battery_loss_discharge
   - entity: input_number.predbat_inverter_loss
