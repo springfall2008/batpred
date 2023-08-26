@@ -93,21 +93,21 @@ The app runs every N minutes (default 5), it will automatically update its predi
 Please see the sections below for how to achieve each step. This is just a checklist of things:
 
 1. Make sure GivTCP is installed and running - [GivTCP install](#givtcp-install)
-2. Install AppDeamon if you haven't already  - [AppDaemon install](#appdaemon-install)
+2. Install AppDaemon if you haven't already  - [AppDaemon install](#appdaemon-install)
 3. Install HACS if you haven't already - [HACS install](#hacs-install)
 4. Install Predbat using HACS - [Predbat install](#predbat-install)
 5. Install Solcast if you haven't already [Solcast install](#solcast-install)
    - Also check Solcast is being auto-updated a few times a day and that you see the data in Home Assistant
 6. If you have Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - [Octopus energy](#octopus-energy)
    - If you have Octopus Intelligent also install the Intelligent plugin
-7. Go and edit apps.yml (in config/appdeamon/apps/predbat/config/apps.yml) to match your system - [config.yml settings](#configyml-settings)
+7. Go and edit apps.yml (in config/appdaemon/apps/predbat/config/apps.yml) to match your system - [config.yml settings](#configyml-settings)
    - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
      - You have set the right number of inverters (**num_inverters**)
      - Adjust your **inverter_limit** as required
    - You have your energy rates set correctly either using Octopus Plugin or entered manually
    - That the Solcast plugin is matching the configuration correctly - should be automatic
    - If you have a car charging sensor you might want to add that also to help make predictions more accurate
-   - Then check the AppDeamon logfile and make sure you have no errors or warnings that are unexpected
+   - Then check the AppDaemon log file and make sure you have no errors or warnings that are unexpected
    - And check **predbat.status** in Home Assistant to check it's now Idle (errors are reported here too)
 8. Add the Predbat entities to your dashboard  - [Output data](#output-data)
 9. Follow the configuration guide to tune things for your system  - [Configuration guide](#configuration-guide)
@@ -134,7 +134,7 @@ Overview of the key configuration elements:
 ### HACS install
 
 - Install HACS if you haven't already (https://hacs.xyz/docs/setup/download)
-- Enable AppDeamon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
+- Enable AppDaemon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
 - 
 ### Predbat install
 
@@ -145,9 +145,9 @@ Overview of the key configuration elements:
 - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
-> After an update with HACS you may need to reboot AppDeamon as it sometimes reads the config wrongly during the update
+> After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
 
-- Edit in Homeassistant config/appdaemon/apps/predbat/config/apps.yml to configure
+- Edit in HomeAssistant config/appdaemon/apps/predbat/config/apps.yml to configure
 - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
 
 ### Predbat manual install
@@ -156,7 +156,7 @@ Overview of the key configuration elements:
 
 - Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant
 - Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant
-- Edit in Homeassistant config/appdaemon/apps/apps.yml to configure
+- Edit in HomeAssistant config/appdaemon/apps/apps.yml to configure
 
 - If you later install with HACS then you must move the apps.yml into config/appdaemon/apps/predbat/config
 
@@ -249,9 +249,9 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **import_today** - GivTCP Imported energy today in Kwh (incrementing)
   - **export_today** - GivTCP Exported energy today in Kwh (incrementing)
 
-#### GE Cloud Data
+#### GivEnergy Cloud Data
 
-   If you have an issue with the GivTCP data you can get this historical data from the Givenergy cloud instead. This data is updated every 30 minutes
+   If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes
 
   - **ge_cloud_data**   - When True use the GE Cloud for data rather than load_today, import_today and export_today
   - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
@@ -259,7 +259,7 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
 ### Inverter control
 
-  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a seperate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount. 
+  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount. 
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
@@ -358,10 +358,10 @@ Control how your battery behaves during car charging:
 ### Workarounds
 
   - **battery_scaling** - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
-  - **import_export_scaling** - Scalings the import & export data from GivTCP - used for workarounds
+  - **import_export_scaling** - Scaling the import & export data from GivTCP - used for workarounds
   - **inverter_clock_skew_start**, **inverter_clock_skew_end** - Skews the setting of the charge slot registers vs the predicted start time (see apps.yml)
   - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time (see apps.yml)
-  - **clock_skew** - Skews the local time that Predbat uses (from AppDeamon), will change when real-time actions happen e.g. triggering a discharge.
+  - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
 
 ### Triggers
 
@@ -404,7 +404,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 
 ```
 set_soc_enable - True              # Allow the tool to configure the charge %
-set_reserve_enable - True          # Use the reserve to stop fluctations in the charge % when charging
+set_reserve_enable - True          # Use the reserve to stop fluctuations in the charge % when charging
 set_reserve_hold - True            # Means if you don't need to charge then charging won't be enabled
 calculate_best_charge - True       # You want the tool to calculate charging
 combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
@@ -464,7 +464,7 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 Configuring Predbat:
    - https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5
    - https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36
-AppDeamon log files:
+AppDaemon log files:
    - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
 Historical data:
    - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
@@ -473,8 +473,8 @@ Charts:
 
 ## FAQ
 
-  - I've installed Batbred but I don't see the correct entities:
-    - First look at AppDeamon.log (can be found in the list of logfiles in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
+  - I've installed Batpred but I don't see the correct entities:
+    - First look at AppDaemon.log (can be found in the list of log files in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
     - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions). The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names (some people don't have the solcast_ bit in their names)
   - Why is my predicted charge % higher or lower than I might expect?
     - Batpred is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable it's better to charge more and not risk getting stung importing.
@@ -494,7 +494,7 @@ Charts:
   - It's all running but I'm not getting very good results
     - You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kwh, which is just over 20% on a 9.5kwh battery)
     - Have a read of the user configuration guide above depending on your tariff different settings maybe required
-    - Check your solar production is well calibrated (you can compare solcast vs actualy in home assistant energy tab or on the Givenergy portal)
+    - Check your solar production is well calibrated (you can compare solcast vs actually in home assistant energy tab or on the GivEnergy portal)
     - Make sure your inverter max AC rate has been set correctly
     - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
     - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
@@ -511,8 +511,11 @@ Each config item has an input_number or switch associated with it, see the examp
 ### Battery loss options
 
 **battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
+
 **battery_loss_discharge** accounts for energy lost discharging the battery, default 0.05 is 5%
+
 **inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
+
 **inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
 
 ### Scaling and weight options
@@ -520,7 +523,7 @@ Each config item has an input_number or switch associated with it, see the examp
 **battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
 e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported by the inverter
 
-**load_scaling** is a Scaling factor applied to historial load, tune up if you want to be more pessimistic on future consumption
+**load_scaling** is a Scaling factor applied to historical load, tune up if you want to be more pessimistic on future consumption
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
 **pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
@@ -534,12 +537,14 @@ A value of 0.15 is recommended.
 
 Car charging hold is a feature where you try to filter out previous car charging from your historical data so that future predictions are more accurate.
 
-When **car_charging_hold** is enabled loads of above the power threshold **car_charging_treshold** then you are assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
+When **car_charging_hold** is enabled loads of above the power threshold **car_charging_threshold** then you are assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
 
 For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml then historical data will be subtracted from the load data instead.
-**car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instgead.
 
-**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Ocotpus Intelligent if enabled
+**car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instead.
+
+**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Intelligent if enabled
+
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
 ### Car charging plan options
@@ -560,31 +565,44 @@ you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this
 This must be enabled to get all the 'best' sensors.
 
 **calculate_best_charge**     If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
+
 **calculate_charge_oldest**   If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first. Recommended to keep disabled.
+
 **calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to keep enabled.
+
 **calculate_charge_passes**   Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
 
 **calculate_best_discharge**   If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
+
 **calculate_discharge_all**    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to leave as False.
+
 **calculate_discharge_passes** Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
+
 **calculate_discharge_oldest** When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default True (recommended).
+
 **calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
 
 ### Battery margins and metrics options
 
 **best_soc margin** is added to the final SOC estimate (in kwh) to set the battery charge level (pushes it up). Recommended to leave this as 0.
+
 **best_soc_min** sets the minimum charge level (in kwh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
+
 **best_soc_max** sets the maximum charge level (in kwh) for charging during each slot. A value of 0 disables this feature.
+
 **best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin in case you use more energy than planned between charge slots.
+
 **best_soc_step** is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
+
 **best_soc_pass_margin** Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0 - recommended).
 
-**combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+**combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
 Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is enabled (True)
 
 **charge_slot_split** When combine charge is False charge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
 
-**combine_discharge_slots** Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing runtimes but potentially more accurate for planning.
+**combine_discharge_slots** Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
+
 **discharge_slot_split** When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
 A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
 
@@ -610,33 +628,26 @@ If you set this too high you might not get any export slots. If it's too low you
 
 ### Inverter control options
 
-**set_charge_window**
-
-When enabled the next charge window will be automatically configured based on the incoming rates
+**set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates
 Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
 Will also automatically disable charging if not required and re-enable it when required. 
 If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on.
 
 **set_window_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
+
 **set_window_notify** enables mobile notifications about changes to the charge window
 
-**set_discharge_window**
-
-When enabled automatically discharge (forced export) for export during high rate periods.
+**set_discharge_window** When enabled automatically discharge (forced export) for export during high rate periods.
 
 **set_discharge_notify** enables mobile notifications about changes to the discharge window.
 
-**set_soc_enable**
-
-When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
+**set_soc_enable** When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
 NOTE: it maybe set more than once if things change
 
 **set_soc_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
 **set_soc_notify** enables mobile notifications about changes to the charge %
 
-**set_reserve_enable**
-
-When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
+**set_reserve_enable** When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
 to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % which is often 4%.
 The feature applies with **set_soc_enable** or **set_discharge_window** is True 
 
@@ -650,7 +661,9 @@ IBoost model, when enabled with **iboost_enable** tries to model excess solar en
 **iboost_max** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kwh
 
 **iboost_max_power** Sets the maximum power in watts to consume - default 2400
+
 **iboost_min_power** Sets the minimum power in watts to consume - default 500
+
 **iboost_min_soc** sets the minimum home battery soc % to enable iboost on, default 0
 
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
@@ -707,7 +720,7 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.iboost_best - Gives the predicted energy going into the iBoost - for charter
   - input_number.iboost_today - Gives the amount of energy modelled into the diverter today, resets at 11:30pm each night. Increments in the day.
 
-- The calcuated results under PV 10% scenario
+- The calculated results under PV 10% scenario
   - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
   - predbat.best10_pv_energy - Predicted PV 10% energy in Kwh
   - predbat.best10_metric - Predicted cost for PV 10%
@@ -716,23 +729,24 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.best10_import_energy- Predicted import energy for PV 10%
 
 - Energy rate data:
-  - predbat.low_rate_cost - The lowest rate cost in P
-  - predbat.low_rate_start - Start time of the next low rate
-  - predbat.low_rate_end - End time of the next low rate
-  - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low rate slow
-  - binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
-    
-  - predbat.high_export_rate_cost - The highest rate cost in P
-  - predbat.high_export_rate_start - Start time of the next high export rate
-  - predbat.high_export_rate_end - End time of the next high export rate
-  - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slow
-  - binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
-   
-  - predbat.rates - The current energy rates in P (also can be charted)
-  - predbat.rates_export - The current energy export rates in P (also be be charted)
-  - predbat.cost_today - The total cost of energy so far today (since midnight)
-  - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
-  - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
+  - Low import rate entities
+    - predbat.low_rate_cost - The lowest import rate cost in P
+    - predbat.low_rate_start - Start time of the next low import rate
+    - predbat.low_rate_end - End time of the next low import rate
+    - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low import rate slot
+    - binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
+  - High export rate entities
+    - predbat.high_export_rate_cost - The highest rate cost in P
+    - predbat.high_export_rate_start - Start time of the next high export rate
+    - predbat.high_export_rate_end - End time of the next high export rate
+    - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
+    - binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
+  - Other rate entities
+    - predbat.rates - The current energy rates in P (also can be charted)
+    - predbat.rates_export - The current energy export rates in P (also be be charted)
+    - predbat.cost_today - The total cost of energy so far today (since midnight)
+    - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
+    - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
 
 - Car data:
   - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
@@ -745,7 +759,7 @@ Example data out:
 
 To create the fancy chart 
 - Install apex charts https://github.com/RomRider/apexcharts-card
-- There are mutiple charts, for each section of the example file create a new apexcharts card and copy the YAML into it
+- There are multiple charts, for each section of the example file create a new apexcharts card and copy the YAML into it
 - Customise as you like
 
 Example charts:
