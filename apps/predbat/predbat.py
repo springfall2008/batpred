@@ -42,6 +42,7 @@ CONFIG_ITEMS = [
     {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'inverter_hybrid',               'friendly_name' : 'Inverter Hybrid',                'type' : 'switch'},
+    {'name' : 'battery_capacity_nominal',      'friendly_name' : 'Use the Battery Capacity Nominal size', 'type' : 'switch'},
     {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:multiplication'},
     {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging threshold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw', 'icon' : 'mdi:ev-station'},
     {'name' : 'car_charging_rate',             'friendly_name' : 'Car charging rate',              'type' : 'input_number', 'min' : 1,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw', 'icon' : 'mdi:ev-station'},
@@ -152,9 +153,12 @@ class Inverter():
             self.nominal_capacity = self.soc_max
             if 'raw' in self.rest_data:
                 self.nominal_capacity = float(self.rest_data['raw']['invertor']['battery_nominal_capacity']) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
-                if abs(self.soc_max - self.nominal_capacity) > 1.0:
-                    # XXX: Weird workaround for battery reporting wrong capacity issue
-                    self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                if self.base.battery_capacity_nominal:
+                    if abs(self.soc_max - self.nominal_capacity) > 1.0:
+                       # XXX: Weird workaround for battery reporting wrong capacity issue
+                       self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                    else:
+                       self.base.log("REST data reports Battery Capacity Kwh as {} and nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
    
@@ -3277,6 +3281,7 @@ class PredBat(hass.Hass):
         self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
         # Battery charging options
+        self.battery_capacity_nominal = self.get_arg('battery_capacity_nominal', False)
         self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
         self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
