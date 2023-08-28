@@ -462,18 +462,18 @@ rate_high_threshold: 1.0               # Consider all slots for export
 
 Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
 
-Configuring Predbat:
-   - https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5
-   - https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36
+Basic installation:
+   - https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1
+   - https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862
 AppDaemon log files:
    - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
 Historical data:
    - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
+Configuring Predbat:
+   - https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5
+   - https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36
 Charts:
    - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
-
-Basic installation:
-   - https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1
 
 ## FAQ
 
