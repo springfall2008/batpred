@@ -472,6 +472,9 @@ Historical data:
 Charts:
    - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
 
+Basic installation:
+   - https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1
+
 ## FAQ
 
   - I've installed Batpred but I don't see the correct entities:
