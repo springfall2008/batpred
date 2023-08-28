@@ -762,7 +762,7 @@ class Inverter():
         try:
             r = requests.get(url)
         except Exception as e:
-            self.log("ERROR: Exception raised {}".format(e))
+            self.base.log("ERROR: Exception raised {}".format(e))
             r = None
 
         if r and (r.status_code == 200):
