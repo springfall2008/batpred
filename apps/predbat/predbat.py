@@ -2745,6 +2745,7 @@ class PredBat(hass.Hass):
         self.ge_url_cache = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.battery_capacity_nominal = False
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = 0, end_record=None):
         """
