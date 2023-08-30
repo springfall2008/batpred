@@ -102,7 +102,7 @@ Please see the sections below for how to achieve each step. This is just a check
 7. Go and edit apps.yml (in config/appdaemon/apps/predbat/config/apps.yml) to match your system - [config.yml settings](#configyml-settings)
    - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
      - You have set the right number of inverters (**num_inverters**)
-     - Adjust your **inverter_limit** as required
+     - Adjust your **inverter_limit** and **export_limit** as required
    - You have your energy rates set correctly either using Octopus Plugin or entered manually
    - That the Solcast plugin is matching the configuration correctly - should be automatic
    - If you have a car charging sensor you might want to add that also to help make predictions more accurate
@@ -260,7 +260,9 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
 ### Inverter control
 
-  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount. 
+  - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
+
+  - **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500). This will emulate the software export limit setting in the Inverter that you will have if your G98/G99 approval was lower than your maximum inverter power (check your install information for details). If not set the export limit is the same as the inverter limit. 
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
