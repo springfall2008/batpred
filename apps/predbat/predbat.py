@@ -2195,15 +2195,22 @@ class PredBat(hass.Hass):
         new_slots = []
 
         for slot in octopus_slots:
-            start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+            if 'start' in slot:
+                start = datetime.strptime(slot['start'], TIME_FORMAT)
+                end = datetime.strptime(slot['end'], TIME_FORMAT)
+            else:
+                start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+                end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
             start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
-            end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
             end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
             slot_minutes = end_minutes - start_minutes
             slot_hours = slot_minutes / 60.0
 
             # The load expected is stored in chargeKwh for the period in use
-            kwh = abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours)))
+            if 'charge_in_kwh' in slot:
+                kwh = abs(float(slot.get('charge_in_kwh', self.car_charging_rate * slot_hours)))
+            else:
+                kwh = abs(float(slot.get('chargeKwh', self.car_charging_rate * slot_hours)))
 
             if end_minutes > self.minutes_now:
                 new_slot = {}
@@ -2407,8 +2414,12 @@ class PredBat(hass.Hass):
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
-                end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
+                if 'start' in slot:
+                    start = datetime.strptime(slot['start'], TIME_FORMAT)
+                    end = datetime.strptime(slot['end'], TIME_FORMAT)
+                else:
+                    start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
+                    end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
                 start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
                 end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
@@ -3437,7 +3448,11 @@ class PredBat(hass.Hass):
             entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
             try:
                 completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
+                if not completed:
+                    completed = self.get_state(entity_id = entity_id, attribute='completed_dispatches')
                 planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
+                if not planned:
+                    planned = self.get_state(entity_id = entity_id, attribute='planned_dispatches')
                 vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
                 vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
             except ValueError:
@@ -3450,10 +3465,21 @@ class PredBat(hass.Hass):
             if planned:
                 self.octopus_slots += planned
 
+            # Get rate for import to compute charging costs
+            if self.rate_import:
+                self.rate_import = self.rate_scan(self.rate_import, print=False)
+
             # Extract vehicle data if we can get it            
             if vehicle:
                 self.car_charging_battery_size = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size))
                 self.car_charging_rate = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate))
+            else:
+                size = self.get_state(entity_id = entity_id, attribute='vehicle_battery_size_in_kwh')
+                rate = self.get_state(entity_id = entity_id, attribute='charge_point_power_in_kw')
+                if size:
+                    self.car_charging_battery_size = size
+                if rate:
+                    self.car_charging_rate = rate
 
             # Get car charging limit again from car based on new battery size
             self.car_charging_limit = (float(self.get_arg('car_charging_limit', 100.0)) * self.car_charging_battery_size) / 100.0
@@ -3516,10 +3542,10 @@ class PredBat(hass.Hass):
 
         # Replicate and scan import rates
         if self.rate_import:
-            self.rate_import = self.rate_scan(self.rate_import, print=True)
+            self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.rate_import = self.rate_scan(self.rate_import)
+            self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error - No import rate data provided", had_errors=True)

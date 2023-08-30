@@ -99,7 +99,6 @@ Please see the sections below for how to achieve each step. This is just a check
 5. Install Solcast if you haven't already [Solcast install](#solcast-install)
    - Also check Solcast is being auto-updated a few times a day and that you see the data in Home Assistant
 6. If you have Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - [Octopus energy](#octopus-energy)
-   - If you have Octopus Intelligent also install the Intelligent plugin
 7. Go and edit apps.yml (in config/appdaemon/apps/predbat/config/apps.yml) to match your system - [config.yml settings](#configyml-settings)
    - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
      - You have set the right number of inverters (**num_inverters**)
@@ -200,14 +199,16 @@ mode: single
 
 ### Octopus Intelligent Plugin
 
-- If you are on Intelligent and want to include charging slots outside the normal period or account in your predictions for your car charging then use the Octopus Intelligent plugin and ensure it's configured (https://github.com/megakid/ha_octopus_intelligent). 
-- Batpred may decide to charge in these slots as well.
+- The Intelligent Plugin is no longer required as the Octopus Energy Plugin now gives this information, however if it is installed it will be used.
+- In either case, when **octopus_intelligent_charging** is True the car charging plan will be extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
+
+- The Seperate Intelligent plugin can be found here: https://github.com/megakid/ha_octopus_intelligent
 
 ## Car charging planning
 
 There are two ways to plan car charging slots
 - Enable Octopus Intelligent plugin - in which case Predbat will use the slots allocated by Intelligent in battery prediction
-  - Ensure **octopus_intelligent_slot** points to the Intelligent plugin
+  - Ensure **octopus_intelligent_slot** points to the Intelligent Slot sensor in the Octopus Plugin or the Octopus Intelligent Plugin
   - Set **octopus_intelligent_charging** to True
   - Information about the cars battery size will also be extracted from the Intelligent plugin
   - You will need to set the cars current soc sensor, **car_charging_soc** correctly to have accurate results

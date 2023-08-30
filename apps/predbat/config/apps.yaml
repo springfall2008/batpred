@@ -158,7 +158,8 @@ pred_bat:
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
-  octopus_intelligent_slot: 're:binary_sensor.octopus_intelligent_slot'
+  # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
