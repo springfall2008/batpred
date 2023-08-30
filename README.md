@@ -468,6 +468,7 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 Basic installation:
    - https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1
    - https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862
+   - https://www.loom.com/share/a245dcf30b744e3dbfab3ed874f52855?sid=6bd07f2f-b507-4575-877f-840c4b6cc8c7
 AppDaemon log files:
    - https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7
 Historical data:
