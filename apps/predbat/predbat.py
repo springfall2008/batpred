@@ -137,6 +137,7 @@ class Inverter():
         self.soc_percent = 0
         self.rest_data = None
         self.inverter_limit = 7500.0
+        self.export_limit = 99999.0
         self.inverter_time = None
 
         # Rest API?
@@ -221,8 +222,12 @@ class Inverter():
         # Max inverter rate override
         if 'inverter_limit' in self.base.args:
             self.inverter_limit = self.base.get_arg('inverter_limit', self.inverter_limit, index=self.id) / (1000 * 60.0)
+        if 'export_limit' in self.base.args:
+            self.export_limit = self.base.get_arg('export_limit', self.inverter_limit, index=self.id) / (1000 * 60.0)
+        # Can't export more than the inverter limit
+        self.export_limit = min(self.export_limit, self.inverter_limit)
 
-        self.base.log("New Inverter {} with soc_max {} nominal_capacity {} battery rate kw {} ac limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.reserve_percent))
+        self.base.log("New Inverter {} with soc_max {} nominal_capacity {} battery rate kw {} ac limit {} export limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent))
         
     def update_status(self, minutes_now):
         """
@@ -1780,6 +1785,14 @@ class PredBat(hass.Hass):
                 battery_draw = discharge_rate_max * step
                 if (soc - reserve_expected) < battery_draw:
                     battery_draw = max(soc - reserve_expected, 0)
+
+                # Account for export limit, clip battery draw if possible to avoid going over
+                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
+                if diff_tmp < 0:
+                    if abs(diff_tmp) > self.export_limit:
+                        above_limit = abs(diff_tmp + self.export_limit)
+                        battery_draw = max(0, battery_draw - above_limit)
+
                 battery_state = 'f-'
             elif (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
                 # Charge enable
@@ -1843,6 +1856,9 @@ class PredBat(hass.Hass):
                     diff += -inverter_left
                 else:
                     diff = max(diff, -inverter_left)
+            if diff < 0:
+                # Can not export over export limit, so cap at that
+                diff = max(diff, -self.export_limit)
 
             if diff > 0:
                 # Import
@@ -3601,6 +3617,7 @@ class PredBat(hass.Hass):
         # Find the inverters
         self.num_inverters = int(self.get_arg('num_inverters', 1))
         self.inverter_limit = 0.0
+        self.export_limit = 0.0
         self.inverters = []
         self.charge_window = []
         self.discharge_window = []
@@ -3634,12 +3651,13 @@ class PredBat(hass.Hass):
             self.discharge_rate_max += inverter.discharge_rate_max
             self.inverters.append(inverter)
             self.inverter_limit += inverter.inverter_limit
+            self.export_limit += inverter.export_limit
 
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
-                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
