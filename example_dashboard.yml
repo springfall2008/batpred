@@ -63,6 +63,7 @@ entities:
   - entity: input_number.predbat_set_reserve_min
   - entity: input_number.predbat_set_soc_minutes
   - entity: input_number.predbat_set_window_minutes
+  - entity: input_number.predbat_holiday_days_left
   - entity: binary_sensor.predbat_car_charging_slot
   - entity: binary_sensor.predbat_export_trigger_large
   - entity: binary_sensor.predbat_export_trigger_small
