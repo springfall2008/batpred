@@ -389,6 +389,17 @@ For example:
        minutes: 15
        energy: 0.25
 ```
+### Holiday mode
+
+When you go away you are likely to use less electric and so the previous load data will be quite pessimistic. Using the configuration item **input_number.predbat_holiday_days_left** in Home assistant you can set the number of full days that you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When holiday days left is non-zero holiday mode is active. 
+
+When holiday mode is active the historical load data will be taken from yesterdays data (1 day ago) rather than from the **days_previous** setting in apps.yaml. This means Predbat will adjust more quickly to the new useage pattern. 
+
+If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going to take longer for the historical data to catch up, you could then enable holiday more for another 7 days after your return. 
+
+In summary:
+- For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
+- For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
 
 ## Configuration guide
 
