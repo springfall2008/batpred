@@ -44,6 +44,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
       - [Home-assistant Inverter control](#home-assistant-inverter-control)
     + [Solcast](#solcast)
     + [Octopus energy](#octopus-energy)
+    + [Standing charge](#standing-charge)
     + [Manual energy rates](#manual-energy-rates)
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
@@ -316,6 +317,12 @@ They are set to a regular expression and auto-discovered but you can comment out
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
   - **rates_import_octopus_url**
   - **rates_export_octopus_url**
+
+### Standing charge
+
+Predbat also include the daily standing charge in cost predictions (optional)
+
+  - **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that stores this information (e.g. Octopus Plugin).
 
 ### Manual energy rates
 
