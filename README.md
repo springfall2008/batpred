@@ -44,6 +44,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
       - [Home-assistant Inverter control](#home-assistant-inverter-control)
     + [Solcast](#solcast)
     + [Octopus energy](#octopus-energy)
+    + [Standing charge](#standing-charge)
     + [Manual energy rates](#manual-energy-rates)
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
@@ -316,6 +317,12 @@ They are set to a regular expression and auto-discovered but you can comment out
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
   - **rates_import_octopus_url**
   - **rates_export_octopus_url**
+
+### Standing charge
+
+Predbat also include the daily standing charge in cost predictions (optional)
+
+  - **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that stores this information (e.g. Octopus Plugin).
 
 ### Manual energy rates
 
@@ -697,7 +704,9 @@ You will see **predbat.iboost_today** entity which tracks the estimated amount c
 You can find an example dashboard with all the entities here: https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml
 
 - Basic status:
-  - predbat.status - Gives the current status and logs any adjustments made to your inverter
+  - predbat.status - Gives the current status & errors and logs any adjustments made to your inverter
+
+- Baseline data - what your battery is expected to do with no changes made by Predbat
   - predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
   - predbat.charge_limit - The current charge limit used for the scenario in %
   - predbat.charge_limit_kw - The current charge limit used for the scenario in kwH
@@ -707,7 +716,7 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.export_energy - Predicted export energy in Kwh
   - predbat.import_energy - Predicted import energy in Kwh
   - predbat.import_energy_battery - Predicted import energy to charge your home battery in Kwh
-  - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
+  - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate
   - predbat.soc_kw - Predicted state of charge (in Kwh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
   - predbat.soc_min_kwh - The minimum battery level during the time period in Kwh
   - predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
@@ -715,7 +724,15 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.pv_power - Predicted PV power per minute, for charting
   - predbat.grid_power - Predicted Grid power per minute, for charting
   - predbat.car_soc - Predicted car battery %
-    
+
+- The calculated baseline results under PV 10% scenario
+  - predbat.soc_kw_base10 - As soc_kw but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
+  - predbat.base10_pv_energy - Predicted PV 10% energy in Kwh
+  - predbat.base10_metric - Predicted cost for PV 10%
+  - predbat.base10_export_energy- Predicted export energy for PV 10%
+  - predbat.base10_load_energy - Predicted load energy for PV 10%
+  - predbat.base10_import_energy- Predicted import energy for PV 10%
+
 - When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage:
   - predbat.best_battery_hours_left - Number of hours left under best plan
   - predbat.best_export_energy - Predicted exports under best plan
@@ -740,13 +757,13 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.iboost_best - Gives the predicted energy going into the iBoost - for charter
   - input_number.iboost_today - Gives the amount of energy modelled into the diverter today, resets at 11:30pm each night. Increments in the day.
 
-- The calculated results under PV 10% scenario
+- The calculated best results under PV 10% scenario
   - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
-  - predbat.best10_pv_energy - Predicted PV 10% energy in Kwh
-  - predbat.best10_metric - Predicted cost for PV 10%
-  - predbat.best10_export_energy- Predicted export energy for PV 10%
-  - predbat.best10_load_energy - Predicted load energy for PV 10%
-  - predbat.best10_import_energy- Predicted import energy for PV 10%
+  - predbat.best10_pv_energy - Predicted best PV 10% energy in Kwh
+  - predbat.best10_metric - Predicted best cost for PV 10%
+  - predbat.best10_export_energy- Predicted best export energy for PV 10%
+  - predbat.best10_load_energy - Predicted best load energy for PV 10%
+  - predbat.best10_import_energy- Predicted best import energy for PV 10%
 
 - Energy rate data:
   - Low import rate entities

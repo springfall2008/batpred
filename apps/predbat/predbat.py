@@ -1680,6 +1680,10 @@ class PredBat(hass.Hass):
             charge_window_n = self.in_charge_window(charge_window, minute_absolute)
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
+            # Add in standing charge
+            if (minute_absolute % (24*60)) == 0:
+                metric += self.metric_standing_charge
+
             # Outside the recording window?
             if minute >= end_record and record:
                 record = False
@@ -2007,6 +2011,14 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".best10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".best10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".best10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+
+        if save and save=='base10' and not SIMULATE:
+            self.set_state(self.prefix + ".soc_kw_base10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".base10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
+            self.set_state(self.prefix + ".base10_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted base 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".base10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".base10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state(self.prefix + ".base10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
         return final_metric, charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute
 
@@ -2542,6 +2554,10 @@ class PredBat(hass.Hass):
         day_cost_time = {}
 
         for minute in range(0, self.minutes_now):
+            # Add in standing charge
+            if (minute % (24*60)) == 0:
+                day_cost += self.metric_standing_charge
+
             minute_back = self.minutes_now - minute - 1
             energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
@@ -3562,6 +3578,10 @@ class PredBat(hass.Hass):
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg('rates_export', [], indirect=False), 'export')
 
+        # Standing charge
+        self.metric_standing_charge = self.get_arg('metric_standing_charge', 0.0) * 100.0
+        self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_import = self.rate_scan(self.rate_import, print=False)
@@ -3759,6 +3779,7 @@ class PredBat(hass.Hass):
         # Simulate current settings
         end_record = self.record_length(self.charge_window_best)
         metric, self.charge_limit_percent, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save='base', end_record=end_record)
+        metricb10, charge_limit_percentb10, import_kwh_batteryb10, import_kwh_houseb10, export_kwhb10, soc_minb10, socb10, soc_min_minuteb10 = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute10_step, save='base10', end_record=end_record)
 
         # Try different battery SOCs to get the best result
         if self.calculate_best:
