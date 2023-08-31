@@ -96,6 +96,7 @@ CONFIG_ITEMS = [
     {'name' : 'iboost_max_power',              'friendly_name' : 'IBoost max power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
     {'name' : 'iboost_min_power',              'friendly_name' : 'IBoost min power',               'type' : 'input_number', 'min' : 0,   'max' : 3500,  'step' : 100,  'unit' : 'w'},
     {'name' : 'iboost_min_soc',                'friendly_name' : 'IBoost min soc',                 'type' : 'input_number', 'min' : 0,   'max' : 100,   'step' : 5,    'unit' : '%', 'icon' : 'mdi:percent'},
+    {'name' : 'holiday_days_left',             'friendly_name' : 'Holiday days left',              'type' : 'input_number', 'min' : 0,   'max' : 28,    'step' : 1,    'unit' : 'days', 'icon' : 'mdi:clock-end'},
 ]
 
 class Inverter():
@@ -3275,8 +3276,13 @@ class PredBat(hass.Hass):
         self.minutes_now = int((now - self.midnight).seconds / 60)
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
+        # Days previous
+        self.holiday_days_left = self.get_arg('holiday_days_left', 0)
         self.days_previous = self.get_arg('days_previous', [7])
         self.days_previous_weight = self.get_arg('days_previous_weight', [1])
+        if self.holiday_days_left > 0:
+            self.days_previous = [1]
+            self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
         self.max_days_previous = max(self.days_previous) + 1
 
         forecast_hours = self.get_arg('forecast_hours', 48)
@@ -3806,7 +3812,11 @@ class PredBat(hass.Hass):
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
-        status = "Idle"
+        if self.holiday_days_left > 0:
+            status = "Idle (Holiday)"
+        else:
+            status = "Idle"
+
         for inverter in self.inverters:
             # Re-programme charge window based on low rates?
             if self.set_charge_window and self.charge_window_best:
@@ -3957,6 +3967,13 @@ class PredBat(hass.Hass):
             # Save next IBoost model value
             self.expose_config('iboost_today', self.iboost_next)
             self.log("IBoost model today updated to {}".format(self.iboost_next))
+
+        # Holiday days left countdown, subtract a day at midnight every day
+        if scheduled and self.holiday_days_left > 0:
+            if self.minutes_now < self.get_arg('run_every', 5):
+                self.holiday_days_left -= 1
+                self.expose_config('holiday_days_left', self.holiday_days_left)
+                self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
         if self.had_errors:
             self.log("Completed run status {} with Errors reported (check log)".format(status))
