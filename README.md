@@ -49,6 +49,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
     + [Triggers](#triggers)
+    + [Holiday mode](#holiday-mode)
   * [Configuration guide](#configuration-guide)
     + [Fixed daily rates](#fixed-daily-rates)
     + [Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)](#cheap-night-rate-eg-octopus-go-intelligent-economy-7-etc)
