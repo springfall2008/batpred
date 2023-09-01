@@ -1794,8 +1794,8 @@ class PredBat(hass.Hass):
                 # Account for export limit, clip battery draw if possible to avoid going over
                 diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if diff_tmp < 0:
-                    if abs(diff_tmp) > self.export_limit:
-                        above_limit = abs(diff_tmp + self.export_limit)
+                    if abs(diff_tmp) > (self.export_limit * step):
+                        above_limit = abs(diff_tmp + self.export_limit * step)
                         battery_draw = max(0, battery_draw - above_limit)
 
                 battery_state = 'f-'
@@ -1863,7 +1863,7 @@ class PredBat(hass.Hass):
                     diff = max(diff, -inverter_left)
             if diff < 0:
                 # Can not export over export limit, so cap at that
-                diff = max(diff, -self.export_limit)
+                diff = max(diff, -self.export_limit * step)
 
             if diff > 0:
                 # Import
