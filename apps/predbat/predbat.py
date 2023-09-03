@@ -42,6 +42,7 @@ CONFIG_ITEMS = [
     {'name' : 'battery_loss_discharge',        'friendly_name' : 'Battery loss discharge',         'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'inverter_loss',                 'friendly_name' : 'Inverter Loss',                  'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'inverter_hybrid',               'friendly_name' : 'Inverter Hybrid',                'type' : 'switch'},
+    {'name' : 'inverter_soc_reset',            'friendly_name' : 'Inverter SOC Reset',             'type' : 'switch'},
     {'name' : 'battery_capacity_nominal',      'friendly_name' : 'Use the Battery Capacity Nominal size', 'type' : 'switch'},
     {'name' : 'car_charging_energy_scale',     'friendly_name' : 'Car charging energy scale',      'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:multiplication'},
     {'name' : 'car_charging_threshold',        'friendly_name' : 'Car charging threshold',         'type' : 'input_number', 'min' : 4,   'max' : 8.5,  'step' : 0.10, 'unit' : 'kw', 'icon' : 'mdi:ev-station'},
@@ -2727,7 +2728,8 @@ class PredBat(hass.Hass):
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
-        self.inverter_hybrid = False
+        self.inverter_hybrid = True
+        self.inverter_soc_reset = True
         self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_max = 0
@@ -3336,6 +3338,7 @@ class PredBat(hass.Hass):
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
         self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
         self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
+        self.inverter_soc_reset = self.get_arg('inverter_soc_reset', True)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
@@ -3962,7 +3965,11 @@ class PredBat(hass.Hass):
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes:
                     inverter.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
-                    self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
+                    if not self.inverter_hybrid and self.inverter_soc_reset:
+                        self.log("Resetting charging SOC as we are not within the window and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
+                        inverter.adjust_battery_target(100.0)
+                    else:
+                        self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
 
             # If we should set reserve?
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:

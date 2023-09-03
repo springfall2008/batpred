@@ -671,6 +671,8 @@ If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned 
 **set_soc_enable** When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
 NOTE: it maybe set more than once if things change
 
+If you have **inverter_hybrid** set to False then if **inverter_soc_reset** is set to True then the target SOC % will be reset to 100% outside a charge window. This maybe required for AOI inverter to ensure it charges from solar.
+
 **set_soc_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
 **set_soc_notify** enables mobile notifications about changes to the charge %
 
