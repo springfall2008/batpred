@@ -11,7 +11,10 @@ pred_bat:
 
   # Timezone to work in
   timezone: Europe/London
-  
+
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
