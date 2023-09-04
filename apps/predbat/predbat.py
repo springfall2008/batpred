@@ -4235,7 +4235,13 @@ class PredBat(hass.Hass):
             self.log("ERROR: Exception raised {}".format(e))
             self.record_status('ERROR: Exception raised {}'.format(e))
             raise e
-        
+
+        # Catch template configurations and exit        
+        if self.get_arg('template', False):
+            self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDeamon if you just updated with HACS")
+            self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDeamon if you just updated with HACS")
+            return
+
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
             SIMULATE = False
