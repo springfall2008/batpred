@@ -3749,6 +3749,21 @@ class PredBat(hass.Hass):
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_today".format(self.get_arg('pv_forecast_today', indirect=False)))                
                 self.record_status("Error - pv_forecast_today not be set correctly", debug=self.get_arg('pv_forecast_today', indirect=False), had_errors=True)
 
+            # Solcast new vs old version
+            # check the total vs the sum of 30 minute slots and work out scale factor
+            sum = 0
+            expected = 0.0
+            factor = 1.0
+            if pv_forecast_data:
+                for entry in pv_forecast_data:
+                    sum += entry['pv_estimate']
+                sum = self.dp2(sum)
+                expected = self.dp2(self.get_arg('pv_forecast_today', 1.0))
+            if expected > 0.0:
+                factor = self.dp2(sum / expected)
+            divide_by = 30 * factor
+
+            # Get the next few days worth of data too
             try:
                 if 'pv_forecast_tomorrow' in self.args:
                     pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute=attribute)
@@ -3759,15 +3774,6 @@ class PredBat(hass.Hass):
             except (ValueError, TypeError):
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
                 self.record_status("Error - pv_forecast_tomorrow or d3/d4 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
-
-            # Solcast new vs old version
-            entity_id = self.get_arg('pv_forecast_today', indirect=False)
-            if '_pv_forecast_' in entity_id:
-                self.log("PV Forecast detected new Solcast - using divide by 60")
-                divide_by = 60
-            else:
-                self.log("PV Forecast detected old Solcast - using divide by 30")
-                divide_by = 30
 
             pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
             pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
