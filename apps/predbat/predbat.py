@@ -3752,11 +3752,15 @@ class PredBat(hass.Hass):
             # Solcast new vs old version
             # check the total vs the sum of 30 minute slots and work out scale factor
             sum = 0
-            for entry in pv_forecast_data:
-                sum += entry['pv_estimate']
-            sum = self.dp2(sum)
-            expected = self.dp2(self.get_arg('pv_forecast_today', 0.0))
-            factor = self.dp2(sum / expected)
+            expected = 0.0
+            factor = 1.0
+            if pv_forecast_data:
+                for entry in pv_forecast_data:
+                    sum += entry['pv_estimate']
+                sum = self.dp2(sum)
+                expected = self.dp2(self.get_arg('pv_forecast_today', 1.0))
+            if expected > 0.0:
+                factor = self.dp2(sum / expected)
             divide_by = 30 * factor
 
             # Get the next few days worth of data too
