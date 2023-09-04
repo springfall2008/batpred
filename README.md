@@ -698,6 +698,8 @@ IBoost model, when enabled with **iboost_enable** tries to model excess solar en
 
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
 
+If you have an incrementing Sensor that tracks IBoost energy usage then you should set **iboost_energy_today** sensor in apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sensor isn't in Kwh.
+
 ### Debug
 
 **debug_enable** when on prints lots of debug, leave off by default
