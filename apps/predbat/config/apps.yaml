@@ -265,7 +265,11 @@ pred_bat:
      - name: 'small'
        minutes: 15
        energy: 0.25
-  
 
+  # If you have a sensor that gives the energy consumed by your solar diverter then add it here
+  # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
+  # It's assumed to be in Kwh but scaling can be applied if need be
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
 
  

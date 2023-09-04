@@ -1260,18 +1260,18 @@ class PredBat(hass.Hass):
 
         return import_today
 
-    def minute_data_load(self, now_utc):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous):
         """
         Download one or more entities for load data
         """
-        entity_ids = self.get_arg('load_today', indirect=False)
+        entity_ids = self.get_arg(entity_name, indirect=False)
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
 
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
-            history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
+            history = self.get_history(entity_id = entity_id, days = max_days_previous)
             if history:
                 item = history[0][0]
                 try:
@@ -1283,7 +1283,7 @@ class PredBat(hass.Hass):
                     age_days = age.days
                 else:
                     age_days = min(age_days, age.days)
-                load_minutes = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
+                load_minutes = self.minute_data(history[0], max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
@@ -1986,7 +1986,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".load_power_best", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power Best', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".soc_kw_best_h1", state=self.dp3(self.predict_soc[60]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 1h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".soc_kw_best_h8", state=self.dp3(self.predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
-            self.set_state(self.prefix + ".soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit _of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.set_state(self.prefix + ".best_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".best_load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
@@ -1996,7 +1996,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".best_import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state(self.prefix + ".best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state(self.prefix + ".record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
-            self.set_state(self.prefix + ".iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'IBoost energy', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
+            self.set_state(self.prefix + ".iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'Predicted IBoost energy best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
             self.find_spare_energy(predict_soc, predict_export, step)            
 
         if save and save=='debug' and not SIMULATE:
@@ -3394,6 +3394,8 @@ class PredBat(hass.Hass):
         self.iboost_min_soc = self.get_arg('iboost_min_soc', 0.0)
         self.iboost_today = self.get_arg('iboost_today', 0.0)
         self.iboost_next = self.iboost_today
+        self.iboost_energy_scaling = self.get_arg('iboost_energy_scaling', 1.0)
+        self.iboost_energy_today = {}
 
         # Car options
         self.car_charging_hold = self.get_arg('car_charging_hold', True)
@@ -3414,13 +3416,21 @@ class PredBat(hass.Hass):
         self.load_minutes = {}
         self.load_minutes_age = 0
 
+        # Iboost load data
+        if self.iboost_enable:
+            if 'iboost_energy_today' in self.args:
+                self.iboost_energy_today, iboost_energy_age = self.minute_data_load(now_utc, 'iboost_energy_today', 1)
+                if iboost_energy_age >= 1:
+                    self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
+                    self.log("IBoost energy today from sensor reads {} kwh".format(self.iboost_today))
+
         # Load previous load data
         if self.get_arg('ge_cloud_data', False):
             self.download_ge_data(now_utc)
         else:
             # Load data
             if 'load_today' in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc, 'load_today', self.max_days_previous)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
@@ -3750,11 +3760,19 @@ class PredBat(hass.Hass):
                 self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
                 self.record_status("Error - pv_forecast_tomorrow or d3/d4 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
 
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
-            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=30, scale=self.pv_scaling)
+            # Solcast new vs old version
+            entity_id = self.get_arg('pv_forecast_today', indirect=False)
+            if '_pv_forecast_' in entity_id:
+                self.log("PV Forecast detected new Solcast - using divide by 60")
+                divide_by = 60
+            else:
+                self.log("PV Forecast detected old Solcast - using divide by 30")
+                divide_by = 30
+
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
+            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
         else:
             self.log("WARN: No solar data has been configured.")
-
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = {}
@@ -3989,8 +4007,11 @@ class PredBat(hass.Hass):
 
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
-            # Reset after 11:30pm
-            if self.minutes_now >= (23*60 + 30):
+            if self.iboost_energy_today:
+                # If we have a realtime sensor just use that data
+                self.iboost_next = self.iboost_today
+            elif self.minutes_now >= (23*60 + 30):
+                # Reset after 11:30pm
                 self.iboost_next = 0
             # Save next IBoost model value
             self.expose_config('iboost_today', self.iboost_next)
