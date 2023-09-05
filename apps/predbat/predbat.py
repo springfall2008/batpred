@@ -1791,13 +1791,19 @@ class PredBat(hass.Hass):
                 battery_draw = discharge_rate_max * step
                 if (soc - reserve_expected) < battery_draw:
                     battery_draw = max(soc - reserve_expected, 0)
-
+                
                 # Account for export limit, clip battery draw if possible to avoid going over
                 diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if diff_tmp < 0:
                     if abs(diff_tmp) > (self.export_limit * step):
                         above_limit = abs(diff_tmp + self.export_limit * step)
                         battery_draw = max(0, battery_draw - above_limit)
+
+                # Account for inverter limit, clip battery draw if possible to avoid going over
+                total_inverted = pv_ac + pv_dc + battery_draw
+                if total_inverted > self.inverter_limit * step:
+                    reduce_by = total_inverted - (self.inverter_limit * step)
+                    battery_draw = max(0, battery_draw - reduce_by)
 
                 battery_state = 'f-'
             elif (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
