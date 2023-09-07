@@ -667,6 +667,10 @@ If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned 
 
 **set_discharge_window** When enabled automatically discharge (forced export) for export during high rate periods.
 
+**set_discharge_freeze** When enabled if a discharge reaches the expected battery level for the discharge slot then charging of the battery will be frozen (charge rate 0) and all non-self consumed solar is exported. When this is disabled the inverter will return to ECO mode (default)
+
+**set_discharge_freeze_only** When enabled forced discharge is prevented, but discharge freeze can be used (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for solar exports but don't allow forced export (brown energy).
+
 **set_discharge_notify** enables mobile notifications about changes to the discharge window.
 
 **set_soc_enable** When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts

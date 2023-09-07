@@ -108,6 +108,22 @@ pred_bat:
   # - 3600
   # - 3600
 
+  # Some batteries tail off their charge rate at high soc%
+  # enter the charging curve here as a % of the max charge rate for each soc pecentage.
+  # the default is 1.0 (full power)
+  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
+  #battery_charge_power_curve:
+  #  91 : 0.91
+  #  92 : 0.81
+  #  93 : 0.71
+  #  94 : 0.62
+  #  95 : 0.52
+  #  96 : 0.43
+  #  97 : 0.33
+  #  98 : 0.24
+  #  99 : 0.24
+  #  100 : 0.24
+
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Seperate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
   # Seperate discharge skew for discharge windows only
