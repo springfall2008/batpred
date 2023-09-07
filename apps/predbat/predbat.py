@@ -260,7 +260,11 @@ class Inverter():
                 self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
         self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
-        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw discharge rate kw {}".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
+
+        # Battery charge scaling curve
+        self.charge_rate_max_curve = self.charge_rate_max * self.base.battery_charge_power_curve.get(self.soc_percent, 1.0)
+        self.battery_rate_max_curve = self.battery_rate_max * self.base.battery_charge_power_curve.get(self.soc_percent, 1.0)
+        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw (curve {}) discharge rate kw {}".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_max*60*1000, self.charge_rate_max_curve*60*1000, self.discharge_rate_max*60*1000.0))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -1661,7 +1665,7 @@ class PredBat(hass.Hass):
         record_time = {}
         car_soc = self.car_charging_soc
         final_car_soc = car_soc
-        charge_rate_max = self.charge_rate_max
+        charge_rate_max = self.charge_rate_max_curve
         discharge_rate_max = self.discharge_rate_max
         battery_state = "-"
         grid_state = '-'
@@ -1785,7 +1789,7 @@ class PredBat(hass.Hass):
 
             # discharge freeze?
             if self.set_discharge_freeze:
-                charge_rate_max = self.battery_rate_max
+                charge_rate_max = self.battery_rate_max_curve
                 if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and (soc <= ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0) or self.set_discharge_freeze_only):
                     # Freeze mode
                     charge_rate_max = 0
@@ -1817,7 +1821,7 @@ class PredBat(hass.Hass):
                 battery_state = 'f-'
             elif (charge_window_n >= 0) and soc < charge_limit[charge_window_n]:
                 # Charge enable
-                charge_rate_max = self.battery_rate_max  # Assume charge becomes enabled here
+                charge_rate_max = self.battery_rate_max_curve  # Assume charge becomes enabled here
                 battery_draw = -max(min(charge_rate_max * step, charge_limit[charge_window_n] - soc), 0)
                 battery_state = 'f+'
             else:
@@ -2783,7 +2787,9 @@ class PredBat(hass.Hass):
         self.discharge_limits_best = []
         self.discharge_window_best = []
         self.battery_rate_max = 0
+        self.battery_rate_max_curve = 0
         self.charge_rate_max = 0
+        self.charge_rate_max_curve = 0
         self.discharge_rate_max = 0
         self.car_charging_hold = False
         self.car_charging_threshold = 99
@@ -3362,6 +3368,7 @@ class PredBat(hass.Hass):
         self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
         self.inverter_soc_reset = self.get_arg('inverter_soc_reset', True)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
+        self.battery_charge_power_curve = self.args.get('battery_charge_power_curve', {})
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.0)
@@ -3690,7 +3697,9 @@ class PredBat(hass.Hass):
         self.soc_max = 0.0
         self.reserve = 0.0
         self.battery_rate_max = 0.0
+        self.battery_rate_max_curve = 0.0
         self.charge_rate_max = 0.0
+        self.charge_rate_max_curve = 0.0
         self.discharge_rate_max = 0.0
         found_first = False
 
@@ -3710,7 +3719,9 @@ class PredBat(hass.Hass):
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
             self.battery_rate_max += inverter.battery_rate_max
+            self.battery_rate_max_curve += inverter.battery_rate_max_curve
             self.charge_rate_max += inverter.charge_rate_max
+            self.charge_rate_max_curve += inverter.charge_rate_max_curve
             self.discharge_rate_max += inverter.discharge_rate_max
             self.inverters.append(inverter)
             self.inverter_limit += inverter.inverter_limit
@@ -3719,8 +3730,8 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
-                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
+        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw ({} curve) discharge rate {} kw ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.charge_rate_max_curve * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
