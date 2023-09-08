@@ -499,6 +499,8 @@ rate_high_threshold: 1.0               # Consider all slots for export
 
 Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
 
+Overiew:
+   - https://www.loom.com/share/e7092cce5c6b4caeb87516f98fcb3292?sid=e064dcef-e4aa-4b61-9698-3fa7922d5a69
 Basic installation:
    - https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1
    - https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862
