@@ -2759,7 +2759,7 @@ class PredBat(hass.Hass):
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
         self.inverter_hybrid = True
-        self.inverter_soc_reset = True
+        self.inverter_soc_reset = False
         self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_max = 0
@@ -3386,7 +3386,7 @@ class PredBat(hass.Hass):
         self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
         self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
         self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
-        self.inverter_soc_reset = self.get_arg('inverter_soc_reset', True)
+        self.inverter_soc_reset = self.get_arg('inverter_soc_reset', False)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.battery_charge_power_curve = self.args.get('battery_charge_power_curve', {})
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
