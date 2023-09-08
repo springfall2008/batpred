@@ -21,7 +21,7 @@ PREDICT_STEP = 5
 
 SIMULATE = False         # Debug option, when set don't write to entities but simulate each 30 min period
 SIMULATE_LENGTH = 23*60  # How many periods to simulate, set to 0 for just current
-INVERTER_TEST = False     # Run inverter control self test
+INVERTER_TEST = False    # Run inverter control self test
 
 """
 Create an array of times
@@ -661,7 +661,7 @@ class Inverter():
             self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
             self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
-    def disable_charge_window(self):
+    def disable_charge_window(self, notify=True):
         """
         Disable charge window
         """
@@ -681,12 +681,13 @@ class Inverter():
                 else:
                     entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     self.write_and_poll_switch('scheduled_charge_enable', entity, False)
-                if self.base.set_soc_notify:
+                if self.base.set_soc_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
                 self.base.sim_charge_schedule_enable = 'off'
 
-            self.base.record_status("Inverter {} Turned off scheduled charge at {}".format(self.id, self.base.time_now_str()))
+            if notify:
+                self.base.record_status("Inverter {} Turned off scheduled charge at {}".format(self.id, self.base.time_now_str()))
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
         # Updated cached status to disabled    
@@ -722,22 +723,11 @@ class Inverter():
 
         self.base.log("Inverter {} charge window is {} - {}, being changed to {} - {}".format(self.id, old_start, old_end, new_start, new_end))
 
-        if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable':
-            if not SIMULATE:
-                # Enable scheduled charge if not turned on
-                if self.rest_api:
-                    self.rest_enableChargeSchedule(True)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
-                    self.write_and_poll_switch('scheduled_charge_enable', entity, True)
-                if self.base.set_soc_notify:
-                    self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
-            else:
-                self.base.sim_charge_schedule_enable = 'on'
-
-            self.charge_enable_time = True
-            self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
-            self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
+        # Disable scheduled charge during change of window to avoid a blip in charging if not required
+        have_disabled = False
+        if new_start != old_start or new_end != old_end:
+            self.disable_charge_window(notify=False)
+            have_disabled = True
 
         # Program start slot
         if new_start != old_start:
@@ -766,6 +756,27 @@ class Inverter():
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.record_status("Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
+
+        if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable' or have_disabled:
+            if not SIMULATE:
+                # Enable scheduled charge if not turned on
+                if self.rest_api:
+                    self.rest_enableChargeSchedule(True)
+                else:
+                    entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                    self.write_and_poll_switch('scheduled_charge_enable', entity, True)
+
+                # Only notify if it's a real change and not a temporary one
+                if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable' and self.base.set_soc_notify:
+                    self.base.call_notify("Predbat: Inverter {} Enabling scheduled charging at {}".format(self.id, self.base.time_now_str()))
+            else:
+                self.base.sim_charge_schedule_enable = 'on'
+
+            self.charge_enable_time = True
+            self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
+
+            if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable':
+                self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
     def rest_readData(self):
         """
@@ -4379,6 +4390,8 @@ class PredBat(hass.Hass):
             if not INVERTER_TEST:
                 self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
                 self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
+            else:
+                self.update_time_loop(None)
 
     def update_time_loop(self, cb_args):
         """
