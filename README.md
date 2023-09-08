@@ -421,7 +421,7 @@ You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_di
 ### Fixed daily rates
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
 
-### Cheap night rate (e.g. Octopus Go, Intelligent, Economy 7 etc)
+### Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)
 - In this scenario you will want to charge overnight based on the next days solar forecast.
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
@@ -437,10 +437,24 @@ set_charge_window - True           # You want to have Predbat control the charge
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
 best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
 rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
-calculate_discharge_first - False  # You probably only want to discharge any excess 
+calculate_discharge_first - False  # You probably only want to discharge any excess as export rates are poor
 ```
 
-If you have Intelligent then make sure the intelligent plugin is also set up so the tool can see when you plan to charge your car and take this into account.
+## Cheap night rate, with a good export rate (e.g. Intelligent with Octopus Outgoing)
+
+Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
+
+calculate_best_discharge - True        # Enable discharge calculation
+calculate_discharge_first - True       # Give priority to discharge when it's profitable
+calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
+combine_discharge_slots - False        # For fixed export rate you have to break up the discharge slots
+set_discharge_window - True            # Allow the tool to control the discharge slots
+metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
+rate_high_threshold: 1.0               # For fixed export rate you need to consider all slots
+predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
+
+predbat_set_discharge_freeze_only - ?? # If you set Freeze only to True then excess solar will be exported, set to False if you want forced export as well
 
 ### Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 

@@ -1790,7 +1790,7 @@ class PredBat(hass.Hass):
             # discharge freeze?
             if self.set_discharge_freeze:
                 charge_rate_max = self.battery_rate_max_curve
-                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and (soc <= ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0) or self.set_discharge_freeze_only):
+                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
                     # Freeze mode
                     charge_rate_max = 0
 
@@ -2924,7 +2924,13 @@ class PredBat(hass.Hass):
         best_start = window['start']
 
         # loop on each discharge option
-        for loop_limit in [100, 0]:
+        if self.set_discharge_freeze and not self.set_discharge_freeze_only:
+            # If we support freeze, try a 99% option which will freeze at any SOC level below this
+            loop_options = [100.0, 99.0, 0.0]
+        else:
+            loop_options = [100.0, 0.0]
+
+        for loop_limit in loop_options:
             # Loop on window size
             loop_start = window['start']
             while loop_start < window['end']:
@@ -2944,8 +2950,8 @@ class PredBat(hass.Hass):
                 if all_n and (start != window['start']):
                     continue
 
-                # Don't optimise start of disabled windows
-                if (this_discharge_limit == 100.0) and (start != window['start']):
+                # Don't optimise start of disabled windows or freeze only windows, just for discharge ones
+                if (this_discharge_limit in [100.0, 99.0]) and (start != window['start']):
                     continue
 
                 # Never go below the minimum level
@@ -3170,7 +3176,13 @@ class PredBat(hass.Hass):
                     limit_soc = max(limit_soc, soc - 10 * self.battery_rate_max)
                     discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                     if limit != discharge_limits_best[window_n]:
-                        self.log("Clip discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                        self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                elif soc < limit_soc:
+                    # Bring down limit to match predicted soc
+                    limit_soc = soc
+                    discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
+                    if limit != discharge_limits_best[window_n]:
+                        self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
 
             else:
                 self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
@@ -3228,7 +3240,6 @@ class PredBat(hass.Hass):
 
                     if self.debug_enable or 1:
                         self.log("Best discharge limit window {} time {} - {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'], best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
-
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
