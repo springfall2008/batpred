@@ -2941,19 +2941,14 @@ class PredBat(hass.Hass):
 
         for loop_limit in loop_options:
             # Loop on window size
-            loop_start = window['start']
-            while loop_start < window['end']:
+            loop_start = window['end'] - 5
+            while loop_start >= window['start']:
 
                 this_discharge_limit = loop_limit
                 start = loop_start
 
-                # Scan the window in larger sections and then get smaller as it gets smaller
-                if record_charge_windows <= 6:
-                    loop_start += 5
-                elif (window['end'] - loop_start) > 60:
-                    loop_start += 15
-                else:
-                    loop_start += 5
+                # Move the loop start back to full size
+                loop_start -= 5
 
                 # Can't optimise all window start slot
                 if all_n and (start != window['start']):
@@ -4057,8 +4052,11 @@ class PredBat(hass.Hass):
                     inverter.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
                     if not self.inverter_hybrid and self.inverter_soc_reset:
-                        self.log("Resetting charging SOC as we are not within the window and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
-                        inverter.adjust_battery_target(100.0)
+                        if self.charge_limit_best and self.minutes_now >= inverter.charge_start_time_minutes and self.minutes_now < inverter.charge_end_time_minutes:
+                            self.log("Within the charge window, holding SOC setting {} (now {} target set_soc_minutes {} charge start time {})".format(self.charge_limit_percent_best[0], self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
+                        else:
+                            self.log("Resetting charging SOC as we are not within the window and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
+                            inverter.adjust_battery_target(100.0)
                     else:
                         self.log("Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
 
