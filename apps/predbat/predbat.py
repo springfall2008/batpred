@@ -2147,32 +2147,52 @@ class PredBat(hass.Hass):
             rate_low_average = self.dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
-    def basic_rates(self, info, rtype):
+    def basic_rates(self, info, rtype, prev=None):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
         """
         rates = {}
 
-        # Set to zero for missing rates
-        for minute in range(0, 24*60):
-            rates[minute] = 0
+        if prev:
+            rates = prev.copy()
+            self.log("Override {} rate info {}".format(rtype, info))
+        else:
+            # Set to zero
+            self.log("Adding {} rate info {}".format(rtype, info))
+            for minute in range(0, 24*60):
+                rates[minute] = 0
 
-        self.log("Adding {} rate info {}".format(rtype, info))
+        max_minute = max(rates) + 1
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
             start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
             end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
+            date = None
+            if 'date' in this_rate:
+                date = datetime.strptime(this_rate['date'], "%Y-%m-%d")
             rate = this_rate.get('rate', 0)
+
+            # Time in minutes
             start_minutes = max(self.mintes_to_time(start, midnight), 0)
             end_minutes   = min(self.mintes_to_time(end, midnight), 24*60-1)
 
+            # Make end > start
             if end_minutes <= start_minutes:
                 end_minutes += 24*60
 
-            # self.log("Found rate {} {} to {} minutes".format(rate, start_minutes, end_minutes))
-            for minute in range(start_minutes, end_minutes):
-                rates[minute % (24*60)] = rate
+            # Adjust for date if specified
+            if date:
+                delta_minutes = self.mintes_to_time(date, self.midnight)
+                start_minutes += delta_minutes
+                end_minutes += delta_minutes
+
+            # Store rates against range
+            self.log("Adding rate {} from {} - {} max minute {}".format(rate, start_minutes, end_minutes, max_minute))
+            if end_minutes >= 0 and start_minutes < max_minute:
+                for minute in range(start_minutes, end_minutes):
+                    if (not date) or (minute >= 0 and minute < max_minute):
+                        rates[minute % max_minute] = rate
 
         return rates
 
@@ -3646,6 +3666,8 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
+            if 'rates_import_override' in self.args:
+                self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
@@ -3654,6 +3676,8 @@ class PredBat(hass.Hass):
         # Replicate and scan export rates
         if self.rate_export:
             self.rate_export = self.rate_replicate(self.rate_export)
+            if 'rates_export_override' in self.args:
+                self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export)
         else:
             self.log("Warning: No export rate data provided")
