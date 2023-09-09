@@ -2188,7 +2188,6 @@ class PredBat(hass.Hass):
                 end_minutes += delta_minutes
 
             # Store rates against range
-            self.log("Adding rate {} from {} - {} max minute {}".format(rate, start_minutes, end_minutes, max_minute))
             if end_minutes >= 0 and start_minutes < max_minute:
                 for minute in range(start_minutes, end_minutes):
                     if (not date) or (minute >= 0 and minute < max_minute):
