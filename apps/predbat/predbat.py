@@ -14,6 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
+THIS_VERSION = 'v6.41'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -34,6 +35,7 @@ for minute in range(0, 24*60, 5):
     OPTIONS_TIME.append(timestr)
 
 CONFIG_ITEMS = [
+    {'name' : 'version',                       'friendly_name' : 'Predbat Core Update',            'type' : 'update', 'title' : 'Predbat', 'installed_version' : THIS_VERSION, 'release_url' : 'https://github.com/springfall2008/batpred/releases/tag/' + THIS_VERSION, 'entity_picture' : 'https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png'},
     {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:percent'},
     {'name' : 'pv_scaling',                    'friendly_name' : 'PV Scaling',                     'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
     {'name' : 'load_scaling',                  'friendly_name' : 'Load Scaling',                   'type' : 'input_number', 'min' : 0,   'max' : 2.0,  'step' : 0.01, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
@@ -1168,6 +1170,65 @@ class PredBat(hass.Hass):
         self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'export', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
+
+    def download_predbat_releases_url(self, url):
+        """
+        Download release data from github, but use the cache for 2 hours
+        """
+        releases = []
+
+        # Check the cache first
+        now = datetime.now()
+        if url in self.github_url_cache:
+            stamp = self.github_url_cache[url]['stamp']
+            pdata = self.github_url_cache[url]['data']
+            age = now - stamp
+            if age.seconds < (120 * 60):
+                self.log("Using cached GITHub data for {} age {} minutes".format(url, age.seconds / 60))
+                return pdata
+
+        try:
+            r = requests.get(url)
+        except:
+            self.log("WARN: Unable to load data from Github url: {}".format(url))
+            return []
+
+        try:
+            pdata = r.json()
+        except requests.exceptions.JSONDecodeError:
+            self.log("WARN: Unable to decode data from Github url: {}".format(url))
+            return []
+        
+        return pdata
+    
+    def download_predbat_releases(self):
+        """
+        Download release data
+        """
+        url = "https://api.github.com/repos/springfall2008/batpred/releases"
+        data = self.download_predbat_releases_url(url)
+        self.releases = {}
+        if data:
+            found_latest = False
+
+            release = data[0]
+            self.releases['this'] = THIS_VERSION
+            self.releases['latest'] = 'Unknown'
+
+            for release in data:
+                if release.get('tag_name', 'Unknown') == THIS_VERSION:
+                    self.releases['this_name'] = release.get('name', 'Unknown')
+                    self.releases['this_body'] = release.get('body', 'Unknown')
+
+                if not found_latest and not release.get('prerelease', True):
+                    self.releases['latest'] = release.get('tag_name', 'Unknown')
+                    self.releases['latest_name'] = release.get('name', 'Unknown')
+                    self.releases['latest_body'] = release.get('body', 'Unknown')
+                    found_latest = True
+
+            self.log("Predbat version {} currently running, latest version is {}".format(self.releases['this'], self.releases['latest']))
+
+        return self.releases
 
     def download_octopus_rates(self, url):
         """
@@ -2838,9 +2899,11 @@ class PredBat(hass.Hass):
         self.notify_devices = ['notify']
         self.octopus_url_cache = {}
         self.ge_url_cache = {}
+        self.github_url_cache = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
         self.battery_capacity_nominal = False
+        self.releases = {}
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = 0, end_record=None):
         """
@@ -3342,6 +3405,9 @@ class PredBat(hass.Hass):
             now_utc += timedelta(minutes=self.simulate_offset)
 
         self.log("--------------- PredBat - update at {} with clock skew {} minutes".format(now_utc, skew))
+
+        self.download_predbat_releases()
+        self.expose_config('version', None)
 
         self.debug_enable = self.get_arg('debug_enable', False)
         self.max_windows = self.get_arg('max_windows', 128)
@@ -4219,6 +4285,12 @@ class PredBat(hass.Hass):
                     elif item['type'] == 'select':
                         icon = item.get('icon', 'mdi:format-list-bulleted')
                         self.set_state(entity_id = entity, state = value, attributes = {'friendly_name' : item['friendly_name'], 'options' : item['options'], 'icon' : icon})
+                    elif item['type'] == 'update':
+                        summary = self.releases.get('this_body', '')
+                        latest = self.releases.get('latest', 'check HACS')
+                        self.set_state(entity_id = entity, state = 'off', attributes = {'friendly_name' : item['friendly_name'], 'title' : item['title'], 'in_progress' : False, 'auto_update' : False, 
+                                                                                        'installed_version' : item['installed_version'], 'latest_version' : latest, 'entity_picture' : item['entity_picture'], 
+                                                                                        'release_url' : item['release_url'], 'skipped_version' : False, 'release_summary' : summary})
 
     def load_user_config(self):
         """
@@ -4256,6 +4328,9 @@ class PredBat(hass.Hass):
                     ha_value = float(ha_value)
                 except ValueError:
                     ha_value = None
+
+            if type == 'update':
+                ha_value = None
 
             # Push back into current state
             if ha_value is not None:
