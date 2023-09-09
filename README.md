@@ -329,13 +329,32 @@ Predbat also include the daily standing charge in cost predictions (optional)
 
 Or manually set your rates in a 24-hour period using these:
   - rates_import
-    - start
-      end
-      rate
+    - start : "HH:MM:SS"
+      end : "HH:MM:SS"
+      rate : pence
   - rates_export
-    - start
-      end
-      rate
+    - start : "HH:MM:SS"
+      end : "HH:MM:SS"
+      rate : p
+
+**start** and **end** are in time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
+rate is in pence e.g. 4.2
+
+You can also override the energy rates (regardless of if they are set manually or via Octopus) using the override feature.
+The override is used to set times where rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two)
+
+  - rates_import
+    - start : "HH:MM:SS"
+      end : "HH:MM:SS"
+      rate : p
+      date : "YYYY-MM-DD"
+  - rates_export
+    - start : "HH:MM:SS"
+      end : "HH:MM:SS"
+      rate : p
+      date : "YYYY-MM-DD"
+      
+**date** is in date format of "YYYY-MM-DD" e.g. "2023-09-09"
 
 ### Car charging filtering
 
