@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v6.42'
+THIS_VERSION = 'v6.43'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1738,6 +1738,8 @@ class PredBat(hass.Hass):
         discharge_rate_max = self.discharge_rate_max
         battery_state = "-"
         grid_state = '-'
+        first_charge = end_record
+        export_to_first_charge = 0
 
         # self.log("Sim discharge window {} enable {}".format(discharge_window, discharge_limits))
         charge_limit, charge_window = self.remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
@@ -1896,6 +1898,7 @@ class PredBat(hass.Hass):
                 charge_rate_max_curve = charge_rate_max * self.battery_charge_power_curve.get(soc_percent, 1.0)
                 battery_draw = -max(min(charge_rate_max_curve * step, charge_limit[charge_window_n] - soc), 0)
                 battery_state = 'f+'
+                first_charge = min(first_charge, minute)
             else:
                 # ECO Mode
                 if load_yesterday - pv_ac - pv_dc > 0:
@@ -2000,6 +2003,8 @@ class PredBat(hass.Hass):
                 # Store export data
                 if diff < 0:
                     predict_export[minute] = energy
+                    if minute <= first_charge:
+                        export_to_first_charge += energy
                 else:
                     predict_export[minute] = 0
 
@@ -2057,7 +2062,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".load_power", state=self.dp3(final_soc), attributes = {'results' : predict_load_power, 'friendly_name' : 'Predicted Load Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
-            self.set_state(self.prefix + ".export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'export_until_charge_kwh' : export_to_first_charge, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state(self.prefix + ".import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
@@ -2079,7 +2084,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".soc_kw_best_h8", state=self.dp3(self.predict_soc[60*8]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 8h', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".soc_kw_best_h12", state=self.dp3(self.predict_soc[60*12]), attributes = {'friendly_name' : 'Predicted SOC kwh best + 12h', 'state_class': 'measurement', 'unit _of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".best_soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
-            self.set_state(self.prefix + ".best_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".best_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'export_until_charge_kwh' : export_to_first_charge, 'friendly_name' : 'Predicted exports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".best_load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".best_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state(self.prefix + ".best_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
@@ -2088,7 +2093,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".best_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state(self.prefix + ".record", state=0.0, attributes = {'results' : record_time, 'friendly_name' : 'Prediction window', 'state_class' : 'measurement'})
             self.set_state(self.prefix + ".iboost_best", state=self.dp2(final_iboost_kwh), attributes = {'results' : predict_iboost, 'friendly_name' : 'Predicted IBoost energy best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:water-boiler'})
-            self.find_spare_energy(predict_soc, predict_export, step)            
+            self.find_spare_energy(predict_soc, predict_export, step, first_charge)            
 
         if save and save=='debug' and not SIMULATE:
             self.set_state(self.prefix + ".pv_power_debug", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power Debug', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
@@ -2100,7 +2105,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".soc_kw_best10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".best10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state(self.prefix + ".best10_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted best 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state(self.prefix + ".best10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".best10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'export_until_charge_kwh': export_to_first_charge, 'friendly_name' : 'Predicted exports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".best10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".best10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports best 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
@@ -2108,7 +2113,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".soc_kw_base10", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Battery SOC kwh base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".base10_pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state(self.prefix + ".base10_metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted base 10% metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state(self.prefix + ".base10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'friendly_name' : 'Predicted exports base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".base10_export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'export_until_charge_kwh': export_to_first_charge, 'friendly_name' : 'Predicted exports base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".base10_load_energy", state=self.dp3(final_load_kwh), attributes = {'friendly_name' : 'Predicted load base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".base10_import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports base 10%', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
 
@@ -3203,7 +3208,7 @@ class PredBat(hass.Hass):
                 new_window_best.append(charge_window_best[window_n])
         return new_limit_best, new_window_best 
 
-    def find_spare_energy(self, predict_soc, predict_export, step):
+    def find_spare_energy(self, predict_soc, predict_export, step, first_charge):
         """
         Find spare energy and set triggers
         """
@@ -3220,7 +3225,7 @@ class PredBat(hass.Hass):
             total_energy = 0
             name = trigger.get('name', 'trigger')
             minutes = trigger.get('minutes', 60.0)
-            minutes = min(max(minutes, 0), self.forecast_minutes)
+            minutes = min(max(minutes, 0), first_charge)
             energy = trigger.get('energy', 1.0)
             for minute in range(0, minutes, step):
                 total_energy += predict_export[minute]
@@ -3264,11 +3269,12 @@ class PredBat(hass.Hass):
                     if limit != discharge_limits_best[window_n]:
                         self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
                 elif soc < limit_soc:
-                    # Bring down limit to match predicted soc
-                    limit_soc = soc
-                    discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
-                    if limit != discharge_limits_best[window_n]:
-                        self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                    # Bring down limit to match predicted soc for freeze only mode
+                    if self.set_discharge_freeze_only:
+                        limit_soc = soc
+                        discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
+                        if limit != discharge_limits_best[window_n]:
+                            self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
 
             else:
                 self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
