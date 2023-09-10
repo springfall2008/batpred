@@ -397,7 +397,9 @@ Control how your battery behaves during car charging:
 
 ### Triggers
 
-The trigger figure is useful to help trigger your own automation based on having spare solar energy that you would otherwise export
+The trigger figure is useful to help trigger your own automation based on having spare solar energy or battery that you would otherwise export
+
+The triggers count export energy until the next active charge slot only.
 
 For each trigger give a name, the minutes of export needed and the energy required in that time
 Multiple triggers can be set at once so in total you could use too much energy if all run
