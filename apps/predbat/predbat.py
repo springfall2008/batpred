@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v6.43'
+THIS_VERSION = 'v6.44'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1872,6 +1872,7 @@ class PredBat(hass.Hass):
             if not self.set_discharge_freeze_only and (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and soc > ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0):
                 # Discharge enable
                 discharge_rate_max = self.battery_rate_max  # Assume discharge becomes enabled here
+
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = (self.soc_max * discharge_limits[discharge_window_n]) / 100.0
                 battery_draw = discharge_rate_max * step
@@ -3254,24 +3255,28 @@ class PredBat(hass.Hass):
                 pass
             elif window_length > 0:
                 predict_minute = int((window_start - minutes_now) / 5) * 5
-                soc = predict_soc[predict_minute]
+                soc_start = predict_soc[predict_minute]
+
+                predict_minute = int((window_end - minutes_now) / 5) * 5
+                soc_end = predict_soc[predict_minute]
+                soc = min(soc_start, soc_end)
+                soc_max = max(soc_start, soc_end)
 
                 if self.debug_enable:
-                    self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc))
+                    self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc_start, soc_end))
 
                 # Discharge level adjustments for safety
-                predict_minute = int((window_end - minutes_now) / 5) * 5
-                soc = predict_soc[predict_minute]
                 if soc > limit_soc:
                     # Give it 10 minute margin
                     limit_soc = max(limit_soc, soc - 10 * self.battery_rate_max)
                     discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                     if limit != discharge_limits_best[window_n]:
                         self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
-                elif soc < limit_soc:
+                elif soc_max < limit_soc:
                     # Bring down limit to match predicted soc for freeze only mode
-                    if self.set_discharge_freeze_only:
-                        limit_soc = soc
+                    if self.set_discharge_freeze:
+                        # Get it 5 minute margin upwards
+                        limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max)
                         discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                         if limit != discharge_limits_best[window_n]:
                             self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
