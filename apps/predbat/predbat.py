@@ -1208,7 +1208,7 @@ class PredBat(hass.Hass):
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
         self.releases = {}
-        if data:
+        if data and isinstance(data, list):
             found_latest = False
 
             release = data[0]
@@ -1227,6 +1227,8 @@ class PredBat(hass.Hass):
                     found_latest = True
 
             self.log("Predbat version {} currently running, latest version is {}".format(self.releases['this'], self.releases['latest']))
+        else:
+            self.log("WARN: Unable to download Predbat version information from github, return code: {}".format(data))
 
         return self.releases
 
