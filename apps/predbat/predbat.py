@@ -1199,6 +1199,11 @@ class PredBat(hass.Hass):
             self.log("WARN: Unable to decode data from Github url: {}".format(url))
             return []
         
+        # Save to cache
+        self.github_url_cache[url] = {}
+        self.github_url_cache[url]['stamp'] = now
+        self.github_url_cache[url]['data'] = pdata
+
         return pdata
     
     def download_predbat_releases(self):
