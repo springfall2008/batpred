@@ -2704,14 +2704,19 @@ class PredBat(hass.Hass):
         Work out energy costs today (approx)
         """
         day_cost = 0
+        day_cost_import = 0
+        day_cost_export = 0
         day_energy = 0
         day_energy_export = 0
         day_cost_time = {}
+        day_cost_time_import = {}
+        day_cost_time_export = {}
 
         for minute in range(0, self.minutes_now):
             # Add in standing charge
             if (minute % (24*60)) == 0:
                 day_cost += self.metric_standing_charge
+                day_cost_import += self.metric_standing_charge
 
             minute_back = self.minutes_now - minute - 1
             energy = 0
@@ -2725,18 +2730,24 @@ class PredBat(hass.Hass):
             
             if self.rate_import:
                 day_cost += self.rate_import[minute] * energy
+                day_cost_import += self.rate_import[minute] * energy
                 
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
+                day_cost_export -= self.rate_export[minute] * energy_export
 
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 day_cost_time[stamp] = self.dp2(day_cost)
+                day_cost_time_import[stamp] = self.dp2(day_cost_import)
+                day_cost_time_export[stamp] = self.dp2(day_cost_export)
 
         if not SIMULATE:
             self.set_state(self.prefix + ".cost_today", state=self.dp2(day_cost), attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-        self.log("Todays energy import {} kwh export {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost)))
+            self.set_state(self.prefix + ".cost_today_import", state=self.dp2(day_cost_import), attributes = {'results' : day_cost_time_import, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".cost_today_export", state=self.dp2(day_cost_export), attributes = {'results' : day_cost_time_export, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+        self.log("Todays energy import {} kwh export {} kwh cost {} p import {} p export {} p".format(self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.dp2(day_cost_import), self.dp2(day_cost_export)))
         return day_cost
 
     def publish_discharge_limit(self, discharge_window, discharge_limits, best):
