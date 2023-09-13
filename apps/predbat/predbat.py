@@ -2745,8 +2745,8 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             self.set_state(self.prefix + ".cost_today", state=self.dp2(day_cost), attributes = {'results' : day_cost_time, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state(self.prefix + ".cost_today_import", state=self.dp2(day_cost_import), attributes = {'results' : day_cost_time_import, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            self.set_state(self.prefix + ".cost_today_export", state=self.dp2(day_cost_export), attributes = {'results' : day_cost_time_export, 'friendly_name' : 'Cost so far today', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".cost_today_import", state=self.dp2(day_cost_import), attributes = {'results' : day_cost_time_import, 'friendly_name' : 'Cost so far today import', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            self.set_state(self.prefix + ".cost_today_export", state=self.dp2(day_cost_export), attributes = {'results' : day_cost_time_export, 'friendly_name' : 'Cost so far today export', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
         self.log("Todays energy import {} kwh export {} kwh cost {} p import {} p export {} p".format(self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.dp2(day_cost_import), self.dp2(day_cost_export)))
         return day_cost
 
