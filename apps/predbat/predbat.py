@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v6.46'
+THIS_VERSION = 'v6.47'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -145,6 +145,8 @@ class Inverter():
         self.inverter_limit = 7500.0
         self.export_limit = 99999.0
         self.inverter_time = None
+        self.reserve_percent = 4.0
+        self.reserve_percent_current = 4.0
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
@@ -213,17 +215,21 @@ class Inverter():
         # Battery rate max scaling
         self.battery_rate_max *= self.base.battery_rate_max_scaling
 
-        # Get the current reserve setting or consider the minimum if we are overriding it
+        # Get current reserve value
+        if self.rest_data:
+            self.reserve_percent_current = float(self.rest_data['Control']['Battery_Power_Reserve'])
+        else:
+            self.reserve_percent_current = max(self.base.get_arg('reserve', default=0.0, index=self.id), 4.0)
+        self.reserve_current = self.base.dp2(self.soc_max * self.reserve_percent_current / 100.0)
+
+        # Get the expected minimum reserve value
         if self.base.set_reserve_enable:
             self.reserve_percent = max(self.base.get_arg('set_reserve_min', 4.0), 4.0)
-            self.base.log("Inverter {} Set reserve is enabled, using min reserve {}".format(self.id, self.reserve_percent))
         else:
-            if self.rest_data:
-                self.reserve_percent = float(self.rest_data['Control']['Battery_Power_Reserve'])
-            else:
-                self.reserve_percent = max(self.base.get_arg('reserve', default=0.0, index=self.id), 4.0)
-            self.base.log("Inverter {} Set reserve is disable, using current reserve {}".format(self.id, self.reserve_percent))
+            self.reserve_percent  = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
+
+        self.base.log("Inverter {} reserve is {} and current setting {}".format(self.id, self.reserve_percent, self.reserve_percent_current))
 
         # Max inverter rate override
         if 'inverter_limit' in self.base.args:
@@ -557,23 +563,17 @@ class Inverter():
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
-    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
+    def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
         """
-        Adjust force discharge on/off
+        Adjust inverter mode between force discharge and ECO
         """
         if SIMULATE:
             old_inverter_mode = self.base.sim_inverter_mode
-            old_start = self.base.sim_discharge_start
-            old_end = self.base.sim_discharge_end
         else:
             if self.rest_data:
                 old_inverter_mode = self.rest_data['Control']['Mode']
-                old_start = self.rest_data['Timeslots']['Discharge_start_time_slot_1']
-                old_end = self.rest_data['Timeslots']['Discharge_end_time_slot_1']
             else:
                 old_inverter_mode = self.base.get_arg('inverter_mode', index=self.id)
-                old_start = self.base.get_arg('discharge_start_time', index=self.id)
-                old_end = self.base.get_arg('discharge_end_time', index=self.id)
 
         # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
         if old_inverter_mode == 'Eco (Paused)':
@@ -584,6 +584,45 @@ class Inverter():
             new_inverter_mode = 'Timed Export'
         else:
             new_inverter_mode = 'Eco'
+
+        # Change inverter mode
+        if old_inverter_mode != new_inverter_mode:
+            if SIMULATE:
+                self.base.sim_inverter_mode = new_inverter_mode
+            else:
+                # Inverter mode
+                if changed_start_end and not self.rest_api:
+                    # XXX: Workaround for GivTCP window state update time to take effort
+                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+                    time.sleep(30)
+
+                if self.rest_api:
+                    self.rest_setBatteryMode(new_inverter_mode)
+                else:
+                    entity = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
+                    self.write_and_poll_option('inverter_mode', entity, new_inverter_mode)
+
+                # Notify
+                if self.base.set_discharge_notify:
+                    self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
+
+            self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
+            self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
+
+    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
+        """
+        Adjust force discharge on/off and set the time window correctly
+        """
+        if SIMULATE:
+            old_start = self.base.sim_discharge_start
+            old_end = self.base.sim_discharge_end
+        else:
+            if self.rest_data:
+                old_start = self.rest_data['Timeslots']['Discharge_start_time_slot_1']
+                old_end = self.rest_data['Timeslots']['Discharge_end_time_slot_1']
+            else:
+                old_start = self.base.get_arg('discharge_start_time', index=self.id)
+                old_end = self.base.get_arg('discharge_end_time', index=self.id)
 
         # Start time to correct format
         if new_start_time:
@@ -599,7 +638,11 @@ class Inverter():
         else:
             new_end = None
 
-        self.base.log("Inverter {} Adjust force discharge to {} times {} - {}, current mode {} times {} - {}".format(self.id, new_inverter_mode, new_start, new_end, old_inverter_mode, old_start, old_end))
+        # Eco mode, turn it on before we change the discharge window
+        if not force_discharge:
+            self.adjust_inverter_mode(force_discharge)
+
+        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, new_start, new_end, old_start, old_end))
         changed_start_end = False
 
         # Change start time
@@ -630,35 +673,16 @@ class Inverter():
             if not SIMULATE:
                 self.rest_setDischargeSlot1(new_start, new_end)
 
+        # Force discharge, turn it on after we change the window
+        if force_discharge:
+            self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
+
         # Notify
         if changed_start_end:
             self.base.record_status("Inverter {} set discharge slot to {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             if self.base.set_discharge_notify:
                 self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
-        # Change inverter mode
-        if old_inverter_mode != new_inverter_mode:
-            if SIMULATE:
-                self.base.sim_inverter_mode = new_inverter_mode
-            else:
-                # Inverter mode
-                if changed_start_end and not self.rest_api:
-                    # XXX: Workaround for GivTCP window state update time to take effort
-                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-                    time.sleep(30)
-
-                if self.rest_api:
-                    self.rest_setBatteryMode(new_inverter_mode)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg('inverter_mode', indirect=False, index=self.id))
-                    self.write_and_poll_option('inverter_mode', entity, new_inverter_mode)
-
-                # Notify
-                if self.base.set_discharge_notify:
-                    self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
-
-            self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
-            self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
     def disable_charge_window(self, notify=True):
         """
@@ -2466,7 +2490,7 @@ class PredBat(hass.Hass):
                     self.set_state(self.prefix + ".high_rate_export_end", state=rate_high_end_date.strftime(time_format_time), attributes = {'date' : rate_high_end_date.strftime(TIME_FORMAT), 'friendly_name' : 'Next high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".high_rate_export_cost", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                     in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
-                    self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='on' if in_high_rate else 'off', attributes = {'friendly_name' : 'Predbat low rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                    self.set_state("binary_sensor." + self.prefix + "_high_rate_export_slot", state='on' if in_high_rate else 'off', attributes = {'friendly_name' : 'Predbat high rate slot', 'icon': 'mdi:home-lightning-bolt-outline'})
                     high_rate_minutes = (rate_high_end - self.minutes_now) if in_high_rate else (rate_high_end - rate_high_start)
                     self.set_state(self.prefix + ".high_rate_export_duration", state=high_rate_minutes, attributes = {'friendly_name' : 'Next high export rate duration', 'state_class': 'measurement', 'unit_of_measurement': 'minutes', 'icon': 'mdi:table-clock'})
                 if window_n == 1 and not SIMULATE:
@@ -2848,6 +2872,7 @@ class PredBat(hass.Hass):
         self.octopus_slots = []
         self.car_charging_slots = []
         self.reserve = 0
+        self.reserve_current = 0
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
@@ -2984,8 +3009,11 @@ class PredBat(hass.Hass):
                 if try_soc == self.reserve:
                     try_percent = 0
                 else:
-                    try_percent = try_soc / self.soc_max * 100.0
-                if abs(int(self.current_charge_limit) - int(try_percent)) <= 2:
+                    try_percent = int(try_soc / self.soc_max * 100.0 + 0.5)
+
+                compare_with = max(self.current_charge_limit, self.reserve_current_percent)
+
+                if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
 
             self.debug_enable = was_debug
@@ -3487,6 +3515,11 @@ class PredBat(hass.Hass):
         self.inverter_soc_reset = self.get_arg('inverter_soc_reset', False)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
         self.battery_charge_power_curve = self.args.get('battery_charge_power_curve', {})
+        # Check power curve is a dictionary
+        if not isinstance(self.battery_charge_power_curve, dict):
+            self.battery_charge_power_curve = {}
+            self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
+            self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.0)
@@ -3818,6 +3851,8 @@ class PredBat(hass.Hass):
         self.soc_kw = 0.0
         self.soc_max = 0.0
         self.reserve = 0.0
+        self.reserve_current = 0.0
+        self.reserve_current_precent = 0.0
         self.battery_rate_max = 0.0
         self.charge_rate_max = 0.0
         self.discharge_rate_max = 0.0
@@ -3838,6 +3873,7 @@ class PredBat(hass.Hass):
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
+            self.reserve_current += inverter.reserve_current
             self.battery_rate_max += inverter.battery_rate_max
             self.charge_rate_max += inverter.charge_rate_max
             self.discharge_rate_max += inverter.discharge_rate_max
@@ -3848,8 +3884,11 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
-        self.log("Found {} inverters total reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
-                 len(self.inverters), self.reserve, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
+        self.reserve_current = self.dp2(self.reserve_current)
+        self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
+
+        self.log("Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+                 len(self.inverters), self.reserve, self.reserve_current, self.soc_max, self.soc_kw, self.charge_rate_max * 60, self.discharge_rate_max * 60, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
 
         # Work out current charge limits
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
@@ -4114,7 +4153,7 @@ class PredBat(hass.Hass):
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
                     else:
-                        inverter.adjust_force_discharge(False)
+                        inverter.adjust_inverter_mode(False)
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
@@ -4130,7 +4169,7 @@ class PredBat(hass.Hass):
                         resetReserve = True
                     else:
                         self.log("Setting ECO mode as we are not yet within the discharge window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
-                        inverter.adjust_force_discharge(False)
+                        inverter.adjust_inverter_mode(False)
                         resetReserve = True
 
                     if self.set_discharge_freeze:
@@ -4138,7 +4177,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(inverter.battery_rate_max * 60 * 1000)
             elif self.set_discharge_window:
                 self.log("Setting ECO mode as no discharge window planned")
-                inverter.adjust_force_discharge(False)
+                inverter.adjust_inverter_mode(False)
                 resetReserve = True
                 if self.set_discharge_freeze:
                     # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
@@ -4217,8 +4256,9 @@ class PredBat(hass.Hass):
         """
         Catch HA Input select updates
         """
-        value = data['service_data']['option']
-        entities = data['service_data']['entity_id']
+        service_data = data.get('service_data', {})
+        value = service_data.get('option', None)
+        entities = service_data.get('entity_id', [])
 
         # Can be a string or an array        
         if isinstance(entities, str):
@@ -4236,8 +4276,9 @@ class PredBat(hass.Hass):
         """
         Catch HA Input number updates
         """
-        value = data['service_data']['value']
-        entities = data['service_data']['entity_id']
+        service_data = data.get('service_data', {})
+        value = service_data.get('value', None)
+        entities = service_data.get('entity_id', [])
 
         # Can be a string or an array        
         if isinstance(entities, str):
@@ -4255,8 +4296,9 @@ class PredBat(hass.Hass):
         """
         Catch HA Switch toggle
         """
-        service = data['service']
-        entities = data['service_data']['entity_id']
+        service = data.get('service', None)
+        service_data = data.get('service_data', {})
+        entities = service_data.get('entity_id', [])
 
         # Can be a string or an array        
         if isinstance(entities, str):
