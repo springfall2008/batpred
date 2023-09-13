@@ -2378,6 +2378,7 @@ class PredBat(hass.Hass):
             else:
                 start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
                 end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
+            source = slot.get('source', '')
             start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
             end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
             slot_minutes = end_minutes - start_minutes
@@ -2394,7 +2395,10 @@ class PredBat(hass.Hass):
                 new_slot['start'] = start_minutes
                 new_slot['end'] = end_minutes
                 new_slot['kwh'] = kwh
-                new_slot['average'] = self.rate_min  # Assume price in minimum 
+                if source != 'bump-charge':
+                    new_slot['average'] = self.rate_min  # Assume price in min 
+                else:
+                    new_slot['average'] = self.rate_max  # Assume price is max 
                 new_slot['cost'] = new_slot['average'] * kwh
                 new_slots.append(new_slot)
         return new_slots
@@ -2597,12 +2601,15 @@ class PredBat(hass.Hass):
                 else:
                     start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
                     end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
-                start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
-                end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
-
-                self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min))
-                for minute in range(start_minutes, end_minutes):
-                    rates[minute] = self.rate_min
+                source = slot.get('source', '')
+                # Ignore bump-charge slots as their cost won't change
+                if source != 'bump-charge':
+                    start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
+                    end_minutes   = max(min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes), 0)
+                    if end_minutes > start_minutes:
+                        self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min))
+                        for minute in range(start_minutes, end_minutes):
+                            rates[minute] = self.rate_min
 
         return rates
 
