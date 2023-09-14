@@ -536,8 +536,8 @@ Configuring Predbat:
 Charts:
    - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
 Tariffs:
-   - https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2
-   - https://www.loom.com/share/c604cb0eefbb499391037bb32173f6e8?sid=5a0a31dc-01f5-4364-b781-c5a7c297bf0c
+   - Intelligent import + Agile export: https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2
+   - Intelligent import + Fixed export: https://www.loom.com/share/c604cb0eefbb499391037bb32173f6e8?sid=5a0a31dc-01f5-4364-b781-c5a7c297bf0c
 
 ## FAQ
 
