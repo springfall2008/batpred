@@ -4106,6 +4106,9 @@ class PredBat(hass.Hass):
             
             # Filter out any unused charge slots
             if self.calculate_best_charge and self.charge_window_best:
+                # Re-run prediction to get data for clipping
+                best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, end_record=end_record)
+
                 # Charge slot clipping
                 record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
                 self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
