@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v6.48'
+THIS_VERSION = 'v6.49'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3298,6 +3298,46 @@ class PredBat(hass.Hass):
             self.log("Evalute trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
             self.set_state(sensor_name, state=state, attributes = {'friendly_name' : 'Predbat export trigger ' + name, 'required' : energy, 'available' : self.dp2(total_energy), 'minutes' : minutes, 'icon': 'mdi:clock-start'})
 
+    def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
+        """
+        Clip charge slots that are useless as they don't charge at all
+        """
+        for window_n in range(0, record_charge_windows):
+            window = charge_window_best[window_n]
+            limit = charge_limit_best[window_n]
+            limit_soc = self.soc_max * limit / 100.0
+            window_start = max(window['start'], minutes_now)
+            window_end = max(window['end'], minutes_now)
+            window_length = window_end - window_start
+
+            if limit <= self.reserve:
+                # Ignore disabled windows
+                pass
+            elif window_length > 0:
+                predict_minute = int((window_start - minutes_now) / 5) * 5
+                soc_start = predict_soc[predict_minute]
+
+                predict_minute = int((window_end - minutes_now) / 5) * 5
+                soc_end = predict_soc[predict_minute]
+                soc_min = min(soc_start, soc_end)
+                soc_max = max(soc_start, soc_end)
+
+                if self.debug_enable:
+                    self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc_start, soc_end))
+
+                if soc_min > charge_limit_best[window_n]:
+                    charge_limit_best[window_n] = max(self.reserve, self.best_soc_min)
+                    self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                if soc_max < charge_limit_best[window_n]:
+                    limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max)
+                    charge_limit_best[window_n] = max(limit_soc, self.best_soc_min) 
+                    self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+
+            else:
+                self.log("WARN: Clip charge window {} as it's already passed".format(window_n))
+                charge_limit_best[window_n] = max(self.reserve, self.best_soc_min)
+        return charge_window_best, charge_limit_best
+
     def clip_discharge_slots(self, minutes_now, predict_soc, discharge_window_best, discharge_limits_best, record_discharge_windows, step):
         """
         Clip discharge slots to the right length
@@ -4044,13 +4084,6 @@ class PredBat(hass.Hass):
             # Remove charge windows that overlap with discharge windows
             self.charge_limit_best, self.charge_window_best = self.remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best)
 
-            # Filter out any unused charge windows
-            if self.set_charge_window:
-                self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
-            else:
-                self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
-
             # Filter out any unused discharge windows
             if self.calculate_best_discharge and self.discharge_window_best:
                 # Filter out the windows we disabled
@@ -4061,8 +4094,7 @@ class PredBat(hass.Hass):
                     # Re-run prediction to get data for clipping
                     best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, end_record=end_record)
 
-                    # Work out new record end
-                    # end_record = self.record_length(self.charge_window_best)
+                    # Work out record windows
                     record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
 
                     # Discharge slot clipping
@@ -4071,7 +4103,20 @@ class PredBat(hass.Hass):
                     # Filter out the windows we disabled during clipping
                     self.discharge_limits_best, self.discharge_window_best = self.discard_unused_discharge_slots(self.discharge_limits_best, self.discharge_window_best)
                 self.log("Discharge windows filtered {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
-        
+            
+            # Filter out any unused charge slots
+            if self.calculate_best_charge and self.charge_window_best:
+                # Charge slot clipping
+                record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+                self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
+
+                # Charge slot filtering
+                if self.set_charge_window:
+                    self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
+                else:
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
+
             # Final simulation of best, do 10% and normal scenario
             best_metric10, self.charge_limit_percent_best10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute10_step, save='best10', end_record=end_record)
             best_metric, self.charge_limit_percent_best, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, save='best', end_record=end_record)
