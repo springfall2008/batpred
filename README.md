@@ -465,6 +465,7 @@ calculate_discharge_first - False  # You probably only want to discharge any exc
 
 Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
 
+```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
 calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
@@ -474,6 +475,7 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 1.0               # For fixed export rate you need to consider all slots
 predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
+```
 
 predbat_set_discharge_freeze_only - ?? # If you set Freeze only to True then excess solar will be exported, set to False if you want forced export as well
 
