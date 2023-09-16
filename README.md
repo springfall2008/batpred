@@ -516,7 +516,9 @@ rate_high_threshold: 1.2               # Consider more valuable export slots onl
 
 If you have a fixed export rate then follow the above for variable rates but change:
 
+```
 rate_high_threshold: 1.0               # Consider all slots for export
+```
 
 ## Video Guides
 
