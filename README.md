@@ -540,6 +540,7 @@ Tariffs:
    - Octopus Intelligent import + Fixed export: https://www.loom.com/share/c604cb0eefbb499391037bb32173f6e8?sid=5a0a31dc-01f5-4364-b781-c5a7c297bf0c
    - Octopus Agile import + Agile export: https://www.loom.com/share/5f007eff9d984dc8bdb03df708fde711?sid=4ae133c4-c7e5-4307-8c50-8737d1ca1593
    - Octopus Flux: https://www.loom.com/share/c5eec8986416448c8c30546b9d4ac220?sid=2262fc1c-515b-405e-8540-67d5084b6e55
+   - Octopus Intelligent car charging: https://www.loom.com/share/ab4650c95df84b23895b4004ab8d8b71?sid=b1e99613-8f87-488b-b03b-401afe442083
 
 ## FAQ
 
