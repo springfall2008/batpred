@@ -151,12 +151,18 @@ pred_bat:
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # Defines the number of cars modelled by the system, set to 0 for no car
+  num_cars: 1
   
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Octopus Intelligent Slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response
   # Auto matches Zappi and Wallbox, or change it for your own
-  car_charging_planned: 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  # One entry per car
+  car_charging_planned: 
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+
   car_charging_planned_response:
     - 'yes'
     - 'on'
@@ -175,16 +181,23 @@ pred_bat:
 
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
-  # If you have intelligent you don't need to use this as it allocate slots, but it may help to get a more accurate figure
-  # car_charging_battery_size: 75
-  # car_charging_limit: 're:number.tsunami_charge_limit'
-  # car_charging_soc: 're:sensor.tsunami_battery'
+  # If you have intelligent the battery size and limit will be extracted from Intelligent directly
+  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
+  # One entry per car if you have multiple cars
+  #car_charging_battery_size: 
+  #  - 75
+  #car_charging_limit: 
+  #  - 're:number.tsunami_charge_limit'
+  car_charging_soc: 
+    - 're:sensor.tsunami_battery'
 
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
+  # When enabled it overrides the 'car_charging_planned' feature for car 0 and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
+  octopus_intelligent_slot: 're:binary_sensor.octopus_energy_intelligent_dispatching'
+  octopus_ready_time: 're:time.octopus_energy_intelligent_ready_time'
+  octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
