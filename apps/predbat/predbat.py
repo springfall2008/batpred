@@ -3549,8 +3549,9 @@ class PredBat(hass.Hass):
             self.car_charging_limit[car_n]  = (float(self.get_arg('car_charging_limit', 100.0, index=car_n)) * self.car_charging_battery_size[car_n] ) / 100.0
 
         self.car_charging_from_battery = self.get_arg('car_charging_from_battery', True)
-        self.log("Cars {} charging from battery {} planned {}, smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(self.num_cars, self.car_charging_from_battery, self.car_charging_planned, 
-                self.car_charging_plan_smart, self.car_charging_plan_time, self.car_charging_battery_size, self.car_charging_limit, self.car_charging_rate))
+        if self.num_cars > 0:
+            self.log("Cars {} charging from battery {} planned {}, smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(self.num_cars, self.car_charging_from_battery, self.car_charging_planned, 
+                    self.car_charging_plan_smart, self.car_charging_plan_time, self.car_charging_battery_size, self.car_charging_limit, self.car_charging_rate))
 
     def update_pred(self, scheduled=True):
         """
@@ -3832,11 +3833,19 @@ class PredBat(hass.Hass):
                     self.car_charging_plan_time[0] = octopus_ready_time
                     octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size[0] / 100.0)
                     self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
+                elif self.octopus_intelligent_charging:
+                    octopus_ready_time = self.get_arg('octopus_ready_time', None)
+                    octopus_limit = self.get_arg('octopus_charge_limit', None)
+                    if octopus_limit:
+                        octopus_limit = self.dp2(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
+                        self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
+                    if octopus_ready_time:
+                        self.car_charging_plan_time[0] = octopus_ready_time
                 
                 # Use octopus slots for charging?
                 if self.octopus_intelligent_charging:
                     self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
-                self.log("Car 0 using Octopus, charging limit {} and Octopus limit {} - select min - battery size {}".format(self.car_charging_limit[0], octopus_limit, self.car_charging_battery_size[0]))
+                self.log("Car 0 using Octopus, charging limit {}, ready time {} - select min - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
@@ -3846,7 +3855,7 @@ class PredBat(hass.Hass):
         for car_n in range(0, self.num_cars):
             self.car_charging_soc[car_n] = (self.get_arg('car_charging_soc', 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
-            self.log("Current Car SOC {}".format(self.car_charging_soc))
+            self.log("Current Car SOC kwh: {}".format(self.car_charging_soc))
 
         if 'rates_export_octopus_url' in self.args:
             # Fixed URL for rate export
@@ -4539,6 +4548,40 @@ class PredBat(hass.Hass):
         self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_next')
         self.listen_select_handle = self.listen_event(self.select_event, event='call_service', domain="select", service='select_previous')
 
+    def resolve_arg_re(self, arg, arg_value, state_keys):
+        """
+        Resolve argument regular expression on list or string
+        """
+        matched = True
+
+        if isinstance(arg_value, list):
+            new_list = []
+            for item_value in arg_value:
+                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
+                if not item_matched:
+                    self.log('WARN: Regular argument {} expression {} failed to match - disabling this item'.format(arg, item_value))
+                    new_list.append(None)
+                else:
+                    new_list.append(item_value)
+            arg_value = new_list
+        elif isinstance(arg_value, str) and arg_value.startswith('re:'):
+            matched = False
+            my_re = '^' + arg_value[3:] + '$'
+            for key in state_keys:
+                res = re.search(my_re, key)
+                if res:
+                    if len(res.groups()) > 0:
+                        self.log('Regular expression argument {} matched {} with {}'.format(arg, my_re, res.group(1)))
+                        arg_value = res.group(1)
+                        matched = True
+                        break
+                    else:
+                        self.log('Regular expression argument {} Matched {} with {}'.format(arg, my_re, res.group(0)))
+                        arg_value = res.group(0)
+                        matched = True
+                        break
+        return matched, arg_value
+
     def auto_config(self):
         """
         Auto configure
@@ -4560,25 +4603,12 @@ class PredBat(hass.Hass):
         # Find each arg re to match
         for arg in self.args:
             arg_value = self.args[arg]
-            if isinstance(arg_value, str) and arg_value.startswith('re:'):
-                my_re = '^' + arg_value[3:] + '$'
-                matched = False
-                for key in state_keys:
-                    res = re.search(my_re, key)
-                    if res:
-                        if len(res.groups()) > 0:
-                            self.log('Regular expression argument {} matched {} with {}'.format(arg, my_re, res.group(1)))
-                            self.args[arg] = res.group(1)
-                            matched = True
-                            break
-                        else:
-                            self.log('Regular expression argument {} Matched {} with {}'.format(arg, my_re, res.group(0)))
-                            self.args[arg] = res.group(0)
-                            matched = True
-                            break
-                if not matched:
-                    self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
-                    disabled.append(arg)
+            matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
+            if not matched:
+                self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                disabled.append(arg)
+            else:
+                self.args[arg] = arg_value
 
         # Remove unmatched keys
         for key in disabled:
