@@ -226,17 +226,6 @@ pred_bat:
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
 
-  # Import rates can be overriden with rate_import_override
-  # Export rates can be overriden with rate_export_override
-  # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
-  # This will override even the Octopus plugin rates if enabled
-  #
-  #rates_import_override:
-  # -  date: '2023-09-10'
-  #    start: '14:00:00'
-  #    end: '14:30:00'
-  #    rate: 5
-
   # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
   # If you use 10 then disable pv_metric10_weight below
   # pv_estimate: 10
@@ -298,5 +287,3 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
-
- 
