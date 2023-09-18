@@ -2466,7 +2466,7 @@ class PredBat(hass.Hass):
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
-                self.set_state("binary_sensor." + self.prefix + "_car_charging_slot" + postfix, state='off', attributes = {'planned' : plan, 'cost' : None, 'kwh' : None, 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                self.set_state("binary_sensor." + self.prefix + "_car_charging_slot" + postfix, state='off', attributes = {'planned' : plan, 'cost' : None, 'kwh' : None, 'friendly_name' : 'Predbat car charging slot' + postfix, 'icon': 'mdi:home-lightning-bolt-outline'})
             else:
                 window = self.car_charging_slots[car_n][0]
                 if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
@@ -2493,7 +2493,7 @@ class PredBat(hass.Hass):
                     total_kwh += kwh
                     plan.append(show)
 
-                self.set_state("binary_sensor." + self.prefix + "_car_charging_slot" + postfix, state="on" if slot else 'off', attributes = {'planned' : plan, 'cost' : self.dp2(total_cost), 'kwh' : self.dp2(total_kwh), 'friendly_name' : 'Predbat car charging slot', 'icon': 'mdi:home-lightning-bolt-outline'})
+                self.set_state("binary_sensor." + self.prefix + "_car_charging_slot" + postfix, state="on" if slot else 'off', attributes = {'planned' : plan, 'cost' : self.dp2(total_cost), 'kwh' : self.dp2(total_kwh), 'friendly_name' : 'Predbat car charging slot' + postfix, 'icon': 'mdi:home-lightning-bolt-outline'})
 
     def publish_rates_export(self):
         """
@@ -3845,7 +3845,7 @@ class PredBat(hass.Hass):
                 # Use octopus slots for charging?
                 if self.octopus_intelligent_charging:
                     self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
-                self.log("Car 0 using Octopus, charging limit {}, ready time {} - select min - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
+                self.log("Car 0 using Octopus, charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
