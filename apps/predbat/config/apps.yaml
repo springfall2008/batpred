@@ -188,8 +188,8 @@ pred_bat:
   #  - 75
   #car_charging_limit: 
   #  - 're:number.tsunami_charge_limit'
-  car_charging_soc: 
-    - 're:sensor.tsunami_battery'
+  #car_charging_soc: 
+  #  - 're:sensor.tsunami_battery'
 
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
