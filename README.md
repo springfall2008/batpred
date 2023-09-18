@@ -61,6 +61,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
   * [Customisation ](#customisation)
     + [Battery loss options](#battery-loss-options)
     + [Scaling and weight options](#scaling-and-weight-options)
+    + [Historical load data](#historical-load-data)
     + [Car charging hold options](#car-charging-hold-options)
     + [Car charging plan options](#car-charging-plan-options)
     + [Calculation options](#calculation-options)
@@ -222,6 +223,8 @@ There are two ways to plan car charging slots
   - Set **car_charging_plan_time** in the config or in HA to the time you want the car ready by
   - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
   - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
+
+NOTE: Multiple cars can be planned with Predbat, see the planned car charging section below in this guide.
 
 ## config.yml settings
 
@@ -385,6 +388,13 @@ Connect to your cars sensors for accurate data:
 
 Control how your battery behaves during car charging:
   - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan, e.g. you are using Octopus Intelligent or you use the car slots in Predbat to control your car charging.
+    - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
+
+- Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
+  - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
+  - Car 0 will be managed by Octopus Intelligent if enabled
+  - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
+  - Each car will have it's own SOC planning sesnor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ### Workarounds
 
@@ -607,6 +617,12 @@ Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
 **pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
 A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost. 
 A value of 0.15 is recommended.
+
+### Historical load data
+
+The historical load data is taken from the load sensor as configured in apps.yaml and the days are selected using **days_previous** and weighted using ***days_previous_weight** in the same configuration file
+
+**switch.predbat_load_filter_modal** when enabled will automatically discard the lowest daily consumption day from the list of days to use (provided you have more than 1 day selected in days_previous). This can be used to ignore a single low usage day in your average calculation.
 
 ### Car charging hold options
 
