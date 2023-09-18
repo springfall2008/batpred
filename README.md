@@ -545,8 +545,9 @@ AppDaemon log files:
 Historical data:
    - https://www.loom.com/share/43f3a71e9a6448c4844a26fbc4f19a3d?sid=8fc24279-4a86-4acc-9fad-e4841d0c01b3
 Configuring Predbat:
-   - https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5
-   - https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36
+   - Configuration of apps.yml: https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5
+   - Configuration inside HA: https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36
+   - Multiple cars: https://www.loom.com/share/c8858d80ea334b2a885f09121dc72650?sid=f37aadc3-d804-4c4f-8c60-a3d0bc43298b
 Charts:
    - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
 Tariffs:
