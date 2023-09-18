@@ -95,6 +95,7 @@ CONFIG_ITEMS = [
     {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
     {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME, 'icon' : 'mdi:clock-end'},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
+    {'name' : 'load_filter_modal',             'friendly_name' : 'Apply modal filter historical load', 'type' : 'switch'},
     {'name' : 'iboost_enable',                 'friendly_name' : 'IBoost enable',                  'type' : 'switch'},
     {'name' : 'iboost_max_energy',             'friendly_name' : 'IBoost max energy',              'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
     {'name' : 'iboost_today',                  'friendly_name' : 'IBoost today',                   'type' : 'input_number', 'min' : 0,   'max' : 5,     'step' : 0.1,  'unit' : 'kwh'},
@@ -1602,6 +1603,47 @@ class PredBat(hass.Hass):
 
         return new_data
 
+    def previous_days_modal_filter(self, data):
+        """
+        Look at the data from previous days and discard the best case one
+        """
+
+        total_points = len(self.days_previous)
+        sum_days = []
+        min_sum = 99999999
+        min_sum_day = 0
+
+        idx = 0
+        for days in self.days_previous:
+            use_days = min(days, self.load_minutes_age)
+            sum_day = 0
+            if use_days > 0:
+                full_days = 24*60*(use_days - 1)
+                for minute in range(0, 24*60):
+                    minute_previous = 24 * 60 - minute + full_days
+                    load_yesterday = self.get_from_incrementing(data, minute_previous)
+                    # Car charging hold
+                    if self.car_charging_hold and self.car_charging_energy:
+                        # Hold based on data
+                        car_energy = self.get_from_incrementing(self.car_charging_energy, minute_previous)
+                        load_yesterday = max(0, load_yesterday - car_energy)
+                    elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold)):
+                        # Car charging hold - ignore car charging in computation based on threshold
+                        load_yesterday = max(load_yesterday - (self.car_charging_rate[0] / 60.0), 0)
+                    sum_day += load_yesterday
+            sum_days.append(self.dp2(sum_day))
+            if sum_day < min_sum:
+                min_sum_day = days
+                min_sum_day_idx = idx
+                min_sum = self.dp2(sum_day)
+            idx += 1
+        
+        self.log("Historical data totals for days {} are {} - min {}".format(self.days_previous, sum_days, min_sum))
+        if self.load_filter_modal and total_points >= 2 and (min_sum_day > 0):
+            self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(self.days_previous)))
+            del self.days_previous[min_sum_day_idx]
+            del self.days_previous_weight[min_sum_day_idx]
+
     def get_historical(self, data, minute):
         """
         Get historical data across N previous days in days_previous array based on current minute 
@@ -1616,9 +1658,7 @@ class PredBat(hass.Hass):
 
         for days in self.days_previous:
             use_days = min(days, self.load_minutes_age)
-            weight = 1.0
-            if this_point < len(self.days_previous_weight):
-                weight = self.days_previous_weight[this_point]                
+            weight = self.days_previous_weight[this_point]                
             if use_days > 0:
                 full_days = 24*60*(use_days - 1)
                 minute_previous = 24 * 60 - minute + full_days
@@ -3590,7 +3630,10 @@ class PredBat(hass.Hass):
         # Days previous
         self.holiday_days_left = self.get_arg('holiday_days_left', 0)
         self.days_previous = self.get_arg('days_previous', [7])
-        self.days_previous_weight = self.get_arg('days_previous_weight', [1])
+        self.days_previous_weight = self.get_arg('days_previous_weight', [1 for i in range(0, len(self.days_previous))])
+        if len(self.days_previous) > len(self.days_previous_weight):
+            # Extend weights with 1 if required
+            self.days_previous_weight += [1 for i in range(0, len(self.days_previous) - len(self.days_previous_weight))]
         if self.holiday_days_left > 0:
             self.days_previous = [1]
             self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
@@ -3677,6 +3720,9 @@ class PredBat(hass.Hass):
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
+
+        # Enable load filtering
+        self.load_filter_modal = self.get_arg('load_filter_modal', False)
 
         # Iboost model
         self.iboost_enable = self.get_arg('iboost_enable', False)
@@ -4092,7 +4138,6 @@ class PredBat(hass.Hass):
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = {}
-        self.car_charging_energy_step = {}
         if 'car_charging_energy' in self.args:
             history = []
             try:
@@ -4103,10 +4148,18 @@ class PredBat(hass.Hass):
 
             if history:
                 self.car_charging_energy = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
-                self.car_charging_energy_step = self.step_data_history(self.car_charging_energy, self.minutes_now, forward=False)
                 self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
+
+        # Apply modal filter to historical data
+        self.previous_days_modal_filter(self.load_minutes)
+        self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
+        # Create step data for car charging energy
+        self.car_charging_energy_step = {}
+        if self.car_charging_energy:
+            self.car_charging_energy_step = self.step_data_history(self.car_charging_energy, self.minutes_now, forward=False)
 
         # Created optimised step data
         load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False)
