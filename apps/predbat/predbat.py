@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.0'
+THIS_VERSION = 'v7.0.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -199,10 +199,10 @@ class Inverter():
         if ivtime:
             try:
                 self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT)
-            except ValueError:
+            except (ValueError, TypeError):
                 try:
                     self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT_OCTOPUS)
-                except ValueError:
+                except (ValueError, TypeError):
                     self.base.log("Warn: Unable to read inverter time string {}".format(ivtime))
                     self.inverter_time = None
 
@@ -1033,7 +1033,7 @@ class PredBat(hass.Hass):
                     got = self.resolve_arg(arg, item, default=default, indirect=True)
                     try:
                         final += float(got)
-                    except ValueError:
+                    except (ValueError, TypeError):
                         self.log("WARN: Return bad value {} from {} arg {}".format(got, item, arg))
                         self.record_status("Warn - Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True) 
                 return final
@@ -1081,7 +1081,7 @@ class PredBat(hass.Hass):
             # Convert to float?
             try:
                 value = float(value)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Return bad float value {} from {} using default {}".format(value, arg, default))
                 self.record_status("Warn - Return bad float value {} from {}".format(value, arg), had_errors=True)
                 value = default
@@ -1089,7 +1089,7 @@ class PredBat(hass.Hass):
             # Convert to int?
             try:
                 value = int(value)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
                 self.record_status("Warn - Return bad int value {} from {}".format(value, arg), had_errors=True)
                 value = default
@@ -1189,7 +1189,7 @@ class PredBat(hass.Hass):
         item = mdata[0]
         try:
             last_updated_time = self.str2time(item['last_updated'])
-        except ValueError:
+        except (ValueError, TypeError):
             last_updated_time = now_utc
 
         self.log("time {} {} {}".format(mdata[0]['last_updated'], mdata[1]['last_updated'], mdata[2]['last_updated']))
@@ -1363,7 +1363,7 @@ class PredBat(hass.Hass):
         for entity_id in entity_ids:
             try:
                 history = self.get_history(entity_id = entity_id, days = self.max_days_previous)
-            except ValueError:
+            except (ValueError, TypeError):
                 history = []
 
             if history:
@@ -1390,7 +1390,7 @@ class PredBat(hass.Hass):
                 item = history[0][0]
                 try:
                     last_updated_time = self.str2time(item['last_updated'])
-                except ValueError:
+                except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time
                 if age_days is None:
@@ -1440,7 +1440,7 @@ class PredBat(hass.Hass):
             try:
                 state = float(item[state_key]) * scale
                 last_updated_time = self.str2time(item[last_updated_key])
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
 
             # Divide down the state if required
@@ -3345,6 +3345,13 @@ class PredBat(hass.Hass):
             minutes = trigger.get('minutes', 60.0)
             minutes = min(max(minutes, 0), first_charge)
             energy = trigger.get('energy', 1.0)
+            try:
+                energy = float(energy)
+            except (ValueError, TypeError):
+                energy = 0.0
+                self.log("WARN: Bad energy value {} provided via trigger {}".format(energy, name))
+                self.record_status("ERROR: Bad energy value {} provided via trigger {}".format(energy, name), had_errors=True)
+                
             for minute in range(0, minutes, step):
                 total_energy += predict_export[minute]
             sensor_name = "binary_sensor." + self.prefix + "_export_trigger_" + name
@@ -3838,7 +3845,7 @@ class PredBat(hass.Hass):
                     planned = self.get_state(entity_id = entity_id, attribute='planned_dispatches')
                 vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
                 vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
                 self.record_status(message="Error - octopus_intelligent_slot not set correctly", had_errors=True)
 
@@ -4142,7 +4149,7 @@ class PredBat(hass.Hass):
             history = []
             try:
                 history = self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("WARN: Unable to fetch history from sensor {} - car_charging_energy may not be set correctly".format(self.get_arg('car_charging_energy', indirect=False)))
                 self.record_status("Error - car_charging_energy not be set correctly", debug=self.get_arg('car_charging_energy', indirect=False), had_errors=True)
 
@@ -4567,7 +4574,7 @@ class PredBat(hass.Hass):
             if type == 'input_number' and ha_value is not None:
                 try:
                     ha_value = float(ha_value)
-                except ValueError:
+                except (ValueError, TypeError):
                     ha_value = None
 
             if type == 'update':
