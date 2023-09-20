@@ -3378,24 +3378,25 @@ class PredBat(hass.Hass):
                 # Ignore disabled windows
                 pass
             elif window_length > 0:
-                predict_minute = int((window_start - minutes_now) / 5) * 5
-                soc_start = predict_soc[predict_minute]
+                predict_minute_start = int((window_start - minutes_now) / 5) * 5
+                predict_minute_end = int((window_end - minutes_now) / 5) * 5
 
-                predict_minute = int((window_end - minutes_now) / 5) * 5
-                soc_end = predict_soc[predict_minute]
-                soc_min = min(soc_start, soc_end)
-                soc_max = max(soc_start, soc_end)
+                if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
+                    soc_start = predict_soc[predict_minute_start]
+                    soc_end = predict_soc[predict_minute_end]
+                    soc_min = min(soc_start, soc_end)
+                    soc_max = max(soc_start, soc_end)
 
-                if self.debug_enable:
-                    self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc_start, soc_end))
+                    if self.debug_enable:
+                        self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
-                if soc_min > charge_limit_best[window_n]:
-                    charge_limit_best[window_n] = max(self.reserve, self.best_soc_min)
-                    self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
-                if soc_max < charge_limit_best[window_n]:
-                    limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max)
-                    charge_limit_best[window_n] = max(limit_soc, self.best_soc_min) 
-                    self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                    if soc_min > charge_limit_best[window_n]:
+                        charge_limit_best[window_n] = max(self.reserve, self.best_soc_min)
+                        self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                    if soc_max < charge_limit_best[window_n]:
+                        limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max)
+                        charge_limit_best[window_n] = max(limit_soc, self.best_soc_min) 
+                        self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
 
             else:
                 self.log("WARN: Clip charge window {} as it's already passed".format(window_n))
@@ -3418,24 +3419,24 @@ class PredBat(hass.Hass):
                 # Ignore disabled windows
                 pass
             elif window_length > 0:
-                predict_minute = int((window_start - minutes_now) / 5) * 5
-                soc_start = predict_soc[predict_minute]
+                predict_minute_start = int((window_start - minutes_now) / 5) * 5
+                predict_minute_end = int((window_end - minutes_now) / 5) * 5
+                if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
+                    soc_start = predict_soc[predict_minute_start]
+                    soc_end = predict_soc[predict_minute_end]
+                    soc_min = min(soc_start, soc_end)
+                    soc_max = max(soc_start, soc_end)
 
-                predict_minute = int((window_end - minutes_now) / 5) * 5
-                soc_end = predict_soc[predict_minute]
-                soc = min(soc_start, soc_end)
-                soc_max = max(soc_start, soc_end)
+                    if self.debug_enable:
+                        self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
-                if self.debug_enable:
-                    self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute, limit, soc_start, soc_end))
-
-                # Discharge level adjustments for safety
-                if soc > limit_soc:
-                    # Give it 10 minute margin
-                    limit_soc = max(limit_soc, soc - 10 * self.battery_rate_max)
-                    discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
-                    if limit != discharge_limits_best[window_n]:
-                        self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                    # Discharge level adjustments for safety
+                    if soc_min > limit_soc:
+                        # Give it 10 minute margin
+                        limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max)
+                        discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
+                        if limit != discharge_limits_best[window_n]:
+                            self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
                 elif soc_max < limit_soc:
                     # Bring down limit to match predicted soc for freeze only mode
                     if self.set_discharge_freeze:
