@@ -2232,7 +2232,10 @@ class PredBat(hass.Hass):
         # Add 12 extra hours to make sure charging period will end
         while minute < (self.forecast_minutes + 24*60):
             if minute not in rates:
-                minute_mod = minute % (24*60)
+                if (minute >= 24*60) and ((minute - 24*60) in rates):
+                    minute_mod = minute - 24*60
+                else:
+                    minute_mod = minute % (24 * 60)
                 if (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
                     rates[minute] = self.rate_max
@@ -2539,6 +2542,7 @@ class PredBat(hass.Hass):
         """
         Publish the export rates
         """
+        window_str = ""
         if self.high_export_rates:
             window_n = 0
             for window in self.high_export_rates:
@@ -2546,7 +2550,9 @@ class PredBat(hass.Hass):
                 rate_high_end = window['end']
                 rate_high_average = window['average']
 
-                self.log("High export rate window:{} - {} to {} @{} !".format(window_n, self.time_abs_str(rate_high_start), self.time_abs_str(rate_high_end), rate_high_average))
+                if window_str:
+                    window_str += ", "
+                window_str += "{} - {} @ {}".format(self.time_abs_str(rate_high_start), self.time_abs_str(rate_high_end), rate_high_average)
 
                 rate_high_start_date = self.midnight_utc + timedelta(minutes=rate_high_start)
                 rate_high_end_date = self.midnight_utc + timedelta(minutes=rate_high_end)
@@ -2566,6 +2572,9 @@ class PredBat(hass.Hass):
                     self.set_state(self.prefix + ".high_rate_export_end_2", state=rate_high_end_date.strftime(time_format_time), attributes = {'date' : rate_high_end_date.strftime(TIME_FORMAT), 'friendly_name' : 'Next+1 high export rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".high_rate_export_cost_2", state=self.dp2(rate_high_average), attributes = {'friendly_name' : 'Next+1 high export rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 window_n += 1
+
+        if window_str:
+            self.log("High export rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
         if not self.high_export_rates and not SIMULATE:
@@ -2699,6 +2708,7 @@ class PredBat(hass.Hass):
         """
         Publish the import rates
         """
+        window_str = ""
         # Output rate info
         if self.low_rates:
             window_n = 0
@@ -2707,7 +2717,9 @@ class PredBat(hass.Hass):
                 rate_low_end = window['end']
                 rate_low_average = window['average']
 
-                self.log("Low import rate window:{} - {} to {} @{} !".format(window_n, self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average))
+                if window_str:
+                    window_str += ", "
+                window_str += "{} - {} @ {}".format(self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average)
 
                 rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
                 rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
@@ -2726,6 +2738,8 @@ class PredBat(hass.Hass):
                     self.set_state(self.prefix + ".low_rate_end_2", state=rate_low_end_date.strftime(time_format_time), attributes = {'date' : rate_low_end_date.strftime(TIME_FORMAT), 'friendly_name' : 'Next+1 low rate end', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
                     self.set_state(self.prefix + ".low_rate_cost_2", state=rate_low_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
                 window_n += 1
+
+        self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
         if not self.low_rates and not SIMULATE:
@@ -3601,6 +3615,76 @@ class PredBat(hass.Hass):
             self.log("Cars {} charging from battery {} planned {}, smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(self.num_cars, self.car_charging_from_battery, self.car_charging_planned, 
                     self.car_charging_plan_smart, self.car_charging_plan_time, self.car_charging_battery_size, self.car_charging_limit, self.car_charging_rate))
 
+    def fetch_pv_datapoints(self, argname):
+        """
+        Get some solcast data from argname argument
+        """
+        data = []
+        total_data = 0
+        total_sensor = 0
+
+        if argname in self.args:
+            # Found out if detailedForcast is present or not, then set the attribute name
+            # in newer solcast plugings only forecast is used
+            attribute = 'detailedForecast'
+            entity_id = self.get_arg(argname, None, indirect=False)
+            if entity_id:
+                result = self.get_state(entity_id = entity_id, attribute=attribute)
+                if not result:
+                    attribute = 'forecast'
+            try:
+                data    = self.get_state(entity_id = self.get_arg(argname, indirect=False), attribute=attribute)
+            except (ValueError, TypeError):
+                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))                
+                self.record_status("Error - {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
+
+            # Solcast new vs old version
+            # check the total vs the sum of 30 minute slots and work out scale factor
+            expected = 0.0
+            factor = 1.0
+            if data:
+                for entry in data:
+                    total_data += entry['pv_estimate']
+                total_data = self.dp2(total_data)
+                total_sensor = self.dp2(self.get_arg(argname, 1.0))
+        return data, total_data, total_sensor
+
+    def fetch_pv_forecast(self):
+        """
+        Fetch the PV Forecast data from Solcast
+        """
+        pv_forecast_minute = {}
+        pv_forecast_minute10 = {}
+        pv_forecast_data = []
+        pv_forecast_total_data = 0
+        pv_forecast_total_sensor = 0
+
+        # Fetch data from each sensor
+        for argname in ['pv_forecast_today', 'pv_forecast_tomorrow', 'pv_forecast_d3', 'pv_forecast_d4']:
+            data, total_data, total_sensor = self.fetch_pv_datapoints(argname)
+            self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
+            pv_forecast_data += data
+            pv_forecast_total_data += total_data
+            pv_forecast_total_sensor += total_sensor
+
+        # Work out data scale factor so it adds up (New Solcast is in kw but old was kWH)
+        factor = 1.0
+        if pv_forecast_total_data > 0.0:
+            factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor)
+        # We want to divide the data into single minute slots
+        divide_by = self.dp2(30 * factor)
+
+        if factor != 1.0 and factor != 2.0:
+            self.log("WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} KWh, this is unexpected and hence data maybe misleading".format(pv_forecast_total_data, pv_forecast_total_sensor))
+
+        if pv_forecast_data:
+            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
+            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
+        else:
+            self.log("WARN: No solar data has been configured.")
+        
+        return pv_forecast_minute, pv_forecast_minute10
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -4095,54 +4179,7 @@ class PredBat(hass.Hass):
         self.log('Best discharge window {}'.format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
-        pv_forecast_minute = {}
-        pv_forecast_minute10 = {}
-        pv_forecast_data = []
-        if 'pv_forecast_today' in self.args:
-            # Found out if detailedForcast is present or not, then set the attribute name
-            # in newer solcast plugings only forecast is used
-            attribute = 'detailedForecast'
-            entity_id = self.get_arg('pv_forecast_today', None, indirect=False)
-            if entity_id:
-                result = self.get_state(entity_id = entity_id, attribute=attribute)
-                if not result:
-                    attribute = 'forecast'
-            try:
-                pv_forecast_data    += self.get_state(entity_id = self.get_arg('pv_forecast_today', indirect=False), attribute=attribute)
-            except (ValueError, TypeError):
-                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_today".format(self.get_arg('pv_forecast_today', indirect=False)))                
-                self.record_status("Error - pv_forecast_today not be set correctly", debug=self.get_arg('pv_forecast_today', indirect=False), had_errors=True)
-
-            # Solcast new vs old version
-            # check the total vs the sum of 30 minute slots and work out scale factor
-            sum = 0
-            expected = 0.0
-            factor = 1.0
-            if pv_forecast_data:
-                for entry in pv_forecast_data:
-                    sum += entry['pv_estimate']
-                sum = self.dp2(sum)
-                expected = self.dp2(self.get_arg('pv_forecast_today', 1.0))
-            if expected > 0.0:
-                factor = self.dp2(sum / expected)
-            divide_by = 30 * factor
-
-            # Get the next few days worth of data too
-            try:
-                if 'pv_forecast_tomorrow' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_tomorrow', indirect=False), attribute=attribute)
-                if 'pv_forecast_d3' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d3', indirect=False), attribute=attribute)
-                if 'pv_forecast_d4' in self.args:
-                    pv_forecast_data += self.get_state(entity_id = self.get_arg('pv_forecast_d4', indirect=False), attribute=attribute)
-            except (ValueError, TypeError):
-                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of pv_forecast_tomorrow or d2/d3".format(self.get_arg('pv_forecast_tomorrow', indirect=False)))
-                self.record_status("Error - pv_forecast_tomorrow or d3/d4 not be set correctly", debug=self.get_arg('pv_forecast_tomorrow', indirect=False), had_errors=True)
-
-            pv_forecast_minute = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate' + str(self.get_arg('pv_estimate', '')), 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
-            pv_forecast_minute10 = self.minute_data(pv_forecast_data, self.forecast_days + 1, self.midnight_utc, 'pv_estimate10', 'period_start', backwards=False, divide_by=divide_by, scale=self.pv_scaling)
-        else:
-            self.log("WARN: No solar data has been configured.")
+        pv_forecast_minute, pv_forecast_minute10 = self.fetch_pv_forecast()
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = {}
