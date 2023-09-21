@@ -19,7 +19,7 @@ pred_bat:
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
   geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
-
+  
   #
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
@@ -30,6 +30,8 @@ pred_bat:
     - sensor.givtcp_{geserial}_import_energy_today_kwh
   export_today: 
     - sensor.givtcp_{geserial}_export_energy_today_kwh
+  pv_today:
+    - sensor.givtcp_{geserial}_pv_energy_today_kwh
   #
   # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
   # this is usually less efficent and of course prone to internet downtime, but could be useful if you lost your GivTCP data
