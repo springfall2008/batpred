@@ -1158,7 +1158,7 @@ class PredBat(hass.Hass):
         mdata = []
         days_prev = 0
         while days_prev <= self.max_days_previous:
-            time_value = now_utc - timedelta(days=self.max_days_previous - days_prev)
+            time_value = now_utc - timedelta(days=(self.max_days_previous - days_prev))
             datestr = time_value.strftime("%Y-%m-%d")
             url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=1024".format(geserial, datestr)
             while url:
@@ -1172,15 +1172,17 @@ class PredBat(hass.Hass):
 
                 for item in darray:
                     timestamp = item['time']
-                    consumption = item['today']['consumption']
-                    dimport = item['today']['grid']['import']
-                    dexport = item['today']['grid']['export']
+                    consumption = item['total']['consumption']
+                    dimport = item['total']['grid']['import']
+                    dexport = item['total']['grid']['export']
+                    dpv = item['total']['solar']
 
                     new_data = {}
                     new_data['last_updated'] = timestamp
                     new_data['consumption'] = consumption
                     new_data['import'] = dimport
                     new_data['export'] = dexport
+                    new_data['pv'] = dpv
                     mdata.append(new_data)
                 url = data['links'].get('next', None)
             days_prev += 1
@@ -1192,14 +1194,13 @@ class PredBat(hass.Hass):
         except (ValueError, TypeError):
             last_updated_time = now_utc
 
-        self.log("time {} {} {}".format(mdata[0]['last_updated'], mdata[1]['last_updated'], mdata[2]['last_updated']))
-
         age = now_utc - last_updated_time
         self.load_minutes_age = age.days
 
         self.load_minutes = self.minute_data(mdata, self.max_days_previous, now_utc, 'consumption', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True)
         self.import_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'import', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.export_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'export', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
+        self.pv_today = self.minute_data(mdata, self.max_days_previous, now_utc, 'pv', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True)
         self.log("Downloaded {} datapoints from GE going back {} days".format(len(self.load_minutes), self.load_minutes_age))
         return True
 
