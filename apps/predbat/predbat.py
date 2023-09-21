@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.0.2'
+THIS_VERSION = 'v7.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1787,20 +1787,24 @@ class PredBat(hass.Hass):
         charge_has_run = False
         charge_has_started = False
         discharge_has_run = False
-        export_kwh = 0
-        import_kwh = 0
+        export_kwh = self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0) # Export since midnight
+        export_kwh_h0 = export_kwh
+        import_kwh = self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0) # Import since midnight
+        import_kwh_h0 = import_kwh
+        load_kwh = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0) # Load since midnight
+        load_kwh_h0 = load_kwh
+        pv_kwh = self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0) # PV since midnight
+        pv_kwh_h0 = pv_kwh
+        iboost_today_kwh = self.iboost_today
         import_kwh_house = 0
         import_kwh_battery = 0
-        final_export_kwh = 0
-        final_import_kwh = 0
-        final_import_kwh_house = 0
-        final_import_kwh_battery = 0
-        iboost_today_kwh = self.iboost_today
+        final_export_kwh = export_kwh
+        final_import_kwh = import_kwh
+        final_load_kwh = load_kwh
+        final_pv_kwh = pv_kwh
         final_iboost_kwh = iboost_today_kwh
-        load_kwh = 0
-        final_load_kwh = 0
-        pv_kwh = 0
-        final_pv_kwh = 0
+        final_import_kwh_house = import_kwh_house
+        final_import_kwh_battery = import_kwh_battery
         metric = self.cost_today_sofar
         final_soc = soc
         final_metric = metric
@@ -2142,7 +2146,7 @@ class PredBat(hass.Hass):
                 if car_n > 0:
                     postfix = "_" + str(car_n)
                 self.set_state(self.prefix + ".car_soc" + postfix, state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0), attributes = {'results' : predict_car_soc_time[car_n], 'friendly_name' : 'Car ' + str(car_n) + ' battery SOC', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:battery'})
-            self.set_state(self.prefix + ".soc_kw_h0", state=self.dp3(self.predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
+            self.set_state(self.prefix + ".soc_kw_h0", state=self.dp3(self.predict_soc[0]), attributes = {'friendly_name' : 'Current SOC kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".soc_kw", state=self.dp3(final_soc), attributes = {'results' : predict_soc_time, 'friendly_name' : 'Predicted SOC kwh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".battery_power", state=self.dp3(final_soc), attributes = {'results' : predict_battery_power, 'friendly_name' : 'Predicted Battery Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
             self.set_state(self.prefix + ".pv_power", state=self.dp3(final_soc), attributes = {'results' : predict_pv_power, 'friendly_name' : 'Predicted PV Power', 'state_class': 'measurement', 'unit_of_measurement': 'kw', 'icon' : 'mdi:battery'})
@@ -2151,9 +2155,13 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".soc_min_kwh", state=self.dp3(soc_min), attributes = {'time' : self.time_abs_str(soc_min_minute), 'friendly_name' : 'Predicted minimum SOC best', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:battery-arrow-down-outline'})
             self.publish_charge_limit(charge_limit, charge_window, charge_limit_percent, best=False)
             self.set_state(self.prefix + ".export_energy", state=self.dp3(final_export_kwh), attributes = {'results' : export_kwh_time, 'export_until_charge_kwh' : export_to_first_charge, 'friendly_name' : 'Predicted exports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
+            self.set_state(self.prefix + ".export_energy_h0", state=self.dp3(export_kwh_h0), attributes = {'friendly_name' : 'Current export kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-export'})
             self.set_state(self.prefix + ".load_energy", state=self.dp3(final_load_kwh), attributes = {'results' : load_kwh_time, 'friendly_name' : 'Predicted load', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
+            self.set_state(self.prefix + ".load_energy_h0", state=self.dp3(load_kwh_h0), attributes = {'friendly_name' : 'Current load kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon' : 'mdi:home-lightning-bolt'})
             self.set_state(self.prefix + ".pv_energy", state=self.dp3(final_pv_kwh), attributes = {'results' : pv_kwh_time, 'friendly_name' : 'Predicted PV', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
+            self.set_state(self.prefix + ".pv_energy_h0", state=self.dp3(pv_kwh_h0), attributes = {'friendly_name' : 'Current PV kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:solar-power'})
             self.set_state(self.prefix + ".import_energy", state=self.dp3(final_import_kwh), attributes = {'results' : import_kwh_time, 'friendly_name' : 'Predicted imports', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
+            self.set_state(self.prefix + ".import_energy_h0", state=self.dp3(import_kwh_h0), attributes = {'friendly_name' : 'Current import kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state(self.prefix + ".import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state(self.prefix + ".import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.log("Battery has {} hours left - now at {}".format(hours_left, self.dp2(self.soc_kw)))
@@ -2996,6 +3004,7 @@ class PredBat(hass.Hass):
         self.debug_enable = False
         self.import_today = {}
         self.export_today = {}
+        self.pv_today = {}
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_window = []
@@ -3842,6 +3851,7 @@ class PredBat(hass.Hass):
         self.cost_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
+        self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
 
@@ -3869,13 +3879,19 @@ class PredBat(hass.Hass):
             if 'import_today' in self.args:
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
             else:
-                self.log("WARN: You have not set import_today, you will have no previous import data")
+                self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
             else:
-                self.log("WARN: You have not set export_today, you will have no previous export data")
+                self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
+
+            # PV today data 
+            if 'pv_today' in self.args:
+                self.pv_today = self.minute_data_import_export(now_utc, 'pv_today')
+            else:
+                self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
         if 'rates_import_octopus_url' in self.args:
             # Fixed URL for rate import
