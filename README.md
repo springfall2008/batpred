@@ -252,9 +252,10 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
   It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
   
-  - **load_today** - GivTCP Entity name for the house load in kwh today (must be incrementing)
+  - **load_today**   - GivTCP Entity name for the house load in kwh today (must be incrementing)
   - **import_today** - GivTCP Imported energy today in Kwh (incrementing)
   - **export_today** - GivTCP Exported energy today in Kwh (incrementing)
+  - **pv_today**     - GivTCP PV energy today in Kwh (incrementing)
 
 #### GivEnergy Cloud Data
 
