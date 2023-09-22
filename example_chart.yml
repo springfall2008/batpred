@@ -274,6 +274,26 @@ now:
 yaxis:
   - min: 0
 series:
+  - entity: predbat.load_energy_h0
+    stroke_width: 1
+    curve: smooth
+    name: load actual
+    extend_to: now
+  - entity: predbat.import_energy_h0
+    stroke_width: 1
+    curve: smooth
+    name: import actual
+    extend_to: now
+  - entity: predbat.export_energy_h0
+    stroke_width: 1
+    curve: smooth
+    name: export actual
+    extend_to: now
+  - entity: predbat.pv_energy_h0
+    stroke_width: 1
+    curve: smooth
+    name: PV actual
+    extend_to: now
   - entity: predbat.best_load_energy
     stroke_width: 1
     curve: smooth
