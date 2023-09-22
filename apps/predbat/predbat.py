@@ -1500,8 +1500,8 @@ class PredBat(hass.Hass):
                     mdata[minute] = state
                 else:
                     if smoothing:
-                        # Reset to zero?
-                        if state < last_state and (state == 0.0):
+                        # Reset to zero, sometimes not exactly zero
+                        if state < last_state and (state <= (last_state / 10.0)):
                             while minute < minutes_to:
                                 mdata[minute] = state
                                 minute += 1
