@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.1'
+THIS_VERSION = 'v7.1.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1341,7 +1341,7 @@ class PredBat(hass.Hass):
         pdata = self.minute_data(mdata, self.forecast_days + 1, self.midnight_utc, 'value_inc_vat', 'valid_from', backwards=False, to_key='valid_to')
         return pdata
 
-    def mintes_to_time(self, updated, now):
+    def minutes_to_time(self, updated, now):
         """
         Compute the number of minutes between a time (now) and the updated time
         """
@@ -2352,8 +2352,8 @@ class PredBat(hass.Hass):
             rate = this_rate.get('rate', 0)
 
             # Time in minutes
-            start_minutes = max(self.mintes_to_time(start, midnight), 0)
-            end_minutes   = min(self.mintes_to_time(end, midnight), 24*60-1)
+            start_minutes = max(self.minutes_to_time(start, midnight), 0)
+            end_minutes   = min(self.minutes_to_time(end, midnight), 24*60-1)
 
             # Make end > start
             if end_minutes <= start_minutes:
@@ -2361,7 +2361,7 @@ class PredBat(hass.Hass):
 
             # Adjust for date if specified
             if date:
-                delta_minutes = self.mintes_to_time(date, self.midnight)
+                delta_minutes = self.minutes_to_time(date, self.midnight)
                 start_minutes += delta_minutes
                 end_minutes += delta_minutes
 
@@ -2456,8 +2456,8 @@ class PredBat(hass.Hass):
                 start = datetime.strptime(slot['startDtUtc'], TIME_FORMAT_OCTOPUS)
                 end = datetime.strptime(slot['endDtUtc'], TIME_FORMAT_OCTOPUS)
             source = slot.get('source', '')
-            start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
-            end_minutes   = min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes)
+            start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
+            end_minutes   = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
             slot_minutes = end_minutes - start_minutes
             slot_hours = slot_minutes / 60.0
 
@@ -2694,8 +2694,8 @@ class PredBat(hass.Hass):
                 source = slot.get('source', '')
                 # Ignore bump-charge slots as their cost won't change
                 if source != 'bump-charge':
-                    start_minutes = max(self.mintes_to_time(start, self.midnight_utc), 0)
-                    end_minutes   = max(min(self.mintes_to_time(end, self.midnight_utc), self.forecast_minutes), 0)
+                    start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
+                    end_minutes   = max(min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes), 0)
                     if end_minutes > start_minutes:
                         self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min))
                         for minute in range(start_minutes, end_minutes):
@@ -2928,7 +2928,7 @@ class PredBat(hass.Hass):
 
             if charge_limit:
                 # Ignore charge windows beyond 24 hours away as they won't apply right now
-                if charge_window[0]['end'] < (24*60 + self.minutes_now):
+                if charge_window[0]['end'] <= (24*60 + self.minutes_now):
                     charge_limit_first = charge_limit[0]
                     charge_limit_percent_first = charge_limit_percent[0]
                     charge_start_minutes = charge_window[0]['start']
@@ -3306,7 +3306,6 @@ class PredBat(hass.Hass):
         id_list = []
         for window in window_with_id:
             id_list.append(window['id'])
-        self.log("Sorted window list {} ids {}".format(window_with_id, id_list))
         return id_list
 
     def remove_intersecting_windows(self, charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
@@ -3544,7 +3543,7 @@ class PredBat(hass.Hass):
                     self.discharge_window_best[window_n]['start'] = best_start
 
                     if self.debug_enable or 1:
-                        self.log("Best discharge limit window {} time {} - {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'], best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                        self.log("Best discharge limit window {} time {} - {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.time_abs_str(self.discharge_window_best[window_n]['start']), self.time_abs_str(self.discharge_window_best[window_n]['end']), best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
@@ -4345,7 +4344,7 @@ class PredBat(hass.Hass):
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
-                    self.log("Include original charge start {} with our start which is {}".format(inverter.charge_start_time_minutes, minutes_start))
+                    self.log("Include original charge start {}, keeping this instead of new start {}".format(self.time_abs_str(inverter.charge_start_time_minutes), self.time_abs_str(minutes_start)))
                     minutes_start = inverter.charge_start_time_minutes
 
                 # Check if end is within 24 hours of now and end is in the future
@@ -4400,7 +4399,7 @@ class PredBat(hass.Hass):
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
-                    self.log("Include original discharge start {} with our start which is {}".format(inverter.discharge_start_time_minutes, minutes_start))
+                    self.log("Include original discharge start {} with our start which is {}".format(self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)))
                     minutes_start = inverter.discharge_start_time_minutes
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
