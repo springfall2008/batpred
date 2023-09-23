@@ -589,6 +589,11 @@ class Inverter():
             if self.rest_data:
                 old_inverter_mode = self.rest_data['Control']['Mode']
             else:
+                # Inverter mode
+                if changed_start_end and not self.rest_api:
+                    # XXX: Workaround for GivTCP window state update time to take effort
+                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+                    time.sleep(30)
                 old_inverter_mode = self.base.get_arg('inverter_mode', index=self.id)
 
         # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
@@ -606,12 +611,6 @@ class Inverter():
             if SIMULATE:
                 self.base.sim_inverter_mode = new_inverter_mode
             else:
-                # Inverter mode
-                if changed_start_end and not self.rest_api:
-                    # XXX: Workaround for GivTCP window state update time to take effort
-                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-                    time.sleep(30)
-
                 if self.rest_api:
                     self.rest_setBatteryMode(new_inverter_mode)
                 else:
