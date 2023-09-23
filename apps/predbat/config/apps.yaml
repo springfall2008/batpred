@@ -46,6 +46,9 @@ pred_bat:
   #
   num_inverters: 1
   #
+  # Run balance inverters every N seconds - only for multi-inverter
+  # balance_inverters: 30
+  #
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
   # Set one per inverter
   # If using Docker then change homeassistant.local to the Docker IP address
