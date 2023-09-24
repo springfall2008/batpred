@@ -64,7 +64,10 @@ pred_bat:
   discharge_rate: 
     - number.givtcp_{geserial}_battery_discharge_rate
     - number.givtcp2_{geserial2}_battery_discharge_rate
-  soc_kw: 
+  battery_power: 
+    - number.givtcp_{geserial}_battery_power
+    - number.givtcp2_{geserial2}_battery_power
+  soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
     - sensor.givtcp2_{geserial2}_soc_kwh
   soc_max: 
