@@ -49,6 +49,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
+    + [Balance Inverters] (#balance-inverters)
     + [Triggers](#triggers)
     + [Holiday mode](#holiday-mode)
   * [Configuration guide](#configuration-guide)
@@ -296,6 +297,7 @@ Control per inverter (only used if REST isn't set):
   - **charge_end_time** - GivTCP battery charge end time entity
   - **charge_rate** - GivTCP battery charge rate entity in watts 
   - **discharge_rate** - GivTCP battery discharge max rate entity in watts
+  - **battery_power** - GivTCP current battery power in watts
   - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
   - **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
   - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
@@ -405,6 +407,21 @@ Control how your battery behaves during car charging:
   - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time (see apps.yml)
   - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
   - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
+
+### Balance Inverters
+
+CAUTION: This is experimental code - needs beta testing and debugging. Only use this if you want to help with the testing, please file github tickets for issues.
+
+When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
+When enabled balance inverters tries to recover this situation by disabiling either charging or discharging from one of the batteries until they re-align.
+
+The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+
+Enable **switch.predbat_balance_inverters_enable** switch in Home Assistant to enable this feature.
+
+**switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
+**switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
+**switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
 
 ### Triggers
 
