@@ -49,7 +49,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Car charging filtering](#car-charging-filtering)
     + [Planned car charging](#planned-car-charging)
     + [Workarounds](#workarounds)
-    + [Balance Inverters] (#balance-inverters)
+    + [Balance Inverters](#balance-inverters)
     + [Triggers](#triggers)
     + [Holiday mode](#holiday-mode)
   * [Configuration guide](#configuration-guide)
