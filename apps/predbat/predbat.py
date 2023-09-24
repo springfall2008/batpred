@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.1.1'
+THIS_VERSION = 'v7.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -90,6 +90,10 @@ CONFIG_ITEMS = [
     {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
     {'name' : 'set_reserve_hold',              'friendly_name' : 'Set Reserve Hold',               'type' : 'switch'},
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
+    {'name' : 'balance_inverters_enable',      'friendly_name' : 'Balance Inverters Enable (Experimental)', 'type' : 'switch'},
+    {'name' : 'balance_inverters_charge',      'friendly_name' : 'Balance Inverters for charging',          'type' : 'switch'},
+    {'name' : 'balance_inverters_discharge',   'friendly_name' : 'Balance Inverters for discharge',         'type' : 'switch'},
+    {'name' : 'balance_inverters_crosscharge', 'friendly_name' : 'Balance Inverters for cross-charging',    'type' : 'switch'},
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch', 'icon' : 'mdi:bug-outline'},
     {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
     {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
@@ -150,6 +154,7 @@ class Inverter():
         self.reserve_percent_current = 4.0
         self.battery_rate_max = 0
         self.battery_rate_max_abs = 0
+        self.battery_power = 0
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
@@ -233,8 +238,6 @@ class Inverter():
             self.reserve_percent  = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
-        self.base.log("Inverter {} reserve is {} and current setting {}".format(self.id, self.reserve_percent, self.reserve_percent_current))
-
         # Max inverter rate override
         if 'inverter_limit' in self.base.args:
             self.inverter_limit = self.base.get_arg('inverter_limit', self.inverter_limit, index=self.id) / (1000 * 60.0)
@@ -243,7 +246,9 @@ class Inverter():
         # Can't export more than the inverter limit
         self.export_limit = min(self.export_limit, self.inverter_limit)
 
-        self.base.log("New Inverter {} with soc_max {} nominal_capacity {} battery rate kw {} ac limit {} export limit {} reserve {} %".format(self.id, self.base.dp2(self.soc_max), self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent))
+        # Log inveter details
+        self.base.log("New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate {} kw ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(self.id, self.base.dp2(self.soc_max), 
+            self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max * 60.0), self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent, self.reserve_percent_current))
         
     def update_status(self, minutes_now):
         """
@@ -277,7 +282,14 @@ class Inverter():
 
         self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
 
-        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} kw discharge rate kw {}".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0))
+        if self.rest_data and ('Power' in self.rest_data):
+            pdetails = self.rest_data['Power']
+            if 'Power' in pdetails:
+                self.battery_power = float(pdetails['Power']['Battery_Power'])
+        else:
+            self.battery_power = self.base.get_arg('battery_power', default=0.0, index=self.id)
+
+        self.base.log("Inverter {} SOC: {} kw {} % Charge rate {} w discharge rate w {} current power {} w".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_max*60*1000, self.discharge_rate_max*60*1000.0, self.battery_power))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -581,6 +593,11 @@ class Inverter():
             if self.rest_data:
                 old_inverter_mode = self.rest_data['Control']['Mode']
             else:
+                # Inverter mode
+                if changed_start_end and not self.rest_api:
+                    # XXX: Workaround for GivTCP window state update time to take effort
+                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+                    time.sleep(30)
                 old_inverter_mode = self.base.get_arg('inverter_mode', index=self.id)
 
         # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
@@ -598,12 +615,6 @@ class Inverter():
             if SIMULATE:
                 self.base.sim_inverter_mode = new_inverter_mode
             else:
-                # Inverter mode
-                if changed_start_end and not self.rest_api:
-                    # XXX: Workaround for GivTCP window state update time to take effort
-                    self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-                    time.sleep(30)
-
                 if self.rest_api:
                     self.rest_setBatteryMode(new_inverter_mode)
                 else:
@@ -3062,6 +3073,10 @@ class PredBat(hass.Hass):
         self.load_minutes_age = 0
         self.battery_capacity_nominal = False
         self.releases = {}
+        self.balance_inverters_enable = False
+        self.balance_inverters_charge = True
+        self.balance_inverters_discharge = True
+        self.balance_inverters_crosscharge = True
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = 0, end_record=None):
         """
@@ -3713,6 +3728,117 @@ class PredBat(hass.Hass):
         
         return pv_forecast_minute, pv_forecast_minute10
 
+    def balance_inverters(self):
+        """
+        Attempt to balance multiple inverters
+        """
+        # Charge rate resets
+        balance_reset_charge = {}
+        balance_reset_discharge = {}
+
+        self.log("BALANCE: Enabled balance charge {} discharge {} crosscharge {}".format(self.balance_inverters_charge, self.balance_inverters_discharge, self.balance_inverters_crosscharge))
+
+        # For each inverter get the details
+        skew = self.get_arg('clock_skew', 0)
+        local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
+        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
+        now = datetime.now() + timedelta(minutes=skew)
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        minutes_now = int((now - midnight).seconds / 60)
+        num_inverters = int(self.get_arg('num_inverters', 1))
+        self.now_utc = now_utc
+        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = int((now - self.midnight).seconds / 60)
+        self.minutes_to_midnight = 24*60 - self.minutes_now
+
+        inverters = []
+        for id in range(0, num_inverters):
+            inverter = Inverter(self, id)
+            inverter.update_status(minutes_now)
+            inverters.append(inverter)
+
+        out_of_balance = False     # Are all the SOC % the same?
+        total_battery_power = 0    # Total battery power across inverters
+        total_max_rate = 0         # Total battery max rate across inverters
+        total_charge_rates = 0     # Current total charge rates
+        total_discharge_rates = 0  # Current total discharge rates
+        socs = []
+        reserves = []
+        battery_powers = []
+        battery_max_rates = []
+        charge_rates = []
+        discharge_rates = []
+        for inverter in inverters:
+            socs.append(inverter.soc_percent)
+            reserves.append(inverter.reserve_current)
+            if inverter.soc_percent != inverters[0].soc_percent:
+                out_of_balance = True
+            battery_powers.append(inverter.battery_power)
+            total_battery_power += inverter.battery_power
+            battery_max_rates.append(inverter.battery_rate_max * 60*1000.0)
+            charge_rates.append(inverter.charge_rate_max * 60*1000.0)
+            total_charge_rates += inverter.charge_rate_max * 60*1000.0
+            discharge_rates.append(inverter.discharge_rate_max * 60*1000.0)
+            total_discharge_rates += inverter.discharge_rate_max * 60*1000.0
+            total_max_rate += inverter.battery_rate_max * 60*1000.0
+        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, total_charge_rates, discharge_rates, total_discharge_rates))
+
+        # Are we discharging
+        during_discharge = total_battery_power >= 0.0
+        during_charge = total_battery_power < 0.0
+
+        # Work out min and max socs
+        soc_min = min(socs)
+        soc_max = max(socs)
+
+        # Work out which inverters have low and high Soc
+        soc_low = []
+        soc_high = []
+        for inverter in inverters:
+            soc_low.append(inverter.soc_percent < soc_max)
+            soc_high.append(inverter.soc_percent > soc_min)
+        
+        above_reserve = [] # Are the inverters above the reserve
+        can_power_house = [] # Could this inverter power the house alone?
+        power_enough_discharge = [] # Inverter drawing enough power to be worth balancing
+        power_enough_charge = []    # Inverter drawing enough power to be worth balancing
+        for id in range(0, num_inverters):
+            above_reserve.append((socs[id] - reserves[id]) >= 4.0)
+            can_power_house.append((total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power)
+            power_enough_discharge.append(battery_powers[id] >= 50.0)
+            power_enough_charge.append(inverters[id].battery_power <= -50.0)
+
+        self.log("BALANCE: out_of_balance {} above_reserve {} can_power_house {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(out_of_balance, above_reserve, can_power_house, power_enough_discharge, power_enough_charge, soc_low, soc_high))
+        for this_inverter in range(0, num_inverters):
+            other_inverter = (this_inverter + 1) % num_inverters
+            if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and power_enough_discharge[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter]:
+                self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
+                balance_reset_discharge[id] = True
+                inverters[this_inverter].adjust_discharge_rate(0)
+            elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and power_enough_charge[this_inverter]:
+                self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
+                balance_reset_charge[id] = True
+                inverters[this_inverter].adjust_charge_rate(0)
+            elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
+                self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
+                balance_reset_charge[id] = True
+                inverters[this_inverter].adjust_charge_rate(0)
+            elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
+                self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
+                balance_reset_charge[id] = True
+                inverters[this_inverter].adjust_charge_rate(0)
+
+        for id in range(0, num_inverters):
+            if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id]==0:
+                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.charge_rate_max*60*1000))
+                inverters[id].adjust_charge_rate(inverter.charge_rate_max*60*1000)
+            if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id]==0:
+                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverter.discharge_rate_max*60*1000))
+                inverters[id].adjust_discharge_rate(inverter.discharge_rate_max*60*1000)
+        
+        self.log("BALANCE: Completed this run")
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -3840,6 +3966,10 @@ class PredBat(hass.Hass):
         self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
         self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
+        self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
+        self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
+        self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
+        self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
 
         # Enable load filtering
         self.load_filter_modal = self.get_arg('load_filter_modal', False)
@@ -4837,6 +4967,15 @@ class PredBat(hass.Hass):
             else:
                 self.update_time_loop(None)
 
+            # Balance inverters
+            run_every_balance = self.get_arg('balance_inverters_seconds', 60)
+            if run_every_balance > 0:
+                self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
+                seconds_offset_balance = seconds_now % run_every_balance
+                seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15 # Offset to start after Predbat update task
+                next_time_balance = midnight + timedelta(seconds=seconds_next_balance)
+                self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
+
     def update_time_loop(self, cb_args):
         """
         Called every 15 seconds
@@ -4870,4 +5009,15 @@ class PredBat(hass.Hass):
             finally:
                 self.prediction_started = False
             self.prediction_started = False
- 
+
+    def run_time_loop_balance(self, cb_args):
+        """
+        Called every N second for balance inverters
+        """
+        if not self.prediction_started and self.balance_inverters_enable:
+            try:
+                self.balance_inverters()
+            except Exception as e:
+                self.log("ERROR: Exception raised {}".format(e))
+                self.record_status('ERROR: Exception raised {}'.format(e))
+                raise e
