@@ -3769,7 +3769,7 @@ class PredBat(hass.Hass):
         battery_max_rates = []
         charge_rates = []
         discharge_rates = []
-        if inverter in inverters:
+        for inverter in inverters:
             socs.append(inverter.soc_percent)
             reserves.append(inverter.reserve_current)
             if inverter.soc_percent != inverters[0].soc_percent:
@@ -3782,6 +3782,7 @@ class PredBat(hass.Hass):
             discharge_rates.append(inverter.discharge_rate_max * 60*1000.0)
             total_discharge_rates += inverter.discharge_rate_max * 60*1000.0
             total_max_rate += inverter.battery_rate_max * 60*1000.0
+        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, total_charge_rates, discharge_rates, total_discharge_rates))
 
         # Are we discharging
         during_discharge = total_battery_power >= 0.0
@@ -3794,7 +3795,7 @@ class PredBat(hass.Hass):
         # Work out which inverters have low and high Soc
         soc_low = []
         soc_high = []
-        if inverter in inverters:
+        for inverter in inverters:
             soc_low.append(inverter.soc_percent < soc_max)
             soc_high.append(inverter.soc_percent > soc_min)
         
@@ -3808,24 +3809,22 @@ class PredBat(hass.Hass):
             power_enough_discharge.append(battery_powers[id] >= 50.0)
             power_enough_charge.append(inverters[id].battery_power <= -50.0)
 
-        self.log("BALANCE: socs {} reserves {} powers {} total_power {} total_max_rate {} above_reserve {} can_power_house {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(socs, reserves, battery_powers, total_battery_power, total_max_rate, above_reserve, can_power_house, power_enough_discharge, power_enough_charge, soc_low, soc_high))
-        self.log("BALANCE: charge rates {} total {} discharge rates {} total {}".format(charge_rates, total_charge_rates, discharge_rates, total_discharge_rates))
+        self.log("BALANCE: out_of_balance {} above_reserve {} can_power_house {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(out_of_balance, above_reserve, can_power_house, power_enough_discharge, power_enough_charge, soc_low, soc_high))
         for this_inverter in range(0, num_inverters):
             other_inverter = (this_inverter + 1) % num_inverters
             if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and power_enough_discharge[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter]:
                 self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
-                old_rate = inverter.discharge_rate_max
                 balance_reset_discharge[id] = True
                 inverters[this_inverter].adjust_discharge_rate(0)
-            if self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and power_enough_charge[this_inverter]:
+            elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
                 inverters[this_inverter].adjust_charge_rate(0)
-            if self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter] :
+            elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
                 inverters[this_inverter].adjust_charge_rate(0)
-            if self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter] :
+            elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
                 inverters[this_inverter].adjust_charge_rate(0)
