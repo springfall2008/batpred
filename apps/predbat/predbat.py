@@ -2512,19 +2512,14 @@ class PredBat(hass.Hass):
                         break
         return load_amount
 
-    def rate_scan_export(self, rates):
+    def rate_scan_export(self, rates, print=True):
         """
         Scan the rates and work out min/max
         """
 
-        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
-        self.log("Export rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
-
-        self.rate_export_min = rate_min
-        self.rate_export_max = rate_max
-        self.rate_export_min_minute = rate_min_minute
-        self.rate_export_max_minute = rate_max_minute
-        self.rate_export_average = rate_average
+        self.rate_export_min, self.rate_export_max, self.rate_export_average, self.rate_export_min_minute, self.rate_export_max_minute = self.rate_minmax(rates)
+        if print:
+            self.log("Export rates min {} max {} average {}".format(self.rate_export_min, self.rate_export_max, self.rate_export_average))
         return rates
 
     def publish_car_plan(self):
@@ -2630,8 +2625,8 @@ class PredBat(hass.Hass):
         rate_n = 0
 
         # Scan rates and find min/max/average
-        minute = self.minutes_now
-        while minute < self.forecast_minutes + self.minutes_now:
+        rate = rates.get(self.minutes_now, 0)
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
             if minute in rates:
                 rate = rates[minute]
                 if rate > rate_max:
@@ -2643,11 +2638,30 @@ class PredBat(hass.Hass):
                 rate_average += rate
                 rate_n += 1
             minute += 1
-
         if rate_n:
             rate_average /= rate_n
-
+        
         return self.dp2(rate_min), self.dp2(rate_max), self.dp2(rate_average), rate_min_minute, rate_max_minute
+
+    def rate_min_forward_calc(self, rates):
+        """
+        Work out lowest rate from time forwards
+        """
+        rate_array = []
+        rate_min_forward = {}
+        rate = 0.0
+
+        for minute in range(0, self.forecast_minutes + 24*60):
+            if minute in rates:
+                rate = rates[minute]
+            rate_array.append(rate)
+            
+        # Work out the min rate going forward 
+        for minute in range(self.minutes_now, self.forecast_minutes + 24*60):
+            rate_min_forward[minute] = min(rate_array[minute:])
+
+        self.log("Rate min forward looking: now {} at end of forecast {}".format(rate_min_forward[self.minutes_now], rate_min_forward[self.forecast_minutes + self.minutes_now]))
+        return rate_min_forward
 
     def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high):
         """
@@ -2720,16 +2734,13 @@ class PredBat(hass.Hass):
         """
         self.low_rates = []
         
-        rate_min, rate_max, rate_average, rate_min_minute, rate_max_minute = self.rate_minmax(rates)
+        self.rate_min, self.rate_max, self.rate_average, self.rate_min_minute, self.rate_max_minute = self.rate_minmax(rates)
 
         if print:
-            self.log("Import rates min {} max {} average {}".format(rate_min, rate_max, rate_average))
+            # Calculate minimum forward rates only once rate replicate has run (when print is True)
+            self.rate_min_forward = self.rate_min_forward_calc(self.rate_import)
+            self.log("Import rates min {} max {} average {}".format(self.rate_min, self.rate_max, self.rate_average))
 
-        self.rate_min = rate_min
-        self.rate_max = rate_max
-        self.rate_min_minute = rate_min_minute
-        self.rate_max_minute = rate_max_minute
-        self.rate_average = rate_average
         return rates
 
     def publish_rates_import(self):
@@ -3009,6 +3020,7 @@ class PredBat(hass.Hass):
         self.best_soc_keep = 0
         self.rate_min = 0
         self.rate_min_minute = 0
+        self.rate_min_forward = {}
         self.rate_max = 0
         self.rate_max_minute = 0
         self.rate_export_threshold = 99
@@ -3128,8 +3140,9 @@ class PredBat(hass.Hass):
 
             # Balancing payment to account for battery left over 
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            metric -= soc * max(self.rate_min, 1.0)
-            metric10 -= soc10 * max(self.rate_min, 1.0)
+            rate_min = self.rate_min_forward.get(end_record, self.rate_min)
+            metric -= soc * max(rate_min, 1.0)
+            metric10 -= soc10 * max(rate_min, 1.0)
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
@@ -3249,8 +3262,9 @@ class PredBat(hass.Hass):
 
                 # Balancing payment to account for battery left over 
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                metric -= soc * max(self.rate_min, 1.0)
-                metric10 -= soc10 * max(self.rate_min, 1.0)
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min)
+                metric -= soc * max(rate_min, 1.0)
+                metric10 -= soc10 * max(rate_min, 1.0)
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -4221,7 +4235,7 @@ class PredBat(hass.Hass):
             self.rate_export = self.rate_replicate(self.rate_export)
             if 'rates_export_override' in self.args:
                 self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
-            self.rate_export = self.rate_scan_export(self.rate_export)
+            self.rate_export = self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
             self.record_status(message="Error - No export rate data provided", had_errors=True)
