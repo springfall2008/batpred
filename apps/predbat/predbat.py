@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.2.2'
+THIS_VERSION = 'v7.2.3'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -441,7 +441,7 @@ class Inverter():
                     self.write_and_poll_value('reserve', entity_soc, reserve)
                 if self.base.set_reserve_notify:
                     self.base.call_notify('Predbat: Inverter {} Target Reserve has been changed to {} at {}'.format(self.id, reserve, self.base.time_now_str()))
-                self.base.record_status("Inverter {} set reserve to {} at {}".format(self.id, reserve, self.base.time_now_str()))
+                self.base.record_status("Inverter {} set reserve to {}".format(self.id, reserve))
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
 
@@ -471,7 +471,7 @@ class Inverter():
                     self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
                 if self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
-            self.base.record_status("Inverter {} charge rate changed to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
+            self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
 
     def adjust_discharge_rate(self, new_rate):
         """
@@ -499,7 +499,7 @@ class Inverter():
                     self.write_and_poll_value('discharge_rate', entity, new_rate, fuzzy=100)
                 if self.base.set_discharge_notify:
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
-            self.base.record_status("Inverter {} discharge rate changed to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
+            self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
 
     def adjust_battery_target(self, soc):
         """
@@ -531,7 +531,7 @@ class Inverter():
     
                 if self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
-            self.base.record_status("Inverter {} set soc to {} at {}".format(self.id, soc, self.base.time_now_str()))
+            self.base.record_status("Inverter {} set soc to {}".format(self.id, soc))
         else:
             self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
 
@@ -631,7 +631,7 @@ class Inverter():
                 if self.base.set_discharge_notify:
                     self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
 
-            self.base.record_status("Inverter {} Set discharge mode to {} at {}".format(self.id, new_inverter_mode, self.base.time_now_str()))
+            self.base.record_status("Inverter {} Set discharge mode to {}".format(self.id, new_inverter_mode))
             self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
@@ -704,7 +704,7 @@ class Inverter():
 
         # Notify
         if changed_start_end:
-            self.base.record_status("Inverter {} set discharge slot to {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+            self.base.record_status("Inverter {} set discharge slot to {} - {}".format(self.id, new_start, new_end))
             if self.base.set_discharge_notify:
                 self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
@@ -735,7 +735,7 @@ class Inverter():
                 self.base.sim_charge_schedule_enable = 'off'
 
             if notify:
-                self.base.record_status("Inverter {} Turned off scheduled charge at {}".format(self.id, self.base.time_now_str()))
+                self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
         # Updated cached status to disabled    
@@ -802,7 +802,7 @@ class Inverter():
                 self.rest_setChargeSlot1(new_start, new_end)
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
-            self.base.record_status("Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+            self.base.record_status("Inverter {} Charge window change to: {} - {}".format(self.id, new_start, new_end))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
         if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable' or have_disabled:
@@ -4677,7 +4677,7 @@ class PredBat(hass.Hass):
             self.log("Completed run status {} with Errors reported (check log)".format(status))
         else:
             self.log("Completed run status {}".format(status))
-            self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best,self.discharge_window_best))
+            self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best, self.discharge_window_best))
 
     def select_event(self, event, data, kwargs):
         """
