@@ -2263,8 +2263,8 @@ class PredBat(hass.Hass):
         """
         minute = 0
         rate_last = 0
-        # Add 12 extra hours to make sure charging period will end
-        while minute < (self.forecast_minutes + 24*60):
+        # Add 48 extra hours to make sure the whole cycle repeats another day
+        while minute < (self.forecast_minutes + 48*60):
             if minute not in rates:
                 if (minute >= 24*60) and ((minute - 24*60) in rates):
                     minute_mod = minute - 24*60
@@ -2655,18 +2655,19 @@ class PredBat(hass.Hass):
         """
         rate_array = []
         rate_min_forward = {}
-        rate = 0.0
+        rate = self.rate_min
 
-        for minute in range(0, self.forecast_minutes + 24*60):
+        for minute in range(0, self.forecast_minutes + self.minutes_now + 48*60):
             if minute in rates:
                 rate = rates[minute]
             rate_array.append(rate)
             
         # Work out the min rate going forward 
-        for minute in range(self.minutes_now, self.forecast_minutes + 24*60):
+        for minute in range(self.minutes_now, self.forecast_minutes + 24*60 + self.minutes_now):
             rate_min_forward[minute] = min(rate_array[minute:])
 
-        self.log("Rate min forward looking: now {} at end of forecast {}".format(rate_min_forward[self.minutes_now], rate_min_forward[self.forecast_minutes + self.minutes_now]))
+        self.log("Rate min forward looking: now {} at end of forecast {}".format(rate_min_forward[self.minutes_now], rate_min_forward[self.forecast_minutes]))
+
         return rate_min_forward
 
     def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high):
