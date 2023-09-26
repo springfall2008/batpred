@@ -1736,7 +1736,7 @@ class PredBat(hass.Hass):
         """
         Records status to HA sensor
         """
-        self.set_state(self.prefix + ".status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'debug' : debug})
+        self.set_state(self.prefix + ".status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'last_updated' : datetime.now(), 'debug' : debug})
         if had_errors:
             self.had_errors = True
 
@@ -4677,7 +4677,7 @@ class PredBat(hass.Hass):
             self.log("Completed run status {} with Errors reported (check log)".format(status))
         else:
             self.log("Completed run status {}".format(status))
-            self.record_status(status, debug="best_soc={} window={} discharge={}".format(self.charge_limit_best, self.charge_window_best, self.discharge_window_best))
+            self.record_status(status, debug="best_charge_limit={} best_charge_window={} best_discharge_limit= {} best_discharge_window={}".format(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best))
 
     def select_event(self, event, data, kwargs):
         """
