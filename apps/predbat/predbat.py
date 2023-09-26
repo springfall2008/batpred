@@ -1103,9 +1103,9 @@ class PredBat(hass.Hass):
                 self.record_status("Warn - Return bad float value {} from {}".format(value, arg), had_errors=True)
                 value = default
         elif isinstance(default, int) and not isinstance(default, bool):
-            # Convert to int?
+            # Convert to int? 
             try:
-                value = int(value)
+                value = int(float(value))
             except (ValueError, TypeError):
                 self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
                 self.record_status("Warn - Return bad int value {} from {}".format(value, arg), had_errors=True)
