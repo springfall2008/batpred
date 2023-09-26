@@ -270,7 +270,9 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
   - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute. If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
 
-  - **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500). This will emulate the software export limit setting in the Inverter that you will have if your G98/G99 approval was lower than your maximum inverter power (check your install information for details). If not set the export limit is the same as the inverter limit. 
+  - **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500). This will emulate the software export limit setting in the Inverter that you will have if your G98/G99 approval was lower than your maximum inverter power (check your install information for details). If not set the export limit is the same as the inverter limit.
+
+  - **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional), when set overrides the maximum charge/discharge rate register settings used when controlling the inverter. This can be used for workarounds if you need to cap your inverter battery rate as Predbat overwrites the maximum rate registers when it enables a timed charge or discharge.
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
