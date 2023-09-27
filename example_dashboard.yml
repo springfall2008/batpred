@@ -38,6 +38,7 @@ entities:
   - entity: input_number.predbat_battery_loss_discharge
   - entity: input_number.predbat_inverter_loss
   - entity: input_number.predbat_battery_rate_max_scaling
+  - entity: input_number.predbat_metric_battery_cycle
   - entity: input_number.predbat_best_soc_keep
   - entity: input_number.predbat_best_soc_margin
   - entity: input_number.predbat_best_soc_min
@@ -75,6 +76,8 @@ entities:
   - entity: predbat.battery_hours_left
   - entity: predbat.battery_power
   - entity: predbat.battery_power_best
+  - entity: predbat.battery_cycle
+  - entity: predbat.battery_cycle_best
   - entity: predbat.best10_export_energy
   - entity: predbat.best10_import_energy
   - entity: predbat.best10_load_energy
