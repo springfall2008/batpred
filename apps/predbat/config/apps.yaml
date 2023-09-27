@@ -137,8 +137,8 @@ pred_bat:
   #  100 : 0.24
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
-  # Seperate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
-  # Seperate discharge skew for discharge windows only
+  # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
+  # Separate discharge skew for discharge windows only
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0
@@ -226,6 +226,10 @@ pred_bat:
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
   # The default below will pick up the standing charge from the Octopus Plugin
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #
+  # If you don't want to include the standing charge in batpred's cost prediction, set metric_standing_charge to zero.
+  # NB: the standing charge being included or not makes no change to the actual prediction, its a personal choice whether you want to see it included in the cost prediction or not.
+  # metric_standing_charge: 0
 
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
