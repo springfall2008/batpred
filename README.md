@@ -469,6 +469,8 @@ If you have an EV try to set up the car charging sensor correctly so the tool ca
 
 You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_discharge** to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter. Also set **inverter_hybrid** to True or False depending on if you have a Hybrid or AC Coupled battery.
 
+The setting **input_number.metric_battery_cycle** can be used to put a cost on using your battery for charging and discharging. In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each cycle is 19kWh and so the cost is £4000 / 19 / 6000 = 3.5p. If you configure this number higher then more expensive plans will be selected which avoid charging and discharging your battery as much. The default is 0 which means ignore the cycle costs in the plan. Note that the cycle cost will not be included in the cost predictions, just taken into account in the planning stage.
+
 ### Fixed daily rates
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
 
@@ -623,6 +625,8 @@ Each config item has an input_number or switch associated with it, see the examp
 **inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
 
 **inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
+
+**input_number.metric_battery_cycle**  Sets the cost in pence per kWh of using your battery for charging and discharging. Higher numbers will reduce battery cycles at the expensive of higher energy costs. Figures of around 1p-5p are recommended, the default is 0.
 
 ### Scaling and weight options
 
@@ -814,6 +818,7 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.soc_min_kwh - The minimum battery level during the time period in Kwh
   - predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
   - predbat.battery_power - Predicted battery power per minute, for charting
+  - predbat.battery_cycle - Predicted battery cycle in kWh (total kWh processed)
   - predbat.pv_power - Predicted PV power per minute, for charting
   - predbat.grid_power - Predicted Grid power per minute, for charting
   - predbat.car_soc - Predicted car battery %
@@ -843,8 +848,9 @@ You can find an example dashboard with all the entities here: https://github.com
   - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
   - predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
   - predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kwH
-  - predbat.battery_power  - Predicted best battery power per minute, for charting
-  - predbat.pv_power - Predicted best PV power per minute, for charting
+  - predbat.battery_power_best  - Predicted best battery power per minute, for charting
+  - predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed)
+  - predbat.pv_power_best - Predicted best PV power per minute, for charting
   - predbat.grid_power - Predicted best Grid power per minute, for charting
   - predbat.car_soc_best - Predicated car battery % in  best plan
   - predbat.iboost_best - Gives the predicted energy going into the iBoost - for charter
