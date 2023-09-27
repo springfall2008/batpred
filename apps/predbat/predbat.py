@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.3.1'
+THIS_VERSION = 'v7.3.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2782,7 +2782,7 @@ class PredBat(hass.Hass):
 
                 if window_str:
                     window_str += ", "
-                window_str += "{} - {} @ {}".format(self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average)
+                window_str += "{}: {} - {} @ {}".format(window_n, self.time_abs_str(rate_low_start), self.time_abs_str(rate_low_end), rate_low_average)
 
                 rate_low_start_date = self.midnight_utc + timedelta(minutes=rate_low_start)
                 rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
@@ -3623,21 +3623,23 @@ class PredBat(hass.Hass):
         Optimise the charge windows
         """
         if self.charge_window_best and self.calculate_best_charge:
+            best_soc = self.soc_max
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
             self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
-            # Set all to min
-            self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
             if self.calculate_charge_all or record_charge_windows==1:
+                # Set all to min
+                self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
+
                 # First do rough optimisation of all windows
                 self.log("Optimise all charge windows n={}".format(record_charge_windows))
                 best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = record_charge_windows, end_record = end_record)
                 if record_charge_windows > 1:
                     best_soc = min(best_soc + self.best_soc_pass_margin, self.soc_max)
-
-                # Set all to optimisation
-                self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
                 self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+
+            # Set all to optimisation
+            self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
             if record_charge_windows > 1:
                 for charge_pass in range(0, self.calculate_charge_passes):
