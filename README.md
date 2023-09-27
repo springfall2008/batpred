@@ -533,6 +533,7 @@ rate_high_threshold: 1.2               # Rates at least 20% above the average co
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
 ```
+calculate_charge_all - False           # Charging is best calculated based on rate order only, so turn this off
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
 calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
@@ -684,7 +685,7 @@ This must be enabled to get all the 'best' sensors.
 
 **calculate_charge_oldest**   If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first. Recommended to keep disabled.
 
-**calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to keep enabled.
+**calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Can be best disabled for variable rate tariffs, on for fixed rate ones.
 
 **calculate_charge_passes**   Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
 
