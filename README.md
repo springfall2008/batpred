@@ -500,7 +500,6 @@ Follow the instructions from Cheap Night rate above, but also you will want to h
 ```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
-calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
 combine_discharge_slots - False        # For fixed export rate you have to break up the discharge slots
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
@@ -520,7 +519,6 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 ```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
-calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
 combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
@@ -535,10 +533,8 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 ```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
-calculate_discharge_oldest - True      # Make the discharge as late as possible so it has more time to adjust (once you have discharged you can't get it back)
 set_discharge_window - True            # Allow the tool to control the discharge slots
 combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
-discharge_slot_split - 30              # 30 minute split matches slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 max_windows - 128                      # Ensure you have enough slots
@@ -682,19 +678,7 @@ This must be enabled to get all the 'best' sensors.
 
 **calculate_best_charge**     If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
 
-**calculate_charge_oldest**   If set to True the charge windows are calculated oldest first (in the highest price bracket), when False it's the newest first. Recommended to keep disabled.
-
-**calculate_charge_all**      When True all charge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to keep enabled.
-
-**calculate_charge_passes**   Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
-
 **calculate_best_discharge**   If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
-
-**calculate_discharge_all**    When True all discharge windows are calculated to a single percentage in a first pass (or only pass if there is only 1 window). Recommended to leave as False.
-
-**calculate_discharge_passes** Sets the number of discharge calculation passes to run (for multi-window only), the default is 1 but 2 will increase run-time but might improve the schedule a tiny bit.
-
-**calculate_discharge_oldest** When True calculate from the oldest window (in the highest price bracket) first, when false start from the newest. Default True (recommended).
 
 **calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
 
@@ -715,12 +699,7 @@ This must be enabled to get all the 'best' sensors.
 **combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
 Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is enabled (True)
 
-**charge_slot_split** When combine charge is False charge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-
 **combine_discharge_slots** Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
-
-**discharge_slot_split** When combine discharge is False discharge slots will be split into the given slot size, recommended 15 or 30 (must be multiple of 5) - default 30
-A value of 15 maybe more useful for discharge planning if the available battery to export isn't that large
 
 **combine_mixed_rates** When True allows mixed rates to be combined into a single average rate charge/discharge window (e.g. Agile windows)
 A better plan is achieved leaving this false but it can speed up run time to have it True.

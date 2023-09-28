@@ -21,9 +21,12 @@ pred_bat:
   geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
   
   #
-  # Sensors, currently more than one can be specified and they will be summed up automatically
-  # If you have two inverters, each inverter will have its own load and PV generation data 
-  # but only set the import and export for one of them as these will both read the same.
+  # Sensors, more than one can be specified and they will be summed up automatically
+  #
+  # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
+  # If you have three phase and one inverter per phase then you would need three load sensors
+  #
+  # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today: 
     - sensor.givtcp_{geserial}_load_energy_today_kwh
@@ -225,11 +228,9 @@ pred_bat:
  
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
   # The default below will pick up the standing charge from the Octopus Plugin
+  # The standing charge only impacts the cost graphs and doesn't change the way Predbat plans
+  # If you don't want to show the standing charge then just delete this line or set to zero
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
-  #
-  # If you don't want to include the standing charge in batpred's cost prediction, set metric_standing_charge to zero.
-  # NB: the standing charge being included or not makes no change to the actual prediction, its a personal choice whether you want to see it included in the cost prediction or not.
-  # metric_standing_charge: 0
 
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
