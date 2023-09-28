@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.3.2'
+THIS_VERSION = 'v7.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -69,14 +69,8 @@ CONFIG_ITEMS = [
     {'name' : 'car_charging_from_battery',     'friendly_name' : 'Allow car to charge from battery', 'type' : 'switch'},
     {'name' : 'calculate_best',                'friendly_name' : 'Calculate Best',                 'type' : 'switch'},
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
-    {'name' : 'calculate_charge_oldest',       'friendly_name' : 'Calculate Charge Oldest',        'type' : 'switch'},
-    {'name' : 'calculate_charge_all',          'friendly_name' : 'Calculate Charge All',           'type' : 'switch'},
-    {'name' : 'calculate_charge_passes',       'friendly_name' : 'Calculate Charge Passes',        'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number', 'icon' : 'mdi:repeat-variant'},    
     {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
-    {'name' : 'calculate_discharge_oldest',    'friendly_name' : 'Calculate Discharge Oldest',     'type' : 'switch'},
-    {'name' : 'calculate_discharge_all',       'friendly_name' : 'Calculate Discharge All',        'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
-    {'name' : 'calculate_discharge_passes',    'friendly_name' : 'Calculate Discharge Passes',     'type' : 'input_number', 'min' : 1, 'max' : 2, 'step' : 1, 'unit' : 'number', 'icon' : 'mdi:repeat-variant'},    
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -96,8 +90,6 @@ CONFIG_ITEMS = [
     {'name' : 'balance_inverters_discharge',   'friendly_name' : 'Balance Inverters for discharge',         'type' : 'switch'},
     {'name' : 'balance_inverters_crosscharge', 'friendly_name' : 'Balance Inverters for cross-charging',    'type' : 'switch'},
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch', 'icon' : 'mdi:bug-outline'},
-    {'name' : 'charge_slot_split',             'friendly_name' : 'Charge Slot Split',              'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
-    {'name' : 'discharge_slot_split',          'friendly_name' : 'Discharge Slot Split',           'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5, 'unit' : 'minutes', 'icon' : 'mdi:set-split'},
     {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME, 'icon' : 'mdi:clock-end'},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
     {'name' : 'load_filter_modal',             'friendly_name' : 'Apply modal filter historical load', 'type' : 'switch'},
@@ -3589,18 +3581,10 @@ class PredBat(hass.Hass):
             # Set all to off
             self.discharge_limits_best = [100.0 for n in range(0, len(self.discharge_window_best))]
 
-            # First do rough optimisation of all windows
-            if self.calculate_discharge_all and record_discharge_windows > 1:
-                self.log("Optimise all discharge windows n={}".format(record_discharge_windows))
-                best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(0, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = record_discharge_windows, end_record = end_record)
-
-                self.discharge_limits_best = [best_discharge if n < record_discharge_windows else 100.0 for n in range(0, len(self.discharge_limits_best))]
-                self.log("Best all discharge limit all windows n={} (adjusted) discharge limit {} min {} @ {} (margin added {} and min {}) with metric {} cost {} windows {}".format(record_discharge_windows, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
             # Optimise in price order, most expensive first try to increase each one
-            for discharge_pass in range(0, self.calculate_discharge_passes):
+            for discharge_pass in range(0, 1):
                 self.log("Optimise discharge pass {}".format(discharge_pass))
-                price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=self.calculate_discharge_oldest)
+                price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=True)
                 for window_n in price_sorted:
                     best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
 
@@ -3627,7 +3611,7 @@ class PredBat(hass.Hass):
             record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
             self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
 
-            if self.calculate_charge_all or record_charge_windows==1:
+            if record_charge_windows==1:
                 # Set all to min
                 self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
@@ -3642,10 +3626,10 @@ class PredBat(hass.Hass):
             self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
 
             if record_charge_windows > 1:
-                for charge_pass in range(0, self.calculate_charge_passes):
+                for charge_pass in range(0, 1):
                     self.log("Optimise charge pass {}".format(charge_pass))
                     # Optimise in price order, most expensive first try to reduce each one, only required for more than 1 window
-                    price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows], reverse_time=self.calculate_charge_oldest)
+                    price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows], reverse_time=False)
                     for window_n in price_sorted:
                         best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
 
@@ -3994,10 +3978,8 @@ class PredBat(hass.Hass):
         self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
         self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
         self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
-        self.discharge_slot_split = self.get_arg('discharge_slot_split', 30)
-        self.charge_slot_split = self.get_arg('charge_slot_split', 30)
-        self.calculate_charge_passes = self.get_arg('calculate_charge_passes', 1)
-        self.calculate_discharge_passes = self.get_arg('calculate_discharge_passes', 1)
+        self.discharge_slot_split = 30
+        self.charge_slot_split = 30
 
         # Enables
         self.calculate_best = self.get_arg('calculate_best', True)
@@ -4009,15 +3991,11 @@ class PredBat(hass.Hass):
         self.set_window_notify = self.get_arg('set_window_notify', True)
         self.set_charge_window = self.get_arg('set_charge_window', True)
         self.set_discharge_window = self.get_arg('set_discharge_window', True)
-        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', False)
+        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', True)
         self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
         self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
-        self.calculate_charge_oldest = self.get_arg('calculate_charge_oldest', False)
-        self.calculate_charge_all = self.get_arg('calculate_charge_all', True)
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', True)
-        self.calculate_discharge_oldest = self.get_arg('calculate_discharge_oldest', True)
-        self.calculate_discharge_all = self.get_arg('calculate_discharge_all', False)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
         self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
         self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
