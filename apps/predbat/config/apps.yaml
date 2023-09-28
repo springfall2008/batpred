@@ -30,15 +30,12 @@ pred_bat:
   #
   load_today: 
     - sensor.givtcp_{geserial}_load_energy_today_kwh
-  # - sensor.givtcp_{geserial2}_load_energy_today_kwh
   import_today: 
     - sensor.givtcp_{geserial}_import_energy_today_kwh
   export_today: 
     - sensor.givtcp_{geserial}_export_energy_today_kwh
   pv_today:
     - sensor.givtcp_{geserial}_pv_energy_today_kwh
-  # - sensor.givtcp_{geserial}_pv_energy_today_kwh
-  
   #
   # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
   # this is usually less efficent and of course prone to internet downtime, but could be useful if you lost your GivTCP data
