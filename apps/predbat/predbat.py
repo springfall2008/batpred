@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.4.2'
+THIS_VERSION = 'v7.4.3'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3717,11 +3717,11 @@ class PredBat(hass.Hass):
                 result = self.get_state(entity_id = entity_id, attribute=attribute)
                 if not result:
                     attribute = 'forecast'
-            try:
-                data    = self.get_state(entity_id = self.get_arg(argname, indirect=False), attribute=attribute)
-            except (ValueError, TypeError):
-                self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))                
-                self.record_status("Error - {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
+                try:
+                    data    = self.get_state(entity_id = self.get_arg(argname, indirect=False), attribute=attribute)
+                except (ValueError, TypeError):
+                    self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))                
+                    self.record_status("Error - {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
 
             # Solcast new vs old version
             # check the total vs the sum of 30 minute slots and work out scale factor
