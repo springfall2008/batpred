@@ -69,7 +69,7 @@ CONFIG_ITEMS = [
     {'name' : 'car_charging_from_battery',     'friendly_name' : 'Allow car to charge from battery', 'type' : 'switch'},
     {'name' : 'calculate_best',                'friendly_name' : 'Calculate Best',                 'type' : 'switch'},
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
-    {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Discharge',       'type' : 'switch'},
+    {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
@@ -1418,7 +1418,7 @@ class PredBat(hass.Hass):
                     age_days = age.days
                 else:
                     age_days = min(age_days, age.days)
-                load_minutes = self.minute_data(history[0], max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
+                load_minutes = self.minute_data(history[0], max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes, max_increment=100.0)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
@@ -1427,7 +1427,7 @@ class PredBat(hass.Hass):
         return load_minutes, age_days
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
-                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[], adjust_key=None):
+                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[], adjust_key=None, max_increment=0):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
@@ -1556,7 +1556,7 @@ class PredBat(hass.Hass):
 
         # Reverse data with smoothing 
         if clean_increment:
-            mdata = self.clean_incrementing_reverse(mdata)
+            mdata = self.clean_incrementing_reverse(mdata, max_increment)
 
         # Accumulate to previous data?
         if accumulate:
@@ -1603,7 +1603,7 @@ class PredBat(hass.Hass):
             window_n += 1
         return -1
 
-    def clean_incrementing_reverse(self, data):
+    def clean_incrementing_reverse(self, data, max_increment=0):
         """
         Cleanup an incrementing sensor data that runs backwards in time to remove the
         resets (where it goes back to 0) and make it always increment
@@ -1618,7 +1618,11 @@ class PredBat(hass.Hass):
             rindex = length - index - 1
             nxt = data.get(rindex, last)
             if nxt >= last:
-                increment += nxt - last
+                if max_increment and ((nxt - last) > max_increment):
+                    # Smooth out big spikes
+                    pass
+                else:
+                    increment += nxt - last
             last = nxt
             new_data[rindex] = increment
 
@@ -4075,7 +4079,7 @@ class PredBat(hass.Hass):
             if 'load_today' in self.args:
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc, 'load_today', self.max_days_previous)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = self.get_arg('load_today', 0.0, combine=True)
+                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
                 self.record_status(message="Error - load_today not set correctly", had_errors=True)
@@ -4083,21 +4087,21 @@ class PredBat(hass.Hass):
             # Load import today data 
             if 'import_today' in self.args:
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
-                self.import_today_now = self.get_arg('import_today', 0.0, combine=True)
+                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
-                self.export_today_now = self.get_arg('export_today', 0.0, combine=True)
+                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data 
             if 'pv_today' in self.args:
                 self.pv_today = self.minute_data_import_export(now_utc, 'pv_today')
-                self.pv_today_now = self.get_arg('pv_today', 0.0, combine=True)
+                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
