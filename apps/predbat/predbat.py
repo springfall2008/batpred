@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.4.1'
+THIS_VERSION = 'v7.4.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3977,9 +3977,9 @@ class PredBat(hass.Hass):
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg('battery_capacity_nominal', False)
-        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.05)
-        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.05)
-        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.00)
+        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.03)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.03)
+        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.04)
         self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
         self.inverter_soc_reset = self.get_arg('inverter_soc_reset', False)
         self.battery_scaling = self.get_arg('battery_scaling', 1.0)
