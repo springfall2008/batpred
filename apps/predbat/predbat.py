@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.4'
+THIS_VERSION = 'v7.4.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3307,12 +3307,14 @@ class PredBat(hass.Hass):
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow['start'] and self.minutes_now < pwindow['end']:
                         if (self.minutes_now >= dwindow['start'] and self.minutes_now < dwindow['end']) or (dwindow['end'] == pwindow['start']):
-                            self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
+                            if self.debug_enable:
+                                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                             metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
                     self.log("Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} end_record {}".format
-                            (this_discharge_limit, window_n, try_discharge_window[window_n]['start'], try_discharge_window[window_n]['end'], self.dp2(import_kwh_battery), self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
+                            (this_discharge_limit, window_n, self.time_abs_str(try_discharge_window[window_n]['start']), self.time_abs_str(try_discharge_window[window_n]['end']), self.dp2(import_kwh_battery), 
+                             self.dp2(import_kwh_house), self.dp2(export_kwh), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.dp2(soc), self.dp2(cost), self.dp2(metric), self.dp2(metricmid), self.dp2(metric10), end_record))
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
@@ -3667,7 +3669,7 @@ class PredBat(hass.Hass):
         self.car_charging_plan_time  = [False for c in range(0, self.num_cars)]
         self.car_charging_battery_size  = [100.0 for c in range(0, self.num_cars)]
         self.car_charging_limit  = [100.0 for c in range(0, self.num_cars)]
-        self.car_charging_rate  = [7.4 for c in range(0, self.num_cars)]
+        self.car_charging_rate  = [7.4 for c in range(0, max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(0, self.num_cars)]
 
         self.car_charging_planned_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
@@ -3874,6 +3876,28 @@ class PredBat(hass.Hass):
                 inverters[id].adjust_discharge_rate(inverter.discharge_rate_max*60*1000)
         
         self.log("BALANCE: Completed this run")
+
+    def log_option_best(self):
+        """
+        Log options
+        """
+        opts = ""
+        opts += "calculate_best_charge({}) ".format(self.calculate_best_charge)
+        opts += "calculate_best_discharge({}) ".format(self.calculate_best_discharge)
+        opts += "calculate_discharge_first({}) ".format(self.calculate_discharge_first)
+        opts += "combine_charge_slots({}) ".format(self.combine_charge_slots)
+        opts += "combine_discharge_slots({}) ".format(self.combine_discharge_slots)
+        opts += "best_soc_min({} kWh) ".format(self.best_soc_min)
+        opts += "best_soc_max({} kWh) ".format(self.best_soc_max)
+        opts += "best_soc_keep({} kWh) ".format(self.best_soc_keep)
+        opts += "inverter_loss({} %) ".format(int((1 - self.inverter_loss) * 100.0))
+        opts += "battery_loss({} %) ".format(int((1 - self.battery_loss) * 100.0))
+        opts += "battery_loss_discharge ({} %) ".format(int((1 - self.battery_loss_discharge) * 100.0))
+        opts += "inverter_hybrid({}) ".format(self.inverter_hybrid)
+        opts += "metric_min_improvement({} p) ".format(self.metric_min_improvement)
+        opts += "metric_min_improvement_discharge({} p) ".format(self.metric_min_improvement_discharge)
+        opts += "metric_battery_cycle({} p/kWh)".format(self.metric_battery_cycle)
+        self.log("Calculate Best options: " + opts)
 
     def update_pred(self, scheduled=True):
         """
@@ -4431,8 +4455,10 @@ class PredBat(hass.Hass):
 
         # Try different battery SOCs to get the best result
         if self.calculate_best:
+
+            self.log_option_best()
+
             if self.calculate_discharge_first:
-                self.log("Calculate discharge first is set")
                 self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
                 self.optimise_discharge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
                 self.optimise_charge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
