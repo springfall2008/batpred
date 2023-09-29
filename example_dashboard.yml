@@ -14,6 +14,7 @@ entities:
   - entity: switch.predbat_set_discharge_freeze
   - entity: switch.predbat_set_discharge_freeze_only
   - entity: switch.predbat_set_reserve_enable
+  - entity: switch.predbat_set_reserve_hold
   - entity: switch.predbat_set_reserve_notify
   - entity: switch.predbat_set_soc_enable
   - entity: switch.predbat_set_soc_notify
