@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.4'
+THIS_VERSION = 'v7.4.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3667,7 +3667,7 @@ class PredBat(hass.Hass):
         self.car_charging_plan_time  = [False for c in range(0, self.num_cars)]
         self.car_charging_battery_size  = [100.0 for c in range(0, self.num_cars)]
         self.car_charging_limit  = [100.0 for c in range(0, self.num_cars)]
-        self.car_charging_rate  = [7.4 for c in range(0, self.num_cars)]
+        self.car_charging_rate  = [7.4 for c in range(0, max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(0, self.num_cars)]
 
         self.car_charging_planned_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
@@ -3874,6 +3874,25 @@ class PredBat(hass.Hass):
                 inverters[id].adjust_discharge_rate(inverter.discharge_rate_max*60*1000)
         
         self.log("BALANCE: Completed this run")
+
+    def log_option_best(self):
+        """
+        Log options
+        """
+        opts = ""
+        opts += "calculate_best_charge:{} ".format(self.calculate_best_charge)
+        opts += "calculate_best_discharge:{} ".format(self.calculate_best_discharge)
+        opts += "calculate_discharge_first:{} ".format(self.calculate_discharge_first)
+        opts += "combine_charge_slots:{} ".format(self.combine_charge_slots)
+        opts += "combine_discharge_slots:{} ".format(self.combine_discharge_slots)
+        opts += "best_soc_min:{} ".format(self.best_soc_min)
+        opts += "best_soc_max:{} ".format(self.best_soc_max)
+        opts += "best_soc_keep:{} ".format(self.best_soc_keep)
+        opts += "inverter_loss:{} ".format(self.inverter_loss)
+        opts += "battery_loss:{} ".format(self.battery_loss)
+        opts += "battery_loss_discharge:{} ".format(self.battery_loss_discharge)
+        opts += "inverter_hybrid:{} ".format(self.inverter_hybrid)
+        self.log("Calculate Best options: " + opts)
 
     def update_pred(self, scheduled=True):
         """
@@ -4431,8 +4450,10 @@ class PredBat(hass.Hass):
 
         # Try different battery SOCs to get the best result
         if self.calculate_best:
+
+            self.log_option_best()
+
             if self.calculate_discharge_first:
-                self.log("Calculate discharge first is set")
                 self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
                 self.optimise_discharge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
                 self.optimise_charge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
