@@ -69,7 +69,7 @@ CONFIG_ITEMS = [
     {'name' : 'car_charging_from_battery',     'friendly_name' : 'Allow car to charge from battery', 'type' : 'switch'},
     {'name' : 'calculate_best',                'friendly_name' : 'Calculate Best',                 'type' : 'switch'},
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
-    {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Disharge',        'type' : 'switch'},
+    {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Discharge',       'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
