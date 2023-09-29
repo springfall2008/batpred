@@ -197,6 +197,8 @@ mode: single
 
 ### Octopus Energy Plugin
 - If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
+- The Octopus Energy Plugin also provides support for Intelligent Octopus charging to support car charging (although you can also use the Octopus Intelligent Plugin if you prefer, see below)
+- In either case, when **octopus_intelligent_charging** is True the car charging plan will be extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
 
 ### Rate bands
 
@@ -204,21 +206,19 @@ mode: single
 
 ### Octopus Intelligent Plugin
 
-- The Intelligent Plugin is no longer required as the Octopus Energy Plugin now gives this information, however if it is installed it will be used.
-- In either case, when **octopus_intelligent_charging** is True the car charging plan will be extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
-
-- The Seperate Intelligent plugin can be found here: https://github.com/megakid/ha_octopus_intelligent
+- The Octopus Intelligent plugin is no longer required as the Octopus Energy plugin now gives this information, however if it is installed it will be used.
+- The separate Octopus Intelligent plugin can be found here: https://github.com/megakid/ha_octopus_intelligent
 
 ## Car charging planning
 
-There are two ways to plan car charging slots
-- Enable Octopus Intelligent plugin - in which case Predbat will use the slots allocated by Intelligent in battery prediction
-  - Ensure **octopus_intelligent_slot** points to the Intelligent Slot sensor in the Octopus Plugin or the Octopus Intelligent Plugin
+There are two ways to plan car charging slots:
+- Enable Octopus Energy Plugin (or Octopus Intelligent Plugin if you prefer) - in which case Predbat will use the slots allocated by the plugin in battery prediction
+  - Ensure **octopus_intelligent_slot** in `apps.yaml` points to the Intelligent Slot sensor in the Octopus Energy Plugin (or the Octopus Intelligent Plugin)
   - Set **octopus_intelligent_charging** to True
-  - Information about the cars battery size will also be extracted from the Intelligent plugin
+  - Information about the car's battery size will also be extracted from the plugin
   - You will need to set the cars current soc sensor, **car_charging_soc** correctly to have accurate results
-  - If you set **car_charging_limit** then Batpred can also know if the cars limit is set lower than Intelligent 
-  - Let the intelligent app control when your car charges
+  - If you set **car_charging_limit** then Batpred can also know if the car's limit is set lower than in Intelligent Octopus
+  - Let the Octopus app control when your car charges
 - Predbat led charging - Here Predbat plans the charging based on the upcoming low rate slots
   - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly
   - Set **car_charging_plan_time** in the config or in HA to the time you want the car ready by
@@ -319,8 +319,8 @@ The following are entity names in the Octopus Energy plugin and the Octopus Inte
 They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
   - **metric_octopus_import** - Import rates from the Octopus plugin
   - **metric_octopus_export** - Export rates from the Octopus plugin
-  - **octopus_intelligent_slot** - If you have Octopus intelligent and the Intelligent plugin installed point to the 'slot' sensor
-  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during intelligent slots using this or the data reported by Octopus
+  - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin (or Octopus Intelligent plugin) installed point to the 'slot' sensor
+  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during Intelligent slots using this or the data reported by Octopus
   - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
 
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
@@ -368,15 +368,15 @@ The override is used to set times where rates are different, e.g. an Octopus Pow
 
 You might want to remove your electric car charging data from the historical load as to not bias the calculations, otherwise you will get high charge levels when the car was charged previously (e.g. last week)
 
-  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the intelligent plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
+  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the Octopus Energy plugin (or Octoput Intelligent plugin) to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
   - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
 ### Planned car charging
 
-These features allow Predbat to know when you plan to charge your car. If you have Octopus Intelligent set up you won't need to change these as it's done automatically via their app and the Intelligent plugin.
+These features allow Predbat to know when you plan to charge your car. If you have Octopus Intelligent set up you won't need to change these as it's done automatically via their app and the Octopus Energy plugin (or the Octopus Intelligent plugin).
 
-  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
+  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Octopus Intelligent slots, taking it into account for battery load and generating the slot information
 
 Only needed if you don't use Intelligent:
   - **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
@@ -397,9 +397,9 @@ Control how your battery behaves during car charging:
 
 - Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
   - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
-  - Car 0 will be managed by Octopus Intelligent if enabled
+  - Car 0 will be managed by Octopus Energy plugin (or Octopus Intelligent plugin) if enabled
   - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
-  - Each car will have it's own SOC planning sesnor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+  - Each car will have it's own SOC planning sensor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ### Workarounds
 
@@ -415,7 +415,7 @@ Control how your battery behaves during car charging:
 CAUTION: This is experimental code - needs beta testing and debugging. Only use this if you want to help with the testing, please file github tickets for issues.
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
-When enabled balance inverters tries to recover this situation by disabiling either charging or discharging from one of the batteries until they re-align.
+When enabled balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
 The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
 
@@ -655,20 +655,20 @@ For more accurate results can you use an incrementing energy sensor set with **c
 
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instead.
 
-**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Intelligent if enabled
+**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Energy plugin (or Octopus Intelligent plugin) if enabled
 
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
 ### Car charging plan options
 
-Car charging planning - is only used if Octopus intelligent isn't enabled and car_charging_planned is connected correctly. 
+Car charging planning - is only used if Octopus Intelligent isn't enabled and car_charging_planned is connected correctly. 
 
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
 **car_charging_plan_time** Is set to the time you expect your car to be fully charged by
 **car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times, when disabled all low rate slots will be used in time order.
 
-**octopus_intelligent_charging** when true enables the octopus intelligent charging feature which will make Predbat create a car charging plan which is taken from the Octopus Intelligent plan
+**octopus_intelligent_charging** when true enables the Octopus Intelligent charging feature which will make Predbat create a car charging plan which is taken from the Octopus Intelligent plan
 you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this feature.
 
 ### Calculation options
