@@ -1624,7 +1624,7 @@ class PredBat(hass.Hass):
             rindex = length - index - 1
             nxt = data.get(rindex, last)
             if nxt >= last:
-                if max_increment and ((nxt - last) > max_increment):
+                if (max_increment > 0) and ((nxt - last) > max_increment):
                     # Smooth out big spikes
                     pass
                 else:
@@ -4001,6 +4001,7 @@ class PredBat(hass.Hass):
             self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
             self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
+        self.log("import_export_scaling is {}".format(self.import_export_scaling))
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.0)
         self.best_soc_max = self.get_arg('best_soc_max', 0.0)
