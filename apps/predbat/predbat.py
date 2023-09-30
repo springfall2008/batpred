@@ -1525,8 +1525,14 @@ class PredBat(hass.Hass):
                             # Can't really go backwards as incrementing data
                             if state < last_state:
                                 state = last_state
+
                             # Create linear function
                             diff = (state - last_state) / (minutes_to - minute)
+
+                            # If the spike is too big don't smooth it, it will removed in the clean function later
+                            if max_increment > 0 and diff > max_increment:
+                                diff = 0
+
                             index = 0
                             while minute < minutes_to:
                                 mdata[minute] = state - diff*index
@@ -4081,6 +4087,7 @@ class PredBat(hass.Hass):
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc, 'load_today', self.max_days_previous)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+                self.log("load_today is {} kWh now and at midnight is {}".format(self.load_minutes.get(0, -1), self.load_minutes.get(self.minutes_now, -1)))
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
                 self.record_status(message="Error - load_today not set correctly", had_errors=True)
@@ -4088,6 +4095,7 @@ class PredBat(hass.Hass):
             # Load import today data 
             if 'import_today' in self.args:
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
+                self.log("import_today is {} kWh now and at midnight is {}".format(self.import_today.get(0, -1), self.import_today.get(self.minutes_now, -1)))
                 self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
@@ -4095,6 +4103,7 @@ class PredBat(hass.Hass):
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
+                self.log("export_today is {} kWh now and at midnight is {}".format(self.export_today.get(0, -1), self.export_today.get(self.minutes_now, -1)))
                 self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
@@ -4102,6 +4111,7 @@ class PredBat(hass.Hass):
             # PV today data 
             if 'pv_today' in self.args:
                 self.pv_today = self.minute_data_import_export(now_utc, 'pv_today')
+                self.log("pv_today is {} kWh now and at midnight is {}".format(self.pv_today.get(0, -1), self.pv_today.get(self.minutes_now, -1)))
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
