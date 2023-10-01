@@ -337,6 +337,7 @@ class Inverter():
                 window = {}
                 window['start'] = minute
                 window['end']   = minute_end
+                window['average'] = 0           # Rates are not known yet
                 self.charge_window.append(window)
                 minute += 24 * 60
                 minute_end += 24 * 60
@@ -392,6 +393,7 @@ class Inverter():
                 window = {}
                 window['start'] = minute
                 window['end']   = minute_end
+                window['average'] = 0                           # Rates are not known yet
                 self.discharge_window.append(window)
                 minute += 24 * 60
                 minute_end += 24 * 60
@@ -3365,27 +3367,34 @@ class PredBat(hass.Hass):
     def sort_window_by_price_combined(self, charge_windows, discharge_windows):
         window_sort = []
         window_links = {}
-        id = 0
-        for window in charge_windows:
-            sort_key = "%04.2f%03d_c%02d" % (5000 - window['average'], id, id)
-            window_sort.append(sort_key)
-            window_links[sort_key] = {}
-            window_links[sort_key]['type'] = "c"
-            window_links[sort_key]['id'] = id
-            id += 1
-        id = 0
-        for window in discharge_windows:
-            sort_key = "%04.2f%03d_d%02d" % (5000 - window['average'], 999 - id, id)
-            if not self.calculate_discharge_first:
-                # Push discharge last if first is not set
-                sort_key = "zz_" + sort_key
-            window_sort.append(sort_key)
-            window_links[sort_key] = {}
-            window_links[sort_key]['type'] = "d"
-            window_links[sort_key]['id'] = id
-            id += 1
 
-        window_sort.sort()
+        # Add charge windows
+        if self.calculate_best_charge:
+            id = 0
+            for window in charge_windows:
+                sort_key = "%04.2f%03d_c%02d" % (5000 - window['average'], id, id)
+                window_sort.append(sort_key)
+                window_links[sort_key] = {}
+                window_links[sort_key]['type'] = "c"
+                window_links[sort_key]['id'] = id
+                id += 1
+
+        # Add discharge windows
+        if self.calculate_best_discharge:
+            id = 0
+            for window in discharge_windows:
+                sort_key = "%04.2f%03d_d%02d" % (5000 - window['average'], 999 - id, id)
+                if not self.calculate_discharge_first:
+                    # Push discharge last if first is not set
+                    sort_key = "zz_" + sort_key
+                window_sort.append(sort_key)
+                window_links[sort_key] = {}
+                window_links[sort_key]['type'] = "d"
+                window_links[sort_key]['id'] = id
+                id += 1
+
+        if window_sort:
+            window_sort.sort()
         return window_sort, window_links
 
     def sort_window_by_price(self, windows, reverse_time=False):
@@ -3613,7 +3622,7 @@ class PredBat(hass.Hass):
     
     def optimise_all_windows(self, end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
-        Optimise all windows
+        Optimise all windows, both charge and discharge in rate order
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
@@ -3641,11 +3650,17 @@ class PredBat(hass.Hass):
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
-        Reset the charge windows to max
+        Reset the charge windows to max or min depending on rates
         """
         if self.charge_window_best and self.calculate_best_charge:
             # Set all to max
-            self.charge_limit_best = [self.soc_max for n in range(0, len(self.charge_limit_best))]
+            for window_n in range(0, len(self.charge_window_best)):
+                window = self.charge_window_best[window_n]
+                average = window['average']
+                if average < self.rate_average:
+                    self.charge_limit_best[window_n] = self.soc_max
+                else:
+                    self.charge_limit_best[window_n] = self.reserve
 
     def window_as_text(self, windows, percents):
         """
@@ -4496,12 +4511,15 @@ class PredBat(hass.Hass):
                 # Re-run prediction to get data for clipping
                 best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle  = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, end_record=end_record)
 
-                # Charge slot filtering & clipping
+                # Initial charge slot filter
                 if self.set_charge_window:
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
-                    self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
 
+                # Charge slot clipping
+                record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+                self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
+
+                if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
                     self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
