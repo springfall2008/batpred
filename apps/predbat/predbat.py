@@ -20,6 +20,9 @@ TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 PREDICT_STEP = 5
 
+# 240v x 100 amps x 3 phases / 1000 to kw / 60 minutes in an hour is the maximum kWh in a 1 minute period
+MAX_INCREMENT = 240*100*3/1000/60 
+
 SIMULATE = False         # Debug option, when set don't write to entities but simulate each 30 min period
 SIMULATE_LENGTH = 23*60  # How many periods to simulate, set to 0 for just current
 INVERTER_TEST = False    # Run inverter control self test
@@ -1418,7 +1421,7 @@ class PredBat(hass.Hass):
                     age_days = age.days
                 else:
                     age_days = min(age_days, age.days)
-                load_minutes = self.minute_data(history[0], max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes, max_increment=100.0)
+                load_minutes = self.minute_data(history[0], max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True, accumulate=load_minutes)
             else:
                 self.log("WARN: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Warn - Unable to fetch history from {}".format(entity_id), had_errors=True)
@@ -1427,7 +1430,7 @@ class PredBat(hass.Hass):
         return load_minutes, age_days
 
     def minute_data(self, history, days, now, state_key, last_updated_key,
-                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[], adjust_key=None, max_increment=0):
+                    backwards=False, to_key=None, smoothing=False, clean_increment=False, divide_by=0, scale=1.0, accumulate=[], adjust_key=None):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
         Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
@@ -1438,6 +1441,7 @@ class PredBat(hass.Hass):
         last_state = 0
         newest_age = 999999
         prev_last_updated_time = None
+        max_increment = MAX_INCREMENT
 
         # Check history is valid
         if not history:
@@ -3358,6 +3362,32 @@ class PredBat(hass.Hass):
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
+    def sort_window_by_price_combined(self, charge_windows, discharge_windows):
+        window_sort = []
+        window_links = {}
+        id = 0
+        for window in charge_windows:
+            sort_key = "%04.2f%03d_c%02d" % (5000 - window['average'], id, id)
+            window_sort.append(sort_key)
+            window_links[sort_key] = {}
+            window_links[sort_key]['type'] = "c"
+            window_links[sort_key]['id'] = id
+            id += 1
+        id = 0
+        for window in discharge_windows:
+            sort_key = "%04.2f%03d_d%02d" % (5000 - window['average'], 999 - id, id)
+            if not self.calculate_discharge_first:
+                # Push discharge last if first is not set
+                sort_key = "zz_" + sort_key
+            window_sort.append(sort_key)
+            window_links[sort_key] = {}
+            window_links[sort_key]['type'] = "d"
+            window_links[sort_key]['id'] = id
+            id += 1
+
+        window_sort.sort()
+        return window_sort, window_links
+
     def sort_window_by_price(self, windows, reverse_time=False):
         """
         Sort the charge windows by highest price first, return a list of window IDs
@@ -3581,30 +3611,33 @@ class PredBat(hass.Hass):
 
         return new_enable, new_best
     
-    def optimise_discharge_windows(self, end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step):
+    def optimise_all_windows(self, end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
-        Optimize the discharge windows
+        Optimise all windows
         """
+        record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+        record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
+        window_sorted, window_index = self.sort_window_by_price_combined(self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows])
 
-        # Try different discharge options
-        if self.discharge_window_best and self.calculate_best_discharge:
-            record_discharge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.discharge_window_best), 1)
-
-            # Set all to off
-            self.discharge_limits_best = [100.0 for n in range(0, len(self.discharge_window_best))]
-
-            # Optimise in price order, most expensive first try to increase each one
-            for discharge_pass in range(0, 1):
-                self.log("Optimise discharge pass {}".format(discharge_pass))
-                price_sorted = self.sort_window_by_price(self.discharge_window_best[:record_discharge_windows], reverse_time=True)
-                for window_n in price_sorted:
+        self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
+        for key in window_sorted:
+            typ = window_index[key]['type']
+            window_n = window_index[key]['id']
+            if typ == 'c':
+                if self.calculate_best_charge:
+                    average = self.charge_window_best[window_n]['average']
+                    best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
+                    self.charge_limit_best[window_n] = best_soc
+                    if self.debug_enable or 1:
+                        self.log("Best charge limit window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(window_n, self.time_abs_str(self.charge_window_best[window_n]['start']), self.time_abs_str(self.charge_window_best[window_n]['end']), average, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
+            else:
+                if self.calculate_best_discharge:
+                    average = self.discharge_window_best[window_n]['average']
                     best_discharge, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
-
                     self.discharge_limits_best[window_n] = best_discharge
                     self.discharge_window_best[window_n]['start'] = best_start
-
                     if self.debug_enable or 1:
-                        self.log("Best discharge limit window {} time {} - {} discharge {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.time_abs_str(self.discharge_window_best[window_n]['start']), self.time_abs_str(self.discharge_window_best[window_n]['end']), best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
+                        self.log("Best discharge limit window {} time {} - {} cost {} discharge_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.time_abs_str(self.discharge_window_best[window_n]['start']), self.time_abs_str(self.discharge_window_best[window_n]['end']), average, best_discharge, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
@@ -3613,42 +3646,6 @@ class PredBat(hass.Hass):
         if self.charge_window_best and self.calculate_best_charge:
             # Set all to max
             self.charge_limit_best = [self.soc_max for n in range(0, len(self.charge_limit_best))]
-
-    def optimise_charge_windows(self, end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step):
-        """
-        Optimise the charge windows
-        """
-        if self.charge_window_best and self.calculate_best_charge:
-            best_soc = self.soc_max
-            record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
-            self.log("Record charge windows is {} end_record_abs was {}".format(record_charge_windows, self.time_abs_str(end_record + self.minutes_now)))
-
-            if record_charge_windows==1:
-                # Set all to min
-                self.charge_limit_best = [self.reserve if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
-
-                # First do rough optimisation of all windows
-                self.log("Optimise all charge windows n={}".format(record_charge_windows))
-                best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(0, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = record_charge_windows, end_record = end_record)
-                if record_charge_windows > 1:
-                    best_soc = min(best_soc + self.best_soc_pass_margin, self.soc_max)
-                self.log("Best all charge limit all windows n={} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(record_charge_windows, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
-            # Set all to optimisation
-            self.charge_limit_best = [best_soc if n < record_charge_windows else self.soc_max for n in range(0, len(self.charge_limit_best))]
-
-            if record_charge_windows > 1:
-                for charge_pass in range(0, 1):
-                    self.log("Optimise charge pass {}".format(charge_pass))
-                    # Optimise in price order, most expensive first try to reduce each one, only required for more than 1 window
-                    price_sorted = self.sort_window_by_price(self.charge_window_best[:record_charge_windows], reverse_time=False)
-                    for window_n in price_sorted:
-                        best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
-
-                        self.charge_limit_best[window_n] = best_soc
-                        if self.debug_enable or 1:
-                            self.log("Best charge limit window {} (adjusted) soc calculated at {} min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(window_n, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
-
 
     def window_as_text(self, windows, percents):
         """
@@ -4001,7 +3998,6 @@ class PredBat(hass.Hass):
             self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
             self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
         self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
-        self.log("import_export_scaling is {}".format(self.import_export_scaling))
         self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
         self.best_soc_min = self.get_arg('best_soc_min', 0.0)
         self.best_soc_max = self.get_arg('best_soc_max', 0.0)
@@ -4088,7 +4084,6 @@ class PredBat(hass.Hass):
                 self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc, 'load_today', self.max_days_previous)
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
-                self.log("load_today is {} kWh now and at midnight is {}".format(self.load_minutes.get(0, -1), self.load_minutes.get(self.minutes_now, -1)))
             else:
                 self.log("WARN: You have not set load_today, you will have no load data")
                 self.record_status(message="Error - load_today not set correctly", had_errors=True)
@@ -4096,7 +4091,6 @@ class PredBat(hass.Hass):
             # Load import today data 
             if 'import_today' in self.args:
                 self.import_today = self.minute_data_import_export(now_utc, 'import_today')
-                self.log("import_today is {} kWh now and at midnight is {}".format(self.import_today.get(0, -1), self.import_today.get(self.minutes_now, -1)))
                 self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
@@ -4104,7 +4098,6 @@ class PredBat(hass.Hass):
             # Load export today data 
             if 'export_today' in self.args:
                 self.export_today = self.minute_data_import_export(now_utc, 'export_today')
-                self.log("export_today is {} kWh now and at midnight is {}".format(self.export_today.get(0, -1), self.export_today.get(self.minutes_now, -1)))
                 self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
@@ -4112,7 +4105,6 @@ class PredBat(hass.Hass):
             # PV today data 
             if 'pv_today' in self.args:
                 self.pv_today = self.minute_data_import_export(now_utc, 'pv_today')
-                self.log("pv_today is {} kWh now and at midnight is {}".format(self.pv_today.get(0, -1), self.pv_today.get(self.minutes_now, -1)))
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
@@ -4473,14 +4465,8 @@ class PredBat(hass.Hass):
         if self.calculate_best:
 
             self.log_option_best()
-
-            if self.calculate_discharge_first:
-                self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
-                self.optimise_discharge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
-                self.optimise_charge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
-            else:
-                self.optimise_charge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
-                self.optimise_discharge_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
+            self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
+            self.optimise_all_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
 
             # Remove charge windows that overlap with discharge windows
             self.charge_limit_best, self.charge_window_best = self.remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best)
@@ -4510,12 +4496,13 @@ class PredBat(hass.Hass):
                 # Re-run prediction to get data for clipping
                 best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle  = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, end_record=end_record)
 
-                # Charge slot clipping
-                record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
-                self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
-
-                # Charge slot filtering
+                # Charge slot filtering & clipping
                 if self.set_charge_window:
+                    self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
+                    record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
+                    self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
+
+                    # Filter out the windows we disabled during clipping
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
                     self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
                 else:
