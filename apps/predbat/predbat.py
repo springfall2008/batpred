@@ -4647,17 +4647,19 @@ class PredBat(hass.Hass):
 
             # Car charging from battery disable?
             if not self.car_charging_from_battery:
-                car_load = self.in_car_slot(self.minutes_now)
                 for car_n in range(0, self.num_cars):
-                    if car_load[car_n] > 0:
-                        if status not in ['Discharging']:
-                            inverter.adjust_discharge_rate(0)
-                            self.log("Disabling battery discharge while the car {} is charging".format(car_n))
-                            if status != 'Idle':
-                                status += ", Hold for car"
-                            else:
-                                status = "Hold for car"
-                        break
+                    if self.car_charging_slots[car_n]:
+                        window = self.car_charging_slots[car_n][0]
+                        self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window['start']), self.time_abs_str(window['end'])))
+                        if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
+                            if status not in ['Discharging']:
+                                inverter.adjust_discharge_rate(0)
+                                self.log("Disabling battery discharge while the car {} is charging".format(car_n))
+                                if status != 'Idle':
+                                    status += ", Hold for car"
+                                else:
+                                    status = "Hold for car"
+                            break
                 else:
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
 
