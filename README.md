@@ -31,7 +31,6 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
   * [Energy rates](#energy-rates)
     + [Octopus Energy Plugin](#octopus-energy-plugin)
     + [Rate bands](#rate-bands)
-    + [Octopus Intelligent Plugin](#octopus-intelligent-plugin)
   * [Car charging planning](#car-charging-planning)
   * [config.yml settings](#configyml-settings)
     + [Basics](#basics)
@@ -82,7 +81,7 @@ The app runs every N minutes (default 5), it will automatically update its predi
 - The output is a prediction of the battery levels, charging slots and % charge level, costs and import and export amounts.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Plugin
    - Both import and export rates are supported.
-   - Octopus Intelligent is also supported and takes into account allocated charging slots.  
+   - Intelligent Octopus is also supported and takes into account allocated charging slots.  
 - The solar forecast used is the central scenario from Solcast but you can also add weighting to the 10% (worst case) scenario, the default is 20% weighting to this.
 - The SOC calculation can be adjusted with a safety margin (minimum battery level, extra amount to add and pence threshold). 
 - The charging windows and charge level (SOC) can be automatically programmed into the inverter.
@@ -197,23 +196,18 @@ mode: single
 
 ### Octopus Energy Plugin
 - If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working (https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/)
-- The Octopus Energy Plugin also provides support for Intelligent Octopus charging to support car charging (although you can also use the Octopus Intelligent Plugin if you prefer, see below)
-- In either case, when **octopus_intelligent_charging** is True the car charging plan will be extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
+- The Octopus Energy Plugin also provides support for Intelligent Octopus charging to support car charging
+- When **octopus_intelligent_charging** is True the car charging plan will be extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
 
 ### Rate bands
 
 - you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
 
-### Octopus Intelligent Plugin
-
-- The Octopus Intelligent plugin is no longer required as the Octopus Energy plugin now gives this information, however if it is installed it will be used.
-- The separate Octopus Intelligent plugin can be found here: https://github.com/megakid/ha_octopus_intelligent
-
 ## Car charging planning
 
 There are two ways to plan car charging slots:
-- Enable Octopus Energy Plugin (or Octopus Intelligent Plugin if you prefer) - in which case Predbat will use the slots allocated by the plugin in battery prediction
-  - Ensure **octopus_intelligent_slot** in `apps.yaml` points to the Intelligent Slot sensor in the Octopus Energy Plugin (or the Octopus Intelligent Plugin)
+- Enable Octopus Energy Plugin - in which case Predbat will use the slots allocated by the plugin in battery prediction
+  - Ensure **octopus_intelligent_slot** in `apps.yaml` points to the Intelligent Slot sensor in the Octopus Energy Plugin
   - Set **octopus_intelligent_charging** to True
   - Information about the car's battery size will also be extracted from the plugin
   - You will need to set the cars current soc sensor, **car_charging_soc** correctly to have accurate results
@@ -315,13 +309,13 @@ The following are entity names in Solcast, unlikely to need changing although a 
   
 ### Octopus energy
 
-The following are entity names in the Octopus Energy plugin and the Octopus Intelligent plugin.
+The following are entity names in the Octopus Energy plugin.
 They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
   - **metric_octopus_import** - Import rates from the Octopus plugin
   - **metric_octopus_export** - Export rates from the Octopus plugin
-  - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin (or Octopus Intelligent plugin) installed point to the 'slot' sensor
-  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during Intelligent slots using this or the data reported by Octopus
-  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the octopus intelligent slots, taking it into account for battery load and generating the slot information
+  - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin installed point to the 'slot' sensor
+  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during Intelligent Octopus slots using this or the data reported by Octopus
+  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus  slots, taking it into account for battery load and generating the slot information
 
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
   - **rates_import_octopus_url**
@@ -368,17 +362,17 @@ The override is used to set times where rates are different, e.g. an Octopus Pow
 
 You might want to remove your electric car charging data from the historical load as to not bias the calculations, otherwise you will get high charge levels when the car was charged previously (e.g. last week)
 
-  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the Octopus Energy plugin (or Octoput Intelligent plugin) to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
+  - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the Octopus Energy plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
   - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
   - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
  
 ### Planned car charging
 
-These features allow Predbat to know when you plan to charge your car. If you have Octopus Intelligent set up you won't need to change these as it's done automatically via their app and the Octopus Energy plugin (or the Octopus Intelligent plugin).
+These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus set up you won't need to change these as it's done automatically via their app and the Octopus Energy plugin.
 
-  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Octopus Intelligent slots, taking it into account for battery load and generating the slot information
+  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
 
-Only needed if you don't use Intelligent:
+Only needed if you don't use Intelligent Octopus:
   - **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
   - **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
   - **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw). 
@@ -392,12 +386,12 @@ Connect to your cars sensors for accurate data:
   - **car_charging_soc** - The cars current % charge level, link to a suitable sensor. Default is 0%
 
 Control how your battery behaves during car charging:
-  - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan, e.g. you are using Octopus Intelligent or you use the car slots in Predbat to control your car charging.
+  - **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly. When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
     - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
 
 - Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
   - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
-  - Car 0 will be managed by Octopus Energy plugin (or Octopus Intelligent plugin) if enabled
+  - Car 0 will be managed by Octopus Energy plugin if enabled
   - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
   - Each car will have it's own SOC planning sensor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
@@ -493,7 +487,7 @@ rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more a
 calculate_discharge_first - False  # You probably only want to discharge any excess as export rates are poor
 ```
 
-## Cheap night rate, with a good export rate (e.g. Intelligent with Octopus Outgoing)
+## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
 Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
 
@@ -569,11 +563,11 @@ Configuring Predbat:
 Charts:
    - https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038
 Tariffs:
-   - Octopus Intelligent import + Agile export: https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2
-   - Octopus Intelligent import + Fixed export: https://www.loom.com/share/c604cb0eefbb499391037bb32173f6e8?sid=5a0a31dc-01f5-4364-b781-c5a7c297bf0c
+   - Intelligent Octopus import + Agile export: https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2
+   - Intelligent Octopus import + Fixed export: https://www.loom.com/share/c604cb0eefbb499391037bb32173f6e8?sid=5a0a31dc-01f5-4364-b781-c5a7c297bf0c
    - Octopus Agile import + Agile export: https://www.loom.com/share/5f007eff9d984dc8bdb03df708fde711?sid=4ae133c4-c7e5-4307-8c50-8737d1ca1593
    - Octopus Flux: https://www.loom.com/share/c5eec8986416448c8c30546b9d4ac220?sid=2262fc1c-515b-405e-8540-67d5084b6e55
-   - Octopus Intelligent car charging: https://www.loom.com/share/ab4650c95df84b23895b4004ab8d8b71?sid=b1e99613-8f87-488b-b03b-401afe442083
+   - Intelligent Octopus car charging: https://www.loom.com/share/ab4650c95df84b23895b4004ab8d8b71?sid=b1e99613-8f87-488b-b03b-401afe442083
 
 ## FAQ
 
@@ -655,20 +649,20 @@ For more accurate results can you use an incrementing energy sensor set with **c
 
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kwh so if you had a sensor in watts you might use 0.001 instead.
 
-**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Energy plugin (or Octopus Intelligent plugin) if enabled
+**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Energy plugin if enabled
 
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
 ### Car charging plan options
 
-Car charging planning - is only used if Octopus Intelligent isn't enabled and car_charging_planned is connected correctly. 
+Car charging planning - is only used if Intelligent Octopus isn't enabled and car_charging_planned is connected correctly. 
 
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
 **car_charging_plan_time** Is set to the time you expect your car to be fully charged by
 **car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times, when disabled all low rate slots will be used in time order.
 
-**octopus_intelligent_charging** when true enables the Octopus Intelligent charging feature which will make Predbat create a car charging plan which is taken from the Octopus Intelligent plan
+**octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this feature.
 
 ### Calculation options
