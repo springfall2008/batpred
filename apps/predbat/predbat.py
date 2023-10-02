@@ -3372,7 +3372,9 @@ class PredBat(hass.Hass):
         if self.calculate_best_charge:
             id = 0
             for window in charge_windows:
-                sort_key = "%04.2f%03d_c%02d" % (5000 - window['average'], id, id)
+                # Account for losses in average rate as it makes import higher 
+                average = window['average'] / self.inverter_loss / self.battery_loss
+                sort_key = "%04.2f%03d_c%02d" % (5000 - average, id, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]['type'] = "c"
@@ -3383,7 +3385,9 @@ class PredBat(hass.Hass):
         if self.calculate_best_discharge:
             id = 0
             for window in discharge_windows:
-                sort_key = "%04.2f%03d_d%02d" % (5000 - window['average'], 999 - id, id)
+                # Account for losses in average rate as it makes export value lower 
+                average = window['average'] * self.inverter_loss * self.battery_loss_discharge
+                sort_key = "%04.2f%03d_d%02d" % (5000 - average, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
@@ -3429,6 +3433,7 @@ class PredBat(hass.Hass):
             window = charge_window_best[window_n]
             start = window['start']
             end = window['end']
+            average = window['average']
 
             clipped = False
             for dwindow_n in range(0, max_dslots):
@@ -3450,6 +3455,7 @@ class PredBat(hass.Hass):
                 new_window = {}
                 new_window['start'] = start
                 new_window['end'] = end
+                new_window['average'] = average
                 new_window_best.append(new_window)
                 new_limit_best.append(charge_limit_best[window_n])
         return new_limit_best, new_window_best 
