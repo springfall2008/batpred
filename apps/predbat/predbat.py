@@ -64,8 +64,8 @@ CONFIG_ITEMS = [
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
-    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 0.95, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
-    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 1.0, 'max' : 3.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},    
+    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 1.20, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 0.80, 'max' : 2.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},    
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
     {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
@@ -74,6 +74,7 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_best_charge',         'friendly_name' : 'Calculate Best Charge',          'type' : 'switch'},
     {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Discharge',       'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
+    {'name' : 'calculate_discharge_oncharge',  'friendly_name' : 'Calculate Discharge on charge slots', 'type' : 'switch'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -665,7 +666,7 @@ class Inverter():
         if not force_discharge:
             self.adjust_inverter_mode(force_discharge)
 
-        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, new_start, new_end, old_start, old_end))
+        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge,  old_start, old_end, new_start, new_end))
         changed_start_end = False
 
         # Change start time
@@ -1604,6 +1605,14 @@ class PredBat(hass.Hass):
         """
         return round(value*1000)/1000
 
+    def hit_charge_window(self, charge_window, start, end):
+        window_n = 0
+        for window in charge_window:
+            if start >= window['start'] and end < window['end']:
+                return window_n
+            window_n += 1
+        return -1
+
     def in_charge_window(self, charge_window, minute_abs):
         """
         Work out if this minute is within the a charge window
@@ -2168,10 +2177,6 @@ class PredBat(hass.Hass):
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
 
-                if save == "best":
-                    total =  predict_grid_power[stamp] - predict_load_power[stamp] + predict_pv_power[stamp] + predict_battery_power[stamp]
-                    if abs(total) > 0.1:
-                        self.log("WARN: Power chart does not add up - total was {} at {} - grid {} load {} pv {} battery {}".format(total, stamp, predict_grid_power[stamp], predict_load_power[stamp], predict_pv_power[stamp], predict_battery_power[stamp]))
             minute += step
 
         hours_left = minute_left / 60.0
@@ -2914,9 +2919,9 @@ class PredBat(hass.Hass):
         discharge_limit_percent = 100
         discharge_limit_first = False
 
-        for minute in range(0, self.forecast_minutes, 30):
-            window_n = self.in_charge_window(discharge_window, minute + self.minutes_now)
-            minute_timestamp = self.midnight_utc + timedelta(minutes=(minute + self.minutes_now))
+        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
+            window_n = self.in_charge_window(discharge_window, minute)
+            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window_n >=0 and (discharge_limits[window_n] < 100.0):
                 soc_kw = (discharge_limits[window_n] * self.soc_max) / 100.0
@@ -3443,39 +3448,42 @@ class PredBat(hass.Hass):
         """
         new_limit_best = []
         new_window_best = []
-        max_slots = len(charge_limit_best)
-        max_dslots = len(discharge_limit_best)
 
-        for window_n in range(0, max_slots):
+        # For each charge window
+        for window_n in range(0, len(charge_limit_best)):
             window = charge_window_best[window_n]
             start = window['start']
             end = window['end']
             average = window['average']
-
+            limit = charge_limit_best[window_n]
             clipped = False
-            for dwindow_n in range(0, max_dslots):
+
+            # For each discharge window
+            for dwindow_n in range(0, len(discharge_limit_best)):
                 dwindow = discharge_window_best[dwindow_n]
                 dlimit = discharge_limit_best[dwindow_n]
                 dstart = dwindow['start']
                 dend = dwindow['end']
 
                 # Overlapping window with enabled discharge?
-                if dlimit < 100.0 and dstart < end and dend >= start:
+                if (limit > self.reserve) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+                    # Adjust the charge window to avoid the discharge
                     if dstart > start:
                         end = dstart
                         clipped = True
                     else:
                         start = dend
                         clipped = True
-                
+                                    
             if (not clipped) or ((end - start) >= 5):
                 new_window = {}
                 new_window['start'] = start
                 new_window['end'] = end
                 new_window['average'] = average
                 new_window_best.append(new_window)
-                new_limit_best.append(charge_limit_best[window_n])
-        return new_limit_best, new_window_best 
+                new_limit_best.append(limit)
+
+        return new_limit_best, new_window_best
 
     def discard_unused_charge_slots(self, charge_limit_best, charge_window_best, reserve):
         """
@@ -3707,6 +3715,10 @@ class PredBat(hass.Hass):
                             self.log("Best charge limit window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(window_n, self.time_abs_str(self.charge_window_best[window_n]['start']), self.time_abs_str(self.charge_window_best[window_n]['end']), average, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
                 else:
                     if self.calculate_best_discharge:
+                        if not self.calculate_discharge_oncharge:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
+                            if hit_charge > 0 and self.charge_limit_best[hit_charge] > self.reserve:
+                                continue
                         average = self.discharge_window_best[window_n]['average']
                         best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
                         self.discharge_limits_best[window_n] = best_soc
@@ -3982,6 +3994,7 @@ class PredBat(hass.Hass):
         opts += "calculate_best_charge({}) ".format(self.calculate_best_charge)
         opts += "calculate_best_discharge({}) ".format(self.calculate_best_discharge)
         opts += "calculate_discharge_first({}) ".format(self.calculate_discharge_first)
+        opts += "calculate_discharge_oncharge({}) ".format(self.calculate_discharge_oncharge)
         opts += "combine_charge_slots({}) ".format(self.combine_charge_slots)
         opts += "combine_discharge_slots({}) ".format(self.combine_discharge_slots)
         opts += "best_soc_min({} kWh) ".format(self.best_soc_min)
@@ -4118,6 +4131,7 @@ class PredBat(hass.Hass):
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', True)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
+        self.calculate_discharge_oncharge = self.get_arg('calculate_discharge_oncharge', True)
         self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
         self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
         self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
@@ -4385,17 +4399,14 @@ class PredBat(hass.Hass):
         # Find discharging windows
         if self.rate_export:
             self.high_export_rates = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            self.publish_rates(self.rate_export, True)
 
         # Find charging windows
         if self.rate_import:
             # Find charging window
             self.low_rates = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
             self.publish_rates(self.rate_import, False)
-
-        # Publish export rates
-        if self.rate_export:
-            self.publish_rates(self.rate_export, True)
-
+        
         # Work out car plan?
         for car_n in range(0, self.num_cars):
             if self.octopus_intelligent_charging and car_n == 0:
