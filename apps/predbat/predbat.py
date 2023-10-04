@@ -3709,30 +3709,30 @@ class PredBat(hass.Hass):
                         average = self.charge_window_best[window_n]['average']
                         best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
                         self.charge_limit_best[window_n] = best_soc
-                        charge_windows.append(window_n)
-                        charge_socs.append(best_soc)
+                        charge_windows.append(self.charge_window_best[window_n])
+                        charge_socs.append(int((best_soc / self.soc_max) * 100.0 + 0.5))
                         if self.debug_enable:
                             self.log("Best charge limit window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(window_n, self.time_abs_str(self.charge_window_best[window_n]['start']), self.time_abs_str(self.charge_window_best[window_n]['end']), average, self.dp2(best_soc), self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min,  self.best_soc_max, self.dp2(best_metric), self.dp2(best_cost), self.charge_limit_best))
                 else:
                     if self.calculate_best_discharge:
                         if not self.calculate_discharge_oncharge:
                             hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
-                            if hit_charge > 0 and self.charge_limit_best[hit_charge] > self.reserve:
+                            if hit_charge >= 0 and self.charge_limit_best[hit_charge] > self.reserve:
                                 continue
                         average = self.discharge_window_best[window_n]['average']
                         best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
                         self.discharge_limits_best[window_n] = best_soc
                         self.discharge_window_best[window_n]['start'] = best_start
-                        discharge_windows.append(window_n)
+                        discharge_windows.append(self.discharge_window_best[window_n])
                         discharge_socs.append(best_soc)
                         if self.debug_enable:
                             self.log("Best discharge limit window {} time {} - {} cost {} discharge_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(window_n, self.time_abs_str(self.discharge_window_best[window_n]['start']), self.time_abs_str(self.discharge_window_best[window_n]['end']), average, best_soc, self.dp2(soc_min), self.time_abs_str(soc_min_minute), self.best_soc_margin, self.best_soc_min, self.dp2(best_metric), self.dp2(best_cost)))
 
             # Log new set of charge and discharge windows
             if charge_windows:
-                self.log("Best charge windows in price group {} best_metric {} best_cost {} windows {} soc {}".format(price, best_metric, self.dp2(best_cost), charge_windows, charge_socs))
+                self.log("Best charge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(charge_windows, charge_socs)))
             if discharge_windows:
-                self.log("Best discharge windows in price group {} best_metric {} best_cost {} windows {} soc {}".format(price, best_metric, self.dp2(best_cost), discharge_windows, discharge_socs))
+                self.log("Best discharge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1])))
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
@@ -3752,10 +3752,11 @@ class PredBat(hass.Hass):
         """
         Convert window in minutes to text string
         """
-        txt = "{"
+        txt = "[ "
         for window_n in range(0, len(windows)):
             window = windows[window_n]
             percent = percents[window_n]
+            average = window['average']
             if window_n > 0:
                 txt += ', '
             start_timestamp = self.midnight_utc + timedelta(minutes=window['start'])
@@ -3764,8 +3765,8 @@ class PredBat(hass.Hass):
             end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
             txt += start_time + ' - '
             txt += end_time
-            txt += " @ {}".format(self.dp2(percent))
-        txt += '}'
+            txt += " @ {}p {}%".format(self.dp2(average), self.dp2(percent))
+        txt += ' ]'
         return txt
 
     def get_car_charging_planned(self):
