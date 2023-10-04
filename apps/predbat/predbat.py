@@ -4706,7 +4706,7 @@ class PredBat(hass.Hass):
                     minutes_start = inverter.discharge_start_time_minutes
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
-                discharge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
+                discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + 1)) # Add in 1 minute margin to allow Predbat to restore ECO mode
                 discharge_soc = (self.discharge_limits_best[0] * self.soc_max) / 100.0
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
