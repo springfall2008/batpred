@@ -406,8 +406,6 @@ Control how your battery behaves during car charging:
 
 ### Balance Inverters
 
-CAUTION: This is experimental code - needs beta testing and debugging. Only use this if you want to help with the testing, please file github tickets for issues.
-
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
@@ -662,19 +660,21 @@ This feature allows Predbat to create a plan for when you car will charge, but y
 **car_charging_plan_time** Is set to the time you expect your car to be fully charged by
 **car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times, when disabled all low rate slots will be used in time order.
 
-**octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
+**switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this feature.
 
 ### Calculation options
 
-**calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed. 
+**switch.predbat_calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed. 
 This must be enabled to get all the 'best' sensors.
 
-**calculate_best_charge**     If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
+**switch.predbat_calculate_best_charge** If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
 
-**calculate_best_discharge**   If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
+**switch.predbat_calculate_best_discharge** If set to False then discharge windows will not be calculated, when True they will be calculated. Default is True.
 
-**calculate_discharge_first**  When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
+**switch.predbat_calculate_discharge_first** When True discharge takes priority over charging (to maximise profit on export), when false charging is optimised first. Default to True
+
+**switch.predbat_calculate_discharge_oncharge** When True calculated discharge slots will disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
 
 ### Battery margins and metrics options
 
