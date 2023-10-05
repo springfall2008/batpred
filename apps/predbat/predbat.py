@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.6.1'
+THIS_VERSION = 'v7.6.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -93,6 +93,8 @@ CONFIG_ITEMS = [
     {'name' : 'balance_inverters_charge',      'friendly_name' : 'Balance Inverters for charging',          'type' : 'switch'},
     {'name' : 'balance_inverters_discharge',   'friendly_name' : 'Balance Inverters for discharge',         'type' : 'switch'},
     {'name' : 'balance_inverters_crosscharge', 'friendly_name' : 'Balance Inverters for cross-charging',    'type' : 'switch'},
+    {'name' : 'balance_inverters_threshold_charge',   'friendly_name' : 'Balance Inverters threshold charge',    'type' : 'input_number', 'min' : 1,   'max' : 20,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
+    {'name' : 'balance_inverters_threshold_discharge',   'friendly_name' : 'Balance Inverters threshold discharge',    'type' : 'input_number', 'min' : 1,   'max' : 20,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
     {'name' : 'debug_enable',                  'friendly_name' : 'Debug Enable',                   'type' : 'switch', 'icon' : 'mdi:bug-outline'},
     {'name' : 'car_charging_plan_time',        'friendly_name' : 'Car charging planned ready time','type' : 'select', 'options' : OPTIONS_TIME, 'icon' : 'mdi:clock-end'},
     {'name' : 'rate_low_match_export',         'friendly_name' : 'Rate Low Match Export',          'type' : 'switch'},
@@ -444,7 +446,7 @@ class Inverter():
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
 
-    def adjust_charge_rate(self, new_rate):
+    def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
         """
@@ -468,11 +470,12 @@ class Inverter():
                 else:
                     entity = self.base.get_entity(self.base.get_arg('charge_rate', indirect=False, index=self.id))
                     self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
-                if self.base.set_soc_notify:
+                if notify and self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
-            self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
+            if notify:
+                self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
 
-    def adjust_discharge_rate(self, new_rate):
+    def adjust_discharge_rate(self, new_rate, notify=True):
         """
         Adjust discharging rate
         """
@@ -496,9 +499,10 @@ class Inverter():
                 else:
                     entity = self.base.get_entity(self.base.get_arg('discharge_rate', indirect=False, index=self.id))
                     self.write_and_poll_value('discharge_rate', entity, new_rate, fuzzy=100)
-                if self.base.set_discharge_notify:
+                if notify and self.base.set_discharge_notify:
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
-            self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
+            if notify:
+                self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
 
     def adjust_battery_target(self, soc):
         """
@@ -3134,6 +3138,121 @@ class PredBat(hass.Hass):
         self.balance_inverters_charge = True
         self.balance_inverters_discharge = True
         self.balance_inverters_crosscharge = True
+        self.balance_inverters_threshold_charge = 1.0
+        self.balance_inverters_threshold_discharge = 1.0
+
+    def optimise_charge_limit_price(self, price_set, price_links, window_index, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record=None):
+        """
+        Pick an import price threshold which gives the best results
+        """
+        loop_price = price_set[-1]
+        best_price = loop_price
+        best_metric = 9999999
+        try_discharge = discharge_limits[:]
+        best_limits = try_charge_limit[:]
+        best_discharge = try_discharge[:]
+        best_soc_min = self.reserve
+        best_cost = 0
+
+        # Do we loop on discharge?
+        if self.calculate_best_discharge and self.calculate_discharge_first:
+            discharge_enable_options = [True, False]
+        else:
+            discharge_enable_options = [False]
+
+        # Cheapest first
+        all_prices = [price_set[-1] - 1] + price_set[::-1]
+        for loop_price in all_prices:
+            all_n = []
+            all_d = []
+            for price in price_set:
+                links = price_links[price]
+                if loop_price >= price:
+                    for key in links:
+                        window_n = window_index[key]['id']
+                        typ = window_index[key]['type']
+                        if typ == 'c':
+                            all_n.append(window_n)
+                else:
+                    # For prices above threshold try discharge
+                    for key in links:
+                        typ = window_index[key]['type']
+                        window_n = window_index[key]['id']
+                        if typ == 'd':
+                            all_d.append(window_n)
+
+            for discharge_enable in discharge_enable_options:
+                # This price band setting for charge
+                try_charge_limit = best_limits[:]
+                for window_n in range(0, record_charge_windows):
+                    if window_n in all_n:
+                        try_charge_limit[window_n] = self.soc_max
+                    else:
+                        try_charge_limit[window_n] = self.reserve
+
+                # Try discharge on/off
+                try_discharge = discharge_limits[:]
+                if discharge_enable:
+                    for window_n in all_d:
+                        if not self.calculate_discharge_oncharge:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
+                            if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
+                                continue
+                        try_discharge[window_n] = 0
+                
+                # Skip this one as it's the same as selected already
+                if try_charge_limit == best_limits:
+                    continue
+                
+                # Optimise
+                self.log("Optimise all for buy/sell price band <= {} windows {} discharge windows {}".format(loop_price, all_n, all_d))
+
+                # Turn off debug for this sim
+                was_debug = self.debug_enable
+                self.debug_enable = False
+
+                # Simulate with medium PV
+                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle  = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record = end_record)
+
+                # Simulate with 10% PV 
+                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute10_step, end_record = end_record)
+
+                # Debug re-enable if it was on
+                self.debug_enable = was_debug
+
+                # Store simulated mid value
+                metric = metricmid
+                cost = metricmid
+
+                # Balancing payment to account for battery left over 
+                # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min)
+                metric -= soc * max(rate_min, 1.0) / self.battery_loss
+                metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
+
+                # Adjustment for battery cycles metric
+                metric += battery_cycle * self.metric_battery_cycle
+                metric10 += battery_cycle * self.metric_battery_cycle
+
+                # Metric adjustment based on 10% outcome weighting
+                if metric10 > metric:
+                    metric_diff = metric10 - metric
+                    metric_diff *= self.pv_metric10_weight
+                    metric += metric_diff
+                    metric = self.dp2(metric)
+
+                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
+                # and it doesn't fall below the soc_keep threshold 
+                if ((metric + self.metric_min_improvement) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+                    best_metric = metric
+                    best_price = loop_price
+                    best_limits = try_charge_limit[:]
+                    best_discharge = all_d[:]
+                    best_soc_min = soc_min
+                    best_cost = cost
+
+        self.log("Optimise all charge found best buy/sell price band {} at metric {} cost {} limits {} discharge {}".format(best_price, best_metric, best_cost, best_limits, best_discharge))
+        return best_limits
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = None, end_record=None):
         """
@@ -3385,7 +3504,8 @@ class PredBat(hass.Hass):
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher 
                 average = self.dp2(window['average'] / self.inverter_loss / self.battery_loss)
-                sort_key = "%04.2f%03d_c%02d" % (5000 - average, id, id)
+                average = int(average + 0.5) # Round to nearest penny to avoid too many bands
+                sort_key = "%04.2f%03d_c%02d" % (5000 - average, 999 - id, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]['type'] = "c"
@@ -3399,6 +3519,7 @@ class PredBat(hass.Hass):
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower 
                 average = self.dp2(window['average'] * self.inverter_loss * self.battery_loss_discharge)
+                average = int(average + 0.5) # Round to nearest penny to avoid too many bands
                 sort_key = "%04.2f%03d_d%02d" % (5000 - average, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
@@ -3661,46 +3782,19 @@ class PredBat(hass.Hass):
         best_soc = self.soc_max
         best_cost = best_metric
 
-        self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
+        # Optimise all windows by picking a price threshold default
+        if price_set and self.calculate_best_charge:
+            self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
+            self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
+            self.charge_limit_best = self.optimise_charge_limit_price(price_set, price_links, window_index, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
+
+        # Optimise individual windows in the price band for charge/discharge
         for price in price_set:
-            links = price_links[price]
-            if self.debug_enable:
-                self.log("Optimise {} windows at expected buy/sell cost {}".format(len(links), price))
-
-            # First optimise all the windows in the price band for charge, only do groups of windows first
-            if self.calculate_best_charge:
-                charge_windows_all = []
-                last_window = None
-                for key in links:
-                    typ = window_index[key]['type']
-                    window_n = window_index[key]['id']
-                    if typ == 'c':
-                        window = self.charge_window_best[window_n]
-                        if not last_window or last_window['end'] == window['start']:
-                            charge_windows_all.append(window_n)
-                            last_window = window
-                        else:
-                            # Next group of windows, optimise last group
-                            if len(charge_windows_all) > 1:
-                                best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record, all_n=charge_windows_all)
-                                self.log("optimise all charge windows in range {} -> soc {} metric {}".format(charge_windows_all, best_soc, best_metric))
-                                for pt in charge_windows_all:
-                                    self.charge_limit_best[pt] = best_soc
-                            charge_windows_all = []
-                            charge_windows_all.append(window_n)
-                            last_window = window
-                # Left over windows
-                if len(charge_windows_all) > 1:
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record, all_n=charge_windows_all)
-                    self.log("optimise all charge windows in range {} -> soc {} metric {}".format(charge_windows_all, best_soc, best_metric))
-                    for pt in charge_windows_all:
-                        self.charge_limit_best[pt] = best_soc
-
-            # Now optimise individual windows in the price band for charge/discharge
             charge_windows = []
             charge_socs = []
             discharge_windows = []
             discharge_socs = []
+            links = price_links[price]
             for key in links:
                 typ = window_index[key]['type']
                 window_n = window_index[key]['id']
@@ -3884,7 +3978,7 @@ class PredBat(hass.Hass):
         balance_reset_charge = {}
         balance_reset_discharge = {}
 
-        self.log("BALANCE: Enabled balance charge {} discharge {} crosscharge {}".format(self.balance_inverters_charge, self.balance_inverters_discharge, self.balance_inverters_crosscharge))
+        self.log("BALANCE: Enabled balance charge {} discharge {} crosscharge {} threshold charge {} discharge {}".format(self.balance_inverters_charge, self.balance_inverters_discharge, self.balance_inverters_crosscharge, self.balance_inverters_threshold_charge, self.balance_inverters_threshold_discharge))
 
         # For each inverter get the details
         skew = self.get_arg('clock_skew', 0)
@@ -3906,7 +4000,7 @@ class PredBat(hass.Hass):
             inverter.update_status(minutes_now)
             inverters.append(inverter)
 
-        out_of_balance = False     # Are all the SOC % the same?
+        out_of_balance = False     # Are all the SOC % the same
         total_battery_power = 0    # Total battery power across inverters
         total_max_rate = 0         # Total battery max rate across inverters
         total_charge_rates = 0     # Current total charge rates
@@ -3944,8 +4038,8 @@ class PredBat(hass.Hass):
         soc_low = []
         soc_high = []
         for inverter in inverters:
-            soc_low.append(inverter.soc_percent < soc_max)
-            soc_high.append(inverter.soc_percent > soc_min)
+            soc_low.append(inverter.soc_percent  < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_discharge))
+            soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_charge))
         
         above_reserve = [] # Are the inverters above the reserve
         can_power_house = [] # Could this inverter power the house alone?
@@ -3963,27 +4057,27 @@ class PredBat(hass.Hass):
             if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter] and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
                 balance_reset_discharge[id] = True
-                inverters[this_inverter].adjust_discharge_rate(0)
+                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
-                inverters[this_inverter].adjust_charge_rate(0)
+                inverters[this_inverter].adjust_charge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
-                inverters[this_inverter].adjust_charge_rate(0)
+                inverters[this_inverter].adjust_charge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
-                inverters[this_inverter].adjust_charge_rate(0)
+                inverters[this_inverter].adjust_charge_rate(0, notify=False)
 
         for id in range(0, num_inverters):
             if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id]==0:
                 self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.battery_rate_max_charge*60*1000))
-                inverters[id].adjust_charge_rate(inverter.battery_rate_max_charge*60*1000)
+                inverters[id].adjust_charge_rate(inverter.battery_rate_max_charge*60*1000, notify=False)
             if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id]==0:
                 self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverter.battery_rate_max_discharge*60*1000))
-                inverters[id].adjust_discharge_rate(inverter.battery_rate_max_discharge*60*1000)
+                inverters[id].adjust_discharge_rate(inverter.battery_rate_max_discharge*60*1000, notify=False)
         
         self.log("BALANCE: Completed this run")
 
@@ -4137,6 +4231,8 @@ class PredBat(hass.Hass):
         self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
         self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
         self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
+        self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
+        self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
 
         # Enable load filtering
         self.load_filter_modal = self.get_arg('load_filter_modal', False)
@@ -4569,7 +4665,6 @@ class PredBat(hass.Hass):
         if self.calculate_best:
 
             self.log_option_best()
-            self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
             self.optimise_all_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric)
 
             # Remove charge windows that overlap with discharge windows
