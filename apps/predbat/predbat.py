@@ -89,7 +89,7 @@ CONFIG_ITEMS = [
     {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
     {'name' : 'set_reserve_hold',              'friendly_name' : 'Set Reserve Hold',               'type' : 'switch'},
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
-    {'name' : 'balance_inverters_enable',      'friendly_name' : 'Balance Inverters Enable (Beta)','type' : 'switch'},
+    {'name' : 'balance_inverters_enable',      'friendly_name' : 'Balance Inverters Enable (Beta)', 'type' : 'switch'},
     {'name' : 'balance_inverters_charge',      'friendly_name' : 'Balance Inverters for charging',          'type' : 'switch'},
     {'name' : 'balance_inverters_discharge',   'friendly_name' : 'Balance Inverters for discharge',         'type' : 'switch'},
     {'name' : 'balance_inverters_crosscharge', 'friendly_name' : 'Balance Inverters for cross-charging',    'type' : 'switch'},
@@ -3979,11 +3979,11 @@ class PredBat(hass.Hass):
 
         for id in range(0, num_inverters):
             if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id]==0:
-                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.charge_rate_max*60*1000))
-                inverters[id].adjust_charge_rate(inverter.charge_rate_max*60*1000)
+                self.log("BALANCE: Inverter {} reset charge rate to {} now balanced".format(id, inverter.battery_rate_max_charge*60*1000))
+                inverters[id].adjust_charge_rate(inverter.battery_rate_max_charge*60*1000)
             if not balance_reset_discharge.get(id, False) and total_discharge_rates != 0 and discharge_rates[id]==0:
-                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverter.discharge_rate_max*60*1000))
-                inverters[id].adjust_discharge_rate(inverter.discharge_rate_max*60*1000)
+                self.log("BALANCE: Inverter {} reset discharge rate to {} now balanced".format(id, inverter.battery_rate_max_discharge*60*1000))
+                inverters[id].adjust_discharge_rate(inverter.battery_rate_max_discharge*60*1000)
         
         self.log("BALANCE: Completed this run")
 
