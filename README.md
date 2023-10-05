@@ -492,12 +492,14 @@ Follow the instructions from Cheap Night rate above, but also you will want to h
 ```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
+combine_charge_slots - True            # Keep one big charge slot
 combine_discharge_slots - False        # For fixed export rate you have to break up the discharge slots
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 1.0               # For fixed export rate you need to consider all slots
 predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
+predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 ```
 
 predbat_set_discharge_freeze_only - ?? # If you set Freeze only to True then excess solar will be exported, set to False if you want forced export as well
@@ -511,11 +513,14 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 ```
 calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
+combine_charge_slots - True            # Keep one big charge slot
 combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
 set_discharge_window - True            # Allow the tool to control the discharge slots
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
+predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
+predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
 ```
 
 ### Half hourly variable rates (e.g. Octopus Agile)
@@ -531,7 +536,8 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 max_windows - 128                      # Ensure you have enough slots
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
-rate_high_threshold: 1.2               # Consider more valuable export slots only
+rate_high_threshold - 1.2              # Consider more valuable export slots only
+predbat_metric_battery_cycle - 0       # Currently setting this non-zero breaks the optimisation of these tariffs
 ```
 
 If you have a fixed export rate then follow the above for variable rates but change:
