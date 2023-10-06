@@ -460,7 +460,7 @@ class Inverter():
             else:
                 current_rate = self.base.get_arg('charge_rate', index=self.id, default=2600.0)
 
-        if current_rate != new_rate:
+        if abs(current_rate - new_rate) > 100:
             self.base.log("Inverter {} current charge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
             if SIMULATE:
                 self.base.sim_charge_rate_max = new_rate
@@ -489,7 +489,7 @@ class Inverter():
             else:
                 current_rate = self.base.get_arg('discharge_rate', index=self.id, default=2600.0)
 
-        if current_rate != new_rate:
+        if abs(current_rate - new_rate) > 100:
             self.base.log("Inverter {} current discharge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
             if SIMULATE:
                 self.base.sim_discharge_rate_max = new_rate
@@ -3194,7 +3194,6 @@ class PredBat(hass.Hass):
             for discharge_enable in discharge_enable_options:
                 # This price band setting for charge
                 try_charge_limit = best_limits[:]
-                self.log("Record charge windows {}".format(record_charge_windows))
                 for window_n in range(0, record_charge_windows):
                     if window_n in all_n:
                         try_charge_limit[window_n] = self.soc_max
@@ -3205,10 +3204,9 @@ class PredBat(hass.Hass):
                 try_discharge = discharge_limits[:]
                 if discharge_enable:
                     for window_n in all_d:
-                        if not self.calculate_discharge_oncharge:
-                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
-                            if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
-                                continue
+                        hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
+                        if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
+                            continue
                         try_discharge[window_n] = 0
                 
                 # Skip this one as it's the same as selected already
@@ -3708,8 +3706,11 @@ class PredBat(hass.Hass):
                         limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max_charge_scaled, charge_limit_best[window_n])
                         if self.best_soc_max > 0:
                             limit_soc = min(limit_soc, self.best_soc_max)
-                        charge_limit_best[window_n] = max(limit_soc, self.best_soc_min) 
-                        self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                        new_limit = max(limit_soc, self.best_soc_min)
+                        if new_limit != charge_limit_best[window_n]:
+                            charge_limit_best[window_n] = new_limit
+                            if self.debug_enable:
+                                self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
 
             else:
                 self.log("WARN: Clip charge window {} as it's already passed".format(window_n))
@@ -3749,7 +3750,8 @@ class PredBat(hass.Hass):
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
                         discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                         if limit != discharge_limits_best[window_n]:
-                            self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                            if self.debug_enable:
+                                self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
                 elif soc_max < limit_soc:
                     # Bring down limit to match predicted soc for freeze only mode
                     if self.set_discharge_freeze:
@@ -3757,7 +3759,8 @@ class PredBat(hass.Hass):
                         limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
                         discharge_limits_best[window_n] = float(int(limit_soc / self.soc_max * 100.0 + 0.5))
                         if limit != discharge_limits_best[window_n]:
-                            self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                            if self.debug_enable:
+                                self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
 
             else:
                 self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
@@ -4101,6 +4104,8 @@ class PredBat(hass.Hass):
         opts += "calculate_best_discharge({}) ".format(self.calculate_best_discharge)
         opts += "calculate_discharge_first({}) ".format(self.calculate_discharge_first)
         opts += "calculate_discharge_oncharge({}) ".format(self.calculate_discharge_oncharge)
+        opts += "set_discharge_freeze({}) ".format(self.set_discharge_freeze)
+        opts += "set_discharge_freeze_only({}) ".format(self.set_discharge_freeze_only)
         opts += "combine_charge_slots({}) ".format(self.combine_charge_slots)
         opts += "combine_discharge_slots({}) ".format(self.combine_discharge_slots)
         opts += "best_soc_min({} kWh) ".format(self.best_soc_min)
