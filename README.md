@@ -416,6 +416,8 @@ Enable **switch.predbat_balance_inverters_enable** switch in Home Assistant to e
 **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
 **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
 **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+**input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
+**input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
 
 ### Triggers
 
