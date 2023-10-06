@@ -537,7 +537,6 @@ metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it 
 max_windows - 128                      # Ensure you have enough slots
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
 rate_high_threshold - 1.2              # Consider more valuable export slots only
-predbat_metric_battery_cycle - 0       # Currently setting this non-zero breaks the optimisation of these tariffs
 ```
 
 If you have a fixed export rate then follow the above for variable rates but change:
