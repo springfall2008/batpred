@@ -2922,22 +2922,26 @@ class PredBat(hass.Hass):
         discharge_limit_soc = self.soc_max
         discharge_limit_percent = 100
         discharge_limit_first = False
+        prev_limit = -1
 
-        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
+        for minute in range(0, self.forecast_minutes + self.minutes_now, 5):
             window_n = self.in_charge_window(discharge_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window_n >=0 and (discharge_limits[window_n] < 100.0):
-                soc_kw = (discharge_limits[window_n] * self.soc_max) / 100.0
-                discharge_limit_time[stamp] = discharge_limits[window_n]
-                discharge_limit_time_kw[stamp] = soc_kw
+                soc_perc = discharge_limits[window_n]
+                soc_kw = (soc_perc * self.soc_max) / 100.0
                 if not discharge_limit_first:
                     discharge_limit_soc = soc_kw
                     discharge_limit_percent = discharge_limits[window_n]
                     discharge_limit_first = True
             else:
-                discharge_limit_time[stamp] = 100
-                discharge_limit_time_kw[stamp] = self.soc_max
+                soc_perc = 100
+                soc_kw = self.soc_max
+            if prev_limit != soc_perc:
+                discharge_limit_time[stamp] = soc_perc
+                discharge_limit_time_kw[stamp] = self.dp2(soc_kw)
+            prev_limit = soc_perc
 
         if not SIMULATE:
             discharge_start_str = 'undefined'
@@ -2974,16 +2978,22 @@ class PredBat(hass.Hass):
         """
         charge_limit_time = {}
         charge_limit_time_kw = {}
-        for minute in range(0, self.forecast_minutes + self.minutes_now, 30):
+        prev_perc = -1
+
+        for minute in range(0, self.forecast_minutes + self.minutes_now, 5):
             window = self.in_charge_window(charge_window, minute)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if window >= 0:
-                charge_limit_time[stamp] = charge_limit_percent[window]
-                charge_limit_time_kw[stamp] = charge_limit[window]
+                soc_perc = charge_limit_percent[window]
+                soc_kw = charge_limit[window]
             else:
-                charge_limit_time[stamp] = 0
-                charge_limit_time_kw[stamp] = 0
+                soc_perc = 0
+                soc_kw = 0
+            if prev_perc != soc_perc:
+                charge_limit_time[stamp] = soc_perc
+                charge_limit_time_kw[stamp] = soc_kw
+            prev_perc = soc_perc
         
         if not SIMULATE:
             charge_limit_first = 0
@@ -3184,6 +3194,7 @@ class PredBat(hass.Hass):
             for discharge_enable in discharge_enable_options:
                 # This price band setting for charge
                 try_charge_limit = best_limits[:]
+                self.log("Record charge windows {}".format(record_charge_windows))
                 for window_n in range(0, record_charge_windows):
                     if window_n in all_n:
                         try_charge_limit[window_n] = self.soc_max
@@ -3783,7 +3794,7 @@ class PredBat(hass.Hass):
         best_cost = best_metric
 
         # Optimise all windows by picking a price threshold default
-        if price_set and self.calculate_best_charge:
+        if price_set and self.calculate_best_charge and self.charge_window_best:
             self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
             self.optimise_charge_windows_reset(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step)
             self.charge_limit_best = self.optimise_charge_limit_price(price_set, price_links, window_index, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
