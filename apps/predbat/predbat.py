@@ -3481,7 +3481,7 @@ class PredBat(hass.Hass):
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
-                if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+                if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min > best_soc_min)):
                     best_metric = metric
                     best_discharge = this_discharge_limit
                     best_cost = cost
