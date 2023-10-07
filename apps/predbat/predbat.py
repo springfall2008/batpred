@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.7'
+THIS_VERSION = 'v7.7.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -75,6 +75,7 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_best_discharge',      'friendly_name' : 'Calculate Best Discharge',       'type' : 'switch'},
     {'name' : 'calculate_discharge_first',     'friendly_name' : 'Calculate Discharge First',      'type' : 'switch'},
     {'name' : 'calculate_discharge_oncharge',  'friendly_name' : 'Calculate Discharge on charge slots', 'type' : 'switch'},
+    {'name' : 'calculate_second_pass',         'friendly_name' : 'Calculate second pass (slower)', 'type' : 'switch'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -1738,6 +1739,8 @@ class PredBat(hass.Hass):
         next_charge_start = self.forecast_minutes
         if charge_window:
             next_charge_start = charge_window[0]['start']
+            if next_charge_start < self.minutes_now:
+                next_charge_start = charge_window[0]['end']
 
         end_record = min(self.forecast_plan_hours * 60 + next_charge_start, self.forecast_minutes + self.minutes_now)
         max_windows = self.max_charge_windows(end_record, charge_window)
@@ -2227,7 +2230,7 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".import_energy_h0", state=self.dp3(import_kwh_h0), attributes = {'friendly_name' : 'Current import kWh', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state(self.prefix + ".import_energy_battery", state=self.dp3(final_import_kwh_battery), attributes = {'friendly_name' : 'Predicted import to battery', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
             self.set_state(self.prefix + ".import_energy_house", state=self.dp3(final_import_kwh_house), attributes = {'friendly_name' : 'Predicted import to house', 'state_class': 'measurement', 'unit_of_measurement': 'kwh', 'icon': 'mdi:transmission-tower-import'})
-            self.log("Battery has {} hours left - now at {}".format(hours_left, self.dp2(self.soc_kw)))
+            self.log("Battery has {} hours left - now at {}".format(self.dp2(hours_left), self.dp2(self.soc_kw)))
             self.set_state(self.prefix + ".metric", state=self.dp2(final_metric), attributes = {'results' : metric_time, 'friendly_name' : 'Predicted metric (cost)', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
             self.set_state(self.prefix + ".duration", state=self.dp2(end_record/60), attributes = {'friendly_name' : 'Prediction duration', 'state_class': 'measurement', 'unit_of_measurement': 'hours', 'icon' : 'mdi:arrow-split-vertical'})
 
@@ -3172,6 +3175,7 @@ class PredBat(hass.Hass):
 
         # Cheapest first
         all_prices = [price_set[-1] - 1] + price_set[::-1]
+        self.log("All prices {}".format(all_prices))
         for loop_price in all_prices:
             all_n = []
             all_d = []
@@ -3203,6 +3207,9 @@ class PredBat(hass.Hass):
                 # Try discharge on/off
                 try_discharge = discharge_limits[:]
                 if discharge_enable:
+                    if not all_d:
+                        continue
+
                     for window_n in all_d:
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
                         if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
@@ -3214,7 +3221,10 @@ class PredBat(hass.Hass):
                     continue
                 
                 # Optimise
-                self.log("Optimise all for buy/sell price band <= {} windows {} discharge windows {}".format(loop_price, all_n, all_d))
+                if discharge_enable:
+                    self.log("Optimise all for buy/sell price band <= {} windows {} discharge on {}".format(loop_price, all_n, all_d))
+                else:
+                    self.log("Optimise all for buy/sell price band <= {} windows {} discharge off".format(loop_price, all_n))
 
                 # Turn off debug for this sim
                 was_debug = self.debug_enable
@@ -3260,7 +3270,7 @@ class PredBat(hass.Hass):
                     best_soc_min = soc_min
                     best_cost = cost
 
-        self.log("Optimise all charge found best buy/sell price band {} at metric {} cost {} limits {} discharge {}".format(best_price, best_metric, best_cost, best_limits, best_discharge))
+            self.log("Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(loop_price, best_price, best_metric, self.dp2(best_cost), best_limits, best_discharge))
         return best_limits
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = None, end_record=None):
@@ -3553,6 +3563,37 @@ class PredBat(hass.Hass):
 
         return window_sort, window_links, price_set, price_links
 
+    def sort_window_by_time_combined(self, charge_windows, discharge_windows):
+        window_sort = []
+        window_links = {}
+
+        # Add charge windows
+        if self.calculate_best_charge:
+            id = 0
+            for window in charge_windows:
+                sort_key = "%04d_%03d_c" % (window['start'], id)
+                window_sort.append(sort_key)
+                window_links[sort_key] = {}
+                window_links[sort_key]['type'] = "c"
+                window_links[sort_key]['id'] = id
+                id += 1
+
+        # Add discharge windows
+        if self.calculate_best_discharge:
+            id = 0
+            for window in discharge_windows:
+                sort_key = "%04d_%03d_d" % (window['start'], id)
+                window_sort.append(sort_key)
+                window_links[sort_key] = {}
+                window_links[sort_key]['type'] = "d"
+                window_links[sort_key]['id'] = id
+                id += 1
+
+        if window_sort:
+            window_sort.sort()
+        
+        return window_sort, window_links
+
     def sort_window_by_price(self, windows, reverse_time=False):
         """
         Sort the charge windows by highest price first, return a list of window IDs
@@ -3841,6 +3882,33 @@ class PredBat(hass.Hass):
                 self.log("Best charge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(charge_windows, charge_socs)))
             if discharge_windows:
                 self.log("Best discharge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1])))
+
+        if self.calculate_second_pass:
+            self.log("Second pass optimisation started")
+            count = 0
+            window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows])
+            for key in window_sorted:
+                typ = window_index[key]['type']
+                window_n = window_index[key]['id']
+                if typ == 'c':
+                    if self.calculate_best_charge:
+                        best_soc, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_charge_limit(window_n, record_charge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
+                        self.charge_limit_best[window_n] = best_soc
+                else:
+                    if self.calculate_best_discharge:
+                        if not self.calculate_discharge_oncharge:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
+                            if hit_charge >= 0 and self.charge_limit_best[hit_charge] > self.reserve:
+                                continue
+                        average = self.discharge_window_best[window_n]['average']
+                        best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute = self.optimise_discharge(window_n, record_discharge_windows, self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record = end_record)
+                        self.discharge_limits_best[window_n] = best_soc
+                        self.discharge_window_best[window_n]['start'] = best_start
+                if (count % 16) == 0:
+                    self.log("Final optimisation type {} window {} metric {} cost {}".format(typ, window_n, best_metric, self.dp2(best_cost)))
+                count += 1
+            self.log("Second pass optimisation finished metric {} cost {}".format(best_metric, self.dp2(best_cost)))
+
 
     def optimise_charge_windows_reset(self, end_record, load_minutes, pv_forecast_minute_step, pv_forecast_minute10_step):
         """
@@ -4243,6 +4311,7 @@ class PredBat(hass.Hass):
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', True)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
         self.calculate_discharge_oncharge = self.get_arg('calculate_discharge_oncharge', True)
+        self.calculate_second_pass = self.get_arg('calculate_second_pass', False)
         self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
         self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
         self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
