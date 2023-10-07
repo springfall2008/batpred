@@ -500,7 +500,8 @@ set_discharge_window - True            # Allow the tool to control the discharge
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 1.0               # For fixed export rate you need to consider all slots
-predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
+set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
+calculate_second_pass - True           # Slower but will give a slightly better result
 predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 ```
 
@@ -521,8 +522,8 @@ set_discharge_window - True            # Allow the tool to control the discharge
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_high_threshold: 1.2               # Rates at least 20% above the average count as export slots
-predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
-predbat_set_discharge_freeze - True    # Allow Predbat to hold the current battery level rather than just discharge
+metric_battery_cycle - ?               # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
+set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
 ```
 
 ### Half hourly variable rates (e.g. Octopus Agile)
@@ -538,7 +539,9 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 max_windows - 128                      # Ensure you have enough slots
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
-rate_high_threshold - 1.2              # Consider more valuable export slots only
+rate_high_threshold - 1.0              # Consider more export slots
+calculate_second_pass - True           # Slower but will give a slightly better result
+set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
 ```
 
 If you have a fixed export rate then follow the above for variable rates but change:
