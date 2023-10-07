@@ -267,6 +267,8 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500). This will emulate the software export limit setting in the Inverter that you will have if your G98/G99 approval was lower than your maximum inverter power (check your install information for details). If not set the export limit is the same as the inverter limit.
 
   - **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional), when set overrides the maximum charge/discharge rate register settings used when controlling the inverter. This can be used for workarounds if you need to cap your inverter battery rate as Predbat overwrites the maximum rate registers when it enables a timed charge or discharge.
+ 
+  - **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge. Recommended setting is 200 for gen1 hybrids with this issue.
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
@@ -403,6 +405,7 @@ Control how your battery behaves during car charging:
   - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time (see apps.yml)
   - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
   - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
+  - **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
 
 ### Balance Inverters
 
