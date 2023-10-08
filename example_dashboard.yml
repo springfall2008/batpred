@@ -7,6 +7,7 @@ entities:
   - entity: switch.predbat_calculate_best_charge
   - entity: switch.predbat_calculate_best_discharge
   - entity: switch.predbat_calculate_discharge_first
+  - entity: switch.predbat_calculate_discharge_oncharge
   - entity: switch.predbat_rate_low_match_export
   - entity: switch.predbat_set_charge_window
   - entity: switch.predbat_set_discharge_notify
@@ -31,6 +32,12 @@ entities:
   - entity: switch.predbat_inverter_soc_reset
   - entity: switch.predbat_battery_capacity_nominal
   - entity: switch.predbat_car_charging_from_battery
+  - entity: switch.predbat_balance_inverters_enable
+  - entity: switch.predbat_balance_inverters_charge
+  - entity: switch.predbat_balance_inverters_discharge
+  - entity: switch.predbat_balance_inverters_crosscharge
+  - entity: input_number.predbat_balance_inverters_threshold_charge
+  - entity: input_number.predbat_balance_inverters_threshold_discharge
   - entity: input_number.predbat_battery_loss
   - entity: input_number.predbat_battery_loss_discharge
   - entity: input_number.predbat_inverter_loss
