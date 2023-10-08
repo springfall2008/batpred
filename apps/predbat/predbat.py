@@ -831,11 +831,11 @@ class Inverter():
             if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable':
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
-    def rest_readData(self):
+    def rest_readData(self, api='readData'):
         """
         Get inverter status
         """
-        url = self.rest_api + '/readData'
+        url = self.rest_api + '/' + api
         try:
             r = requests.get(url)
         except Exception as e:
@@ -859,12 +859,7 @@ class Inverter():
         """
         Updated and get inverter status
         """
-        url = self.rest_api + '/runAll'
-        r = requests.get(url)
-        if r.status_code == 200:
-            return r.json()
-        else:
-            return None
+        return self.rest_readData(api='runAll')
 
     def rest_setChargeTarget(self, target):
         """
