@@ -136,7 +136,7 @@ class Inverter():
             self.self_test()
         exit
 
-    def __init__(self, base, id=0):
+    def __init__(self, base, id=0, quiet=False):
         self.id = id
         self.base = base
         self.charge_enable_time = False
@@ -160,11 +160,13 @@ class Inverter():
         self.battery_rate_max_charge_scaled = 0
         self.battery_rate_max_discharge_scaled = 0
         self.battery_power = 0
+        self.pv_power = 0
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
         if self.rest_api:
-            self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
+            if not quiet:
+                self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
             self.rest_data = self.rest_readData()
 
         # Battery size, charge and discharge rates
@@ -179,8 +181,6 @@ class Inverter():
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                        # XXX: Weird workaround for battery reporting wrong capacity issue
                        self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
-                    else:
-                       self.base.log("REST data reports Battery Capacity Kwh as {} and nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
    
@@ -227,7 +227,8 @@ class Inverter():
         if self.inverter_time:
             tdiff = self.inverter_time - self.base.now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60*24)
-            self.base.log("Invertor time {} AppDeamon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
+            if not quiet:
+                self.base.log("Invertor time {} AppDeamon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
             if abs(tdiff) >= 5:
                 self.base.log("WARN: Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff))
                 self.base.record_status("Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff), had_errors=True)
@@ -255,11 +256,12 @@ class Inverter():
         self.export_limit = min(self.export_limit, self.inverter_limit)
 
         # Log inveter details
-        self.base.log("New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(self.id, self.base.dp2(self.soc_max), 
-            self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max_raw), self.base.dp2(self.battery_rate_max_charge * 60.0), self.base.dp2(self.battery_rate_max_discharge * 60.0), self.base.dp2(self.battery_rate_min * 60.0 * 1000.0),
-            self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent, self.reserve_percent_current))
+        if not quiet:
+            self.base.log("New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(self.id, self.base.dp2(self.soc_max), 
+                self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max_raw), self.base.dp2(self.battery_rate_max_charge * 60.0), self.base.dp2(self.battery_rate_max_discharge * 60.0), self.base.dp2(self.battery_rate_min * 60.0 * 1000.0),
+                self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent, self.reserve_percent_current))
         
-    def update_status(self, minutes_now):
+    def update_status(self, minutes_now, quiet=False):
         """
         Update inverter status
         """
@@ -295,10 +297,13 @@ class Inverter():
             pdetails = self.rest_data['Power']
             if 'Power' in pdetails:
                 self.battery_power = float(pdetails['Power']['Battery_Power'])
+                self.pv_power = float(pdetails['Power']['PV_Power'])
         else:
             self.battery_power = self.base.get_arg('battery_power', default=0.0, index=self.id)
+            self.pv_power = self.base.get_arg('pv_power', default=0.0, index=self.id)
 
-        self.base.log("Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} wcurrent power {} w".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_now*60*1000, self.discharge_rate_now*60*1000.0, self.battery_power))
+        if not quiet:
+            self.base.log("Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} wcurrent power {} w".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_now*60*1000, self.discharge_rate_now*60*1000.0, self.battery_power))
 
         # If the battery is being charged then find the charge window
         if self.charge_enable_time:
@@ -336,7 +341,9 @@ class Inverter():
         # Construct charge window from the GivTCP settings
         self.charge_window = []
 
-        self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.charge_enable_time))
+        if not quiet:
+            self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.charge_enable_time))\
+
         if self.charge_enable_time:
             minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
             minute_end = self.charge_end_time_minutes
@@ -349,7 +356,8 @@ class Inverter():
                 minute += 24 * 60
                 minute_end += 24 * 60
 
-        self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
+        if not quiet:
+            self.base.log('Inverter {} charge windows currently {}'.format(self.id, self.charge_window))
 
         # Work out existing charge limits and percent
         if self.charge_enable_time:
@@ -360,10 +368,11 @@ class Inverter():
         else:
             self.current_charge_limit = 0.0
 
-        if self.charge_enable_time:
-            self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate_now * 60.0))
-        else:
-            self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate_now * 60.0))
+        if not quiet:
+            if self.charge_enable_time:
+                self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate_now * 60.0))
+            else:
+                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate_now * 60.0))
             
         # Construct discharge window from GivTCP settings
         self.discharge_window = []
@@ -390,7 +399,8 @@ class Inverter():
             else:
                 self.discharge_end_time_minutes += 60 * 24
         
-        self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
+        if not quiet:
+            self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
         # Pre-fill current discharge window
         # Store it even when discharge timed isn't enabled as it won't be outside the actual slot
         if True:
@@ -411,7 +421,8 @@ class Inverter():
         else:
             self.discharge_limits = [100.0 for i in range(0, len(self.discharge_window))]
 
-        self.base.log('Inverter {} discharge windows currently {}'.format(self.id, self.discharge_window))
+        if not quiet:
+            self.base.log('Inverter {} discharge windows currently {}'.format(self.id, self.discharge_window))
 
         if INVERTER_TEST:
             self.self_test()
@@ -4093,8 +4104,8 @@ class PredBat(hass.Hass):
 
         inverters = []
         for id in range(0, num_inverters):
-            inverter = Inverter(self, id)
-            inverter.update_status(minutes_now)
+            inverter = Inverter(self, id, quiet=True)
+            inverter.update_status(minutes_now, quiet=True)
             inverters.append(inverter)
 
         out_of_balance = False     # Are all the SOC % the same
@@ -4102,9 +4113,11 @@ class PredBat(hass.Hass):
         total_max_rate = 0         # Total battery max rate across inverters
         total_charge_rates = 0     # Current total charge rates
         total_discharge_rates = 0  # Current total discharge rates
+        total_pv_power = 0         # Current total PV power
         socs = []
         reserves = []
         battery_powers = []
+        pv_powers = []
         battery_max_rates = []
         charge_rates = []
         discharge_rates = []
@@ -4114,14 +4127,16 @@ class PredBat(hass.Hass):
             if inverter.soc_percent != inverters[0].soc_percent:
                 out_of_balance = True
             battery_powers.append(inverter.battery_power)
+            pv_powers.append(inverter.pv_power)
             total_battery_power += inverter.battery_power
+            total_pv_power += inverter.pv_power
             battery_max_rates.append(inverter.battery_rate_max_discharge * 60*1000.0)
             total_max_rate += inverter.battery_rate_max_discharge * 60*1000.0
             charge_rates.append(inverter.charge_rate_now * 60*1000.0)
             total_charge_rates += inverter.charge_rate_now * 60*1000.0
             discharge_rates.append(inverter.discharge_rate_now * 60*1000.0)
             total_discharge_rates += inverter.discharge_rate_now * 60*1000.0
-        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, total_charge_rates, discharge_rates, total_discharge_rates))
+        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} pv_power {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, pv_powers, total_charge_rates, discharge_rates, total_discharge_rates))
 
         # Are we discharging
         during_discharge = total_battery_power >= 0.0
@@ -4138,24 +4153,28 @@ class PredBat(hass.Hass):
             soc_low.append(inverter.soc_percent  < soc_max and (abs(inverter.soc_percent - soc_max) >= self.balance_inverters_discharge))
             soc_high.append(inverter.soc_percent > soc_min and (abs(inverter.soc_percent - soc_min) >= self.balance_inverters_charge))
         
-        above_reserve = [] # Are the inverters above the reserve
-        can_power_house = [] # Could this inverter power the house alone?
+        above_reserve = []          # Is the battery above reserve?
+        below_full = []             # Is the battery below full?
+        can_power_house = []        # Could this inverter power the house alone?
+        can_store_pv = []           # Can store the PV for the house alone?
         power_enough_discharge = [] # Inverter drawing enough power to be worth balancing
         power_enough_charge = []    # Inverter drawing enough power to be worth balancing
         for id in range(0, num_inverters):
             above_reserve.append((socs[id] - reserves[id]) >= 4.0)
+            below_full.append(socs[id] < 100.0)
             can_power_house.append((total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power)
+            can_store_pv.append(total_pv_power <= (total_charge_rates - charge_rates[id]))
             power_enough_discharge.append(battery_powers[id] >= 50.0)
             power_enough_charge.append(inverters[id].battery_power <= -50.0)
 
-        self.log("BALANCE: out_of_balance {} above_reserve {} can_power_house {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(out_of_balance, above_reserve, can_power_house, power_enough_discharge, power_enough_charge, soc_low, soc_high))
+        self.log("BALANCE: out_of_balance {} above_reserve {} below_full {} can_power_house {} can_store_pv {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(out_of_balance, above_reserve, below_full, can_power_house, can_store_pv, power_enough_discharge, power_enough_charge, soc_low, soc_high))
         for this_inverter in range(0, num_inverters):
             other_inverter = (this_inverter + 1) % num_inverters
             if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter] and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
                 balance_reset_discharge[id] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-            elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
+            elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and below_full[other_inverter] and can_store_pv[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
                 inverters[this_inverter].adjust_charge_rate(0, notify=False)
@@ -4165,7 +4184,7 @@ class PredBat(hass.Hass):
                 inverters[this_inverter].adjust_charge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
-                balance_reset_charge[id] = True
+                balance_reset_discharge[id] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(0, num_inverters):

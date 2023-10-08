@@ -71,6 +71,9 @@ pred_bat:
   battery_power: 
     - number.givtcp_{geserial}_battery_power
     - number.givtcp2_{geserial2}_battery_power
+  pv_power: 
+    - number.givtcp_{geserial}_pv_power
+    - number.givtcp2_{geserial2}_pv_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
     - sensor.givtcp2_{geserial2}_soc_kwh
