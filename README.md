@@ -701,8 +701,6 @@ This must be enabled to get all the 'best' sensors.
 
 **best_soc_step** is the accuracy to calculate the charge levels to, higher values make calculations quicker, smaller ones will take longer (recommended 0.5 or 0.25)
 
-**best_soc_pass_margin** Only used for multiple charge windows, the margin to add to the first pass calculations only (default is 0 - recommended).
-
 **combine_charge_slots** controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
 Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is enabled (True)
 
@@ -750,7 +748,7 @@ If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned 
 **set_soc_enable** When enable automatically set the battery SOC charge amount a defined number of minutes before charging starts
 NOTE: it maybe set more than once if things change
 
-If you have **inverter_hybrid** set to False then if **inverter_soc_reset** is set to True then the target SOC % will be reset to 100% outside a charge window. This maybe required for AOI inverter to ensure it charges from solar.
+If you have **inverter_hybrid** set to False then if **inverter_soc_reset** is set to True then the target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
 
 **set_soc_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
 **set_soc_notify** enables mobile notifications about changes to the charge %
