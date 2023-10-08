@@ -181,8 +181,6 @@ class Inverter():
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                        # XXX: Weird workaround for battery reporting wrong capacity issue
                        self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
-                    else:
-                       self.base.log("REST data reports Battery Capacity Kwh as {} and nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
    
