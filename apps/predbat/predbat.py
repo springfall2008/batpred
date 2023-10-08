@@ -61,6 +61,8 @@ CONFIG_ITEMS = [
     {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_min_improvement_discharge', 'friendly_name' : 'Metric Min Improvement Discharge',    'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_battery_cycle',          'friendly_name' : 'Metric Battery Cycle Cost',      'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
+    {'name' : 'metric_future_rate_offset_import', 'friendly_name' : 'Metric Future Rate Offset Import','type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
+    {'name' : 'metric_future_rate_offset_export', 'friendly_name' : 'Metric Future Rate Offset Export','type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
@@ -2294,27 +2296,41 @@ class PredBat(hass.Hass):
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
-    def rate_replicate(self, rates, rate_io={}):
+    def rate_replicate(self, rates, rate_io={}, is_import=True):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
         minute = 0
         rate_last = 0
+        adjusted_rates = {}
+
         # Add 48 extra hours to make sure the whole cycle repeats another day
         while minute < (self.forecast_minutes + 48*60):
             if minute not in rates:
+                # Take 24-hours previous if missing rate
                 if (minute >= 24*60) and ((minute - 24*60) in rates):
                     minute_mod = minute - 24*60
                 else:
                     minute_mod = minute % (24 * 60)
+
                 if (minute_mod in rate_io) and rate_io[minute_mod]:
                     # Dont replicate Intelligent rates into the next day as it will be different
-                    rates[minute] = self.rate_max
+                    rate_offset = self.rate_max
                 elif minute_mod in rates:
-                    rates[minute] = rates[minute_mod]
+                    rate_offset = rates[minute_mod]
                 else:
                     # Missing rate within 24 hours - fill with dummy last rate
-                    rates[minute] = rate_last
+                    rate_offset = rate_last
+
+                # Only offset once not every day
+                if minute_mod not in adjusted_rates:
+                    if is_import:
+                        rate_offset = rate_offset + self.metric_future_rate_offset_import
+                    else:
+                        rate_offset = max(rate_offset + self.metric_future_rate_offset_export, 0)
+                    adjusted_rates[minute] = True
+
+                rates[minute] = rate_offset
             else:
                 rate_last = rates[minute]
             minute += 1
@@ -3053,6 +3069,8 @@ class PredBat(hass.Hass):
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_discharge = 0.0
         self.metric_battery_cycle = 0.0
+        self.metric_future_rate_offset_import = 0.0
+        self.metric_future_rate_offset_export = 0.0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_slots = []
@@ -4250,6 +4268,8 @@ class PredBat(hass.Hass):
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
         self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
         self.metric_battery_cycle = self.get_arg('metric_battery_cycle', 0.0)
+        self.metric_future_rate_offset_import = self.get_arg('metric_future_rate_offset_import', 0.0)
+        self.metric_future_rate_offset_export = self.get_arg('metric_future_rate_offset_export', 0.0)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
         self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.15)
@@ -4552,7 +4572,7 @@ class PredBat(hass.Hass):
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_import = self.rate_scan(self.rate_import, print=False)
-            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted)
+            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             if 'rates_import_override' in self.args:
                 self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
@@ -4563,7 +4583,7 @@ class PredBat(hass.Hass):
 
         # Replicate and scan export rates
         if self.rate_export:
-            self.rate_export = self.rate_replicate(self.rate_export)
+            self.rate_export = self.rate_replicate(self.rate_export, is_import=False)
             if 'rates_export_override' in self.args:
                 self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
