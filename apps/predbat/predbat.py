@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.7.2'
+THIS_VERSION = 'v7.7.3'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4166,7 +4166,7 @@ class PredBat(hass.Hass):
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[id] = True
-                inverters[this_inverter].adjust_charge_rate(0, notify=False)
+                inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(0, num_inverters):
             if not balance_reset_charge.get(id, False) and total_charge_rates != 0 and charge_rates[id]==0:
