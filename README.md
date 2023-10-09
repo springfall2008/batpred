@@ -205,6 +205,10 @@ mode: single
 
 - you can configure your rate bands (assuming they repeat) using rates_import/rates_export (see below)
 
+### Rate offsets
+
+- Note that you can tune future unknown energy rates by adjusting **input_number.predbat_metric_future_rate_offset_import** and **input_number.predbat_metric_future_rate_offset_export** inside Home Assistant to set the predicted offset for future unknown rates. 
+
 ## Car charging planning
 
 There are two ways to plan car charging slots:
@@ -731,6 +735,8 @@ If you set this too high you might not get any export slots. If it's too low you
 **metric_future_rate_offset_import** Sets an offset to apply to future import energy rates that are not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm. If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
 **metric_future_rate_offset_export** Sets an offset to apply to future export energy rates that are not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm. If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
+
+**switch.predbat_calculate_inday_adjustment** When enabled will calculate the difference between today's actual load and today's predicated load and adjust the rest of the days usage prediction accordingly. A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact). The in-day adjustment factor can be see in **predbat.load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found in the charts template in Github).
 
 ### Inverter control options
 
