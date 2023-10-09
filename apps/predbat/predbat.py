@@ -163,6 +163,7 @@ class Inverter():
         self.battery_rate_max_discharge_scaled = 0
         self.battery_power = 0
         self.pv_power = 0
+        self.load_power = 0
 
         # Rest API?
         self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
@@ -267,6 +268,10 @@ class Inverter():
         """
         Update inverter status
         """
+        self.battery_power = 0
+        self.pv_power = 0
+        self.load_power = 0
+
         if self.rest_api:
             self.rest_data = self.rest_readData()
 
@@ -300,9 +305,11 @@ class Inverter():
             if 'Power' in pdetails:
                 self.battery_power = float(pdetails['Power']['Battery_Power'])
                 self.pv_power = float(pdetails['Power']['PV_Power'])
+                self.load_power = float(pdetails['Power']['Load_Power'])
         else:
             self.battery_power = self.base.get_arg('battery_power', default=0.0, index=self.id)
             self.pv_power = self.base.get_arg('pv_power', default=0.0, index=self.id)
+            self.load_power = self.base.get_arg('load_power', default=0.0, index=self.id)
 
         if not quiet:
             self.base.log("Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} wcurrent power {} w".format(self.id, self.base.dp2(self.soc_kw), self.soc_percent, self.charge_rate_now*60*1000, self.discharge_rate_now*60*1000.0, self.battery_power))
@@ -3311,9 +3318,9 @@ class PredBat(hass.Hass):
         loop_price = price_set[-1]
         best_price = loop_price
         best_metric = 9999999
-        try_discharge = discharge_limits[:]
-        best_limits = try_charge_limit[:]
-        best_discharge = try_discharge[:]
+        try_discharge = discharge_limits.copy()
+        best_limits = try_charge_limit.copy()
+        best_discharge = try_discharge.copy()
         best_soc_min = self.reserve
         best_cost = 0
 
@@ -3347,7 +3354,7 @@ class PredBat(hass.Hass):
 
             for discharge_enable in discharge_enable_options:
                 # This price band setting for charge
-                try_charge_limit = best_limits[:]
+                try_charge_limit = best_limits.copy()
                 for window_n in range(0, record_charge_windows):
                     if window_n in all_n:
                         try_charge_limit[window_n] = self.soc_max
@@ -3355,7 +3362,7 @@ class PredBat(hass.Hass):
                         try_charge_limit[window_n] = self.reserve
 
                 # Try discharge on/off
-                try_discharge = discharge_limits[:]
+                try_discharge = discharge_limits.copy()
                 if discharge_enable:
                     if not all_d:
                         continue
@@ -3371,12 +3378,6 @@ class PredBat(hass.Hass):
                     self.log("Skip this optimisation as it's the same charge {} discharge {}".format(try_charge_limit, try_discharge))
                     continue
                 
-                # Optimise
-                if discharge_enable:
-                    self.log("Optimise all for buy/sell price band <= {} windows {} discharge on {}".format(loop_price, all_n, all_d))
-                else:
-                    self.log("Optimise all for buy/sell price band <= {} windows {} discharge off".format(loop_price, all_n))
-
                 # Turn off debug for this sim
                 was_debug = self.debug_enable
                 self.debug_enable = False
@@ -3411,13 +3412,19 @@ class PredBat(hass.Hass):
                     metric += metric_diff
                     metric = self.dp2(metric)
 
+                # Optimise
+                if discharge_enable:
+                    self.log("Optimise all for buy/sell price band <= {} metric {} windows {} discharge on {}".format(metric, loop_price, all_n, all_d))
+                else:
+                    self.log("Optimise all for buy/sell price band <= {} metric {} windows {} discharge off".format(metric, loop_price, all_n))
+
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
                 if ((metric + self.metric_min_improvement) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
                     best_metric = metric
                     best_price = loop_price
-                    best_limits = try_charge_limit[:]
-                    best_discharge = try_discharge[:]
+                    best_limits = try_charge_limit.copy()
+                    best_discharge = try_discharge.copy()
                     best_soc_min = soc_min
                     best_cost = cost
 
@@ -4239,6 +4246,7 @@ class PredBat(hass.Hass):
         total_charge_rates = 0     # Current total charge rates
         total_discharge_rates = 0  # Current total discharge rates
         total_pv_power = 0         # Current total PV power
+        total_load_power = 0       # Current load power
         socs = []
         reserves = []
         battery_powers = []
@@ -4246,6 +4254,7 @@ class PredBat(hass.Hass):
         battery_max_rates = []
         charge_rates = []
         discharge_rates = []
+        load_powers = []
         for inverter in inverters:
             socs.append(inverter.soc_percent)
             reserves.append(inverter.reserve_current)
@@ -4253,15 +4262,17 @@ class PredBat(hass.Hass):
                 out_of_balance = True
             battery_powers.append(inverter.battery_power)
             pv_powers.append(inverter.pv_power)
+            load_powers.append(inverter.load_power)
             total_battery_power += inverter.battery_power
             total_pv_power += inverter.pv_power
+            total_load_power += inverter.load_power
             battery_max_rates.append(inverter.battery_rate_max_discharge * 60*1000.0)
             total_max_rate += inverter.battery_rate_max_discharge * 60*1000.0
             charge_rates.append(inverter.charge_rate_now * 60*1000.0)
             total_charge_rates += inverter.charge_rate_now * 60*1000.0
             discharge_rates.append(inverter.discharge_rate_now * 60*1000.0)
             total_discharge_rates += inverter.discharge_rate_now * 60*1000.0
-        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} pv_power {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, pv_powers, total_charge_rates, discharge_rates, total_discharge_rates))
+        self.log("BALANCE: socs {} reserves {} battery_powers {} total {} battery_max_rates {} charge_rates {} pv_power {} load_power {} total {} discharge_rates {} total {}".format(socs, reserves, battery_powers, total_battery_power, battery_max_rates, charge_rates, pv_powers, load_powers, total_charge_rates, discharge_rates, total_discharge_rates))
 
         # Are we discharging
         during_discharge = total_battery_power >= 0.0
