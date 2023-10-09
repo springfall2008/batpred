@@ -4226,12 +4226,12 @@ class PredBat(hass.Hass):
         now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
         now = datetime.now() + timedelta(minutes=skew)
         midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        minutes_now = int((now - midnight).seconds / 60)
+        minutes_now = int((now - midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         num_inverters = int(self.get_arg('num_inverters', 1))
         self.now_utc = now_utc
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((now - self.midnight).seconds / 60)
+        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
         inverters = []
@@ -4389,7 +4389,7 @@ class PredBat(hass.Hass):
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
         self.difference_minutes = self.minutes_since_yesterday(now)
-        self.minutes_now = int((now - self.midnight).seconds / 60)
+        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
         # Days previous
