@@ -36,6 +36,7 @@ entities:
   - entity: switch.predbat_balance_inverters_charge
   - entity: switch.predbat_balance_inverters_discharge
   - entity: switch.predbat_balance_inverters_crosscharge
+  - entity: switch.predbat_calculate_inday_adjustment
   - entity: input_number.predbat_balance_inverters_threshold_charge
   - entity: input_number.predbat_balance_inverters_threshold_discharge
   - entity: input_number.predbat_battery_loss
@@ -70,6 +71,7 @@ entities:
   - entity: input_number.predbat_set_soc_minutes
   - entity: input_number.predbat_set_window_minutes
   - entity: input_number.predbat_holiday_days_left
+  - entity: input_number.predbat_metric_inday_adjust_damping
   - entity: binary_sensor.predbat_car_charging_slot
   - entity: binary_sensor.predbat_export_trigger_large
   - entity: binary_sensor.predbat_export_trigger_small
@@ -143,4 +145,5 @@ entities:
   - entity: predbat.soc_kw_best_h8
   - entity: predbat.soc_kw_h0
   - entity: predbat.soc_min_kwh
+  - entity: predbat.load_inday_adjustment
 title: Predbat
