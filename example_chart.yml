@@ -234,6 +234,12 @@ yaxis:
     max: 50
 series:
   - entity: predbat.rates
+    attribute: threshold
+    name: Low threshold
+  - entity: predbat.rates_export
+    attribute: threshold
+    name: High threshold
+  - entity: predbat.rates
     stroke_width: 1
     curve: stepline
     name: import
