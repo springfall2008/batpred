@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.7.3'
+THIS_VERSION = 'v7.7.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3326,12 +3326,12 @@ class PredBat(hass.Hass):
 
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
-            discharge_enable_options = [True, False]
+            discharge_enable_options = [False, True]
         else:
             discharge_enable_options = [False]
 
-        # Cheapest first
-        all_prices = [price_set[-1] - 1] + price_set[::-1]
+        # Most expensive first
+        all_prices = price_set[::] + [price_set[-1] - 1]
         self.log("All prices {}".format(all_prices))
         for loop_price in all_prices:
             all_n = []
@@ -3367,14 +3367,15 @@ class PredBat(hass.Hass):
                     if not all_d:
                         continue
 
-                    for window_n in all_d:
-                        hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
-                        if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
-                            continue
-                        try_discharge[window_n] = 0
+                    if not self.calculate_discharge_oncharge:
+                        for window_n in all_d:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]['start'], self.discharge_window_best[window_n]['end'])
+                            if hit_charge >= 0 and try_charge_limit[hit_charge] > self.reserve:
+                                continue
+                            try_discharge[window_n] = 0
                 
                 # Skip this one as it's the same as selected already
-                if try_charge_limit == best_limits and best_discharge == try_discharge:
+                if try_charge_limit == best_limits and best_discharge == try_discharge and best_metric!=9999999:
                     self.log("Skip this optimisation as it's the same charge {} discharge {}".format(try_charge_limit, try_discharge))
                     continue
                 
@@ -3384,9 +3385,6 @@ class PredBat(hass.Hass):
 
                 # Simulate with medium PV
                 metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle  = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record = end_record)
-
-                # Simulate with 10% PV 
-                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute10_step, end_record = end_record)
 
                 # Debug re-enable if it was on
                 self.debug_enable = was_debug
@@ -3399,36 +3397,27 @@ class PredBat(hass.Hass):
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                 rate_min = self.rate_min_forward.get(end_record, self.rate_min)
                 metric -= soc * max(rate_min, 1.0) / self.battery_loss
-                metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
 
                 # Adjustment for battery cycles metric
                 metric += battery_cycle * self.metric_battery_cycle
-                metric10 += battery_cycle * self.metric_battery_cycle
-
-                # Metric adjustment based on 10% outcome weighting
-                if metric10 > metric:
-                    metric_diff = metric10 - metric
-                    metric_diff *= self.pv_metric10_weight
-                    metric += metric_diff
-                    metric = self.dp2(metric)
 
                 # Optimise
                 if discharge_enable:
-                    self.log("Optimise all for buy/sell price band <= {} metric {} windows {} discharge on {}".format(metric, loop_price, all_n, all_d))
+                    self.log("Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge on {}".format(loop_price, self.dp2(metric), self.dp2(soc_min), all_n, all_d))
                 else:
-                    self.log("Optimise all for buy/sell price band <= {} metric {} windows {} discharge off".format(metric, loop_price, all_n))
+                    self.log("Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(loop_price, self.dp2(metric), self.dp2(soc_min), all_n))
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
-                if ((metric + self.metric_min_improvement) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
+                if ((metric < best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min))):
                     best_metric = metric
                     best_price = loop_price
                     best_limits = try_charge_limit.copy()
                     best_discharge = try_discharge.copy()
                     best_soc_min = soc_min
                     best_cost = cost
-
-            self.log("Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(loop_price, best_price, best_metric, self.dp2(best_cost), best_limits, best_discharge))
+                    self.log("Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(loop_price, best_price, best_metric, self.dp2(best_cost), best_limits, best_discharge))
+        self.log("Optimise all charge for all bands best price threshold {} at metric {} cost {} soc_min {} limits {} discharge {}".format(self.dp2(best_price), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge))
         return best_limits
 
     def optimise_charge_limit(self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, all_n = None, end_record=None):
@@ -4037,9 +4026,9 @@ class PredBat(hass.Hass):
 
             # Log new set of charge and discharge windows
             if charge_windows:
-                self.log("Best charge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(charge_windows, charge_socs)))
+                self.log("Best charge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(charge_windows, charge_socs, ignore_min=True)))
             if discharge_windows:
-                self.log("Best discharge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1])))
+                self.log("Best discharge windows in price group {} best_metric {} best_cost {} windows {}".format(price, best_metric, self.dp2(best_cost), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1], ignore_max=True)))
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
@@ -4082,17 +4071,25 @@ class PredBat(hass.Hass):
                 else:
                     self.charge_limit_best[window_n] = self.reserve
 
-    def window_as_text(self, windows, percents):
+    def window_as_text(self, windows, percents, ignore_min=False, ignore_max=False):
         """
         Convert window in minutes to text string
         """
         txt = "[ "
+        first_window = True
         for window_n in range(0, len(windows)):
             window = windows[window_n]
             percent = percents[window_n]
             average = window['average']
-            if window_n > 0:
+
+            if ignore_min and percent <= int(self.reserve / self.soc_max * 100.0 + 0.5):
+                continue
+            if ignore_max and percent == 100:
+                continue
+
+            if not first_window:
                 txt += ', '
+            first_window = False
             start_timestamp = self.midnight_utc + timedelta(minutes=window['start'])
             start_time = start_timestamp.strftime("%d-%m %H:%M:%S")
             end_timestamp = self.midnight_utc + timedelta(minutes=window['end'])
@@ -4804,7 +4801,7 @@ class PredBat(hass.Hass):
         self.soc_max = 0.0
         self.reserve = 0.0
         self.reserve_current = 0.0
-        self.reserve_current_precent = 0.0
+        self.reserve_current_percent = 0.0
         self.battery_rate_max_charge = 0.0
         self.battery_rate_max_discharge = 0.0
         self.battery_rate_max_charge_scaled = 0.0
