@@ -223,22 +223,21 @@ header:
   title: Energy rates
   show_states: true
   colorize_states: true
-graph_span: 48h
+graph_span: 72h
 span:
-  start: minute
-  offset: '-12h'
+  start: day
+  offset: +0h
 now:
   show: true
-yaxis:
-  - min: 0
-    max: 50
 series:
   - entity: predbat.rates
     attribute: threshold
     name: Low threshold
+    curve: stepline
   - entity: predbat.rates_export
     attribute: threshold
     name: High threshold
+    curve: stepline
   - entity: predbat.rates
     stroke_width: 1
     curve: stepline
