@@ -4389,7 +4389,7 @@ class PredBat(hass.Hass):
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
 
         self.difference_minutes = self.minutes_since_yesterday(now)
-        self.minutes_now = int((now - self.midnight).seconds / 60)
+        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         self.minutes_to_midnight = 24*60 - self.minutes_now
 
         # Days previous
