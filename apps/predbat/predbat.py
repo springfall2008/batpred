@@ -4308,19 +4308,23 @@ class PredBat(hass.Hass):
             other_inverter = (this_inverter + 1) % num_inverters
             if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter] and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
-                balance_reset_discharge[id] = True
+                balance_reset_discharge[this_inverter] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
             elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and below_full[other_inverter] and can_store_pv[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
-                balance_reset_charge[id] = True
+                balance_reset_charge[this_inverter] = True
                 inverters[this_inverter].adjust_charge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_discharge and total_discharge_rates > 0 and power_enough_charge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross charging during discharge, attempting to balance it".format(this_inverter))
-                balance_reset_charge[id] = True
-                inverters[this_inverter].adjust_charge_rate(0, notify=False)
+                if soc_low[this_inverter] and can_power_house[other_inverter]:
+                    balance_reset_discharge[this_inverter] = True
+                    inverters[this_inverter].adjust_discharge_rate(0, notify=False)
+                else:
+                    balance_reset_charge[this_inverter] = True
+                    inverters[this_inverter].adjust_charge_rate(0, notify=False)
             elif self.balance_inverters_crosscharge and during_charge and total_charge_rates > 0 and power_enough_discharge[this_inverter]:
                 self.log("BALANCE: Inverter {} is cross discharging during charge, attempting to balance it".format(this_inverter))
-                balance_reset_discharge[id] = True
+                balance_reset_discharge[this_inverter] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
 
         for id in range(0, num_inverters):
