@@ -11,7 +11,7 @@ header:
   title: Home Battery Prediction
   show_states: true
   colorize_states: true
-graph_span: 52h
+graph_span: 60h
 span:
   start: minute
   offset: '-12h'
@@ -23,7 +23,7 @@ yaxis:
 series:
   - entity: predbat.soc_kw_h0
     stroke_width: 1
-    curve: smooth
+    curve: stepline
     name: actual
     extend_to: now
     show:
@@ -40,7 +40,7 @@ series:
     show:
       in_header: raw
   - entity: predbat.soc_kw_best
-    stroke_width: 2
+    stroke_width: 3
     curve: smooth
     name: best
     data_generator: >
@@ -62,9 +62,11 @@ series:
     show:
       in_header: raw
   - entity: predbat.best_charge_limit_kw
-    stroke_width: 1
+    stroke_width: 4
     curve: stepline
     name: charge_limit_best
+    type: area
+    opacity: 0.2
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
@@ -84,7 +86,7 @@ series:
     show:
       in_header: raw
   - entity: predbat.best_discharge_limit_kw
-    stroke_width: 1
+    stroke_width: 2
     curve: stepline
     name: discharge_best
     data_generator: >
@@ -95,10 +97,11 @@ series:
     show:
       in_header: raw
   - entity: predbat.record
-    stroke_width: 2
+    stroke_width: 3
     curve: stepline
     name: record
-    type: column
+    type: area
+    opacity: 0.5
     color: black
     data_generator: >
       let res = []; for (const [key, value] of
@@ -117,7 +120,7 @@ series:
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
     show:
-      in_header: raw      
+      in_header: raw
 ###############################################
 # This is a cost chart
 ###############################################
