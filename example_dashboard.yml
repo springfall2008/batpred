@@ -8,12 +8,14 @@ entities:
   - entity: switch.predbat_calculate_best_discharge
   - entity: switch.predbat_calculate_discharge_first
   - entity: switch.predbat_calculate_discharge_oncharge
+  - entity: switch.predbat_calculate_second_pass
   - entity: switch.predbat_rate_low_match_export
   - entity: switch.predbat_set_charge_window
   - entity: switch.predbat_set_discharge_notify
   - entity: switch.predbat_set_discharge_window
   - entity: switch.predbat_set_discharge_freeze
   - entity: switch.predbat_set_discharge_freeze_only
+  - entity: switch.predbat_set_discharge_during_charge
   - entity: switch.predbat_set_reserve_enable
   - entity: switch.predbat_set_reserve_hold
   - entity: switch.predbat_set_reserve_notify
