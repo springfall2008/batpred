@@ -276,6 +276,8 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
  
   - **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge. Recommended setting is 200 for gen1 hybrids with this issue.
 
+  - **set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter to avoid cross charging when batteries are out of balance.
+
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
 
