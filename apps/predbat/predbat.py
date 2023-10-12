@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.8'
+THIS_VERSION = 'v7.8.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -67,8 +67,8 @@ CONFIG_ITEMS = [
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
-    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.05,'max' : 1.20, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
-    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 0.80, 'max' : 2.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},    
+    {'name' : 'rate_low_threshold',            'friendly_name' : 'Rate Low Threshold',             'type' : 'input_number', 'min' : 0.00, 'max' : 2.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},
+    {'name' : 'rate_high_threshold',           'friendly_name' : 'Rate High Threshold',            'type' : 'input_number', 'min' : 0.00, 'max' : 2.00, 'step' : 0.05, 'unit' : 'multiple', 'icon' : 'mdi:multiplication'},    
     {'name' : 'car_charging_hold',             'friendly_name' : 'Car charging hold',              'type' : 'switch'},
     {'name' : 'octopus_intelligent_charging',  'friendly_name' : 'Octopus Intelligent Charging',   'type' : 'switch'},
     {'name' : 'car_charging_plan_smart',       'friendly_name' : 'Car Charging Plan Smart',        'type' : 'switch'},
@@ -2904,18 +2904,36 @@ class PredBat(hass.Hass):
             price_set.reverse()
         
         # For each price set in order, take windows newest and then oldest picks
+        take_enable = True
         for loop_price in price_set:
-            these_items = price_links[loop_price]
-            take_front = not find_high
+            these_items = price_links[loop_price].copy()
+            take_front = find_high
+            take_position = 0
+            take_counter = 0
             while these_items and total < self.calculate_max_windows:
+                remaining = len(these_items)
                 if take_front:
-                    key = these_items.pop(0)
+                    key = these_items.pop(take_position % remaining)
                 else:
-                    key = these_items.pop()                
-                selected_rates.append(window_index[key]['id'])
-                total += 1
-            if total >= self.calculate_max_windows:
-                break
+                    key = these_items.pop(remaining - (take_position % remaining) - 1)
+                window_id = window_index[key]['id']             
+
+                # Only count those starting inside the window, those outside appear for 'free' as they won't be optimised
+                if found_rates[window_id]['start'] >= (self.minutes_now + self.forecast_minutes):
+                    selected_rates.append(window_id)
+                elif take_enable:
+                    selected_rates.append(window_id)
+                    total += 1
+
+                # Take 60 minutes together and then move on to another group
+                if take_counter >= 1:
+                    take_position += 31
+                    take_counter = 0
+                else:
+                    take_counter += 1
+
+                if total >= self.calculate_max_windows:
+                    take_enable = False
         selected_rates.sort()
         final_rates = []
         for window_id in selected_rates:
@@ -3720,7 +3738,10 @@ class PredBat(hass.Hass):
             id = 0
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher 
-                average = self.dp2(window['average'] / self.inverter_loss / self.battery_loss)
+                if stand_alone:
+                    average = window['average']
+                else:
+                    average = self.dp2(window['average'] / self.inverter_loss / self.battery_loss)
                 average = int(average + 0.5) # Round to nearest penny to avoid too many bands
                 sort_key = "%04.2f%03d_c%02d" % (5000 - average, 999 - id, id)
                 window_sort.append(sort_key)
@@ -4114,7 +4135,10 @@ class PredBat(hass.Hass):
         if self.charge_window_best and self.calculate_best_charge:
             # Set all to max
             for window_n in range(0, len(self.charge_window_best)):
-                self.charge_limit_best[window_n] = self.reserve
+                if self.charge_window_best[window_n]['start'] < end_record:
+                    self.charge_limit_best[window_n] = self.reserve
+                else:
+                    self.charge_limit_best[window_n] = self.soc_max
 
     def window_as_text(self, windows, percents, ignore_min=False, ignore_max=False):
         """
