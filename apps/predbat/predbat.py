@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.7.5'
+THIS_VERSION = 'v7.8'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -58,7 +58,6 @@ CONFIG_ITEMS = [
     {'name' : 'best_soc_max',                  'friendly_name' : 'Best SOC Max',                   'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
     {'name' : 'best_soc_keep',                 'friendly_name' : 'Best SOC Keep',                  'type' : 'input_number', 'min' : 0,   'max' : 30.0, 'step' : 0.10, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
     {'name' : 'best_soc_step',                 'friendly_name' : 'Best SOC Step',                  'type' : 'input_number', 'min' : 0.1, 'max' : 1.0,  'step' : 0.05, 'unit' : 'kwh', 'icon' : 'mdi:battery-50'},
-    {'name' : 'max_windows',                   'friendly_name' : 'Max charge/discharge windows',   'type' : 'input_number', 'min' : 8,   'max' : 128,  'step' : 8,    'unit' : 'kwh', 'icon' : 'mdi:vector-arrange-above'},
     {'name' : 'metric_min_improvement',        'friendly_name' : 'Metric Min Improvement',         'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_min_improvement_discharge', 'friendly_name' : 'Metric Min Improvement Discharge',    'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_battery_cycle',          'friendly_name' : 'Metric Battery Cycle Cost',      'type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
@@ -81,6 +80,7 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_discharge_oncharge',  'friendly_name' : 'Calculate Discharge on charge slots', 'type' : 'switch'},
     {'name' : 'calculate_second_pass',         'friendly_name' : 'Calculate second pass (slower)', 'type' : 'switch'},
     {'name' : 'calculate_inday_adjustment',    'friendly_name' : 'Calculate in-day adjustment',    'type' : 'switch'},
+    {'name' : 'calculate_max_windows',         'friendly_name' : 'Max charge/discharge windows',   'type' : 'input_number', 'min' : 8,   'max' : 128,  'step' : 8,    'unit' : 'kwh', 'icon' : 'mdi:vector-arrange-above'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -2907,14 +2907,14 @@ class PredBat(hass.Hass):
         for loop_price in price_set:
             these_items = price_links[loop_price]
             take_front = not find_high
-            while these_items and total < self.max_windows:
+            while these_items and total < self.calculate_max_windows:
                 if take_front:
                     key = these_items.pop(0)
                 else:
                     key = these_items.pop()                
                 selected_rates.append(window_index[key]['id'])
                 total += 1
-            if total >= self.max_windows:
+            if total >= self.calculate_max_windows:
                 break
         selected_rates.sort()
         final_rates = []
@@ -4426,7 +4426,7 @@ class PredBat(hass.Hass):
         self.expose_config('version', None)
 
         self.debug_enable = self.get_arg('debug_enable', False)
-        self.max_windows = self.get_arg('max_windows', 128)
+        self.calculate_max_windows = self.get_arg('calculate_max_windows', 32)
         self.num_cars = self.get_arg('num_cars', 1)
 
         self.log("Debug enable is {}".format(self.debug_enable))
