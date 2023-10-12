@@ -552,7 +552,7 @@ rate_high_threshold - 0                # Consider All export slots
 rate_low_threshold - 0                 # Consider All import slots
 calculate_second_pass - True           # Slower but will give a slightly better result
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
-max_windows - 32                       # Consider the top 32 slots in the 48 hour period
+calculate_max_windows - 32             # Consider the top 32 slots in the 48 hour period
 forecast_plan_hours - 48               # In apps.yml set this to 48 hours to consider a full cycle plan
 ```
 
@@ -723,15 +723,15 @@ You could even go to something like -0.1 to say you would charge less even if it
 **metric_min_improvement_discharge** Sets the minimum cost improvement it's worth discharging for. A value of 0 or 1 is generally good.
 
 **rate_low_threshold** sets the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
-If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder. You can set this to 0 to consider all possible slots, this can be done when combined with setting max_windows to a lower number e.g. 32.
+If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder. You can set this to 0 to consider all possible slots, this can be done when combined with setting **calculate_max_windows** to a lower number e.g. 24 or 32.
 
 **rate_low_match_export** When enabled consider import rates that are lower than the highest export rate (minus any battery losses). 
 This is if you want to be really aggressive about importing just to export, default is False (recommended).
 
 **rate_high_threshold** Sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
-If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period. You can set this to 0 to consider all possible slots, this can be done when combined with setting max_windows to a lower number e.g. 32.
+If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period. You can set this to 0 to consider all possible slots, this can be done when combined with setting **calculate_max_windows** to a lower number e.g. 24 or 32.
 
-- **max_windows** - Maximum number of charge and discharge windows, the default is 128 (which means all that are found). If you system has performance issues you might want to cut this down to something between 16 and 32 to only consider the highest value exports and cheapest imports.
+**calculate_max_windows** - Maximum number of charge and discharge windows, the default is 32. If you system has performance issues you might want to cut this down to something between 16 and 24 to only consider the highest value exports and cheapest imports. The maximum usable value would be 96 which is 48 hours split into 30 minute slots
 
 **metric_future_rate_offset_import** Sets an offset to apply to future import energy rates that are not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm. If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
