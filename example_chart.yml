@@ -219,6 +219,8 @@ series:
       in_header: raw
 ###############################################
 # Energy rate chart
+# NOTE: Tune the value*5 in the grid_power_best part to make the power peak line up with the energy rates
+# so you can see charging/discharging aligned with slots
 ###############################################
 type: custom:apexcharts-card
 header:
@@ -233,16 +235,28 @@ span:
 now:
   show: true
 series:
+  - entity: predbat.grid_power_best
+    name: power
+    stroke_width: 1
+    type: area
+    opacity: 0.2
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value*5]); } return res.sort((a, b) => { return a[0]
+      - b[0]  })
   - entity: predbat.rates
     attribute: threshold
     name: Low threshold
     curve: stepline
+    stroke_width: 2
   - entity: predbat.rates_export
     attribute: threshold
     name: High threshold
     curve: stepline
+    stroke_width: 2
   - entity: predbat.rates
-    stroke_width: 1
+    stroke_width: 2
     curve: stepline
     name: import
     data_generator: >
@@ -254,6 +268,8 @@ series:
       in_header: raw
   - entity: predbat.rates_export
     stroke_width: 1
+    type: area
+    opacity: 0.2
     curve: stepline
     name: export
     data_generator: >
@@ -263,7 +279,6 @@ series:
       b[0]  })
     show:
       in_header: raw
-
 ###############################################
 # Data prediction chart (import/export/pv/load)
 ###############################################
