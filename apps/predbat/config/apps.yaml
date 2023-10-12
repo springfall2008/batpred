@@ -300,10 +300,6 @@ pred_bat:
   # tariffs like Agile
   forecast_plan_hours: 24
 
-  # Maximum number of charge and discharge windows
-  # Larger numbers of windows can increase runtime, normally 128 is more than enough for most uses
-  max_windows: 128
-  
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices: 
   #  - mobile_app_treforsiphone12_2

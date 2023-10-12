@@ -6,7 +6,7 @@ Also known by some as Batpred or Batman!
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
 ```
-Copyright (c) Trefor Southwell August 2023 - All rights reserved
+Copyright (c) Trefor Southwell October 2023 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
@@ -240,7 +240,6 @@ Basic configuration items
   - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
   - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
   - **forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
-  - **max_windows** - Maximum number of charge and discharge windows, the default is 32.  Larger numbers of windows can increase runtime, but is needed if you decide to use smaller slots (e.g. 5, 10 or 15 minutes). 
   
 ### Inverter information
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
@@ -495,6 +494,7 @@ set_charge_window - True           # You want to have Predbat control the charge
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
 best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
 rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
+forecast_plan_hours - 24               # In apps.yml set this to 24 hours to match the repeating rates
 calculate_discharge_first - False  # You probably only want to discharge any excess as export rates are poor
 ```
 
@@ -512,7 +512,6 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 1.0               # For fixed export rate you need to consider all slots
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
-calculate_second_pass - True           # Slower but will give a slightly better result
 predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 ```
 
@@ -548,18 +547,16 @@ set_discharge_window - True            # Allow the tool to control the discharge
 combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
 metric_min_improvement - 0             # Charge less if it's cost neutral 
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
-max_windows - 128                      # Ensure you have enough slots
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
-rate_high_threshold - 1.0              # Consider more export slots
+rate_high_threshold - 0                # Consider All export slots
+rate_low_threshold - 0                 # Consider All import slots
 calculate_second_pass - True           # Slower but will give a slightly better result
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
+calculate_max_windows - 32             # Consider the top 32 slots in the 48 hour period
+forecast_plan_hours - 48               # In apps.yml set this to 48 hours to consider a full cycle plan
 ```
 
-If you have a fixed export rate then follow the above for variable rates but change:
-
-```
-rate_high_threshold: 1.0               # Consider all slots for export
-```
+If you have a fixed export rate then follow the above guidance
 
 ## Video Guides
 
@@ -726,13 +723,15 @@ You could even go to something like -0.1 to say you would charge less even if it
 **metric_min_improvement_discharge** Sets the minimum cost improvement it's worth discharging for. A value of 0 or 1 is generally good.
 
 **rate_low_threshold** sets the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
-If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period.
+If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder. You can set this to 0 to consider all possible slots, this can be done when combined with setting **calculate_max_windows** to a lower number e.g. 24 or 32.
 
 **rate_low_match_export** When enabled consider import rates that are lower than the highest export rate (minus any battery losses). 
 This is if you want to be really aggressive about importing just to export, default is False (recommended).
 
 **rate_high_threshold** Sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
-If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
+If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period. You can set this to 0 to consider all possible slots, this can be done when combined with setting **calculate_max_windows** to a lower number e.g. 24 or 32.
+
+**calculate_max_windows** - Maximum number of charge and discharge windows, the default is 32. If you system has performance issues you might want to cut this down to something between 16 and 24 to only consider the highest value exports and cheapest imports. The maximum usable value would be 96 which is 48 hours split into 30 minute slots
 
 **metric_future_rate_offset_import** Sets an offset to apply to future import energy rates that are not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm. If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 

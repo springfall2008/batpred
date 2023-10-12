@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.7.5'
+THIS_VERSION = 'v7.8'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -80,6 +80,7 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_discharge_oncharge',  'friendly_name' : 'Calculate Discharge on charge slots', 'type' : 'switch'},
     {'name' : 'calculate_second_pass',         'friendly_name' : 'Calculate second pass (slower)', 'type' : 'switch'},
     {'name' : 'calculate_inday_adjustment',    'friendly_name' : 'Calculate in-day adjustment',    'type' : 'switch'},
+    {'name' : 'calculate_max_windows',         'friendly_name' : 'Max charge/discharge windows',   'type' : 'input_number', 'min' : 8,   'max' : 128,  'step' : 8,    'unit' : 'kwh', 'icon' : 'mdi:vector-arrange-above'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -2519,8 +2520,8 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60*6):
-                        # Export slot can never be bigger than 6 hours
+                    if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60*4):
+                        # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
                     if rate_low_start < 0:
@@ -2881,7 +2882,7 @@ class PredBat(hass.Hass):
         minute = 0
         found_rates = []
 
-        while len(found_rates) < self.max_windows:
+        while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
             window = {}
             window['start'] = rate_low_start
@@ -2894,19 +2895,51 @@ class PredBat(hass.Hass):
                 minute = rate_low_end
             else:
                 break
-        return found_rates
+        
+        # Sort all windows by price
+        selected_rates = []
+        total = 0
+        window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(found_rates, [], stand_alone=True)
+        if not find_high:
+            price_set.reverse()
+        
+        # For each price set in order, take windows newest and then oldest picks
+        for loop_price in price_set:
+            these_items = price_links[loop_price]
+            take_front = not find_high
+            while these_items and total < self.calculate_max_windows:
+                if take_front:
+                    key = these_items.pop(0)
+                else:
+                    key = these_items.pop()                
+                selected_rates.append(window_index[key]['id'])
+                total += 1
+            if total >= self.calculate_max_windows:
+                break
+        selected_rates.sort()
+        final_rates = []
+        for window_id in selected_rates:
+            final_rates.append(found_rates[window_id])
+        return final_rates
 
     def set_rate_thresholds(self):
         """
         Set the high and low rate thresholds
         """
-        self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
+        if self.rate_low_threshold > 0:
+            self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
+        else:
+            self.rate_threshold = self.rate_min
+
         if self.rate_low_match_export:
             # When enabled the low rate could be anything up-to the export rate (less battery losses)
             self.rate_threshold = self.dp2(max(self.rate_threshold, self.rate_export_max * self.battery_loss * self.battery_loss_discharge))
 
         # Compute the export rate threshold
-        self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
+        if self.rate_high_threshold > 0:
+            self.rate_export_threshold = self.rate_export_max
+        else:
+            self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
 
         # Rule out exports if the import rate is already higher unless it's a variable export tariff
         if self.rate_export_max == self.rate_export_min:
@@ -3673,14 +3706,17 @@ class PredBat(hass.Hass):
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
-    def sort_window_by_price_combined(self, charge_windows, discharge_windows):
+    def sort_window_by_price_combined(self, charge_windows, discharge_windows, stand_alone=False):
+        """
+        Sort windows into price sets
+        """
         window_sort = []
         window_links = {}
         price_set = []
         price_links = {}
 
         # Add charge windows
-        if self.calculate_best_charge:
+        if self.calculate_best_charge or stand_alone:
             id = 0
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher 
@@ -3695,7 +3731,7 @@ class PredBat(hass.Hass):
                 id += 1
 
         # Add discharge windows
-        if self.calculate_best_discharge:
+        if self.calculate_best_discharge and not stand_alone:
             id = 0
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower 
@@ -4390,7 +4426,7 @@ class PredBat(hass.Hass):
         self.expose_config('version', None)
 
         self.debug_enable = self.get_arg('debug_enable', False)
-        self.max_windows = self.get_arg('max_windows', 128)
+        self.calculate_max_windows = self.get_arg('calculate_max_windows', 32)
         self.num_cars = self.get_arg('num_cars', 1)
 
         self.log("Debug enable is {}".format(self.debug_enable))
