@@ -67,6 +67,7 @@ entities:
   - entity: input_number.predbat_pv_scaling
   - entity: input_number.predbat_rate_high_threshold
   - entity: input_number.predbat_rate_low_threshold
+  - entity: input_number.predbat_calculate_max_windows
   - entity: input_number.predbat_metric_future_rate_offset_import
   - entity: input_number.predbat_metric_future_rate_offset_export
   - entity: input_number.predbat_set_reserve_min
