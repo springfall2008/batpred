@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.8.1'
+THIS_VERSION = 'v7.8.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1637,7 +1637,7 @@ class PredBat(hass.Hass):
     def hit_charge_window(self, charge_window, start, end):
         window_n = 0
         for window in charge_window:
-            if start >= window['start'] and end < window['end']:
+            if end > window['start'] and start <= window['end']:
                 return window_n
             window_n += 1
         return -1
@@ -2947,7 +2947,7 @@ class PredBat(hass.Hass):
         if self.rate_low_threshold > 0:
             self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
         else:
-            self.rate_threshold = self.rate_min
+            self.rate_threshold = self.rate_max
 
         if self.rate_low_match_export:
             # When enabled the low rate could be anything up-to the export rate (less battery losses)
@@ -2955,9 +2955,9 @@ class PredBat(hass.Hass):
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_threshold = self.rate_export_max
-        else:
             self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
+        else:
+            self.rate_export_threshold = self.rate_export_min
 
         # Rule out exports if the import rate is already higher unless it's a variable export tariff
         if self.rate_export_max == self.rate_export_min:
