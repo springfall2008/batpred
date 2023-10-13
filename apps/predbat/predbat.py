@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.8.2'
+THIS_VERSION = 'v7.8.3'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2881,6 +2881,8 @@ class PredBat(hass.Hass):
         """
         minute = 0
         found_rates = []
+        lowest = 99
+        highest = -99
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
@@ -2907,26 +2909,35 @@ class PredBat(hass.Hass):
         take_enable = True
         for loop_price in price_set:
             these_items = price_links[loop_price].copy()
-            take_front = find_high
+            take_front = not find_high
             take_position = 0
             take_counter = 0
             while these_items and total < self.calculate_max_windows:
                 remaining = len(these_items)
+                take_position = take_position % remaining
                 if take_front:
-                    key = these_items.pop(take_position % remaining)
+                    from_pos = take_position
+                    key = these_items.pop(take_position)
                 else:
-                    key = these_items.pop(remaining - (take_position % remaining) - 1)
+                    from_pos = remaining - (take_position) - 1
+                    key = these_items.pop(from_pos)
+
                 window_id = window_index[key]['id']             
+                window_price = found_rates[window_id]['average']                
 
                 # Only count those starting inside the window, those outside appear for 'free' as they won't be optimised
                 if found_rates[window_id]['start'] >= (self.minutes_now + self.forecast_minutes):
                     selected_rates.append(window_id)
                 elif take_enable:
+                    if window_price < lowest:
+                        lowest = window_price
+                    if window_price > highest:
+                        highest = window_price
                     selected_rates.append(window_id)
                     total += 1
 
                 # Take 60 minutes together and then move on to another group
-                if take_counter >= 1:
+                if take_counter >= 2:
                     take_position += 31
                     take_counter = 0
                 else:
@@ -2938,7 +2949,7 @@ class PredBat(hass.Hass):
         final_rates = []
         for window_id in selected_rates:
             final_rates.append(found_rates[window_id])
-        return final_rates
+        return final_rates, lowest, highest
 
     def set_rate_thresholds(self):
         """
@@ -2947,7 +2958,11 @@ class PredBat(hass.Hass):
         if self.rate_low_threshold > 0:
             self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
         else:
-            self.rate_threshold = self.rate_max
+            # In automatic mode select the only rate or everything but the most expensive
+            if self.rate_max == self.rate_min:
+                self.rate_threshold = self.rate_max
+            else:
+                self.rate_threshold = self.rate_max - 0.5
 
         if self.rate_low_match_export:
             # When enabled the low rate could be anything up-to the export rate (less battery losses)
@@ -2957,7 +2972,11 @@ class PredBat(hass.Hass):
         if self.rate_high_threshold > 0:
             self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
         else:
-            self.rate_export_threshold = self.rate_export_min
+            # In automatic mode select the only rate or everything but the most cheapest
+            if self.rate_export_max == self.rate_export_min:
+                self.rate_export_threshold = self.rate_export_min
+            else:
+                self.rate_export_threshold = self.rate_export_min + 0.5
 
         # Rule out exports if the import rate is already higher unless it's a variable export tariff
         if self.rate_export_max == self.rate_export_min:
@@ -4829,13 +4848,21 @@ class PredBat(hass.Hass):
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            # Update threshold automatically
+            self.log("High export rate found rates in range {} to {}".format(lowest, highest))
+            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
+                self.rate_export_threshold = lowest
             self.publish_rates(self.rate_export, True)
 
         # Find charging windows
         if self.rate_import:
             # Find charging window
-            self.low_rates = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
+            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
+            self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
+            # Update threshold automatically
+            if self.rate_low_threshold == 0 and highest >= self.rate_min:
+                self.rate_threshold = highest
             self.publish_rates(self.rate_import, False)
         
         # Work out car plan?
