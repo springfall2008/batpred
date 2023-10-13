@@ -14,7 +14,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
 
-THIS_VERSION = 'v7.8.3'
+THIS_VERSION = 'v7.8.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1829,85 +1829,96 @@ class PredBat(hass.Hass):
         """
         Compare predicted vs actual load
         """
-        load_total = 0
-        load_total_today = 0
-        car_total = 0
+        load_total_pred = 0
+        load_total_pred_now = 0
+        car_total_pred = 0
         car_total_actual = 0
-        car_value = 0
+        car_value_pred = 0
         car_value_actual = 0
-        actual_total = 0
+        actual_total_now = 0
         actual_total_today = 0
-        import_ignored_load = 0
-        import_ignored_actual = 0
+        import_ignored_load_pred = 0
+        import_ignored_load_actual = 0
         load_predict_stamp = {}
         load_actual_stamp = {}
         load_predict_data = {}
 
         for minute in range(0, 24*60, step):
-            import_value = 0
-            actual_value = 0
-            load_value = 0
+            import_value_today = 0
+            import_value_pred = 0
+            load_value_today = 0
+            load_value_pred = 0
             if minute < minutes_now:
                 for offset in range(0, step):
-                    import_value += self.get_from_incrementing(import_minutes, minutes_now - minute - offset)
-                    actual_value += self.get_from_incrementing(load_minutes, minutes_now - minute - offset)
+                    import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
+                    load_value_today += self.get_from_incrementing(load_minutes, minutes_now - minute - offset - 1)
 
             for offset in range(0, step):
-                load_value += self.get_historical(load_minutes, minute + step)
+                import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
+                load_value_pred += self.get_historical(load_minutes, minute - minutes_now + offset)
 
-            car_value = 0
+            car_value_pred = 0
             # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
-            if import_value >= load_value:
-                import_ignored_load += load_value
-                import_ignored_actual += actual_value
-                load_value = 0
-                actual_value = 0
+            if import_value_today >= load_value_today:
+                import_ignored_load_actual += load_value_today
+                load_value_today = 0
             elif self.car_charging_hold and car_minutes:
                 # Hold based on data
                 car_value_actual = 0
-                car_value = 0
                 for offset in range(0, step):
-                    car_value += self.get_historical(car_minutes, minute + offset)
-                    car_value_actual += self.get_from_incrementing(car_minutes, minutes_now - minute - offset)
-                load_value_new = max(0, load_value - car_value)
-                actual_value_new = max(0, actual_value - car_value_actual)
-                car_value = load_value - load_value_new
-                car_value_actual = actual_value - actual_value_new
-                load_value = load_value_new
-                actual_value = actual_value_new
-            elif self.car_charging_hold and (load_value >= self.car_charging_threshold):
+                    if minute < minutes_now:
+                        car_value_actual += self.get_from_incrementing(car_minutes, minutes_now - minute - offset - 1)
+                load_value_today_new = max(0, load_value_today - car_value_actual)
+                car_value_actual = load_value_today - load_value_today_new
+                load_value_today = load_value_today_new
+            elif self.car_charging_hold and (load_value_today >= self.car_charging_threshold):
                 # Car charging hold - ignore car charging in computation based on threshold
-                load_value_new = max(load_value - (self.car_charging_rate[0] * step / 60.0), 0)
-                actual_value_new = max(actual_value - (self.car_charging_rate[0] * step / 60.0), 0)
-                car_value = load_value - load_value_new
-                car_value_actual = actual_value - actual_value_new
-                load_value = load_value_new
-                actual_value = actual_value_new
+                load_value_today_new = max(load_value_today - (self.car_charging_rate[0] * step / 60.0), 0)
+                car_value_actual = load_value_today - load_value_today_new
+                load_value_today = load_value_today_new
+
+            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
+            if import_value_pred >= load_value_pred:
+                import_ignored_load_pred += load_value_pred
+                load_value_pred = 0
+            elif self.car_charging_hold and car_minutes:
+                # Hold based on data
+                car_value_pred = 0
+                for offset in range(0, step):
+                    car_value_pred += self.get_historical(car_minutes, minute - minutes_now + offset)
+                load_value_new = max(0, load_value_pred - car_value_pred)
+                car_value_pred = load_value_pred - load_value_new
+                load_value_pred = load_value_new
+            elif self.car_charging_hold and (load_value_pred >= self.car_charging_threshold):
+                # Car charging hold - ignore car charging in computation based on threshold
+                load_value_new = max(load_value_pred - (self.car_charging_rate[0] * step / 60.0), 0)
+                car_value_pred = load_value_pred - load_value_new
+                load_value_pred = load_value_new
 
             # Only count totals until now
             if minute < minutes_now:
-                load_total += load_value
-                car_total += car_value
-                actual_total += actual_value
+                load_total_pred_now += load_value_pred
+                car_total_pred += car_value_pred
+                actual_total_now += load_value_today
                 car_total_actual += car_value_actual
-                actual_total_today += actual_value
+                actual_total_today += load_value_today
             else:
-                actual_total_today += load_value
-            load_total_today += load_value
+                actual_total_today += load_value_pred
+            load_total_pred += load_value_pred
 
-            load_predict_data[minute] = load_value
+            load_predict_data[minute] = load_value_pred
 
             # Store for charts
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60*minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                load_predict_stamp[stamp] = self.dp3(load_total_today)
+                load_predict_stamp[stamp] = self.dp3(load_total_pred)
                 load_actual_stamp[stamp] = self.dp3(actual_total_today)
 
         difference = 1.0
-        if minutes_now >= 180 and actual_total >= 1.0:
+        if minutes_now >= 180 and actual_total_now >= 1.0:
             # Make a ratio only if we have enough data to consider the outcome
-            difference = 1.0 + ((actual_total_today - load_total_today) / actual_total_today)
+            difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
                     
         # Work out diveragence
         if not self.calculate_inday_adjustment:
@@ -1921,11 +1932,11 @@ class PredBat(hass.Hass):
             difference_cap = min(difference_cap, 2.0)
 
         self.log("Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored, Actual so far {} KWh with {} kWh car excluded and {} kWh import ignored".format(
-            self.dp2(difference * 100.0), self.dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, self.dp2(load_total), self.dp2(car_total), self.dp2(import_ignored_load), self.dp2(actual_total), self.dp2(car_total_actual), self.dp2(import_ignored_actual)))
+            self.dp2(difference * 100.0), self.dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, self.dp2(load_total_pred_now), self.dp2(car_total_pred), self.dp2(import_ignored_load_pred), self.dp2(actual_total_now), self.dp2(car_total_actual), self.dp2(import_ignored_load_actual)))
 
         # Create adjusted curve
         load_adjusted_stamp = {}
-        load_adjusted = actual_total
+        load_adjusted = actual_total_now
         for minute in range(0, 24*60, step):
             if minute >= minutes_now:
                 load = load_predict_data[minute] * difference_cap
@@ -1937,7 +1948,7 @@ class PredBat(hass.Hass):
 
         self.set_state(self.prefix + ".load_inday_adjustment", state=self.dp2(difference_cap * 100.0), attributes = {'damping' : self.metric_inday_adjust_damping, 'friendly_name' : 'Load in-day adjustment factor', 'state_class': 'measurement', 'unit_of_measurement': '%', 'icon' : 'mdi:percent'})
         self.set_state(self.prefix + ".load_energy_actual", state=self.dp3(actual_total_today), attributes = {'results' : load_actual_stamp, 'friendly_name' : 'Load energy actual (filtered)', 'state_class': 'measurement', 'unit_of_measurement': 'kWh', 'icon' : 'mdi:percent'})
-        self.set_state(self.prefix + ".load_energy_predicted", state=self.dp3(load_total_today), attributes = {'results' : load_predict_stamp, 'friendly_name' : 'Load energy predicted (filtered)', 'state_class': 'measurement', 'unit_of_measurement': 'kWh', 'icon' : 'mdi:percent'})
+        self.set_state(self.prefix + ".load_energy_predicted", state=self.dp3(load_total_pred), attributes = {'results' : load_predict_stamp, 'friendly_name' : 'Load energy predicted (filtered)', 'state_class': 'measurement', 'unit_of_measurement': 'kWh', 'icon' : 'mdi:percent'})
         self.set_state(self.prefix + ".load_energy_adjusted", state=self.dp3(load_adjusted), attributes = {'results' : load_adjusted_stamp, 'friendly_name' : 'Load energy prediction adjusted', 'state_class': 'measurement', 'unit_of_measurement': 'kWh', 'icon' : 'mdi:percent'})
 
         return difference_cap
@@ -1959,7 +1970,7 @@ class PredBat(hass.Hass):
                 if forward:
                     value += item.get(minute + minutes_now + offset, 0.0)
                 else:
-                    value += self.get_historical(item, minute - offset)
+                    value += self.get_historical(item, minute + offset)
             values[minute] = value * scale_today
             minute += step
         return values
@@ -3080,7 +3091,7 @@ class PredBat(hass.Hass):
         Create rates/time every 30 minutes
         """
         rates_time = {}
-        for minute in range(0, self.forecast_minutes+24*60, 30):
+        for minute in range(0, self.minutes_now + self.forecast_minutes+24*60, 30):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             rates_time[stamp] = self.dp2(rates[minute])
