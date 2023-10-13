@@ -10,9 +10,10 @@ import math
 import re
 import time
 import pytz
-import appdaemon.plugins.hass.hassapi as hass
 import requests
 import copy
+import appdaemon.plugins.hass.hassapi as hass
+import adbase as ad
 
 THIS_VERSION = 'v7.8.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
@@ -4459,6 +4460,7 @@ class PredBat(hass.Hass):
         opts += "metric_battery_cycle({} p/kWh)".format(self.metric_battery_cycle)
         self.log("Calculate Best options: " + opts)
 
+    @ad.app_lock
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -5551,12 +5553,6 @@ class PredBat(hass.Hass):
         for key in disabled:
             del self.args[key]
 
-    def state_change(self, entity, attribute, old, new, kwargs):
-        """
-        State change monitor
-        """
-        self.log("State change: {} to {}".format(entity, new))
-
     def initialize(self):
         """
         Setup the app, called once each time the app starts
@@ -5614,13 +5610,7 @@ class PredBat(hass.Hass):
             self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
             # First run is now
-            # self.run_in(self.run_time_loop, 0)
             self.update_pending = True
-
-            # Monitor state for inputs
-            # self.listen_state(self.state_change, "input_boolean")
-            # self.listen_state(self.state_change, "input_select")
-            # self.listen_state(self.state_change, "input_number")            
 
             # And then every N minutes
             if not INVERTER_TEST:
