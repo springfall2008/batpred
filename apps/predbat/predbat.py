@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.8.4'
+THIS_VERSION = 'v7.8.5'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1964,7 +1964,7 @@ class PredBat(hass.Hass):
             value = 0
 
             # Reset in-day adjustment for tomorrow
-            if minute > 24*60:
+            if (minute + minutes_now) > 24*60:
                 scale_today = 1.0
 
             for offset in range(0, step):
@@ -3529,6 +3529,14 @@ class PredBat(hass.Hass):
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
+        best_soc_step = self.best_soc_step
+
+        # For single windows, if the size is 30 minutes or less then use a larger step
+        if not all_n:
+            start = charge_window[window_n]['start']
+            end = charge_window[window_n]['end']
+            if (end - start) <= 30 and best_soc_step < 1:
+                best_soc_step *= 2
         
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
@@ -3611,7 +3619,7 @@ class PredBat(hass.Hass):
             
             prev_soc = try_soc
             prev_metric = metric
-            loop_soc -= max(self.best_soc_step, 0.1)
+            loop_soc -= max(best_soc_step, 0.1)
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -3633,6 +3641,7 @@ class PredBat(hass.Hass):
         try_discharge_window = copy.deepcopy(discharge_window)
         try_discharge = copy.deepcopy(discharge_limit)
         best_start = window['start']
+        discharge_step = 5
 
         # loop on each discharge option
         if self.set_discharge_freeze and not self.set_discharge_freeze_only:
@@ -3643,14 +3652,14 @@ class PredBat(hass.Hass):
 
         for loop_limit in loop_options:
             # Loop on window size
-            loop_start = window['end'] - 5
+            loop_start = window['end'] - 10  # Minimum discharge window size 10 minutes
             while loop_start >= window['start']:
 
                 this_discharge_limit = loop_limit
                 start = loop_start
 
                 # Move the loop start back to full size
-                loop_start -= 5
+                loop_start -= discharge_step
 
                 # Can't optimise all window start slot
                 if all_n and (start != window['start']):
@@ -5126,7 +5135,8 @@ class PredBat(hass.Hass):
                 for windows in self.charge_window_best:
                     if minutes_end == windows['start']:
                         minutes_end = windows['end']
-                        self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows['start']), self.time_abs_str(windows['end'])))
+                        if self.debug_enable:
+                            self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows['start']), self.time_abs_str(windows['end'])))
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
@@ -5307,6 +5317,9 @@ class PredBat(hass.Hass):
                 self.holiday_days_left -= 1
                 self.expose_config('holiday_days_left', self.holiday_days_left)
                 self.log("Holiday days left is now {}".format(self.holiday_days_left))
+
+        #self.log("sleep")
+        #time.sleep(60)
 
         if self.had_errors:
             self.log("Completed run status {} with Errors reported (check log)".format(status))
