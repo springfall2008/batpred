@@ -896,7 +896,7 @@ class Inverter():
         data = {"chargeToPercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             if float(self.rest_data['Control']['Target_SOC']) == target:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
@@ -915,7 +915,7 @@ class Inverter():
         data = {"chargeRate": rate}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             new = self.rest_data['Control']['Battery_Charge_Rate']
             if abs(new - rate) <  100:
@@ -935,7 +935,7 @@ class Inverter():
         data = {"dischargeRate": rate}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             new = self.rest_data['Control']['Battery_Discharge_Rate']
             if abs(new - rate) <  100:
@@ -955,7 +955,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             if inverter_mode == self.rest_data['Control']['Mode']:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
@@ -974,7 +974,7 @@ class Inverter():
         data = {"reservePercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             if float(self.rest_data['Control']['Battery_Power_Reserve']) == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
@@ -993,7 +993,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             new_value = self.rest_data['Control']['Enable_Charge_Schedule']
             if isinstance(new_value, str):
@@ -1018,7 +1018,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             if self.rest_data['Timeslots']['Charge_start_time_slot_1'] == start and self.rest_data['Timeslots']['Charge_end_time_slot_1'] == finish:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -1037,7 +1037,7 @@ class Inverter():
 
         for retry in range(0, 5):
             r = requests.post(url, json=data)
-            time.sleep(10)
+            #time.sleep(10)
             self.rest_data = self.rest_runAll()
             if self.rest_data['Timeslots']['Discharge_start_time_slot_1'] == start and self.rest_data['Timeslots']['Discharge_end_time_slot_1'] == finish:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -3734,7 +3734,7 @@ class PredBat(hass.Hass):
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold 
-                if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min > best_soc_min)):
+                if ((metric + self.metric_min_improvement_discharge) <= best_metric) and (best_metric==9999999 or (soc_min >= self.best_soc_keep or soc_min >= best_soc_min)):
                     best_metric = metric
                     best_discharge = this_discharge_limit
                     best_cost = cost
