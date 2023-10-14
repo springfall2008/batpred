@@ -2170,8 +2170,12 @@ class PredBat(hass.Hass):
                     charge_rate_now = self.battery_rate_min # 0
 
             # Set discharge during charge?
-            if not self.set_discharge_during_charge and (charge_window_n >= 0):
-                discharge_rate_now = self.battery_rate_min # 0
+            if not self.set_discharge_during_charge:
+                if (charge_window_n >= 0):
+                    discharge_rate_now = self.battery_rate_min # 0
+                elif not car_freeze:
+                    # Reset discharge rate
+                    discharge_rate_now = self.battery_rate_max_discharge_scaled
 
             # Battery behaviour
             battery_draw = 0
@@ -2756,12 +2760,18 @@ class PredBat(hass.Hass):
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
                 self.set_state("binary_sensor." + self.prefix + "_car_charging_slot" + postfix, state='off', attributes = {'planned' : plan, 'cost' : None, 'kwh' : None, 'friendly_name' : 'Predbat car charging slot' + postfix, 'icon': 'mdi:home-lightning-bolt-outline'})
+                self.set_state(self.prefix + ".car_charging_start" + postfix, state='undefined', attributes = {'friendly_name' : 'Predbat car charge start time car' + postfix, 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
             else:
                 window = self.car_charging_slots[car_n][0]
                 if self.minutes_now >= window['start'] and self.minutes_now < window['end']:
                     slot = True
                 else:
                     slot = False
+
+                time_format_time = '%H:%M:%S'
+                car_startt = self.midnight_utc + timedelta(minutes=window['start'])
+                car_start_time_str = car_startt.strftime(time_format_time)
+                self.set_state(self.prefix + ".car_charging_start" + postfix, state=car_start_time_str, attributes = {'friendly_name' : 'Predbat car charge start time car' + postfix, 'state_class': 'measurement', 'state_class': 'timestamp', 'icon': 'mdi:table-clock'})
 
                 total_kwh = 0
                 total_cost = 0
