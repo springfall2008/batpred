@@ -168,13 +168,17 @@ class Inverter():
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
+        self.rest_api = None
 
-        # Rest API?
-        self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
-        if self.rest_api:
-            if not quiet:
-                self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
-            self.rest_data = self.rest_readData()
+        self.inverter_type = self.base.get_arg('inverter_type', 'GE', indirect=False)
+
+        # Rest API for GivEnergy
+        if self.inverter_type == 'GE':
+            self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
+            if self.rest_api:
+                if not quiet:
+                    self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
+                self.rest_data = self.rest_readData()
 
         # Battery size, charge and discharge rates
         ivtime = None
@@ -209,7 +213,10 @@ class Inverter():
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
-            self.battery_rate_max_raw = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0)
+            if self.inverter_type == 'GE':
+                self.battery_rate_max_raw = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0)
+            else:
+                self.battery_rate_max_raw = self.base.get_arg('battery_rate_max', index=self.id, default=2600.0)
             ivtime = self.base.get_arg('inverter_time', index=self.id, default=None)
         
         # Battery rate max charge, discharge
@@ -300,7 +307,10 @@ class Inverter():
             if self.rest_data:
                 self.soc_kw = self.rest_data['Power']['Power']['SOC_kWh'] * self.base.battery_scaling
             else:
-                self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
+                if 'soc_percent' in self.base.args:
+                    self.soc_kw = self.base.get_arg('soc_percent', default=0.0, index=self.id) * self.soc_max * self.base.battery_scaling / 100.0
+                else:
+                    self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
         self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
 
