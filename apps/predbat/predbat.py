@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.8.6'
+THIS_VERSION = 'v7.8.7'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2278,10 +2278,10 @@ class PredBat(hass.Hass):
                 # Can not export over export limit, so cap at that
                 diff = max(diff, -self.export_limit * step)
 
-            # Metric keep - pretend the battery is empty and you have to import due to violating keep
+            # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if soc < self.best_soc_keep:
-                keep_drop = max(load_yesterday - (pv_dc + pv_ac), 0)
-                metric_keep += self.rate_import[minute_absolute] * keep_drop
+                diff_keep = max(load_yesterday - (0 + pv_dc + pv_ac), 0)
+                metric_keep += self.rate_import[minute_absolute] * diff_keep
 
             if diff > 0:
                 # Import
@@ -3598,16 +3598,16 @@ class PredBat(hass.Hass):
             metric -= soc * max(rate_min, 1.0) / self.battery_loss
             metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
 
-            # Adjustment for battery cycles metric
-            metric += battery_cycle * self.metric_battery_cycle + metric_keep
-            metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
-
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
                 metric_diff = metric10 - metric
                 metric_diff *= self.pv_metric10_weight
                 metric += metric_diff
                 metric = self.dp2(metric)
+
+            # Adjustment for battery cycles metric
+            metric += battery_cycle * self.metric_battery_cycle + metric_keep
+            metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
             # Metric adjustment based on current charge limit, try to avoid
             # constant changes by weighting the base setting a little
@@ -3727,16 +3727,16 @@ class PredBat(hass.Hass):
                 metric -= soc * max(rate_min, 1.0) / self.battery_loss
                 metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
 
-                # Adjustment for battery cycles metric
-                metric += battery_cycle * self.metric_battery_cycle + metric_keep
-                metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
-
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
                     metric_diff = metric10 - metric
                     metric_diff *= self.pv_metric10_weight
                     metric += metric_diff
                     metric = self.dp2(metric)
+
+                # Adjustment for battery cycles metric
+                metric += battery_cycle * self.metric_battery_cycle + metric_keep
+                metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
                 # Adjust to try to keep existing windows
                 if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
