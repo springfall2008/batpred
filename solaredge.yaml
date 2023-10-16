@@ -18,13 +18,13 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today: 
-    - sensor.givtcp_{geserial}_load_energy_today_kwh
+    - sensor.solaredge_i2_ac_energy_kwh
   import_today: 
     - sensor.solaredge_m1_imported_kwh
   export_today: 
     - sensor.solaredge_m1_exported_kwh
   pv_today:
-    - sensor.givtcp_{geserial}_pv_energy_today_kwh
+    - sensor.solar_panel_production_kwh   # This is a custom sensor - documentation TBD
   #
   # Controls/status - must by 1 per inverter
   #
@@ -43,10 +43,10 @@ pred_bat:
   #  - number.givtcp_{geserial}_pv_power
   #load_power: 
   #  - number.givtcp_{geserial}_load_power
-  #soc_kw: 
-  #  - sensor.givtcp_{geserial}_soc_kwh
-  soc_percent:
-    - sensor.solaredge_b1_state_of_energy
+  soc_kw: 
+    - sensor.solaredge_b1_available_energy
+  #soc_percent:
+  #  - sensor.solaredge_b1_state_of_energy
   soc_max: 
     - sensor.solaredge_b1_maximum_energy
   reserve: 
