@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.8.7'
+THIS_VERSION = 'v7.8.8'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -168,13 +168,17 @@ class Inverter():
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
+        self.rest_api = None
 
-        # Rest API?
-        self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
-        if self.rest_api:
-            if not quiet:
-                self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
-            self.rest_data = self.rest_readData()
+        self.inverter_type = self.base.get_arg('inverter_type', 'GE', indirect=False)
+
+        # Rest API for GivEnergy
+        if self.inverter_type == 'GE':
+            self.rest_api = self.base.get_arg('givtcp_rest', None, indirect=False, index=self.id)
+            if self.rest_api:
+                if not quiet:
+                    self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
+                self.rest_data = self.rest_readData()
 
         # Battery size, charge and discharge rates
         ivtime = None
@@ -209,7 +213,10 @@ class Inverter():
         else:
             self.soc_max = self.base.get_arg('soc_max', default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
-            self.battery_rate_max_raw = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0)
+            if self.inverter_type == 'GE':
+                self.battery_rate_max_raw = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0)
+            else:
+                self.battery_rate_max_raw = self.base.get_arg('battery_rate_max', index=self.id, default=2600.0)
             ivtime = self.base.get_arg('inverter_time', index=self.id, default=None)
         
         # Battery rate max charge, discharge
@@ -300,7 +307,10 @@ class Inverter():
             if self.rest_data:
                 self.soc_kw = self.rest_data['Power']['Power']['SOC_kWh'] * self.base.battery_scaling
             else:
-                self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
+                if 'soc_percent' in self.base.args:
+                    self.soc_kw = self.base.get_arg('soc_percent', default=0.0, index=self.id) * self.soc_max * self.base.battery_scaling / 100.0
+                else:
+                    self.soc_kw = self.base.get_arg('soc_kw', default=0.0, index=self.id) * self.base.battery_scaling
 
         self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
 
@@ -970,18 +980,20 @@ class Inverter():
         Configure reserve % via REST
         """
         target = int(target)
+        result = target
         url = self.rest_api + '/setBatteryReserve'
         data = {"reservePercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             #time.sleep(10)
             self.rest_data = self.rest_runAll()
-            if float(self.rest_data['Control']['Battery_Power_Reserve']) == target:
+            result = int(float(self.rest_data['Control']['Battery_Power_Reserve']))
+            if result == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
-        self.base.log("WARN: Set inverter {} reserve {} via REST failed".format(self.id, target, retry))
-        self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
+        self.base.log("WARN: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
+        self.base.record_status("Warn - Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
         return False
 
     def rest_enableChargeSchedule(self, enable):
@@ -4161,9 +4173,9 @@ class PredBat(hass.Hass):
 
             # Log new set of charge and discharge windows
             if charge_windows:
-                self.log("Best charge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(price, best_metric, self.dp2(best_cost), self.dp2(metric_keep), self.window_as_text(charge_windows, charge_socs, ignore_min=True)))
+                self.log("Best charge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(metric_keep), self.window_as_text(charge_windows, charge_socs, ignore_min=True)))
             if discharge_windows:
-                self.log("Best discharge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(price, best_metric, self.dp2(best_cost), self.dp2(metric_keep), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1], ignore_max=True)))
+                self.log("Best discharge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(metric_keep), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1], ignore_max=True)))
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
@@ -4517,8 +4529,9 @@ class PredBat(hass.Hass):
         self.debug_enable = self.get_arg('debug_enable', False)
         self.calculate_max_windows = self.get_arg('calculate_max_windows', 32)
         self.num_cars = self.get_arg('num_cars', 1)
+        self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
 
-        self.log("Debug enable is {}".format(self.debug_enable))
+        self.log("Inverter type {} max_windows {} num_cars {} debug enable is {}".format(self.inverter_type, self.calculate_max_windows, self.num_cars, self.debug_enable))
 
         self.now_utc = now_utc
         self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -4605,21 +4618,26 @@ class PredBat(hass.Hass):
         self.charge_slot_split = 30
 
         # Enables
+        default_enable_mode = True
+        if self.inverter_type != 'GE':
+            default_enable_mode = False
+            self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
+
         self.calculate_best = self.get_arg('calculate_best', True)
-        self.set_soc_enable = self.get_arg('set_soc_enable', True)
-        self.set_reserve_enable = self.get_arg('set_reserve_enable', True)
+        self.set_soc_enable = self.get_arg('set_soc_enable', default_enable_mode)
+        self.set_reserve_enable = self.get_arg('set_reserve_enable', default_enable_mode)
         self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
         self.set_reserve_hold   = self.get_arg('set_reserve_hold', True)
         self.set_soc_notify = self.get_arg('set_soc_notify', True)
         self.set_window_notify = self.get_arg('set_window_notify', True)
-        self.set_charge_window = self.get_arg('set_charge_window', True)
-        self.set_discharge_window = self.get_arg('set_discharge_window', True)
-        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', True)
+        self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
+        self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
+        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
         self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
         self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
         self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
-        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', True)
+        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', default_enable_mode)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
         self.calculate_discharge_oncharge = self.get_arg('calculate_discharge_oncharge', True)
         self.calculate_second_pass = self.get_arg('calculate_second_pass', False)
