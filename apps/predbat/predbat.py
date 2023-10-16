@@ -980,18 +980,20 @@ class Inverter():
         Configure reserve % via REST
         """
         target = int(target)
+        result = target
         url = self.rest_api + '/setBatteryReserve'
         data = {"reservePercent": target}
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             #time.sleep(10)
             self.rest_data = self.rest_runAll()
-            if float(self.rest_data['Control']['Battery_Power_Reserve']) == target:
+            result = int(float(self.rest_data['Control']['Battery_Power_Reserve']))
+            if result == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
-        self.base.log("WARN: Set inverter {} reserve {} via REST failed".format(self.id, target, retry))
-        self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
+        self.base.log("WARN: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
+        self.base.record_status("Warn - Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
         return False
 
     def rest_enableChargeSchedule(self, enable):
