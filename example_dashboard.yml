@@ -51,6 +51,7 @@ entities:
   - entity: input_number.predbat_best_soc_min
   - entity: input_number.predbat_best_soc_max
   - entity: input_number.predbat_best_soc_step
+  - entity: input_number.predbat_calculate_max_windows
   - entity: input_number.predbat_car_charging_energy_scale
   - entity: input_number.predbat_car_charging_loss
   - entity: input_number.predbat_car_charging_rate
