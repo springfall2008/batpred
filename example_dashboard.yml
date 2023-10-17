@@ -29,7 +29,6 @@ entities:
   - entity: switch.predbat_combine_charge_slots
   - entity: switch.predbat_combine_discharge_slots
   - entity: switch.predbat_combine_mixed_rates
-  - entity: switch.predbat_rate_low_match_export
   - entity: switch.predbat_iboost_enable
   - entity: switch.predbat_inverter_hybrid
   - entity: switch.predbat_inverter_soc_reset
