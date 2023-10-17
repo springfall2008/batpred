@@ -97,6 +97,7 @@ CONFIG_ITEMS = [
     {'name' : 'set_reserve_enable',            'friendly_name' : 'Set Reserve Enable',             'type' : 'switch'},
     {'name' : 'set_reserve_hold',              'friendly_name' : 'Set Reserve Hold',               'type' : 'switch'},
     {'name' : 'set_reserve_notify',            'friendly_name' : 'Set Reserve Notify',             'type' : 'switch'},
+    {'name' : 'set_read_only',                 'friendly_name' : 'Read Only mode',                 'type' : 'switch'},
     {'name' : 'balance_inverters_enable',      'friendly_name' : 'Balance Inverters Enable (Beta)', 'type' : 'switch'},
     {'name' : 'balance_inverters_charge',      'friendly_name' : 'Balance Inverters for charging',          'type' : 'switch'},
     {'name' : 'balance_inverters_discharge',   'friendly_name' : 'Balance Inverters for discharge',         'type' : 'switch'},
@@ -1589,7 +1590,11 @@ class PredBat(hass.Hass):
                                 index += 1
                     else:
                         while minute < minutes_to:
-                            mdata[minute] = state
+                            if backwards:
+                                mdata[minute] = last_state
+                            else:
+                                mdata[minute] = state
+
                             if adjusted:
                                 adata[minute] = True
                             minute += 1
@@ -3433,6 +3438,7 @@ class PredBat(hass.Hass):
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
+        self.set_read_only = True
 
     def optimise_charge_limit_price(self, price_set, price_links, window_index, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record=None):
         """
@@ -4627,7 +4633,8 @@ class PredBat(hass.Hass):
         self.set_soc_enable = self.get_arg('set_soc_enable', default_enable_mode)
         self.set_reserve_enable = self.get_arg('set_reserve_enable', default_enable_mode)
         self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
-        self.set_reserve_hold   = self.get_arg('set_reserve_hold', True)
+        self.set_reserve_hold = self.get_arg('set_reserve_hold', True)
+        self.set_read_only = self.get_arg('set_read_only', False)
         self.set_soc_notify = self.get_arg('set_soc_notify', True)
         self.set_window_notify = self.get_arg('set_window_notify', True)
         self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
@@ -4648,6 +4655,9 @@ class PredBat(hass.Hass):
         self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
         self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
         self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
+
+        if self.set_read_only:
+            self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
 
         # Enable load filtering
         self.load_filter_modal = self.get_arg('load_filter_modal', False)
@@ -5158,6 +5168,11 @@ class PredBat(hass.Hass):
             status = "Idle"
 
         for inverter in self.inverters:
+            # Read-only mode
+            if self.set_read_only:
+                status = "Read-Only"
+                continue
+
             resetDischarge = False
             if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery):
                 # These options mess with discharge rate, so we must reset it when they aren't changing it
@@ -5721,7 +5736,7 @@ class PredBat(hass.Hass):
         """
         Called every N second for balance inverters
         """
-        if not self.prediction_started and self.balance_inverters_enable:
+        if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:
             try:
                 self.balance_inverters()
             except Exception as e:

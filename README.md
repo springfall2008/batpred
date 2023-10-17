@@ -406,6 +406,7 @@ Control how your battery behaves during car charging:
 
 ### Workarounds
 
+  - **switch.predbat_set_read_only** - When set prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
   - **battery_scaling** - Scales the battery reported SOC Kwh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
   - **import_export_scaling** - Scaling the import & export data from GivTCP - used for workarounds
   - **inverter_clock_skew_start**, **inverter_clock_skew_end** - Skews the setting of the charge slot registers vs the predicted start time (see apps.yml)
