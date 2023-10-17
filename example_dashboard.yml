@@ -76,6 +76,7 @@ entities:
   - entity: input_number.predbat_holiday_days_left
   - entity: input_number.predbat_metric_inday_adjust_damping
   - entity: binary_sensor.predbat_car_charging_slot
+  - entity: predbat.car_charging_start
   - entity: binary_sensor.predbat_export_trigger_large
   - entity: binary_sensor.predbat_export_trigger_small
   - entity: binary_sensor.predbat_high_rate_export_slot
