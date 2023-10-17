@@ -2,6 +2,7 @@
 type: entities
 entities:
   - entity: predbat.status
+  - entity: switch.predbat_set_read_only 
   - entity: switch.predbat_debug_enable
   - entity: switch.predbat_calculate_best
   - entity: switch.predbat_calculate_best_charge
@@ -105,6 +106,7 @@ entities:
   - entity: predbat.best_soc_min_kwh
   - entity: predbat.car_soc
   - entity: predbat.car_soc_best
+  - entity: predbat.car_charging_start
   - entity: predbat.charge_limit
   - entity: predbat.charge_limit_kw
   - entity: predbat.cost_today
