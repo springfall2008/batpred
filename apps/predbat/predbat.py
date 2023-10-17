@@ -3438,6 +3438,7 @@ class PredBat(hass.Hass):
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
+        self.set_read_only = True
 
     def optimise_charge_limit_price(self, price_set, price_links, window_index, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record=None):
         """
@@ -5735,7 +5736,7 @@ class PredBat(hass.Hass):
         """
         Called every N second for balance inverters
         """
-        if not self.prediction_started and self.balance_inverters_enable:
+        if not self.prediction_started and self.balance_inverters_enable and not self.set_read_only:
             try:
                 self.balance_inverters()
             except Exception as e:
