@@ -4021,8 +4021,8 @@ class PredBat(hass.Hass):
         """
         Reports status on charging/discharging to binary sensor
         """
-        self.set_state("binary_sensor." + self.prefix + "_charging", state=isCharging, attributes = {'friendly_name' : 'Predbat is charging', 'icon': 'mdi:battery-arrow-up'})
-        self.set_state("binary_sensor." + self.prefix + "_discharging", state=isDischarging, attributes = {'friendly_name' : 'Predbat is discharging', 'icon': 'mdi:battery-arrow-down'})
+        self.set_state("binary_sensor." + self.prefix + "_charging", state='on' if isCharging else 'off', attributes = {'friendly_name' : 'Predbat is charging', 'icon': 'mdi:battery-arrow-up'})
+        self.set_state("binary_sensor." + self.prefix + "_discharging", state='on' if isDischarging else 'off', attributes = {'friendly_name' : 'Predbat is discharging', 'icon': 'mdi:battery-arrow-down'})
 
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
         """
