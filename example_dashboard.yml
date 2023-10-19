@@ -81,6 +81,8 @@ entities:
   - entity: binary_sensor.predbat_export_trigger_small
   - entity: binary_sensor.predbat_high_rate_export_slot
   - entity: binary_sensor.predbat_low_rate_slot
+  - entity: binary_sensor.predbat_charging
+  - entity: binary_sensor.predbat_discharging
   - entity: predbat.battery_hours_left
   - entity: predbat.battery_power
   - entity: predbat.battery_power_best
