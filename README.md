@@ -276,6 +276,8 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
   - **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge. Recommended setting is 200 for gen1 hybrids with this issue.
 
   - **set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter to avoid cross charging when batteries are out of balance.
+   
+  - **inverter_max_reserve** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
@@ -414,6 +416,7 @@ Control how your battery behaves during car charging:
   - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
   - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
   - **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
+  - **inverter_max_reserve** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
 
 ### Balance Inverters
 
@@ -454,6 +457,12 @@ For example:
        minutes: 15
        energy: 0.25
 ```
+
+If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors
+
+**binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level)
+**binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include discharge freeze slots where the charge rate is set to zero to export excess solar only.
+
 ### Holiday mode
 
 When you go away you are likely to use less electric and so the previous load data will be quite pessimistic. Using the configuration item **input_number.predbat_holiday_days_left** in Home assistant you can set the number of full days that you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When holiday days left is non-zero holiday mode is active. 

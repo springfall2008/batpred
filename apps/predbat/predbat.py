@@ -161,6 +161,7 @@ class Inverter():
         self.inverter_time = None
         self.reserve_percent = 4.0
         self.reserve_percent_current = 4.0
+        self.reserve_max = 100
         self.battery_rate_max_raw = 0
         self.battery_rate_max_charge = 0
         self.battery_rate_max_discharge = 0
@@ -172,6 +173,7 @@ class Inverter():
         self.rest_api = None
 
         self.inverter_type = self.base.get_arg('inverter_type', 'GE', indirect=False)
+        self.reserve_max = self.base.get_arg('inverter_reserve_max', 100)
 
         # Rest API for GivEnergy
         if self.inverter_type == 'GE':
@@ -468,6 +470,9 @@ class Inverter():
         reserve = int(reserve + 0.5)
         if reserve < self.reserve_percent:
             reserve = self.reserve_percent
+
+        # Clamp reserve at max setting
+        reserve = min(reserve, self.reserve_max)
 
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {} % and new target is {} %".format(self.id, current_reserve, reserve))
@@ -4012,6 +4017,13 @@ class PredBat(hass.Hass):
             self.log("Evalute trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
             self.set_state(sensor_name, state=state, attributes = {'friendly_name' : 'Predbat export trigger ' + name, 'required' : energy, 'available' : self.dp2(total_energy), 'minutes' : minutes, 'icon': 'mdi:clock-start'})
 
+    def set_charge_discharge_status(self, isCharging, isDischarging):
+        """
+        Reports status on charging/discharging to binary sensor
+        """
+        self.set_state("binary_sensor." + self.prefix + "_charging", state='on' if isCharging else 'off', attributes = {'friendly_name' : 'Predbat is charging', 'icon': 'mdi:battery-arrow-up'})
+        self.set_state("binary_sensor." + self.prefix + "_discharging", state='on' if isDischarging else 'off', attributes = {'friendly_name' : 'Predbat is discharging', 'icon': 'mdi:battery-arrow-down'})
+
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
         """
         Clip charge slots that are useless as they don't charge at all
@@ -5167,6 +5179,8 @@ class PredBat(hass.Hass):
         else:
             status = "Idle"
 
+        isCharging = False
+        isDischarging = False
         for inverter in self.inverters:
             # Read-only mode
             if self.set_read_only:
@@ -5213,6 +5227,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
                         status = "Charging"
+                        isCharging = True
 
                     # Hold charge mode when enabled
                     if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and (status == "Charging") and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]):
@@ -5266,6 +5281,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         resetDischarge = False
+                        isDischarging = True
 
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(self.discharge_limits_best[0])
@@ -5356,6 +5372,9 @@ class PredBat(hass.Hass):
             if self.set_reserve_enable and resetReserve and not setReserve:
                 inverter.adjust_reserve(0)
 
+        # Set the charge/discharge status information
+        self.set_charge_discharge_status(isCharging, isDischarging)
+
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
             if self.iboost_energy_today:
@@ -5374,9 +5393,6 @@ class PredBat(hass.Hass):
                 self.holiday_days_left -= 1
                 self.expose_config('holiday_days_left', self.holiday_days_left)
                 self.log("Holiday days left is now {}".format(self.holiday_days_left))
-
-        #self.log("sleep")
-        #time.sleep(60)
 
         if self.had_errors:
             self.log("Completed run status {} with Errors reported (check log)".format(status))
