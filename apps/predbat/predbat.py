@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.8.9'
+THIS_VERSION = 'v7.9'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1123,7 +1123,10 @@ class PredBat(hass.Hass):
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and '.' in value:
-            ovalue = value
+            nattribute = None
+            if '$' in value:
+                value, attribute = value.split('$')
+                
             if attribute:
                 value = self.get_state(entity_id = value, default=default, attribute=attribute)
             else:
@@ -1423,7 +1426,18 @@ class PredBat(hass.Hass):
             tdata = datetime.strptime(str, TIME_FORMAT)
         return tdata
 
-    def minute_data_import_export(self, now_utc, key):
+    def load_car_energy(self, now_utc):
+        """
+        Load previous car charging energy data
+        """
+        self.car_charging_energy = {}
+        if 'car_charging_energy' in self.args:
+            self.car_charging_energy = self.minute_data_import_export(now_utc, 'car_charging_energy', scale=self.car_charging_energy_scale)
+        else:
+            self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
+        return self.car_charging_energy
+
+    def minute_data_import_export(self, now_utc, key, scale=1.0):
         """
         Download one or more entities for import/export data
         """
@@ -1439,7 +1453,7 @@ class PredBat(hass.Hass):
                 history = []
 
             if history:
-                import_today = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True, accumulate=import_today)
+                import_today = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, scale=scale, clean_increment=True, accumulate=import_today)
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
                 self.record_status("Error - Unable to fetch history from {}".format(entity_id), had_errors=True)
@@ -1546,7 +1560,11 @@ class PredBat(hass.Hass):
                 if backwards:
                     to_time = prev_last_updated_time
                 else:
-                    to_time = None
+                    if smoothing:
+                        to_time = last_updated_time
+                        last_updated_time = prev_last_updated_time
+                    else:
+                        to_time = None
 
             if backwards:
                 timed = now - last_updated_time
@@ -1572,25 +1590,28 @@ class PredBat(hass.Hass):
                 else:
                     if smoothing:
                         # Reset to zero, sometimes not exactly zero
-                        if state < last_state and (state <= (last_state / 10.0)):
+                        if clean_increment and state < last_state and (state <= (last_state / 10.0)):
                             while minute < minutes_to:
                                 mdata[minute] = state
                                 minute += 1
                         else:
                             # Can't really go backwards as incrementing data
-                            if state < last_state:
+                            if clean_increment and state < last_state:
                                 state = last_state
 
                             # Create linear function
                             diff = (state - last_state) / (minutes_to - minute)
 
                             # If the spike is too big don't smooth it, it will removed in the clean function later
-                            if max_increment > 0 and diff > max_increment:
+                            if clean_increment and max_increment > 0 and diff > max_increment:
                                 diff = 0
 
                             index = 0
                             while minute < minutes_to:
-                                mdata[minute] = state - diff*index
+                                if backwards:
+                                    mdata[minute] = state - diff*index
+                                else:
+                                    mdata[minute] = last_state + diff*index
                                 minute += 1
                                 index += 1
                     else:
@@ -1607,7 +1628,10 @@ class PredBat(hass.Hass):
                 mdata[minutes] = state
 
             # Store previous time & state
-            prev_last_updated_time = last_updated_time
+            if to_time and not backwards:
+                prev_last_updated_time = to_time
+            else:
+                prev_last_updated_time = last_updated_time
             last_state = state
 
         # If we only have a start time then fill the gaps with the last values
@@ -1701,6 +1725,34 @@ class PredBat(hass.Hass):
 
         return new_data
 
+    def get_filtered_load_minute(self, data, minute_previous, historical, step=1):
+        """
+        Gets a previous load minute after filtering for car charging
+        """
+        load_yesterday_raw = 0
+
+        for offset in range(0, step):
+            if historical:
+                load_yesterday_raw += self.get_historical(data, minute_previous + offset)
+            else:
+                load_yesterday_raw += self.get_from_incrementing(data, minute_previous + offset)
+
+        load_yesterday = load_yesterday_raw
+        # Car charging hold
+        if self.car_charging_hold and self.car_charging_energy:
+            # Hold based on data
+            car_energy = 0
+            for offset in range(0, step):
+                if historical:
+                    car_energy += self.get_historical(self.car_charging_energy, minute_previous + offset)
+                else:
+                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous + offset)
+            load_yesterday = max(0, load_yesterday - car_energy)
+        elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
+            # Car charging hold - ignore car charging in computation based on threshold
+            load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
+        return load_yesterday, load_yesterday_raw
+
     def previous_days_modal_filter(self, data):
         """
         Look at the data from previous days and discard the best case one
@@ -1717,17 +1769,9 @@ class PredBat(hass.Hass):
             sum_day = 0
             if use_days > 0:
                 full_days = 24*60*(use_days - 1)
-                for minute in range(0, 24*60):
+                for minute in range(0, 24*60, PREDICT_STEP):
                     minute_previous = 24 * 60 - minute + full_days
-                    load_yesterday = self.get_from_incrementing(data, minute_previous)
-                    # Car charging hold
-                    if self.car_charging_hold and self.car_charging_energy:
-                        # Hold based on data
-                        car_energy = self.get_from_incrementing(self.car_charging_energy, minute_previous)
-                        load_yesterday = max(0, load_yesterday - car_energy)
-                    elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold)):
-                        # Car charging hold - ignore car charging in computation based on threshold
-                        load_yesterday = max(load_yesterday - (self.car_charging_rate[0] / 60.0), 0)
+                    load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
                     sum_day += load_yesterday
             sum_days.append(self.dp2(sum_day))
             if sum_day < min_sum:
@@ -1771,13 +1815,16 @@ class PredBat(hass.Hass):
         else:
             return total / total_weight
 
-    def get_from_incrementing(self, data, index):
+    def get_from_incrementing(self, data, index, backwards=True):
         """
         Get a single value from an incrementing series e.g. kwh today -> kwh this minute
         """
         while index < 0:
             index += 24*60
-        return data.get(index, 0) - data.get(index + 1, 0)
+        if backwards:
+            return data.get(index, 0) - data.get(index + 1, 0)
+        else:
+            return data.get(index + 1, 0) - data.get(index, 0)
 
     def record_length(self, charge_window):
         """
@@ -1848,7 +1895,7 @@ class PredBat(hass.Hass):
             txt += "%7s" % str(value)
         return txt
 
-    def load_today_comparison(self, load_minutes, car_minutes, import_minutes, minutes_now, step=5):
+    def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5):
         """
         Compare predicted vs actual load
         """
@@ -1865,58 +1912,39 @@ class PredBat(hass.Hass):
         load_predict_stamp = {}
         load_actual_stamp = {}
         load_predict_data = {}
+        total_forecast_value_pred = 0
+        total_forecast_value_pred_now = 0
 
         for minute in range(0, 24*60, step):
             import_value_today = 0
-            import_value_pred = 0
-            load_value_today = 0
-            load_value_pred = 0
+
             if minute < minutes_now:
                 for offset in range(0, step):
                     import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
-                    load_value_today += self.get_from_incrementing(load_minutes, minutes_now - minute - offset - 1)
+                load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
 
+            import_value_pred = 0
+            forecast_value_pred = 0
             for offset in range(0, step):
                 import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
-                load_value_pred += self.get_historical(load_minutes, minute - minutes_now + offset)
+                forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
 
-            car_value_pred = 0
+            load_value_pred, load_value_pred_raw = self.get_filtered_load_minute(load_minutes, minute - minutes_now, historical=True, step=step)
+
             # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
-            if import_value_today >= load_value_today:
+            car_value_actual = load_value_today_raw - load_value_today
+            if import_value_today >= load_value_today_raw:
                 import_ignored_load_actual += load_value_today
                 load_value_today = 0
-            elif self.car_charging_hold and car_minutes:
-                # Hold based on data
-                car_value_actual = 0
-                for offset in range(0, step):
-                    if minute < minutes_now:
-                        car_value_actual += self.get_from_incrementing(car_minutes, minutes_now - minute - offset - 1)
-                load_value_today_new = max(0, load_value_today - car_value_actual)
-                car_value_actual = load_value_today - load_value_today_new
-                load_value_today = load_value_today_new
-            elif self.car_charging_hold and (load_value_today >= self.car_charging_threshold):
-                # Car charging hold - ignore car charging in computation based on threshold
-                load_value_today_new = max(load_value_today - (self.car_charging_rate[0] * step / 60.0), 0)
-                car_value_actual = load_value_today - load_value_today_new
-                load_value_today = load_value_today_new
 
             # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
-            if import_value_pred >= load_value_pred:
+            car_value_pred = load_value_pred_raw - load_value_pred
+            if import_value_pred >= load_value_pred_raw:
                 import_ignored_load_pred += load_value_pred
                 load_value_pred = 0
-            elif self.car_charging_hold and car_minutes:
-                # Hold based on data
-                car_value_pred = 0
-                for offset in range(0, step):
-                    car_value_pred += self.get_historical(car_minutes, minute - minutes_now + offset)
-                load_value_new = max(0, load_value_pred - car_value_pred)
-                car_value_pred = load_value_pred - load_value_new
-                load_value_pred = load_value_new
-            elif self.car_charging_hold and (load_value_pred >= self.car_charging_threshold):
-                # Car charging hold - ignore car charging in computation based on threshold
-                load_value_new = max(load_value_pred - (self.car_charging_rate[0] * step / 60.0), 0)
-                car_value_pred = load_value_pred - load_value_new
-                load_value_pred = load_value_new
+
+            # Add in forecast load
+            load_value_pred += forecast_value_pred
 
             # Only count totals until now
             if minute < minutes_now:
@@ -1925,9 +1953,12 @@ class PredBat(hass.Hass):
                 actual_total_now += load_value_today
                 car_total_actual += car_value_actual
                 actual_total_today += load_value_today
+                total_forecast_value_pred_now += forecast_value_pred
             else:
                 actual_total_today += load_value_pred
+
             load_total_pred += load_value_pred
+            total_forecast_value_pred += forecast_value_pred
 
             load_predict_data[minute] = load_value_pred
 
@@ -1954,8 +1985,8 @@ class PredBat(hass.Hass):
             difference_cap = max(difference_cap, 0.5)
             difference_cap = min(difference_cap, 2.0)
 
-        self.log("Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored, Actual so far {} KWh with {} kWh car excluded and {} kWh import ignored".format(
-            self.dp2(difference * 100.0), self.dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, self.dp2(load_total_pred_now), self.dp2(car_total_pred), self.dp2(import_ignored_load_pred), self.dp2(actual_total_now), self.dp2(car_total_actual), self.dp2(import_ignored_load_actual)))
+        self.log("Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored and {} forecast extra, Actual so far {} KWh with {} kWh car excluded and {} kWh import ignored".format(
+            self.dp2(difference * 100.0), self.dp2(difference_cap * 100.0), self.metric_inday_adjust_damping, self.dp2(load_total_pred_now), self.dp2(car_total_pred), self.dp2(import_ignored_load_pred), self.dp2(total_forecast_value_pred_now), self.dp2(actual_total_now), self.dp2(car_total_actual), self.dp2(import_ignored_load_actual)))
 
         # Create adjusted curve
         load_adjusted_stamp = {}
@@ -1976,26 +2007,35 @@ class PredBat(hass.Hass):
 
         return difference_cap
 
-    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0):
+    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, car_filter=False, load_forecast={}):
         """
         Create cached step data for historical array 
         """
-        minute = 0
         values = {}
-        while minute < self.forecast_minutes:
+        for minute in range(0, self.forecast_minutes, step):
             value = 0
+            minute_absolute = minute + minutes_now
 
             # Reset in-day adjustment for tomorrow
             if (minute + minutes_now) > 24*60:
                 scale_today = 1.0
 
-            for offset in range(0, step):
-                if forward:
-                    value += item.get(minute + minutes_now + offset, 0.0)
-                else:
-                    value += self.get_historical(item, minute + offset)
-            values[minute] = value * scale_today
-            minute += step
+            if car_filter and not forward:
+                load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(item, minute, historical=True, step=step)
+                value += load_yesterday
+            else:
+                for offset in range(0, step):
+                    if forward:
+                        value += item.get(minute + minutes_now + offset, 0.0)
+                    else:
+                        value += self.get_historical(item, minute + offset)
+
+            # Extra load adding in (e.g. heat pump)
+            load_extra = 0
+            if load_forecast:
+                for offset in range(0, step):
+                    load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
+            values[minute] = value * scale_today + load_extra
         return values
 
     def calc_percent_limit(self, charge_limit):
@@ -2119,15 +2159,6 @@ class PredBat(hass.Hass):
             pv_kwh += pv_now
             if record:
                 final_pv_kwh = pv_kwh
-
-            # Car charging hold
-            if self.car_charging_hold and self.car_charging_energy_step:
-                # Hold based on data
-                car_energy = self.car_charging_energy_step[minute]
-                load_yesterday = max(0, load_yesterday - car_energy)
-            elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
-                # Car charging hold - ignore car charging in computation based on threshold
-                load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
 
             # Simulate car charging
             car_load = self.in_car_slot(minute_absolute)
@@ -2661,8 +2692,31 @@ class PredBat(hass.Hass):
         if ready_minutes < self.minutes_now:
             ready_minutes += 24*60
 
+        # Car charging now override
+        extra_slot = {}
+        if self.car_charging_now[car_n]:
+            start = int(self.minutes_now / 30) * 30
+            end = start + 30
+            extra_slot['start'] = start
+            extra_slot['end'] = end
+            extra_slot['average'] = self.rate_import.get(start, self.rate_min)                
+            self.log("Car is charging now slot {}".format(extra_slot))
+
+            for window_p in price_sorted:
+                window = low_rates[window_p]
+                if window['start'] == start:
+                    price_sorted.remove(window_p)
+                    self.log("Remove old window {}".format(window_p))
+                    break
+
+            price_sorted = [-1] + price_sorted
+
         for window_n in price_sorted:
-            window = low_rates[window_n]
+            if window_n == -1 :
+                window = extra_slot
+            else:
+                window = low_rates[window_n]
+
             start = max(window['start'], self.minutes_now)
             end = min(window['end'], ready_minutes)
             length = 0
@@ -2705,11 +2759,27 @@ class PredBat(hass.Hass):
                 new_slot['cost'] = new_slot['average'] * kwh
                 plan.append(new_slot)
 
-
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def add_now_to_octopus_slot(self, octopus_slots, now_utc):
+        """
+        For intelligent charging, add in if the car is charging now as a low rate slot (workaround for Ohme)
+        """
+        for car_n in range(0, self.num_cars):
+            if self.car_charging_now[car_n]:
+                minutes_start_slot = int(self.minutes_now / 30) * 30
+                minutes_end_slot = minutes_start_slot + 30
+                slot_start_date = self.midnight_utc + timedelta(minutes=minutes_start_slot)
+                slot_end_date = self.midnight_utc + timedelta(minutes=minutes_end_slot)
+                slot = {}
+                slot['start'] = slot_start_date.strftime(TIME_FORMAT)
+                slot['end'] = slot_end_date.strftime(TIME_FORMAT)
+                octopus_slots.append(slot)
+                self.log("Car is charging now - added new IO slot {}".format(slot))
+        return octopus_slots
+                
     def load_octopus_slots(self, octopus_slots):
         """
         Turn octopus slots into charging plan
@@ -4268,6 +4338,7 @@ class PredBat(hass.Hass):
         Get the car attributes
         """
         self.car_charging_planned = [False for c in range(0, self.num_cars)]
+        self.car_charging_now = [False for c in range(0, self.num_cars)]
         self.car_charging_plan_smart  = [False for c in range(0, self.num_cars)]
         self.car_charging_plan_time  = [False for c in range(0, self.num_cars)]
         self.car_charging_battery_size  = [100.0 for c in range(0, self.num_cars)]
@@ -4276,17 +4347,32 @@ class PredBat(hass.Hass):
         self.car_charging_slots = [[] for c in range(0, self.num_cars)]
 
         self.car_charging_planned_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
+        self.car_charging_now_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
+
+        # Car charging plannned sensor
         for car_n in range(0, self.num_cars):
             # Get car N planned status
-            car = self.get_arg('car_charging_planned', "no", index=car_n)            
-            if isinstance(car, str):
-                if car.lower() in self.car_charging_planned_response:
-                    car = True
+            planned = self.get_arg('car_charging_planned', "no", index=car_n)            
+            if isinstance(planned, str):
+                if planned.lower() in self.car_charging_planned_response:
+                    planned = True
                 else:
-                    car = False
-            elif not isinstance(car, bool):
-                car = False
-            self.car_charging_planned[car_n] = car                        
+                    planned = False
+            elif not isinstance(planned, bool):
+                planned = False
+            self.car_charging_planned[car_n] = planned                        
+
+            # Car is charging now sensor
+            charging_now = self.get_arg('car_charging_now', "no", index=car_n)            
+            if isinstance(charging_now, str):
+                if charging_now.lower() in self.car_charging_now_response:
+                    charging_now = True
+                else:
+                    charging_now = False
+            elif not isinstance(charging_now, bool):
+                charging_now = False
+            self.car_charging_now[car_n] = charging_now                        
+
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg('car_charging_plan_smart', False)
             self.car_charging_plan_time[car_n] = self.get_arg('car_charging_plan_time', "07:00:00")
@@ -4296,8 +4382,8 @@ class PredBat(hass.Hass):
 
         self.car_charging_from_battery = self.get_arg('car_charging_from_battery', True)
         if self.num_cars > 0:
-            self.log("Cars {} charging from battery {} planned {}, smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(self.num_cars, self.car_charging_from_battery, self.car_charging_planned, 
-                    self.car_charging_plan_smart, self.car_charging_plan_time, self.car_charging_battery_size, self.car_charging_limit, self.car_charging_rate))
+            self.log("Cars {} charging from battery {} planned {}, charging_now {} smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(self.num_cars, self.car_charging_from_battery, self.car_charging_planned, 
+                    self.car_charging_now, self.car_charging_plan_smart, self.car_charging_plan_time, self.car_charging_battery_size, self.car_charging_limit, self.car_charging_rate))
 
     def fetch_pv_datapoints(self, argname):
         """
@@ -4332,6 +4418,29 @@ class PredBat(hass.Hass):
                 total_data = self.dp2(total_data)
                 total_sensor = self.dp2(self.get_arg(argname, 1.0))
         return data, total_data, total_sensor
+
+    def fetch_extra_load_forecast(self, now_utc):
+        """
+        Fetch extra load forecast
+        """
+        load_forecast = {}
+        if 'load_forecast' in self.args:
+            entity_ids = self.get_arg('load_forecast', indirect=False)
+            if isinstance(entity_ids, str):
+                entity_ids = [entity_ids]
+
+            for entity_id in entity_ids:
+                attribute = None
+                if '$' in entity_id:
+                    entity_id, attribute = entity_id.split('$')
+                try:
+                    data    = self.get_state(entity_id = entity_id, attribute=attribute)
+                except (ValueError, TypeError):
+                    data =  None
+                
+                load_forecast = self.minute_data(data, self.forecast_days, self.midnight_utc, 'energy', 'last_updated', backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0)
+
+        return load_forecast
 
     def fetch_pv_forecast(self):
         """
@@ -4703,6 +4812,7 @@ class PredBat(hass.Hass):
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.load_forecast = {}
 
         # Iboost load data
         if self.iboost_enable:
@@ -4725,17 +4835,17 @@ class PredBat(hass.Hass):
                 self.log("Error: You have not set load_today, you will have no load data")
                 self.record_status(message="Error - load_today not set correctly", had_errors=True)
                 raise ValueError
-
+            
             # Load import today data 
             if 'import_today' in self.args:
-                self.import_today = self.minute_data_import_export(now_utc, 'import_today')
+                self.import_today = self.minute_data_import_export(now_utc, 'import_today', scale=self.import_export_scaling)
                 self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data 
             if 'export_today' in self.args:
-                self.export_today = self.minute_data_import_export(now_utc, 'export_today')
+                self.export_today = self.minute_data_import_export(now_utc, 'export_today', scale=self.import_export_scaling)
                 self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
@@ -4746,6 +4856,9 @@ class PredBat(hass.Hass):
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
+
+        # Car charging hold - when enabled battery is held during car charging in simulation
+        self.car_charging_energy = self.load_car_energy(now_utc)
 
         # Log current values
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
@@ -4856,6 +4969,7 @@ class PredBat(hass.Hass):
                 
                 # Use octopus slots for charging?
                 if self.octopus_intelligent_charging:
+                    self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, now_utc)
                     self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
                 self.log("Car 0 using Octopus, charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
         else:
@@ -4955,7 +5069,7 @@ class PredBat(hass.Hass):
         for car_n in range(0, self.num_cars):
             if self.octopus_intelligent_charging and car_n == 0:
                 self.log("Car 0 is using Octopus intelligent schedule")
-            elif self.car_charging_planned[car_n] :
+            elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                 self.log("Plan car {} charging from {} to {} with slots {} from soc {} to {} ready by {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.low_rates, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.car_charging_plan_time[car_n]))
                 self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
             else:
@@ -5071,37 +5185,19 @@ class PredBat(hass.Hass):
         # Fetch PV forecast if enbled, today must be enabled, other days are optional
         pv_forecast_minute, pv_forecast_minute10 = self.fetch_pv_forecast()
 
-        # Car charging hold - when enabled battery is held during car charging in simulation
-        self.car_charging_energy = {}
-        if 'car_charging_energy' in self.args:
-            history = []
-            try:
-                history = self.get_history(entity_id = self.get_arg('car_charging_energy', indirect=False), days = self.max_days_previous)
-            except (ValueError, TypeError):
-                self.log("WARN: Unable to fetch history from sensor {} - car_charging_energy may not be set correctly".format(self.get_arg('car_charging_energy', indirect=False)))
-                self.record_status("Error - car_charging_energy not be set correctly", debug=self.get_arg('car_charging_energy', indirect=False), had_errors=True)
-
-            if history:
-                self.car_charging_energy = self.minute_data(history[0], self.max_days_previous, now_utc, 'state', 'last_updated', backwards=True, smoothing=True, clean_increment=True, scale=self.car_charging_energy_scale)
-                self.log("Car charging hold {} with energy data".format(self.car_charging_hold))
-        else:
-            self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold*60.0))
+        # Fetch extra load forecast
+        self.load_forecast = self.fetch_extra_load_forecast(now_utc)
 
         # Load today vs actual
         if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.car_charging_energy, self.import_today, self.minutes_now)
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
 
         # Apply modal filter to historical data
         self.previous_days_modal_filter(self.load_minutes)
         self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
-        # Create step data for car charging energy
-        self.car_charging_energy_step = {}
-        if self.car_charging_energy:
-            self.car_charging_energy_step = self.step_data_history(self.car_charging_energy, self.minutes_now, forward=False)
-
         # Created optimised step data
-        load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment)
+        load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, car_filter=True, load_forecast=self.load_forecast)
         pv_forecast_minute_step = self.step_data_history(pv_forecast_minute, self.minutes_now, forward=True)
         pv_forecast_minute10_step = self.step_data_history(pv_forecast_minute10, self.minutes_now, forward=True)
 
