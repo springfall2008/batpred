@@ -389,6 +389,9 @@ Only needed if you don't use Intelligent Octopus:
   - **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw). 
   - **car_charging_battery_size** - Indicates the cars battery size in kwh, defaults to 100. It will be used to predict car charging stops. 
 
+  - **car_charging_now** - When set links to a sensor that tells you that the car is currently charging. Predbat will then assume this 30 minute slot is used for charging regardless of the plan. If Octopus Inteligent Charging is enabled then it will also assume it's a low rate slot for the car/house, otherwise rates are taken from the normal rate data.
+  - **car_charging_now_response** - Sets the range of positive responses for **car_charging_now**, useful if you have a sensor for your car that isn't binary.
+
   - **car_charging_plan_time** - When using Batpred led planning set this to the time you want the car to be charged by
   - **car_charging_plan_smart** - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
   
@@ -417,6 +420,7 @@ Control how your battery behaves during car charging:
   - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
   - **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
   - **inverter_max_reserve** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
+  - **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see Planned car charging
 
 ### Balance Inverters
 
