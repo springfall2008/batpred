@@ -637,6 +637,8 @@ Changing the items in apps.yml will have no effect.
 
 Each config item has an input_number or switch associated with it, see the example dashboard for their exact names (https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml)
 
+You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards (https://github.com/RossMcMillan92/lovelace-collapsable-cards) and lovelace-auto-entities (https://github.com/thomasloven/lovelace-auto-entities) to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
+
 ### Battery loss options
 
 **battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
