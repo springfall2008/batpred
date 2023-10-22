@@ -277,7 +277,7 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
   - **set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter to avoid cross charging when batteries are out of balance.
    
-  - **inverter_max_reserve** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
+  - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
 
 #### REST Interface inverter control
   - **givtcp_rest** - One per Inverter, sets the REST API URL (http://homeassistant.local:6345 is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
@@ -419,7 +419,7 @@ Control how your battery behaves during car charging:
   - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
   - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
   - **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
-  - **inverter_max_reserve** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
+  - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some gen2 inverters which refuse to be set to 100.
   - **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see Planned car charging
 
 ### Balance Inverters
