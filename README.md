@@ -16,7 +16,8 @@ For support please raise a Github ticket or use the GivTCP Facebook page: https:
 If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
-**Please note from release v5.0 onwards many configuration options are now inside Home Assistant, for these options changing the apps.yml will have no effect once installed** 
+![image](https://github.com/springfall2008/batpred/assets/48591903/ac4eb3ee-f00e-4014-9d1e-34e3358c37ed)
+
 
 - [predbat](#predbat)
   * [Operation](#operation)
