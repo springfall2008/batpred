@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.9'
+THIS_VERSION = 'v7.9.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -359,6 +359,12 @@ class Inverter():
                     self.charge_start_time_minutes -= 60 * 24
                 else:
                     self.charge_end_time_minutes += 60 * 24
+
+            # Window already passed, move it forward until the next one
+            if self.charge_end_time_minutes < minutes_now:
+                self.charge_start_time_minutes += 60 * 24
+                self.charge_end_time_minutes += 60 * 24
+
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -368,12 +374,12 @@ class Inverter():
         self.charge_window = []
 
         if not quiet:
-            self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.charge_enable_time))\
+            self.base.log("Inverter {} scheduled charge enable is {}".format(self.id, self.charge_enable_time))
 
         if self.charge_enable_time:
             minute = max(0, self.charge_start_time_minutes)  # Max is here is start could be before midnight now
             minute_end = self.charge_end_time_minutes
-            while minute < self.base.forecast_minutes:
+            while minute < (self.base.forecast_minutes + minutes_now):
                 window = {}
                 window['start'] = minute
                 window['end']   = minute_end
