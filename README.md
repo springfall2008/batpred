@@ -906,6 +906,8 @@ You can find an example dashboard with all the entities here: https://github.com
   - Other rate entities
     - predbat.rates - The current energy rates in P (also can be charted)
     - predbat.rates_export - The current energy export rates in P (also be be charted)
+    - predbat.current_rates_import - The current energy import rates in the Octopus format for use by the rate card
+    - predbat.current_rates_export - The current energy export rates in the Octopus format for use by the rate card
     - predbat.cost_today - The total cost of energy so far today (since midnight)
     - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
     - predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
@@ -935,6 +937,33 @@ Example charts:
 ![image](https://github.com/springfall2008/batpred/assets/48591903/c02d65cf-e502-4484-a58d-cff8fb93d0f3)
 
 <img width="1052" alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/a96934d3-753a-49da-800b-925896f87cb6">
+
+## Octopus energy card
+
+Using HACS add this custom repository and install this version instead of the standard octopus-energy-rates-card:
+
+* https://github.com/springfall2008/octopus-energy-rates-card
+
+Create a new card using octopus-energy-rates-card and use the following code:
+
+```
+title: Import rates
+type: custom:octopus-energy-rates-card
+entity: predbat.current_rates_import
+cols: 2
+```
+
+Create a similar one for export:
+
+```
+title: Export rates
+type: custom:octopus-energy-rates-card
+entity: predbat.current_rates_export
+cols: 2
+```
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/d0c45d5e-c6d6-4639-8d75-88e636555980)
+
 
 ## Todo list
   - See Github tickets
