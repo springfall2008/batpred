@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.9.1'
+THIS_VERSION = 'v7.9.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -118,7 +118,7 @@ CONFIG_ITEMS = [
 ]
 
 class Inverter():
-    def self_test(self):
+    def self_test(self, minutes_now):
         self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
         self.adjust_battery_target(99)
         self.adjust_battery_target(100)
@@ -130,8 +130,8 @@ class Inverter():
         timeb = datetime.strptime("23:01:00", "%H:%M:%S")
         timec = datetime.strptime("05:00:00", "%H:%M:%S")
         timed = datetime.strptime("05:01:00", "%H:%M:%S")
-        self.adjust_charge_window(timeb, timed)
-        self.adjust_charge_window(timea, timec)
+        self.adjust_charge_window(timeb, timed, minutes_now)
+        self.adjust_charge_window(timea, timec, minutes_now)
         self.adjust_force_discharge(False, timec, timed)
         self.adjust_force_discharge(True, timea, timeb)
         self.adjust_force_discharge(False)
@@ -140,7 +140,7 @@ class Inverter():
         if self.rest_api:
             self.rest_api = None
             self.rest_data = None
-            self.self_test()
+            self.self_test(minutes_now)
         exit
 
     def __init__(self, base, id=0, quiet=False):
@@ -457,7 +457,7 @@ class Inverter():
             self.base.log('Inverter {} discharge windows currently {}'.format(self.id, self.discharge_window))
 
         if INVERTER_TEST:
-            self.self_test()
+            self.self_test(minutes_now)
 
     def adjust_reserve(self, reserve):
         """
@@ -796,7 +796,7 @@ class Inverter():
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_end_time_minutes = self.base.forecast_minutes
 
-    def adjust_charge_window(self, charge_start_time, charge_end_time):
+    def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
         Adjust the charging window times (start and end) in GivTCP
         """
@@ -822,11 +822,22 @@ class Inverter():
         new_start = charge_start_time.strftime("%H:%M:%S")
         new_end = charge_end_time.strftime("%H:%M:%S")
 
-        self.base.log("Inverter {} charge window is {} - {}, being changed to {} - {}".format(self.id, old_start, old_end, new_start, new_end))
-
         # Disable scheduled charge during change of window to avoid a blip in charging if not required
         have_disabled = False
-        if new_start != old_start or new_end != old_end:
+        in_new_window = False
+
+        # Work out window time in minutes from midnight
+        new_start_minutes = charge_start_time.hour * 60 + charge_start_time.minute
+        new_end_minutes = charge_end_time.hour * 60 + charge_end_time.minute
+
+        self.base.log("Set window new start {} end {}".format(new_start_minutes, new_end_minutes))
+
+        # If we are in the new window no need to disable
+        if minutes_now >= new_start_minutes and minutes_now < new_end_minutes:
+            in_new_window = True
+
+        # Disable charging if required, for REST no need as we change start and end together anyhow
+        if not in_new_window and not self.rest_api and ((new_start != old_start) or (new_end != old_end)):
             self.disable_charge_window(notify=False)
             have_disabled = True
 
@@ -4353,7 +4364,7 @@ class PredBat(hass.Hass):
         self.car_charging_slots = [[] for c in range(0, self.num_cars)]
 
         self.car_charging_planned_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
-        self.car_charging_now_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
+        self.car_charging_now_response = self.get_arg('car_charging_now_response', ['yes', 'on', 'enable', 'true'])
 
         # Car charging plannned sensor
         for car_n in range(0, self.num_cars):
@@ -5257,13 +5268,14 @@ class PredBat(hass.Hass):
                 # Charge slot clipping
                 record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
                 self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP) 
-
                 if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
+                    self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
+                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
                 else:
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best), self.reserve))
+                    self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
 
             # Final simulation of best, do 10% and normal scenario
             best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute10_step, save='best10', end_record=end_record)
@@ -5342,7 +5354,7 @@ class PredBat(hass.Hass):
                         ):
                         # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
                         self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
-                        inverter.adjust_charge_window(charge_start_time, charge_end_time)                        
+                        inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)                        
                     else:
                         self.log("Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now),self.set_window_minutes, self.time_abs_str(minutes_start)))
 
