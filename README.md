@@ -72,6 +72,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Debug](#debug)
   * [Output data](#output-data)
   * [Creating the charts](#creating-the-charts)
+  * [Octopus energy card](#octopus-energy-card)
   * [Todo list](#todo-list)
 
 
