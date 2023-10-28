@@ -3215,6 +3215,55 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".low_rate_end_2", state='undefined', attributes = {'date' : None, 'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".low_rate_cost_2", state=self.rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
+    def publish_all_rates(self, rates, windows, window_limit, export):
+        """
+        Publish the rates for charts
+        Create rates/time every 30 minutes
+        """
+        all_rates = []
+        for minute in range(0, self.minutes_now + self.forecast_minutes+24*60, 30):
+            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+            rate_start = minute_timestamp
+            rate_end = minute_timestamp + timedelta(seconds=30*60)
+            rate_value = self.dp2(rates[minute])
+            window_n = -1
+
+            for try_minute in range(minute, minute + 30, 5):
+                window_n = self.in_charge_window(windows, try_minute)
+                if window_n >= 0:
+                    break
+
+            state = ''
+            
+            if export:
+                limit = 100
+            else:
+                limit = 0
+
+            if window_n >= 0:
+                limit = window_limit[window_n]
+                if export:
+                    if limit == 99:
+                        state = 'Freeze'
+                    else:
+                        state = 'Discharge'
+                else:
+                    state = 'Charge'
+            
+            item = {}
+            item['valid_from'] = rate_start.strftime(TIME_FORMAT)
+            item['valid_to'] = rate_end.strftime(TIME_FORMAT)
+            item['state'] = state
+            item['value_inc_vat'] = rate_value
+            item['limit'] = limit
+            all_rates.append(item)
+
+        if not SIMULATE:
+            if export:
+                self.set_state(self.prefix + ".current_rates_export", state=self.dp2(rates[self.minutes_now]), attributes = {'all_rates' : all_rates, 'friendly_name' : 'Current Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+            else:
+                self.set_state(self.prefix + ".current_rates_import", state=self.dp2(rates[self.minutes_now]), attributes = {'all_rates' : all_rates, 'friendly_name' : 'Current Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
+
     def publish_rates(self, rates, export):
         """
         Publish the rates for charts
@@ -4787,6 +4836,10 @@ class PredBat(hass.Hass):
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
+        # All rates data
+        self.publish_all_rates(self.rate_import, self.charge_window_best, self.charge_limit_best, export=False)
+        self.publish_all_rates(self.rate_export, self.discharge_window_best, self.discharge_limits_best, export=True)
+
     def execute_plan(self):
         if self.holiday_days_left > 0:
             status = "Idle (Holiday)"
@@ -5574,7 +5627,7 @@ class PredBat(hass.Hass):
                 status = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old max age {}".format(plan_age_minutes, self.calculate_plan_every))
-
+        
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
             if self.iboost_energy_today:
