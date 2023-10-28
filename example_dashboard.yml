@@ -143,6 +143,8 @@ entities:
   - entity: predbat.pv_power_best
   - entity: predbat.rates
   - entity: predbat.rates_export
+  - entity: predbat.current_rates_import
+  - entity: predbat.current_rates_export
   - entity: predbat.record
   - entity: predbat.soc_kw
   - entity: predbat.soc_kw_best
