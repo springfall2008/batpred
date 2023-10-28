@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.9.2'
+THIS_VERSION = 'v7.10'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -82,6 +82,7 @@ CONFIG_ITEMS = [
     {'name' : 'calculate_second_pass',         'friendly_name' : 'Calculate second pass (slower)', 'type' : 'switch'},
     {'name' : 'calculate_inday_adjustment',    'friendly_name' : 'Calculate in-day adjustment',    'type' : 'switch'},
     {'name' : 'calculate_max_windows',         'friendly_name' : 'Max charge/discharge windows',   'type' : 'input_number', 'min' : 8,   'max' : 128,  'step' : 8,    'unit' : 'kwh', 'icon' : 'mdi:vector-arrange-above'},
+    {'name' : 'calculate_plan_every',          'friendly_name' : 'Calculate plan every N minutes', 'type' : 'input_number', 'min' : 5,   'max' : 60,  'step' : 5,    'unit' : 'kwh', 'icon' : 'mdi:clock-end'},
     {'name' : 'combine_charge_slots',          'friendly_name' : 'Combine Charge Slots',           'type' : 'switch'},
     {'name' : 'combine_discharge_slots',       'friendly_name' : 'Combine Discharge Slots',        'type' : 'switch'},
     {'name' : 'combine_mixed_rates',           'friendly_name' : 'Combined Mixed Rates',           'type' : 'switch'},
@@ -3411,6 +3412,9 @@ class PredBat(hass.Hass):
         """
         self.prefix = self.args.get('prefix', "predbat")
         self.had_errors = False
+        self.plan_valid = False
+        self.plan_last_updated = None
+        self.calculate_plan_every = 5
         self.prediction_started = False
         self.update_pending = True
         self.midnight = None
@@ -4649,587 +4653,76 @@ class PredBat(hass.Hass):
         opts += "metric_battery_cycle({} p/kWh)".format(self.metric_battery_cycle)
         self.log("Calculate Best options: " + opts)
 
-    @ad.app_lock
-    def update_pred(self, scheduled=True):
+    def calculate_plan(self, recompute=True):
         """
-        Update the prediction state, everything is called from here right now
+        Calculate the new plan (best)
+
+        sets:
+           self.charge_window_best
+           self.charge_limits_best
+           self.charge_limit_percent_best
+           self.discharge_window_best           
+           self.discharge_limits_best
         """
-        self.had_errors = False
-        local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
-        skew = self.get_arg('clock_skew', 0)
-        if skew:
-            self.log("WARN: Clock skew is set to {} minutes".format(skew))
-        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
-        now = datetime.now() + timedelta(minutes=skew)
-        if SIMULATE:
-            now += timedelta(minutes=self.simulate_offset)
-            now_utc += timedelta(minutes=self.simulate_offset)
 
-        self.log("--------------- PredBat - update at {} with clock skew {} minutes".format(now_utc, skew))
-
-        self.download_predbat_releases()
-        self.expose_config('version', None)
-
-        self.debug_enable = self.get_arg('debug_enable', False)
-        self.calculate_max_windows = self.get_arg('calculate_max_windows', 32)
-        self.num_cars = self.get_arg('num_cars', 1)
-        self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
-
-        self.log("Inverter type {} max_windows {} num_cars {} debug enable is {}".format(self.inverter_type, self.calculate_max_windows, self.num_cars, self.debug_enable))
-
-        self.now_utc = now_utc
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        self.difference_minutes = self.minutes_since_yesterday(now)
-        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
-        self.minutes_to_midnight = 24*60 - self.minutes_now
-
-        # Days previous
-        self.holiday_days_left = self.get_arg('holiday_days_left', 0)
-        self.days_previous = self.get_arg('days_previous', [7])
-        self.days_previous_weight = self.get_arg('days_previous_weight', [1 for i in range(0, len(self.days_previous))])
-        if len(self.days_previous) > len(self.days_previous_weight):
-            # Extend weights with 1 if required
-            self.days_previous_weight += [1 for i in range(0, len(self.days_previous) - len(self.days_previous_weight))]
-        if self.holiday_days_left > 0:
-            self.days_previous = [1]
-            self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
-        self.max_days_previous = max(self.days_previous) + 1
-
-        forecast_hours = self.get_arg('forecast_hours', 48)
-        self.forecast_days = int((forecast_hours + 23)/24)
-        self.forecast_minutes = forecast_hours * 60
-        self.forecast_plan_hours = self.get_arg('forecast_plan_hours', 24)
-        self.inverter_clock_skew_start = self.get_arg('inverter_clock_skew_start', 0)
-        self.inverter_clock_skew_end = self.get_arg('inverter_clock_skew_end', 0)
-        self.inverter_clock_skew_discharge_start = self.get_arg('inverter_clock_skew_discharge_start', 0)
-        self.inverter_clock_skew_discharge_end = self.get_arg('inverter_clock_skew_discharge_end', 0)
-
-        # Log clock skew
-        if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:
-            self.log("Inverter clock skew start {} end {} applied".format(self.inverter_clock_skew_start, self.inverter_clock_skew_end))
-        if self.inverter_clock_skew_discharge_start != 0 or self.inverter_clock_skew_discharge_end != 0:
-            self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
-
-        # Metric config
-        self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
-        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
-        self.metric_battery_cycle = self.get_arg('metric_battery_cycle', 0.0)
-        self.metric_future_rate_offset_import = self.get_arg('metric_future_rate_offset_import', 0.0)
-        self.metric_future_rate_offset_export = self.get_arg('metric_future_rate_offset_export', 0.0)
-        self.metric_inday_adjust_damping = self.get_arg('metric_inday_adjust_damping', 1.0)
-        self.notify_devices = self.get_arg('notify_devices', ['notify'])
-        self.pv_scaling = self.get_arg('pv_scaling', 1.0)
-        self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.15)
-        self.load_scaling = self.get_arg('load_scaling', 1.0)
-        self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
-        self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
-        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
-        self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.0)
-        self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
-        self.best_soc_step = self.get_arg('best_soc_step', 0.25)
-
-        # Battery charging options
-        self.battery_capacity_nominal = self.get_arg('battery_capacity_nominal', False)
-        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.03)
-        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.03)
-        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.04)
-        self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
-        self.inverter_soc_reset = self.get_arg('inverter_soc_reset', False)
-        self.battery_scaling = self.get_arg('battery_scaling', 1.0)
-        self.battery_charge_power_curve = self.args.get('battery_charge_power_curve', {})
-        # Check power curve is a dictionary
-        if not isinstance(self.battery_charge_power_curve, dict):
-            self.battery_charge_power_curve = {}
-            self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
-            self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
-        self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
-        self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
-        self.best_soc_min = self.get_arg('best_soc_min', 0.0)
-        self.best_soc_max = self.get_arg('best_soc_max', 0.0)
-        self.best_soc_keep = self.get_arg('best_soc_keep', 2.0)
-        self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
-        self.set_window_minutes = self.get_arg('set_window_minutes', 30)
-        self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
-        self.get_car_charging_planned()
-        self.load_inday_adjustment = 1.0
-       
-        self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
-        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
-        self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
-        self.discharge_slot_split = 30
-        self.charge_slot_split = 30
-
-        # Enables
-        default_enable_mode = True
-        if self.inverter_type != 'GE':
-            default_enable_mode = False
-            self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
-
-        self.calculate_best = self.get_arg('calculate_best', True)
-        self.set_soc_enable = self.get_arg('set_soc_enable', default_enable_mode)
-        self.set_reserve_enable = self.get_arg('set_reserve_enable', default_enable_mode)
-        self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
-        self.set_reserve_hold = self.get_arg('set_reserve_hold', True)
-        self.set_read_only = self.get_arg('set_read_only', False)
-        self.set_soc_notify = self.get_arg('set_soc_notify', True)
-        self.set_window_notify = self.get_arg('set_window_notify', True)
-        self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
-        self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
-        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
-        self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
-        self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
-        self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
-        self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
-        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', default_enable_mode)
-        self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
-        self.calculate_discharge_oncharge = self.get_arg('calculate_discharge_oncharge', True)
-        self.calculate_second_pass = self.get_arg('calculate_second_pass', False)
-        self.calculate_inday_adjustment = self.get_arg('calculate_inday_adjustment', False)
-        self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
-        self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
-        self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
-        self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
-        self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
-        self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
-
-        if self.set_read_only:
-            self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
-
-        # Enable load filtering
-        self.load_filter_modal = self.get_arg('load_filter_modal', False)
-
-        # Iboost model
-        self.iboost_enable = self.get_arg('iboost_enable', False)
-        self.iboost_max_energy = self.get_arg('iboost_max_energy', 3.0)
-        self.iboost_max_power = self.get_arg('iboost_max_power', 2400) / 1000 / 60.0
-        self.iboost_min_power = self.get_arg('iboost_min_power', 500)  / 1000 / 60.0
-        self.iboost_min_soc = self.get_arg('iboost_min_soc', 0.0)
-        self.iboost_today = self.get_arg('iboost_today', 0.0)
-        self.iboost_next = self.iboost_today
-        self.iboost_energy_scaling = self.get_arg('iboost_energy_scaling', 1.0)
-        self.iboost_energy_today = {}
-
-        # Car options
-        self.car_charging_hold = self.get_arg('car_charging_hold', True)
-        self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
-        self.car_charging_energy_scale = self.get_arg('car_charging_energy_scale', 1.0)
-
-        self.rate_import = {}
-        self.rate_export = {}
-        self.rate_slots = []
-        self.io_adjusted = {}
-        self.low_rates = []
-        self.high_export_rates = []
-        self.octopus_slots = []
-        self.cost_today_sofar = 0
-        self.import_today = {}
-        self.export_today = {}
-        self.pv_today = {}
-        self.load_minutes = {}
-        self.load_minutes_age = 0
-        self.load_forecast = {}
-
-        # Iboost load data
-        if self.iboost_enable:
-            if 'iboost_energy_today' in self.args:
-                self.iboost_energy_today, iboost_energy_age = self.minute_data_load(now_utc, 'iboost_energy_today', 1)
-                if iboost_energy_age >= 1:
-                    self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
-                    self.log("IBoost energy today from sensor reads {} kwh".format(self.iboost_today))
-
-        # Load previous load data
-        if self.get_arg('ge_cloud_data', False):
-            self.download_ge_data(now_utc)
-        else:
-            # Load data
-            if 'load_today' in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(now_utc, 'load_today', self.max_days_previous)
-                self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
-                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
-            else:
-                self.log("Error: You have not set load_today, you will have no load data")
-                self.record_status(message="Error - load_today not set correctly", had_errors=True)
-                raise ValueError
-            
-            # Load import today data 
-            if 'import_today' in self.args:
-                self.import_today = self.minute_data_import_export(now_utc, 'import_today', scale=self.import_export_scaling)
-                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
-
-            # Load export today data 
-            if 'export_today' in self.args:
-                self.export_today = self.minute_data_import_export(now_utc, 'export_today', scale=self.import_export_scaling)
-                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
-
-            # PV today data 
-            if 'pv_today' in self.args:
-                self.pv_today = self.minute_data_import_export(now_utc, 'pv_today')
-                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
-            else:
-                self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
-
-        # Car charging hold - when enabled battery is held during car charging in simulation
-        self.car_charging_energy = self.load_car_energy(now_utc)
-
-        # Log current values
-        self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
+        # Recompute as charge window ran out
+        if self.charge_window_best:
+            window = self.charge_window_best[0]
+            if window['end'] <= self.minutes_now:
+                self.log("Force recompute as current charge window has expired")
+                recompute = True
         
-        if 'rates_import_octopus_url' in self.args:
-            # Fixed URL for rate import
-            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
-            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
-        elif 'metric_octopus_import' in self.args:
-            # Octopus import rates
-            entity_id = self.get_arg('metric_octopus_import', None, indirect=False)
-            data_all = []
-            
-            if entity_id:
-                data_import = self.get_state(entity_id = entity_id, attribute='rates')
-                if data_import:
-                    data_all += data_import
-                else:
-                    data_import = self.get_state(entity_id = entity_id, attribute='all_rates')
-                    if data_import:
-                        data_all += data_import
+        # Recompute as discharge window ran out
+        if self.discharge_window_best:
+            window = self.discharge_window_best[0]
+            if window['end'] <= self.minutes_now:
+                self.log("Force recompute as current discharge window has expired")
+                recompute = True
 
-            if data_all:
-                rate_key = 'rate'
-                from_key = 'from'
-                to_key = 'to'
-                if rate_key not in data_all[0]:
-                    rate_key = 'value_inc_vat'
-                    from_key = 'valid_from'
-                    to_key = 'valid_to'
-                self.rate_import = self.minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key='is_intelligent_adjusted')
+        # Recompute?
+        if recompute:
+            # Calculate best charge windows
+            if self.low_rates:
+                # If we are using calculated windows directly then save them
+                self.charge_window_best = copy.deepcopy(self.low_rates)
             else:
-                self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
-                self.record_status(message="Error - metric_octopus_import not set correctly", had_errors=True)
-                raise ValueError
-        else:
-            # Basic rates defined by user over time
-            self.rate_import = self.basic_rates(self.get_arg('rates_import', [], indirect=False), 'import')
+                # Default best charge window as this one
+                self.charge_window_best = self.charge_window
 
-        # Work out current car SOC and limit
-        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0.08))
+            if self.set_soc_enable and not self.set_charge_window:
+                # If we can't control the charge window, but we can control the SOC then don't calculate a new window or the calculated SOC will be wrong
+                self.log("Note: Set SOC is enabled, but set charge window is disabled, so using the existing charge window only")
+                self.charge_window_best = self.charge_window
 
-        # Octopus intelligent slots
-        if 'octopus_intelligent_slot' in self.args:
-            completed = []
-            planned = []
-            vehicle = {}
-            vehicle_pref = {}
-            entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
-            try:
-                completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
-                if not completed:
-                    completed = self.get_state(entity_id = entity_id, attribute='completed_dispatches')
-                planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
-                if not planned:
-                    planned = self.get_state(entity_id = entity_id, attribute='planned_dispatches')
-                vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
-                vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
-            except (ValueError, TypeError):
-                self.log("WARN: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                self.record_status(message="Error - octopus_intelligent_slot not set correctly", had_errors=True)
+            # Calculate best discharge windows
+            if self.high_export_rates:
+                self.discharge_window_best = copy.deepcopy(self.high_export_rates)
+            else:
+                self.discharge_window_best = []
 
-            # Completed and planned slots
-            if completed:
-                self.octopus_slots += completed
-            if planned:
-                self.octopus_slots += planned
+            # Pre-fill best charge limit with the current charge limit
+            self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window_best))]
+            self.charge_limit_percent_best = [self.current_charge_limit for i in range(0, len(self.charge_window_best))]
 
-            # Get rate for import to compute charging costs
-            if self.rate_import:
-                self.rate_import = self.rate_scan(self.rate_import, print=False)
-
-            if self.num_cars >= 1:
-                # Extract vehicle data if we can get it            
-                if vehicle:
-                    self.car_charging_battery_size[0] = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size[0]))
-                    self.car_charging_rate[0] = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate[0]))
-                else:
-                    size = self.get_state(entity_id = entity_id, attribute='vehicle_battery_size_in_kwh')
-                    rate = self.get_state(entity_id = entity_id, attribute='charge_point_power_in_kw')
-                    if size:
-                        self.car_charging_battery_size[0] = size
-                    if rate:
-                        self.car_charging_rate[0] = rate
-
-                # Get car charging limit again from car based on new battery size
-                self.car_charging_limit[0] = (float(self.get_arg('car_charging_limit', 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0
-
-                # Extract vehicle preference if we can get it
-                if vehicle_pref and self.octopus_intelligent_charging:
-                    octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
-                    octopus_ready_time = vehicle_pref.get('weekdayTargetTime', None)
-                    if not octopus_ready_time:
-                        octopus_ready_time = self.car_charging_plan_time[0]
-                    else:
-                        octopus_ready_time += ":00"
-                    self.car_charging_plan_time[0] = octopus_ready_time
-                    octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size[0] / 100.0)
-                    self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
-                elif self.octopus_intelligent_charging:
-                    octopus_ready_time = self.get_arg('octopus_ready_time', None)
-                    octopus_limit = self.get_arg('octopus_charge_limit', None)
-                    if octopus_limit:
-                        octopus_limit = self.dp2(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
-                        self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
-                    if octopus_ready_time:
-                        self.car_charging_plan_time[0] = octopus_ready_time
+            # Pre-fill best discharge enable with Off
+            self.discharge_limits_best = [100.0 for i in range(0, len(self.discharge_window_best))]
                 
-                # Use octopus slots for charging?
-                if self.octopus_intelligent_charging:
-                    self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, now_utc)
-                    self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
-                self.log("Car 0 using Octopus, charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
-        else:
-            # Disable octopus charging if we don't have the slot sensor
-            self.octopus_intelligent_charging = False
-
-        # Work out car SOC
-        self.car_charging_soc = [0.0 for car_n in range(0, self.num_cars)]
-        for car_n in range(0, self.num_cars):
-            self.car_charging_soc[car_n] = (self.get_arg('car_charging_soc', 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
-        if self.num_cars:
-            self.log("Current Car SOC kwh: {}".format(self.car_charging_soc))
-
-        if 'rates_export_octopus_url' in self.args:
-            # Fixed URL for rate export
-            self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
-            self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
-        elif 'metric_octopus_export' in self.args:
-            # Octopus export rates
-            entity_id = self.get_arg('metric_octopus_export', None, indirect=False)
-            data_all_export = []
-
-            data_export = self.get_state(entity_id = entity_id, attribute='rates')
-            if data_export:
-                data_all_export += data_export
-            else:
-                data_export = self.get_state(entity_id = entity_id, attribute='all_rates')
-                if data_export:
-                    data_all_export += data_export
-                    
-            if data_all_export:
-                rate_key = 'rate'
-                from_key = 'from'
-                to_key = 'to'
-                if rate_key not in data_all_export[0]:
-                    rate_key = 'value_inc_vat'
-                    from_key = 'valid_from'
-                    to_key = 'valid_to'
-                self.rate_export = self.minute_data(data_all_export, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key)
-            else:
-                self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
-                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
-        else:
-            # Basic rates defined by user over time
-            self.rate_export = self.basic_rates(self.get_arg('rates_export', [], indirect=False), 'export')
-
-        # Standing charge
-        self.metric_standing_charge = self.get_arg('metric_standing_charge', 0.0) * 100.0
-        self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
-
-        # Replicate and scan import rates
-        if self.rate_import:
-            self.rate_import = self.rate_scan(self.rate_import, print=False)
-            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
-            self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            if 'rates_import_override' in self.args:
-                self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
-            self.rate_import = self.rate_scan(self.rate_import, print=True)
-        else:
-            self.log("Warning: No import rate data provided")
-            self.record_status(message="Error - No import rate data provided", had_errors=True)
-
-        # Replicate and scan export rates
-        if self.rate_export:
-            self.rate_export = self.rate_replicate(self.rate_export, is_import=False)
-            if 'rates_export_override' in self.args:
-                self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
-            self.rate_export = self.rate_scan_export(self.rate_export, print=True)
-        else:
-            self.log("Warning: No export rate data provided")
-            self.record_status(message="Error - No export rate data provided", had_errors=True)
-
-        # Set rate thresholds
-        if self.rate_import or self.rate_export:
-            self.set_rate_thresholds()
-
-        # Find discharging windows
-        if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
-            # Update threshold automatically
-            self.log("High export rate found rates in range {} to {}".format(lowest, highest))
-            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
-                self.rate_export_threshold = lowest
-            self.publish_rates(self.rate_export, True)
-
-        # Find charging windows
-        if self.rate_import:
-            # Find charging window
-            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
-            self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
-            # Update threshold automatically
-            if self.rate_low_threshold == 0 and highest >= self.rate_min:
-                self.rate_threshold = highest
-            self.publish_rates(self.rate_import, False)
-        
-        # Work out car plan?
-        for car_n in range(0, self.num_cars):
-            if self.octopus_intelligent_charging and car_n == 0:
-                self.log("Car 0 is using Octopus intelligent schedule")
-            elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
-                self.log("Plan car {} charging from {} to {} with slots {} from soc {} to {} ready by {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.low_rates, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.car_charging_plan_time[car_n]))
-                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
-            else:
-                self.log("Not planning car charging for car {} - car charging planned is False".format(car_n))
-
-            # Log the charging plan
-            if self.car_charging_slots[car_n]:
-                self.log("Car {} charging plan is: {}".format(car_n, self.car_charging_slots[car_n]))
-
-        # Publish the car plan
-        self.publish_car_plan()
-
-        # Work out cost today
-        if self.import_today:
-            self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
-
-        # Find the inverters
-        self.num_inverters = int(self.get_arg('num_inverters', 1))
-        self.inverter_limit = 0.0
-        self.export_limit = 0.0
-        self.inverters = []
-        self.charge_window = []
-        self.discharge_window = []
-        self.discharge_limits = []
-        self.current_charge_limit = 0.0
-        self.soc_kw = 0.0
-        self.soc_max = 0.0
-        self.reserve = 0.0
-        self.reserve_current = 0.0
-        self.reserve_current_percent = 0.0
-        self.battery_rate_max_charge = 0.0
-        self.battery_rate_max_discharge = 0.0
-        self.battery_rate_max_charge_scaled = 0.0
-        self.battery_rate_max_discharge_scaled = 0.0
-        self.battery_rate_min = 0
-        self.charge_rate_now = 0.0
-        self.discharge_rate_now = 0.0
-        found_first = False
-
-        # For each inverter get the details
-        for id in range(0, self.num_inverters):
-            inverter = Inverter(self, id)
-            inverter.update_status(self.minutes_now)
-
-            # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
-            if not found_first:
-                found_first = True
-                self.current_charge_limit = inverter.current_charge_limit
-                self.charge_window = inverter.charge_window
-                self.discharge_window = inverter.discharge_window
-                self.discharge_limits = inverter.discharge_limits
-            self.soc_max += inverter.soc_max
-            self.soc_kw += inverter.soc_kw
-            self.reserve += inverter.reserve
-            self.reserve_current += inverter.reserve_current
-            self.battery_rate_max_charge += inverter.battery_rate_max_charge
-            self.battery_rate_max_discharge += inverter.battery_rate_max_discharge
-            self.battery_rate_max_charge_scaled += inverter.battery_rate_max_charge_scaled
-            self.battery_rate_max_discharge_scaled += inverter.battery_rate_max_discharge_scaled
-            self.charge_rate_now += inverter.charge_rate_now
-            self.discharge_rate_now += inverter.discharge_rate_now
-            self.battery_rate_min += inverter.battery_rate_min
-            self.inverters.append(inverter)
-            self.inverter_limit += inverter.inverter_limit
-            self.export_limit += inverter.export_limit
-
-        # Remove extra decimals
-        self.soc_max = self.dp2(self.soc_max)
-        self.soc_kw = self.dp2(self.soc_kw)
-        self.reserve_current = self.dp2(self.reserve_current)
-        self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
-
-        self.log("Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
-                 len(self.inverters), self.reserve, self.reserve_current, self.soc_max, self.soc_kw, self.charge_rate_now * 60, self.discharge_rate_now * 60, self.battery_rate_min * 60 * 1000, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
-
-        # Work out current charge limits
-        self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
-        self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
-
-        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit)))
-        self.log("Base discharge window {}".format(self.window_as_text(self.discharge_window, self.discharge_limits)))
-
-        # Calculate best charge windows
-        if self.low_rates:
-            # If we are using calculated windows directly then save them
-            self.charge_window_best = copy.deepcopy(self.low_rates)
-        else:
-            # Default best charge window as this one
-            self.charge_window_best = self.charge_window
-
-        if self.set_soc_enable and not self.set_charge_window:
-            # If we can't control the charge window, but we can control the SOC then don't calculate a new window or the calculated SOC will be wrong
-            self.log("Note: Set SOC is enabled, but set charge window is disabled, so using the existing charge window only")
-            self.charge_window_best = self.charge_window
-
-        # Calculate best discharge windows
-        if self.high_export_rates:
-            self.discharge_window_best = copy.deepcopy(self.high_export_rates)
-        else:
-            self.discharge_window_best = []
-
-        # Pre-fill best charge limit with the current charge limit
-        self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window_best))]
-        self.charge_limit_percent_best = [self.current_charge_limit for i in range(0, len(self.charge_window_best))]
-
-        # Pre-fill best discharge enable with Off
-        self.discharge_limits_best = [100.0 for i in range(0, len(self.discharge_window_best))]
-
         # Show best windows
         self.log('Best charge    window {}'.format(self.window_as_text(self.charge_window_best, self.charge_limit_best)))
         self.log('Best discharge window {}'.format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
-        # Fetch PV forecast if enbled, today must be enabled, other days are optional
-        pv_forecast_minute, pv_forecast_minute10 = self.fetch_pv_forecast()
-
-        # Fetch extra load forecast
-        self.load_forecast = self.fetch_extra_load_forecast(now_utc)
-
-        # Load today vs actual
-        if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
-
-        # Apply modal filter to historical data
-        self.previous_days_modal_filter(self.load_minutes)
-        self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
-
         # Created optimised step data
         load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, car_filter=True, load_forecast=self.load_forecast)
-        pv_forecast_minute_step = self.step_data_history(pv_forecast_minute, self.minutes_now, forward=True)
-        pv_forecast_minute10_step = self.step_data_history(pv_forecast_minute10, self.minutes_now, forward=True)
+        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True)
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True)
 
         # Simulate current settings
         end_record = self.record_length(self.charge_window_best)
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save='base', end_record=end_record)
         metricb10, import_kwh_batteryb10, import_kwh_houseb10, export_kwhb10, soc_minb10, socb10, soc_min_minuteb10, battery_cycle10, metric_keep10  = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute10_step, save='base10', end_record=end_record)
 
-        # Publish charge limit base
-        self.charge_limit_percent = self.calc_percent_limit(self.charge_limit)
-        self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
-
         # Try different battery SOCs to get the best result
-        if self.calculate_best:
-
+        if recompute and self.calculate_best:
             self.log_option_best()
             self.optimise_all_windows(end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
@@ -5277,6 +4770,11 @@ class PredBat(hass.Hass):
                     self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
 
+            # Plan is now valid
+            self.plan_valid = True
+            self.plan_last_updated = self.now_utc
+
+        if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
             best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute10_step, save='best10', end_record=end_record)
             best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, load_minutes_step, pv_forecast_minute_step, save='best', end_record=end_record)
@@ -5288,6 +4786,7 @@ class PredBat(hass.Hass):
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
+    def execute_plan(self):
         if self.holiday_days_left > 0:
             status = "Idle (Holiday)"
         else:
@@ -5488,6 +4987,592 @@ class PredBat(hass.Hass):
 
         # Set the charge/discharge status information
         self.set_charge_discharge_status(isCharging, isDischarging)
+        return status
+
+    def fetch_sensor_data(self):
+        """
+        Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
+        """
+        self.rate_import = {}
+        self.rate_export = {}
+        self.rate_slots = []
+        self.io_adjusted = {}
+        self.low_rates = []
+        self.high_export_rates = []
+        self.octopus_slots = []
+        self.cost_today_sofar = 0
+        self.import_today = {}
+        self.export_today = {}
+        self.pv_today = {}
+        self.load_minutes = {}
+        self.load_minutes_age = 0
+        self.load_forecast = {}
+        self.pv_forecast_minute = {}
+        self.pv_forecast_minute10 = {}
+
+        # Iboost load data
+        if self.iboost_enable:
+            if 'iboost_energy_today' in self.args:
+                self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, 'iboost_energy_today', 1)
+                if iboost_energy_age >= 1:
+                    self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
+                    self.log("IBoost energy today from sensor reads {} kwh".format(self.iboost_today))
+
+        # Load previous load data
+        if self.get_arg('ge_cloud_data', False):
+            self.download_ge_data(self.now_utc)
+        else:
+            # Load data
+            if 'load_today' in self.args:
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, 'load_today', self.max_days_previous)
+                self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
+                self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
+            else:
+                self.log("Error: You have not set load_today, you will have no load data")
+                self.record_status(message="Error - load_today not set correctly", had_errors=True)
+                raise ValueError
+            
+            # Load import today data 
+            if 'import_today' in self.args:
+                self.import_today = self.minute_data_import_export(self.now_utc, 'import_today', scale=self.import_export_scaling)
+                self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
+            else:
+                self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
+
+            # Load export today data 
+            if 'export_today' in self.args:
+                self.export_today = self.minute_data_import_export(self.now_utc, 'export_today', scale=self.import_export_scaling)
+                self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
+            else:
+                self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
+
+            # PV today data 
+            if 'pv_today' in self.args:
+                self.pv_today = self.minute_data_import_export(self.now_utc, 'pv_today')
+                self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
+            else:
+                self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
+
+        # Car charging hold - when enabled battery is held during car charging in simulation
+        self.car_charging_energy = self.load_car_energy(self.now_utc)
+
+        # Log current values
+        self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
+        
+        if 'rates_import_octopus_url' in self.args:
+            # Fixed URL for rate import
+            self.log("Downloading import rates directly from url {}".format(self.get_arg('rates_import_octopus_url', indirect=False)))
+            self.rate_import = self.download_octopus_rates(self.get_arg('rates_import_octopus_url', indirect=False))
+        elif 'metric_octopus_import' in self.args:
+            # Octopus import rates
+            entity_id = self.get_arg('metric_octopus_import', None, indirect=False)
+            data_all = []
+            
+            if entity_id:
+                data_import = self.get_state(entity_id = entity_id, attribute='rates')
+                if data_import:
+                    data_all += data_import
+                else:
+                    data_import = self.get_state(entity_id = entity_id, attribute='all_rates')
+                    if data_import:
+                        data_all += data_import
+
+            if data_all:
+                rate_key = 'rate'
+                from_key = 'from'
+                to_key = 'to'
+                if rate_key not in data_all[0]:
+                    rate_key = 'value_inc_vat'
+                    from_key = 'valid_from'
+                    to_key = 'valid_to'
+                self.rate_import = self.minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key='is_intelligent_adjusted')
+            else:
+                self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
+                self.record_status(message="Error - metric_octopus_import not set correctly", had_errors=True)
+                raise ValueError
+        else:
+            # Basic rates defined by user over time
+            self.rate_import = self.basic_rates(self.get_arg('rates_import', [], indirect=False), 'import')
+
+        # Work out current car SOC and limit
+        self.car_charging_loss = 1 - float(self.get_arg('car_charging_loss', 0.08))
+
+        # Octopus intelligent slots
+        if 'octopus_intelligent_slot' in self.args:
+            completed = []
+            planned = []
+            vehicle = {}
+            vehicle_pref = {}
+            entity_id = self.get_arg('octopus_intelligent_slot', indirect=False)
+            try:
+                completed = self.get_state(entity_id = entity_id, attribute='completedDispatches')
+                if not completed:
+                    completed = self.get_state(entity_id = entity_id, attribute='completed_dispatches')
+                planned = self.get_state(entity_id = entity_id, attribute='plannedDispatches')
+                if not planned:
+                    planned = self.get_state(entity_id = entity_id, attribute='planned_dispatches')
+                vehicle = self.get_state(entity_id = entity_id, attribute='registeredKrakenflexDevice')
+                vehicle_pref = self.get_state(entity_id = entity_id, attribute='vehicleChargingPreferences')            
+            except (ValueError, TypeError):
+                self.log("WARN: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                self.record_status(message="Error - octopus_intelligent_slot not set correctly", had_errors=True)
+
+            # Completed and planned slots
+            if completed:
+                self.octopus_slots += completed
+            if planned:
+                self.octopus_slots += planned
+
+            # Get rate for import to compute charging costs
+            if self.rate_import:
+                self.rate_import = self.rate_scan(self.rate_import, print=False)
+
+            if self.num_cars >= 1:
+                # Extract vehicle data if we can get it            
+                if vehicle:
+                    self.car_charging_battery_size[0] = float(vehicle.get('vehicleBatterySizeInKwh', self.car_charging_battery_size[0]))
+                    self.car_charging_rate[0] = float(vehicle.get('chargePointPowerInKw', self.car_charging_rate[0]))
+                else:
+                    size = self.get_state(entity_id = entity_id, attribute='vehicle_battery_size_in_kwh')
+                    rate = self.get_state(entity_id = entity_id, attribute='charge_point_power_in_kw')
+                    if size:
+                        self.car_charging_battery_size[0] = size
+                    if rate:
+                        self.car_charging_rate[0] = rate
+
+                # Get car charging limit again from car based on new battery size
+                self.car_charging_limit[0] = (float(self.get_arg('car_charging_limit', 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0
+
+                # Extract vehicle preference if we can get it
+                if vehicle_pref and self.octopus_intelligent_charging:
+                    octopus_limit = max(float(vehicle_pref.get('weekdayTargetSoc', 100)), float(vehicle_pref.get('weekendTargetSoc', 100)))
+                    octopus_ready_time = vehicle_pref.get('weekdayTargetTime', None)
+                    if not octopus_ready_time:
+                        octopus_ready_time = self.car_charging_plan_time[0]
+                    else:
+                        octopus_ready_time += ":00"
+                    self.car_charging_plan_time[0] = octopus_ready_time
+                    octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size[0] / 100.0)
+                    self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
+                elif self.octopus_intelligent_charging:
+                    octopus_ready_time = self.get_arg('octopus_ready_time', None)
+                    octopus_limit = self.get_arg('octopus_charge_limit', None)
+                    if octopus_limit:
+                        octopus_limit = self.dp2(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
+                        self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
+                    if octopus_ready_time:
+                        self.car_charging_plan_time[0] = octopus_ready_time
+                
+                # Use octopus slots for charging?
+                if self.octopus_intelligent_charging:
+                    self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
+                    self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
+                self.log("Car 0 using Octopus, charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
+        else:
+            # Disable octopus charging if we don't have the slot sensor
+            self.octopus_intelligent_charging = False
+
+        # Work out car SOC
+        self.car_charging_soc = [0.0 for car_n in range(0, self.num_cars)]
+        for car_n in range(0, self.num_cars):
+            self.car_charging_soc[car_n] = (self.get_arg('car_charging_soc', 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+        if self.num_cars:
+            self.log("Current Car SOC kwh: {}".format(self.car_charging_soc))
+
+        if 'rates_export_octopus_url' in self.args:
+            # Fixed URL for rate export
+            self.log("Downloading export rates directly from url {}".format(self.get_arg('rates_export_octopus_url', indirect=False)))
+            self.rate_export = self.download_octopus_rates(self.get_arg('rates_export_octopus_url', indirect=False))
+        elif 'metric_octopus_export' in self.args:
+            # Octopus export rates
+            entity_id = self.get_arg('metric_octopus_export', None, indirect=False)
+            data_all_export = []
+
+            data_export = self.get_state(entity_id = entity_id, attribute='rates')
+            if data_export:
+                data_all_export += data_export
+            else:
+                data_export = self.get_state(entity_id = entity_id, attribute='all_rates')
+                if data_export:
+                    data_all_export += data_export
+                    
+            if data_all_export:
+                rate_key = 'rate'
+                from_key = 'from'
+                to_key = 'to'
+                if rate_key not in data_all_export[0]:
+                    rate_key = 'value_inc_vat'
+                    from_key = 'valid_from'
+                    to_key = 'valid_to'
+                self.rate_export = self.minute_data(data_all_export, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key)
+            else:
+                self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
+                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
+        else:
+            # Basic rates defined by user over time
+            self.rate_export = self.basic_rates(self.get_arg('rates_export', [], indirect=False), 'export')
+
+        # Standing charge
+        self.metric_standing_charge = self.get_arg('metric_standing_charge', 0.0) * 100.0
+        self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+
+        # Replicate and scan import rates
+        if self.rate_import:
+            self.rate_import = self.rate_scan(self.rate_import, print=False)
+            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
+            self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
+            if 'rates_import_override' in self.args:
+                self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
+            self.rate_import = self.rate_scan(self.rate_import, print=True)
+        else:
+            self.log("Warning: No import rate data provided")
+            self.record_status(message="Error - No import rate data provided", had_errors=True)
+
+        # Replicate and scan export rates
+        if self.rate_export:
+            self.rate_export = self.rate_replicate(self.rate_export, is_import=False)
+            if 'rates_export_override' in self.args:
+                self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
+            self.rate_export = self.rate_scan_export(self.rate_export, print=True)
+        else:
+            self.log("Warning: No export rate data provided")
+            self.record_status(message="Error - No export rate data provided", had_errors=True)
+
+        # Set rate thresholds
+        if self.rate_import or self.rate_export:
+            self.set_rate_thresholds()
+
+        # Find discharging windows
+        if self.rate_export:
+            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            # Update threshold automatically
+            self.log("High export rate found rates in range {} to {}".format(lowest, highest))
+            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
+                self.rate_export_threshold = lowest
+            self.publish_rates(self.rate_export, True)
+
+        # Find charging windows
+        if self.rate_import:
+            # Find charging window
+            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
+            self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
+            # Update threshold automatically
+            if self.rate_low_threshold == 0 and highest >= self.rate_min:
+                self.rate_threshold = highest
+            self.publish_rates(self.rate_import, False)
+        
+        # Work out car plan?
+        for car_n in range(0, self.num_cars):
+            if self.octopus_intelligent_charging and car_n == 0:
+                self.log("Car 0 is using Octopus intelligent schedule")
+            elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
+                self.log("Plan car {} charging from {} to {} with slots {} from soc {} to {} ready by {}".format(car_n, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.low_rates, self.car_charging_soc[car_n], self.car_charging_limit[car_n], self.car_charging_plan_time[car_n]))
+                self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
+            else:
+                self.log("Not planning car charging for car {} - car charging planned is False".format(car_n))
+
+            # Log the charging plan
+            if self.car_charging_slots[car_n]:
+                self.log("Car {} charging plan is: {}".format(car_n, self.car_charging_slots[car_n]))
+
+        # Publish the car plan
+        self.publish_car_plan()
+
+        # Work out cost today
+        if self.import_today:
+            self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
+
+        # Fetch PV forecast if enbled, today must be enabled, other days are optional
+        self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
+
+        # Fetch extra load forecast
+        self.load_forecast = self.fetch_extra_load_forecast(self.now_utc)
+
+        # Load today vs actual
+        if self.load_minutes:
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
+
+        # Apply modal filter to historical data
+        self.previous_days_modal_filter(self.load_minutes)
+        self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
+        # Publish charge limit base
+        self.charge_limit_percent = self.calc_percent_limit(self.charge_limit)
+        self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
+
+    def fetch_inverter_data(self):
+        """
+        Fetch data about the inverters
+        """
+        # Find the inverters
+        self.num_inverters = int(self.get_arg('num_inverters', 1))
+        self.inverter_limit = 0.0
+        self.export_limit = 0.0
+        self.inverters = []
+        self.charge_window = []
+        self.discharge_window = []
+        self.discharge_limits = []
+        self.current_charge_limit = 0.0
+        self.soc_kw = 0.0
+        self.soc_max = 0.0
+        self.reserve = 0.0
+        self.reserve_current = 0.0
+        self.reserve_current_percent = 0.0
+        self.battery_rate_max_charge = 0.0
+        self.battery_rate_max_discharge = 0.0
+        self.battery_rate_max_charge_scaled = 0.0
+        self.battery_rate_max_discharge_scaled = 0.0
+        self.battery_rate_min = 0
+        self.charge_rate_now = 0.0
+        self.discharge_rate_now = 0.0
+        found_first = False
+
+        # For each inverter get the details
+        for id in range(0, self.num_inverters):
+            inverter = Inverter(self, id)
+            inverter.update_status(self.minutes_now)
+
+            # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
+            if not found_first:
+                found_first = True
+                self.current_charge_limit = inverter.current_charge_limit
+                self.charge_window = inverter.charge_window
+                self.discharge_window = inverter.discharge_window
+                self.discharge_limits = inverter.discharge_limits
+            self.soc_max += inverter.soc_max
+            self.soc_kw += inverter.soc_kw
+            self.reserve += inverter.reserve
+            self.reserve_current += inverter.reserve_current
+            self.battery_rate_max_charge += inverter.battery_rate_max_charge
+            self.battery_rate_max_discharge += inverter.battery_rate_max_discharge
+            self.battery_rate_max_charge_scaled += inverter.battery_rate_max_charge_scaled
+            self.battery_rate_max_discharge_scaled += inverter.battery_rate_max_discharge_scaled
+            self.charge_rate_now += inverter.charge_rate_now
+            self.discharge_rate_now += inverter.discharge_rate_now
+            self.battery_rate_min += inverter.battery_rate_min
+            self.inverters.append(inverter)
+            self.inverter_limit += inverter.inverter_limit
+            self.export_limit += inverter.export_limit
+
+        # Remove extra decimals
+        self.soc_max = self.dp2(self.soc_max)
+        self.soc_kw = self.dp2(self.soc_kw)
+        self.reserve_current = self.dp2(self.reserve_current)
+        self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
+
+        self.log("Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+                 len(self.inverters), self.reserve, self.reserve_current, self.soc_max, self.soc_kw, self.charge_rate_now * 60, self.discharge_rate_now * 60, self.battery_rate_min * 60 * 1000, self.dp2(self.inverter_limit * 60), self.dp2(self.export_limit * 60), 100 - int(self.battery_loss * 100), 100 - int(self.battery_loss_discharge * 100), 100 - int(self.inverter_loss * 100)))
+
+        # Work out current charge limits
+        self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(0, len(self.charge_window))]
+        self.charge_limit_percent = [self.current_charge_limit for i in range(0, len(self.charge_window))]
+
+        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit)))
+        self.log("Base discharge window {}".format(self.window_as_text(self.discharge_window, self.discharge_limits)))
+
+    def fetch_config_options(self):
+        """
+        Fetch all the configuration options
+        """
+
+        self.debug_enable = self.get_arg('debug_enable', False)
+        self.calculate_max_windows = self.get_arg('calculate_max_windows', 40)
+        self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 5), 5)
+        self.num_cars = self.get_arg('num_cars', 1)
+        self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
+
+        self.log("Inverter type {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(self.inverter_type, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every))
+
+        # Days previous
+        self.holiday_days_left = self.get_arg('holiday_days_left', 0)
+        self.days_previous = self.get_arg('days_previous', [7])
+        self.days_previous_weight = self.get_arg('days_previous_weight', [1 for i in range(0, len(self.days_previous))])
+        if len(self.days_previous) > len(self.days_previous_weight):
+            # Extend weights with 1 if required
+            self.days_previous_weight += [1 for i in range(0, len(self.days_previous) - len(self.days_previous_weight))]
+        if self.holiday_days_left > 0:
+            self.days_previous = [1]
+            self.log("Holiday mode is active, {} days remaining, setting days previous to 1".format(self.holiday_days_left))
+        self.max_days_previous = max(self.days_previous) + 1
+
+        forecast_hours = self.get_arg('forecast_hours', 48)
+        self.forecast_days = int((forecast_hours + 23)/24)
+        self.forecast_minutes = forecast_hours * 60
+        self.forecast_plan_hours = self.get_arg('forecast_plan_hours', 24)
+        self.inverter_clock_skew_start = self.get_arg('inverter_clock_skew_start', 0)
+        self.inverter_clock_skew_end = self.get_arg('inverter_clock_skew_end', 0)
+        self.inverter_clock_skew_discharge_start = self.get_arg('inverter_clock_skew_discharge_start', 0)
+        self.inverter_clock_skew_discharge_end = self.get_arg('inverter_clock_skew_discharge_end', 0)
+
+        # Log clock skew
+        if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:
+            self.log("Inverter clock skew start {} end {} applied".format(self.inverter_clock_skew_start, self.inverter_clock_skew_end))
+        if self.inverter_clock_skew_discharge_start != 0 or self.inverter_clock_skew_discharge_end != 0:
+            self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
+
+        # Metric config
+        self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
+        self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
+        self.metric_battery_cycle = self.get_arg('metric_battery_cycle', 0.0)
+        self.metric_future_rate_offset_import = self.get_arg('metric_future_rate_offset_import', 0.0)
+        self.metric_future_rate_offset_export = self.get_arg('metric_future_rate_offset_export', 0.0)
+        self.metric_inday_adjust_damping = self.get_arg('metric_inday_adjust_damping', 1.0)
+        self.notify_devices = self.get_arg('notify_devices', ['notify'])
+        self.pv_scaling = self.get_arg('pv_scaling', 1.0)
+        self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.15)
+        self.load_scaling = self.get_arg('load_scaling', 1.0)
+        self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
+        self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
+        self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.0)
+        self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
+        self.best_soc_step = self.get_arg('best_soc_step', 0.25)
+
+        # Battery charging options
+        self.battery_capacity_nominal = self.get_arg('battery_capacity_nominal', False)
+        self.battery_loss = 1.0 - self.get_arg('battery_loss', 0.03)
+        self.battery_loss_discharge = 1.0 - self.get_arg('battery_loss_discharge', 0.03)
+        self.inverter_loss = 1.0 - self.get_arg('inverter_loss', 0.04)
+        self.inverter_hybrid = self.get_arg('inverter_hybrid', True)
+        self.inverter_soc_reset = self.get_arg('inverter_soc_reset', False)
+        self.battery_scaling = self.get_arg('battery_scaling', 1.0)
+        self.battery_charge_power_curve = self.args.get('battery_charge_power_curve', {})
+        # Check power curve is a dictionary
+        if not isinstance(self.battery_charge_power_curve, dict):
+            self.battery_charge_power_curve = {}
+            self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
+            self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
+        self.import_export_scaling = self.get_arg('import_export_scaling', 1.0)
+        self.best_soc_margin = self.get_arg('best_soc_margin', 0.0)
+        self.best_soc_min = self.get_arg('best_soc_min', 0.0)
+        self.best_soc_max = self.get_arg('best_soc_max', 0.0)
+        self.best_soc_keep = self.get_arg('best_soc_keep', 2.0)
+        self.set_soc_minutes = self.get_arg('set_soc_minutes', 30)
+        self.set_window_minutes = self.get_arg('set_window_minutes', 30)
+        self.octopus_intelligent_charging = self.get_arg('octopus_intelligent_charging', True)
+        self.get_car_charging_planned()
+        self.load_inday_adjustment = 1.0
+       
+        self.combine_mixed_rates = self.get_arg('combine_mixed_rates', False)
+        self.combine_discharge_slots = self.get_arg('combine_discharge_slots', False)
+        self.combine_charge_slots = self.get_arg('combine_charge_slots', True)
+        self.discharge_slot_split = 30
+        self.charge_slot_split = 30
+
+        # Enables
+        default_enable_mode = True
+        if self.inverter_type != 'GE':
+            default_enable_mode = False
+            self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
+
+        self.calculate_best = self.get_arg('calculate_best', True)
+        self.set_soc_enable = self.get_arg('set_soc_enable', default_enable_mode)
+        self.set_reserve_enable = self.get_arg('set_reserve_enable', default_enable_mode)
+        self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
+        self.set_reserve_hold = self.get_arg('set_reserve_hold', True)
+        self.set_read_only = self.get_arg('set_read_only', False)
+        self.set_soc_notify = self.get_arg('set_soc_notify', True)
+        self.set_window_notify = self.get_arg('set_window_notify', True)
+        self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
+        self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
+        self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
+        self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
+        self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
+        self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
+        self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
+        self.calculate_best_discharge = self.get_arg('calculate_best_discharge', default_enable_mode)
+        self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
+        self.calculate_discharge_oncharge = self.get_arg('calculate_discharge_oncharge', True)
+        self.calculate_second_pass = self.get_arg('calculate_second_pass', False)
+        self.calculate_inday_adjustment = self.get_arg('calculate_inday_adjustment', False)
+        self.balance_inverters_enable = self.get_arg('balance_inverters_enable', False)
+        self.balance_inverters_charge = self.get_arg('balance_inverters_charge', True)
+        self.balance_inverters_discharge = self.get_arg('balance_inverters_discharge', True)
+        self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
+        self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
+        self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
+
+        if self.set_read_only:
+            self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
+
+        # Enable load filtering
+        self.load_filter_modal = self.get_arg('load_filter_modal', False)
+
+        # Iboost model
+        self.iboost_enable = self.get_arg('iboost_enable', False)
+        self.iboost_max_energy = self.get_arg('iboost_max_energy', 3.0)
+        self.iboost_max_power = self.get_arg('iboost_max_power', 2400) / 1000 / 60.0
+        self.iboost_min_power = self.get_arg('iboost_min_power', 500)  / 1000 / 60.0
+        self.iboost_min_soc = self.get_arg('iboost_min_soc', 0.0)
+        self.iboost_today = self.get_arg('iboost_today', 0.0)
+        self.iboost_next = self.iboost_today
+        self.iboost_energy_scaling = self.get_arg('iboost_energy_scaling', 1.0)
+        self.iboost_energy_today = {}
+
+        # Car options
+        self.car_charging_hold = self.get_arg('car_charging_hold', True)
+        self.car_charging_threshold = float(self.get_arg('car_charging_threshold', 6.0)) / 60.0
+        self.car_charging_energy_scale = self.get_arg('car_charging_energy_scale', 1.0)
+
+    @ad.app_lock
+    def update_pred(self, scheduled=True):
+        """
+        Update the prediction state, everything is called from here right now
+        """
+        self.had_errors = False
+        local_tz = pytz.timezone(self.get_arg('timezone', "Europe/London"))
+        skew = self.get_arg('clock_skew', 0)
+        if skew:
+            self.log("WARN: Clock skew is set to {} minutes".format(skew))
+        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
+        now = datetime.now() + timedelta(minutes=skew)
+        if SIMULATE:
+            now += timedelta(minutes=self.simulate_offset)
+            now_utc += timedelta(minutes=self.simulate_offset)
+
+        self.now_utc = now_utc
+        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        self.difference_minutes = self.minutes_since_yesterday(now)
+        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
+        self.minutes_to_midnight = 24*60 - self.minutes_now
+
+        self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
+
+        # Check our version
+        self.download_predbat_releases()
+        self.expose_config('version', None)
+
+        self.fetch_config_options()
+        self.fetch_sensor_data()
+        self.fetch_inverter_data()
+
+        recompute = False
+        if not scheduled or not self.plan_valid:
+            self.log("Will recompute the plan as it is invalid")
+            recompute = True
+        else:
+            plan_age = self.now_utc - self.plan_last_updated
+            plan_age_minutes = plan_age.seconds / 60.0
+            self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, plan_age_minutes))
+
+        self.calculate_plan(recompute=recompute)
+
+        # Execute the plan
+        status = self.execute_plan()
+
+        # If the plan was not updated, and the time has expired lets update it now
+        if not recompute:
+            plan_age = self.now_utc - self.plan_last_updated
+            plan_age_minutes = plan_age.seconds / 60.0
+
+            if ((plan_age_minutes + self.get_arg('run_every', 5)) > self.calculate_plan_every):
+                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(plan_age_minutes, self.calculate_plan_every))
+                self.calculate_plan(recompute=True)
+                status = self.execute_plan()
+            else:
+                self.log("Will not recompute the plan, it is {} minutes old max age {}".format(plan_age_minutes, self.calculate_plan_every))
 
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
@@ -5532,6 +5617,7 @@ class PredBat(hass.Hass):
                 self.log("select_event: {} = {}".format(entity, value))
                 self.expose_config(item['name'], value)
                 self.update_pending = True
+                self.plan_valid = False
                 return
 
     def number_event(self, event, data, kwargs):
@@ -5552,6 +5638,7 @@ class PredBat(hass.Hass):
                 self.log("number_event: {} = {}".format(entity, value))
                 self.expose_config(item['name'], value)
                 self.update_pending = True
+                self.plan_valid = False
                 return
 
     def switch_event(self, event, data, kwargs):
@@ -5581,6 +5668,7 @@ class PredBat(hass.Hass):
                 self.log("switch_event: {} = {}".format(entity, value))
                 self.expose_config(item['name'], value)
                 self.update_pending = True
+                self.plan_valid = False
                 return
 
     def get_ha_config(self, name):
