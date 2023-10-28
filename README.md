@@ -235,7 +235,6 @@ NOTE: Multiple cars can be planned with Predbat, see the planned car charging se
 Basic configuration items
   - **timezone** - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
   - **notify_devices** - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
-  - **run_every** - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
   - **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**. Keep in mind HA default history is only 10 days.
   - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
