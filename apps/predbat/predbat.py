@@ -20,6 +20,7 @@ TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 PREDICT_STEP = 5
+RUN_EVERY = 5
 
 # 240v x 100 amps x 3 phases / 1000 to kw / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240*100*3/1000/60 
@@ -2231,7 +2232,7 @@ class PredBat(hass.Hass):
 
                 # Save Iboost next prediction
                 if minute == 0 and save=='best':
-                    scaled_boost = (iboost_amount / step) * self.get_arg('run_every', 5)
+                    scaled_boost = (iboost_amount / step) * RUN_EVERY
                     self.iboost_next = self.dp3(self.iboost_today + scaled_boost)
                     self.log("IBoost model predicts usage {} in this run period taking total to {}".format(self.dp2(scaled_boost), self.iboost_next))
 
@@ -5377,7 +5378,7 @@ class PredBat(hass.Hass):
 
         self.debug_enable = self.get_arg('debug_enable', False)
         self.calculate_max_windows = self.get_arg('calculate_max_windows', 40)
-        self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 5), 5)
+        self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 10), 5)
         self.num_cars = self.get_arg('num_cars', 1)
         self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
 
@@ -5567,7 +5568,7 @@ class PredBat(hass.Hass):
             plan_age = self.now_utc - self.plan_last_updated
             plan_age_minutes = plan_age.seconds / 60.0
 
-            if ((plan_age_minutes + self.get_arg('run_every', 5)) > self.calculate_plan_every):
+            if ((plan_age_minutes + RUN_EVERY) > self.calculate_plan_every):
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(plan_age_minutes, self.calculate_plan_every))
                 self.calculate_plan(recompute=True)
                 status = self.execute_plan()
@@ -5588,7 +5589,7 @@ class PredBat(hass.Hass):
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0:
-            if self.minutes_now < self.get_arg('run_every', 5):
+            if self.minutes_now < RUN_EVERY:
                 self.holiday_days_left -= 1
                 self.expose_config('holiday_days_left', self.holiday_days_left)
                 self.log("Holiday days left is now {}".format(self.holiday_days_left))
@@ -5885,7 +5886,7 @@ class PredBat(hass.Hass):
             skew = self.get_arg('clock_skew', 0)
             if skew:
                 self.log("WARN: Clock skew is set to {} minutes".format(skew))
-            run_every = self.get_arg('run_every', 5) * 60
+            run_every = RUN_EVERY * 60
             skew = skew % (run_every / 60)
             now = datetime.now() + timedelta(minutes=skew)
             midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
