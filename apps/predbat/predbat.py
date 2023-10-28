@@ -1933,11 +1933,11 @@ class PredBat(hass.Hass):
         load_predict_data = {}
         total_forecast_value_pred = 0
         total_forecast_value_pred_now = 0
-        load_value_today = 0
-        load_value_today_raw = 0
 
         for minute in range(0, 24*60, step):
             import_value_today = 0
+            load_value_today = 0
+            load_value_today_raw = 0
 
             if minute < minutes_now:
                 for offset in range(0, step):
