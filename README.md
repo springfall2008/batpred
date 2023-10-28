@@ -79,7 +79,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
 
 The app runs every N minutes (default 5), it will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically find charging slots (up to 10 slots) and if enabled configure them automatically with GivTCP. It uses the solar production forecast from Solcast combined with your historical energy use and your plan charging slots to make a prediction. When enable it will tune the charging percentage (SOC) for each of the slots to achieve the lowest cost possible.
 
-- The output is a prediction of the battery levels, charging slots and % charge level, costs and import and export amounts.
+- The output is a prediction of the battery levels, charging slots, discharging slots, costs and import and export amounts.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Plugin
    - Both import and export rates are supported.
    - Intelligent Octopus is also supported and takes into account allocated charging slots.  
@@ -235,7 +235,6 @@ NOTE: Multiple cars can be planned with Predbat, see the planned car charging se
 Basic configuration items
   - **timezone** - Set to your local timezone, default is Europe/London (https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
   - **notify_devices** - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
-  - **run_every** - Set the number of minutes between updates, default is 5 (recommended), must divide into 60 to be aligned correctly (e.g. 10 or 15 is okay)
   - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
   - **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**. Keep in mind HA default history is only 10 days.
   - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
@@ -640,6 +639,16 @@ Changing the items in apps.yml will have no effect.
 Each config item has an input_number or switch associated with it, see the example dashboard for their exact names (https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml)
 
 You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards (https://github.com/RossMcMillan92/lovelace-collapsable-cards) and lovelace-auto-entities (https://github.com/thomasloven/lovelace-auto-entities) to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
+
+### Performance related
+
+By default Predbat controls the inverter and updates the plan every 5 minutes, this can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Rasperry PIs and some thin clients.
+
+You can tweak **input_number.predbat_calculate_plan_every** to reduce the frequency of replanning while keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 minutes should also give good results.
+
+You can tune the number of windows that are optimised for using **'input_number.predbat_calculate_max_windows** however a minimum of 32 is recommended, and values of between 40 and 64 will give best results for Agile tariffs.
+
+If you have performance problems leave **switch.predbat_calculate_second_pass** turned off as it's quite CPU intensive and provides very little improvement for most systems.
 
 ### Battery loss options
 
