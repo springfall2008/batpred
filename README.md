@@ -804,8 +804,9 @@ When **set_reserve_hold** is True then if the current charge % is above the targ
 
 ### IBoost model options
 
-IBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat hot water (or similar)
-**iboost_max** Sets the max energy sets the number of kWh that iBoost can consume during a day before turning off - default 3kWh
+IBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat hot water (or similar). The predicted output from the IBoost model is returned in **iboost_best**.
+
+**iboost_max_energy** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kWh
 
 **iboost_max_power** Sets the maximum power in watts to consume - default 2400
 
