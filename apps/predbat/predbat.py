@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10'
+THIS_VERSION = 'v7.10.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1933,6 +1933,8 @@ class PredBat(hass.Hass):
         load_predict_data = {}
         total_forecast_value_pred = 0
         total_forecast_value_pred_now = 0
+        load_value_today = 0
+        load_value_today_raw = 0
 
         for minute in range(0, 24*60, step):
             import_value_today = 0
