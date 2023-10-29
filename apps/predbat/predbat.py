@@ -2554,6 +2554,7 @@ class PredBat(hass.Hass):
         minute = 0
         rate_last = 0
         adjusted_rates = {}
+        replicated_rates = {}
 
         # Add 48 extra hours to make sure the whole cycle repeats another day
         while minute < (self.forecast_minutes + 48*60):
@@ -2582,10 +2583,12 @@ class PredBat(hass.Hass):
                     adjusted_rates[minute] = True
 
                 rates[minute] = rate_offset
+                replicated_rates[minute] = True
             else:
                 rate_last = rates[minute]
+                replicated_rates[minute] = False
             minute += 1
-        return rates
+        return rates, replicated_rates
 
     def find_charge_window(self, rates, minute, threshold_rate, find_high):
         """
@@ -3320,10 +3323,26 @@ class PredBat(hass.Hass):
                     show_limit = str(limit) + "%"
                     state_color = '#FFFF00'
 
+            # Import and export rates -> to string
+            if self.rate_import_replicated.get(minute, False):
+                rate_str_import = '<i>' + str(rate_value_import) + ' ?</i>'
+            else:
+                rate_str_import = str(rate_value_import) + ' p'
+            if charge_window_n >= 0:
+                rate_str_import = '<b>' + rate_str_import + '</b>'
+
+            if self.rate_export_replicated.get(minute, False):
+                rate_str_export = '<i>' + str(rate_value_export) + ' ?</i>'
+            else:
+                rate_str_export = str(rate_value_export) + ' p'
+            if discharge_window_n >= 0:
+                rate_str_export = '<b>' + rate_str_export + '</b>'
+
+            # Table row
             html += '<tr>'
             html += '<td> ' + rate_start.strftime("%a %H:%M") + '</td>'
-            html += '<td bgcolor=' + rate_color_import + '>' + str(rate_value_import) + ' p</td>'
-            html += '<td bgcolor=' + rate_color_export + '>' + str(rate_value_export) + ' p</td>'
+            html += '<td bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
+            html += '<td bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
             html += '<td bgcolor=' + state_color + '>' + state + '</td>'
             html += '<td> ' + show_limit + '</td>'
             html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
@@ -3332,55 +3351,6 @@ class PredBat(hass.Hass):
             html += '</tr>'
         html += "</table>"
         self.set_state(self.prefix + ".plan_html", state='', attributes = {'html' : html, 'friendly_name' : 'Plan in HTML', 'icon': 'mdi:web-box'})
-
-    def publish_all_rates(self, rates, windows, window_limit, export):
-        """
-        Publish the rates for charts
-        Create rates/time every 30 minutes
-        """
-        all_rates = []
-        for minute in range(0, self.forecast_minutes, 30):
-            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
-            rate_start = minute_timestamp
-            rate_end = minute_timestamp + timedelta(seconds=30*60)
-            rate_value = self.dp2(rates[minute])
-            window_n = -1
-
-            for try_minute in range(minute, minute + 30, 5):
-                window_n = self.in_charge_window(windows, try_minute)
-                if window_n >= 0:
-                    break
-
-            state = ''
-            
-            if export:
-                limit = 100
-            else:
-                limit = 0
-
-            if window_n >= 0:
-                limit = window_limit[window_n]
-                if export:
-                    if limit == 99:
-                        state = 'Freeze'
-                    else:
-                        state = 'Discharge'
-                else:
-                    state = 'Charge'
-            
-            item = {}
-            item['valid_from'] = rate_start.strftime(TIME_FORMAT)
-            item['valid_to'] = rate_end.strftime(TIME_FORMAT)
-            item['state'] = state
-            item['value_inc_vat'] = rate_value
-            item['limit'] = limit
-            all_rates.append(item)
-
-        if not SIMULATE:
-            if export:
-                self.set_state(self.prefix + ".current_rates_export", state=self.dp2(rates[self.minutes_now]), attributes = {'all_rates' : all_rates, 'friendly_name' : 'Current Export rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
-            else:
-                self.set_state(self.prefix + ".current_rates_import", state=self.dp2(rates[self.minutes_now]), attributes = {'all_rates' : all_rates, 'friendly_name' : 'Current Import rates', 'state_class' : 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
     def publish_rates(self, rates, export):
         """
@@ -4957,8 +4927,6 @@ class PredBat(hass.Hass):
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
         # HTML data
-        self.publish_all_rates(self.rate_import, self.charge_window_best, self.charge_limit_best, export=False)
-        self.publish_all_rates(self.rate_export, self.discharge_window_best, self.discharge_limits_best, export=True)
         self.publish_html_plan(pv_forecast_minute_step, load_minutes_step)
 
     def execute_plan(self):
@@ -5169,7 +5137,9 @@ class PredBat(hass.Hass):
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
         self.rate_import = {}
+        self.rate_import_replicated = {}
         self.rate_export = {}
+        self.rate_export_replicated = {}
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
@@ -5394,7 +5364,7 @@ class PredBat(hass.Hass):
         # Replicate and scan import rates
         if self.rate_import:
             self.rate_import = self.rate_scan(self.rate_import, print=False)
-            self.rate_import = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
+            self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             if 'rates_import_override' in self.args:
                 self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
@@ -5405,7 +5375,7 @@ class PredBat(hass.Hass):
 
         # Replicate and scan export rates
         if self.rate_export:
-            self.rate_export = self.rate_replicate(self.rate_export, is_import=False)
+            self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             if 'rates_export_override' in self.args:
                 self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
