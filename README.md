@@ -941,7 +941,7 @@ Example charts:
 
 ## Octopus energy card
 
-Using HACS add this custom repository and install this version instead of the standard octopus-energy-rates-card:
+Using HACS add this custom repository and install this version instead of the standard octopus-energy-rates-card. Make sure you remove the standard octopus-energy-rates-card first as this is a fork repository with the same name. Install the new one from the custom repository list in HACS.
 
 * https://github.com/springfall2008/octopus-energy-rates-card
 
@@ -952,6 +952,7 @@ title: Import rates
 type: custom:octopus-energy-rates-card
 entity: predbat.current_rates_import
 cols: 2
+showday: True
 ```
 
 Create a similar one for export:
@@ -961,6 +962,7 @@ title: Export rates
 type: custom:octopus-energy-rates-card
 entity: predbat.current_rates_export
 cols: 2
+showday: True
 ```
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/d0c45d5e-c6d6-4639-8d75-88e636555980)
