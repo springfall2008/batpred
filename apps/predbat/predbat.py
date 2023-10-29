@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10.3'
+THIS_VERSION = 'v7.10.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2668,11 +2668,37 @@ class PredBat(hass.Hass):
         max_minute = max(rates) + 1
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
-            start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
-            end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
+            start_str = this_rate.get('start', "00:00:00")
+            end_str = this_rate.get('end', "00:00:00")
+
+            if start_str.count(':') < 2:
+                start_str += ":00"
+            if end_str.count(':') < 2:
+                end_str += ":00"
+
+            try:
+                start = datetime.strptime(start_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad start time {} provided in energy rates".format(start_str))
+                self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
+                continue
+
+            try:
+                end = datetime.strptime(end_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad end time {} provided in energy rates".format(end_str))
+                self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
+                continue
+
             date = None
             if 'date' in this_rate:
-                date = datetime.strptime(this_rate['date'], "%Y-%m-%d")
+                try:
+                    date = datetime.strptime(this_rate['date'], "%Y-%m-%d")
+                except ValueError:
+                    self.log("WARN: Bad date {} provided in energy rates".format(this_rate['date']))
+                    self.record_status("Bad date {} provided in energy rates".format(this_rate['date']), had_errors=True)
+                    continue
+    
             rate = this_rate.get('rate', 0)
 
             # Time in minutes
@@ -3341,13 +3367,13 @@ class PredBat(hass.Hass):
             # Table row
             html += '<tr>'
             html += '<td> ' + rate_start.strftime("%a %H:%M") + '</td>'
-            html += '<td bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
-            html += '<td bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
-            html += '<td bgcolor=' + state_color + '>' + state + '</td>'
+            html += '<td color=#000000 bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
+            html += '<td color=#000000 bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
+            html += '<td color=#000000 bgcolor=' + state_color + '>' + state + '</td>'
             html += '<td> ' + show_limit + '</td>'
-            html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
-            html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + ' kW</td>'
-            html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + ' %</td>'
+            html += '<td color=#000000 bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
+            html += '<td color=#000000 bgcolor=' + load_color + '>' + str(load_forecast) + ' kW</td>'
+            html += '<td color=#000000 bgcolor=' + soc_color + '>' + str(soc_percent) + ' %</td>'
             html += '</tr>'
         html += "</table>"
         self.set_state(self.prefix + ".plan_html", state='', attributes = {'html' : html, 'friendly_name' : 'Plan in HTML', 'icon': 'mdi:web-box'})
