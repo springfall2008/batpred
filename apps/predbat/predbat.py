@@ -2663,10 +2663,8 @@ class PredBat(hass.Hass):
 
         if prev:
             rates = prev.copy()
-            self.log("Override {} rate info {}".format(rtype, info))
         else:
             # Set to zero
-            self.log("Adding {} rate info {}".format(rtype, info))
             for minute in range(0, 24*60):
                 rates[minute] = 0
 
@@ -2674,7 +2672,9 @@ class PredBat(hass.Hass):
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
             start_str = this_rate.get('start', "00:00:00")
+            start_str = self.resolve_arg('start', start_str, "00:00:00")
             end_str = this_rate.get('end', "00:00:00")
+            end_str = self.resolve_arg('end', end_str, "00:00:00")
 
             if start_str.count(':') < 2:
                 start_str += ":00"
@@ -2697,18 +2697,22 @@ class PredBat(hass.Hass):
 
             date = None
             if 'date' in this_rate:
+                date_str = self.resolve_arg('date', this_rate['date'])
                 try:
-                    date = datetime.strptime(this_rate['date'], "%Y-%m-%d")
+                    date = datetime.strptime(date_str, "%Y-%m-%d")
                 except ValueError:
                     self.log("WARN: Bad date {} provided in energy rates".format(this_rate['date']))
                     self.record_status("Bad date {} provided in energy rates".format(this_rate['date']), had_errors=True)
                     continue
     
-            rate = this_rate.get('rate', 0)
+            rate = this_rate.get('rate', 0.0)
+            rate = self.resolve_arg('rate', rate, 0.0)
 
             # Time in minutes
             start_minutes = max(self.minutes_to_time(start, midnight), 0)
             end_minutes   = min(self.minutes_to_time(end, midnight), 24*60-1)
+
+            self.log("Adding rate {} => {} to {} @ {} date {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date))
 
             # Make end > start
             if end_minutes <= start_minutes:
