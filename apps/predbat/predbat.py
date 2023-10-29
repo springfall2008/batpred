@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10.4'
+THIS_VERSION = 'v7.10.5'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -223,7 +223,12 @@ class Inverter():
             else:
                 self.battery_rate_max_raw = self.base.get_arg('battery_rate_max', index=self.id, default=2600.0)
             ivtime = self.base.get_arg('inverter_time', index=self.id, default=None)
-        
+
+        # Battery can not be zero size
+        if self.soc_max <= 0:
+            self.base.log("ERROR: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
+            raise ValueError
+
         # Battery rate max charge, discharge
         self.battery_rate_max_charge = min(self.base.get_arg('inverter_limit_charge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_discharge = min(self.base.get_arg('inverter_limit_discharge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
@@ -3591,7 +3596,7 @@ class PredBat(hass.Hass):
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
-        self.soc_max = 0
+        self.soc_max = 10
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.metric_min_improvement = 0.0
@@ -5485,7 +5490,7 @@ class PredBat(hass.Hass):
         self.discharge_limits = []
         self.current_charge_limit = 0.0
         self.soc_kw = 0.0
-        self.soc_max = 0.0
+        self.soc_max = 10.0
         self.reserve = 0.0
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
