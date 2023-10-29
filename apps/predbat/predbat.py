@@ -3596,7 +3596,7 @@ class PredBat(hass.Hass):
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
-        self.soc_max = 10
+        self.soc_max = 10.0
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.metric_min_improvement = 0.0
@@ -5490,7 +5490,7 @@ class PredBat(hass.Hass):
         self.discharge_limits = []
         self.current_charge_limit = 0.0
         self.soc_kw = 0.0
-        self.soc_max = 10.0
+        self.soc_max = 0.0
         self.reserve = 0.0
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
