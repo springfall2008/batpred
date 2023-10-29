@@ -72,6 +72,7 @@ If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
     + [Debug](#debug)
   * [Output data](#output-data)
   * [Creating the charts](#creating-the-charts)
+  * [HTML plan card](#html-plan-card)
   * [Octopus energy card](#octopus-energy-card)
   * [Todo list](#todo-list)
 
@@ -938,6 +939,28 @@ Example charts:
 ![image](https://github.com/springfall2008/batpred/assets/48591903/c02d65cf-e502-4484-a58d-cff8fb93d0f3)
 
 <img width="1052" alt="image" src="https://github.com/springfall2008/batpred/assets/48591903/a96934d3-753a-49da-800b-925896f87cb6">
+
+## HTML Plan card
+
+Predbat can create it's own plan card which can be added to your HA dashboard.
+
+* First install html-template-card in HACS (from the Frontend list), it will already be available to add, but for reference the repository can be found here:
+  * https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card
+
+Next create a new card as follows:
+
+```
+type: custom:html-template-card
+title: Predbat plan
+ignore_line_breaks: true
+content: |
+  {{ state_attr('predbat.plan_html', 'html') }}
+```
+
+You should see something like this:
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/3c0a2a53-4d83-4b64-aa49-822a233f7554)
+
 
 ## Octopus energy card
 

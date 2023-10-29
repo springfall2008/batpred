@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10.1'
+THIS_VERSION = 'v7.10.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -322,9 +322,10 @@ class Inverter():
         if self.rest_data and ('Power' in self.rest_data):
             pdetails = self.rest_data['Power']
             if 'Power' in pdetails:
-                self.battery_power = float(pdetails['Power']['Battery_Power'])
-                self.pv_power = float(pdetails['Power']['PV_Power'])
-                self.load_power = float(pdetails['Power']['Load_Power'])
+                ppdetails = pdetails['Power']
+                self.battery_power = float(ppdetails.get('Battery_Power', 0.0))
+                self.pv_power = float(ppdetails.get('PV_Power', 0.0))
+                self.load_power = float(ppdetails.get('Load_Power', 0.0))
         else:
             self.battery_power = self.base.get_arg('battery_power', default=0.0, index=self.id)
             self.pv_power = self.base.get_arg('pv_power', default=0.0, index=self.id)
@@ -1991,7 +1992,7 @@ class PredBat(hass.Hass):
                 load_actual_stamp[stamp] = self.dp3(actual_total_today)
 
         difference = 1.0
-        if minutes_now >= 180 and actual_total_now >= 1.0:
+        if minutes_now >= 180 and actual_total_now >= 1.0 and actual_total_today > 0.0:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
                     
@@ -3217,13 +3218,128 @@ class PredBat(hass.Hass):
             self.set_state(self.prefix + ".low_rate_end_2", state='undefined', attributes = {'date' : None, 'friendly_name' : 'Next+1 low rate end', 'device_class': 'timestamp', 'icon': 'mdi:table-clock'})
             self.set_state(self.prefix + ".low_rate_cost_2", state=self.rate_average, attributes = {'friendly_name' : 'Next+1 low rate cost', 'state_class': 'measurement', 'unit_of_measurement': 'p', 'icon': 'mdi:currency-usd'})
 
+    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step):
+        """
+        Publish the current plan in HTML format
+        """
+        html = "<table>"
+        html += '<tr>'
+        html += '<td><b>Time</b></td>'
+        html += '<td><b>Import</b></td>'
+        html += '<td><b>Export</b></td>'
+        html += '<td><b>State</b></td>'
+        html += '<td><b>Limit</b></td>'
+        html += '<td><b>PV</b></td>'
+        html += '<td><b>Load</b></td>'
+        html += '<td><b>SOC</b></td>'
+        html += '</tr>'
+
+        minute_now_align = int(self.minutes_now / 30) * 30
+        for minute in range(minute_now_align, self.forecast_minutes + minute_now_align, 30):
+            minute_relative = minute - minute_now_align
+            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+            rate_start = minute_timestamp
+            rate_value_import = self.dp2(self.rate_import.get(minute, 0))
+            rate_value_export = self.dp2(self.rate_export.get(minute, 0))
+            charge_window_n = -1
+            discharge_window_n = -1
+
+            show_limit = ""
+
+            for try_minute in range(minute, minute + 30, 5):
+                charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
+                if charge_window_n >= 0:
+                    break
+
+            for try_minute in range(minute, minute + 30, 5):
+                discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
+                if discharge_window_n >= 0:
+                    break
+
+            pv_forecast = 0
+            load_forecast = 0
+            for offset in range(0, 30, PREDICT_STEP):
+                pv_forecast += pv_forecast_minute_step.get(minute_relative, 0.0)
+                load_forecast += load_minutes_step.get(minute_relative, 0.0)
+            pv_forecast = self.dp2(pv_forecast)
+            load_forecast = self.dp2(load_forecast)
+
+            soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
+            
+            state = ''
+            state_color = '#FFFFFF'
+            pv_color = '#AAAAAA'
+            load_color = '#FFFFFF'
+            rate_color_import = '#FFFFFF'
+            rate_color_export = '#FFFFFF'
+            soc_color = '#00FF00'
+
+            if soc_percent < 20.0:
+                soc_color = '#F16F49'
+            elif soc_percent < 50.0:
+                soc_color = '#FFFF00'
+
+            if pv_forecast >= 0.2:
+                pv_color = '#FFAAAA'
+            elif pv_forecast >= 0.1:
+                pv_color = '#FFFF00'
+
+            if load_forecast >= 0.5:
+                load_color = '#F16F49'
+            elif load_forecast >= 0.25:
+                load_color = '#FFFF00'
+            elif load_forecast > 0.0:
+                load_color = '#AAFFAA'
+
+            if rate_value_import <= self.rate_threshold:
+                rate_color_import = '#00FF00'
+            elif rate_value_import > (self.rate_threshold * 1.2):
+                rate_color_import = '#FFAAAA'
+
+            if rate_value_export >= self.rate_export_threshold:
+                rate_color_export = '#FFAAAA'
+
+            if charge_window_n >= 0:
+                limit = self.charge_limit_best[charge_window_n]
+                if limit > self.reserve:
+                    state = 'Charge'
+                    show_limit = str(self.charge_limit_percent_best[charge_window_n]) + "%"
+                    state_color = '#00FF00'
+
+            if discharge_window_n >= 0:
+                limit = self.discharge_limits_best[discharge_window_n]
+                if limit == 99:
+                    if state:
+                        state += "/"
+                    state += 'Freeze'
+                    state_color = '#AAAAAA'
+                elif limit < 99:
+                    if state:
+                        state += "/"
+                    state += 'Discharge'
+                    show_limit = str(limit) + "%"
+                    state_color = '#FFFF00'
+
+            html += '<tr>'
+            html += '<td> ' + rate_start.strftime("%a %H:%M") + '</td>'
+            html += '<td bgcolor=' + rate_color_import + '>' + str(rate_value_import) + ' p</td>'
+            html += '<td bgcolor=' + rate_color_export + '>' + str(rate_value_export) + ' p</td>'
+            html += '<td bgcolor=' + state_color + '>' + state + '</td>'
+            html += '<td> ' + show_limit + '</td>'
+            html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
+            html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + ' kW</td>'
+            html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + ' %</td>'
+            html += '</tr>'
+        html += "</table>"
+        self.set_state(self.prefix + ".plan_html", state='', attributes = {'html' : html, 'friendly_name' : 'Plan in HTML', 'icon': 'mdi:web-box'})
+
     def publish_all_rates(self, rates, windows, window_limit, export):
         """
         Publish the rates for charts
         Create rates/time every 30 minutes
         """
         all_rates = []
-        for minute in range(0, self.minutes_now + self.forecast_minutes+24*60, 30):
+        for minute in range(0, self.forecast_minutes, 30):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             rate_start = minute_timestamp
             rate_end = minute_timestamp + timedelta(seconds=30*60)
@@ -4536,7 +4652,7 @@ class PredBat(hass.Hass):
 
         # Work out data scale factor so it adds up (New Solcast is in kw but old was kWH)
         factor = 1.0
-        if pv_forecast_total_data > 0.0:
+        if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
             factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor)
         # We want to divide the data into single minute slots
         divide_by = self.dp2(30 * factor)
@@ -4733,6 +4849,8 @@ class PredBat(hass.Hass):
 
         # Recompute?
         if recompute:
+            self.plan_valid = False # In case of crash, plan is now invalid
+ 
             # Calculate best charge windows
             if self.low_rates:
                 # If we are using calculated windows directly then save them
@@ -4838,9 +4956,10 @@ class PredBat(hass.Hass):
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
-        # All rates data
+        # HTML data
         self.publish_all_rates(self.rate_import, self.charge_window_best, self.charge_limit_best, export=False)
         self.publish_all_rates(self.rate_export, self.discharge_window_best, self.discharge_limits_best, export=True)
+        self.publish_html_plan(pv_forecast_minute_step, load_minutes_step)
 
     def execute_plan(self):
         if self.holiday_days_left > 0:
