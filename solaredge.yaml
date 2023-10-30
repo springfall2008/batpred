@@ -1,8 +1,8 @@
    - "00:00:00"
 ---
 pred_bat:
-  module: predbatX
-  class: PredBatX
+  module: predbat
+  class: PredBat
   
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
