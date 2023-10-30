@@ -2707,6 +2707,12 @@ class PredBat(hass.Hass):
     
             rate = this_rate.get('rate', 0.0)
             rate = self.resolve_arg('rate', rate, 0.0)
+            try:
+                rate = float(rate)
+            except:
+                self.log("WARN: Bad rate {} provided in energy rates".format(rate))
+                self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
+                continue
 
             # Time in minutes
             start_minutes = max(self.minutes_to_time(start, midnight), 0)
