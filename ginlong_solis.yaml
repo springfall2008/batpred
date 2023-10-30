@@ -53,20 +53,28 @@ pred_bat:
   - select.predbat_mode
   inverter_time:
   - sensor.solis_date_time_ro
-  charge_start_time: 
-   - input_datetime.predbat_solis_charge_start_time
-  charge_end_time: 
-   - input_datetime.predbat_solis_charge_end_time
+  charge_start_hour: 
+   - sensor.solis_timed_charge_start_hour
+  charge_start_minute: 
+   - sensor.solis_timed_charge_start_minute
+  charge_end_hour: 
+   - sensor.solis_timed_charge_end_hour
+  charge_end_minute: 
+   - sensor.solis_timed_charge_end_minute
   charge_limit: 
-   - input_number.predbat_solis_charge_limit
-  discharge_start_time: 
-   - input_datetime.predbat_solis_charge_start_time
-  discharge_end_time: 
-   - input_datetime.predbat_solis_charge_end_time
+   - sensor.solis_timed_charge_current_limit
+  discharge_start_hour: 
+   - sensor.solis_timed_discharge_start_hour
+  discharge_start_minute: 
+   - sensor.solis_timed_discharge_start_minute
+  discharge_end_hour: 
+   - sensor.solis_timed_discharge_end_hour
+  discharge_end_minute: 
+   - sensor.solis_timed_discharge_end_minute
   discharge_limit: 
-   - input_number.predbat_solis_charge_limit
+   - sensor.solis_timed_discharge_current_limit
   scheduled_charge_enable: 
-   - switch.predbat_enable_charge_schedule
+   - on
   scheduled_discharge_enable:
    - off
 
