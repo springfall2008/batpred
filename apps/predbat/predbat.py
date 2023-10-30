@@ -2709,7 +2709,7 @@ class PredBat(hass.Hass):
             rate = self.resolve_arg('rate', rate, 0.0)
             try:
                 rate = float(rate)
-            except:
+            except ValueError:
                 self.log("WARN: Bad rate {} provided in energy rates".format(rate))
                 self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
                 continue
