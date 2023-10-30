@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10.5'
+THIS_VERSION = 'v7.10.6'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3263,13 +3263,13 @@ class PredBat(hass.Hass):
         html = "<table>"
         html += '<tr>'
         html += '<td><b>Time</b></td>'
-        html += '<td><b>Import</b></td>'
-        html += '<td><b>Export</b></td>'
+        html += '<td><b>Import p</b></td>'
+        html += '<td><b>Export p</b></td>'
         html += '<td><b>State</b></td>'
-        html += '<td><b>Limit</b></td>'
-        html += '<td><b>PV</b></td>'
-        html += '<td><b>Load</b></td>'
-        html += '<td><b>SOC</b></td>'
+        html += '<td><b>Limit %</b></td>'
+        html += '<td><b>PV kWh</b></td>'
+        html += '<td><b>Load kWh</b></td>'
+        html += '<td><b>SOC %</b></td>'
         html += '</tr>'
 
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -3303,6 +3303,15 @@ class PredBat(hass.Hass):
             load_forecast = self.dp2(load_forecast)
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_change = self.predict_soc_best.get(minute_relative + 25, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
+
+            soc_sym = ''
+            if abs(soc_change) < 0.05:
+                soc_sym = '&rarr;'
+            elif soc_change >= 0:
+                soc_sym = '&nearr;'
+            else:
+                soc_sym = '&searr;'
             
             state = ''
             state_color = '#FFFFFF'
@@ -3311,6 +3320,7 @@ class PredBat(hass.Hass):
             rate_color_import = '#FFFFFF'
             rate_color_export = '#FFFFFF'
             soc_color = '#00FF00'
+            pv_symbol = ''
 
             if soc_percent < 20.0:
                 soc_color = '#F16F49'
@@ -3319,8 +3329,10 @@ class PredBat(hass.Hass):
 
             if pv_forecast >= 0.2:
                 pv_color = '#FFAAAA'
+                pv_symbol = '&#9728;'
             elif pv_forecast >= 0.1:
                 pv_color = '#FFFF00'
+                pv_symbol = '&#9728;'
 
             if load_forecast >= 0.5:
                 load_color = '#F16F49'
@@ -3340,8 +3352,8 @@ class PredBat(hass.Hass):
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
                 if limit > self.reserve:
-                    state = 'Charge'
-                    show_limit = str(self.charge_limit_percent_best[charge_window_n]) + "%"
+                    state = 'Charge &Uarr;'
+                    show_limit = str(self.charge_limit_percent_best[charge_window_n])
                     state_color = '#00FF00'
 
             if discharge_window_n >= 0:
@@ -3349,40 +3361,40 @@ class PredBat(hass.Hass):
                 if limit == 99:
                     if state:
                         state += "/"
-                    state += 'Freeze'
+                    state += 'Freeze &dharr;'
                     state_color = '#AAAAAA'
                 elif limit < 99:
                     if state:
                         state += "/"
-                    state += 'Discharge'
-                    show_limit = str(limit) + "%"
+                    state += 'Discharge &Darr;'
+                    show_limit = str(limit)
                     state_color = '#FFFF00'
 
             # Import and export rates -> to string
             if self.rate_import_replicated.get(minute, False):
                 rate_str_import = '<i>' + str(rate_value_import) + ' ?</i>'
             else:
-                rate_str_import = str(rate_value_import) + ' p'
+                rate_str_import = str(rate_value_import)
             if charge_window_n >= 0:
                 rate_str_import = '<b>' + rate_str_import + '</b>'
 
             if self.rate_export_replicated.get(minute, False):
                 rate_str_export = '<i>' + str(rate_value_export) + ' ?</i>'
             else:
-                rate_str_export = str(rate_value_export) + ' p'
+                rate_str_export = str(rate_value_export)
             if discharge_window_n >= 0:
                 rate_str_export = '<b>' + rate_str_export + '</b>'
 
             # Table row
-            html += '<tr>'
-            html += '<td> ' + rate_start.strftime("%a %H:%M") + '</td>'
-            html += '<td color=#000000 bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
-            html += '<td color=#000000 bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
-            html += '<td color=#000000 bgcolor=' + state_color + '>' + state + '</td>'
-            html += '<td> ' + show_limit + '</td>'
-            html += '<td color=#000000 bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
-            html += '<td color=#000000 bgcolor=' + load_color + '>' + str(load_forecast) + ' kW</td>'
-            html += '<td color=#000000 bgcolor=' + soc_color + '>' + str(soc_percent) + ' %</td>'
+            html += '<tr style="color:black">'
+            html += '<td bgcolor=#FFFFFF>' + rate_start.strftime("%a %H:%M") + '</td>'
+            html += '<td bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
+            html += '<td bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
+            html += '<td bgcolor=' + state_color + '>' + state + '</td>'
+            html += '<td bgcolor=#FFFFFF> ' + show_limit + '</td>'
+            html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + pv_symbol + '</td>'
+            html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + '</td>'
+            html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + soc_sym + '</td>'
             html += '</tr>'
         html += "</table>"
         self.set_state(self.prefix + ".plan_html", state='', attributes = {'html' : html, 'friendly_name' : 'Plan in HTML', 'icon': 'mdi:web-box'})
