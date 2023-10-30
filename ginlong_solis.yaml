@@ -1,8 +1,6 @@
-   - "00:00:00"
----
 pred_bat:
-  module: predbatX
-  class: PredBatX
+  module: predbat
+  class: PredBat
   
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
@@ -18,57 +16,60 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today: 
-    - sensor.solaredge_i2_ac_energy_kwh
+    - sensor.solis_daily_consumption
   import_today: 
-    - sensor.solaredge_m1_imported_kwh
+    - sensor.solis_daily_energy_imported
   export_today: 
-    - sensor.solaredge_m1_exported_kwh
+    - sensor.solis_daily_energy_exported
   pv_today:
-    - sensor.solar_panel_production_kwh   # This is a custom sensor - documentation TBD
+    - sensor.solis_daily_generation   # This is a custom sensor - documentation TBD
   #
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
-  inverter_type: "SE"
+  inverter_type: "GS"
 
   battery_rate_max:
-    - 11600
+    - 3000
   charge_rate: 
-    - number.solaredge_i2_storage_charge_limit
+    - 3000
   discharge_rate: 
-    - number.solaredge_i2_storage_discharge_limit
-  #battery_power: 
-  #  - number.givtcp_{geserial}_battery_power
-  #pv_power: 
-  #  - number.givtcp_{geserial}_pv_power
-  #load_power: 
-  #  - number.givtcp_{geserial}_load_power
+    - 3500
+  battery_power: 
+    - sensor.solis_battery_power
+  pv_power: 
+    - sensor.solis_inverter_dc_power
+  load_power: 
+    - number.solis_total_load_power
   soc_kw: 
-    - sensor.solaredge_b1_available_energy
-  #soc_percent:
-  #  - sensor.solaredge_b1_state_of_energy
+    - sensor.solis_battery_soc_kwh
+  soc_percent:
+    - sensor.solis_battery_soc
   soc_max: 
-    - sensor.solaredge_b1_maximum_energy
+    - sensor.solis_battery_capacity_kwh
   reserve: 
-    - number.solaredge_i2_backup_reserve
-  #inverter_mode: 
-  # - select.givtcp_{geserial}_mode
-  #inverter_time:
-  # - sensor.givtcp_{geserial}_invertor_time
+    - sensor.solis_overdischarge_soc
+  inverter_mode: 
+  - select.predbat_mode
+  inverter_time:
+  - sensor.solis_date_time_ro
   charge_start_time: 
-   - "00:00:00"
+   - input_datetime.predbat_solis_charge_start_time
   charge_end_time: 
-   - "00:01:00"
+   - input_datetime.predbat_solis_charge_end_time
   charge_limit: 
-   - number.solaredge_i2_ac_charge_limit
+   - input_number.predbat_solis_charge_limit
+  discharge_start_time: 
+   - input_datetime.predbat_solis_charge_start_time
+  discharge_end_time: 
+   - input_datetime.predbat_solis_charge_end_time
+  discharge_limit: 
+   - input_number.predbat_solis_charge_limit
   scheduled_charge_enable: 
-   - off
+   - switch.predbat_enable_charge_schedule
   scheduled_discharge_enable:
    - off
-  discharge_start_time:
-   - "00:00:00"
-  discharge_end_time: 
-   - "00:01:00"
+
   
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
@@ -136,54 +137,54 @@ pred_bat:
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  # car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
-  num_cars: 1
+  num_cars: 0
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Octopus Intelligent Slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response
   # Auto matches Zappi and Wallbox, or change it for your own
-  car_charging_planned: 
-    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
-    - 'connected'
+  # car_charging_planned: 
+  #   - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  #   - 'connected'
   
-  car_charging_planned_response:
-    - 'yes'
-    - 'on'
-    - 'true'
-    - 'connected'
-    - 'ev connected'
-    - 'charging'
-    - 'paused'
-    - 'waiting for car demand'
-    - 'waiting for ev'
-    - 'scheduled'
-    - 'enabled'
-    - 'latched'
-    - 'locked'
-    - 'plugged in'
+  # car_charging_planned_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
+  #   - 'connected'
+  #   - 'ev connected'
+  #   - 'charging'
+  #   - 'paused'
+  #   - 'waiting for car demand'
+  #   - 'waiting for ev'
+  #   - 'scheduled'
+  #   - 'enabled'
+  #   - 'latched'
+  #   - 'locked'
+  #   - 'plugged in'
 
   # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent the battery size and limit will be extracted from Intelligent directly
   # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
   # One entry per car if you have multiple cars
-  car_charging_battery_size: 
-    - 75
-  car_charging_limit: 
-    - 're:number.tsunami_charge_limit'
-  car_charging_soc: 
-    - 're:sensor.tsunami_battery'
+  # car_charging_battery_size: 
+  #   - 75
+  # car_charging_limit: 
+  #   - 're:number.tsunami_charge_limit'
+  # car_charging_soc: 
+  #   - 're:sensor.tsunami_battery'
   
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
   #octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
-  octopus_intelligent_slot: 're:binary_sensor.octopus_energy_intelligent_dispatching'
-  octopus_ready_time: 're:time.octopus_energy_intelligent_ready_time'
-  octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
+  # octopus_intelligent_slot: 're:binary_sensor.octopus_energy_intelligent_dispatching'
+  # octopus_ready_time: 're:time.octopus_energy_intelligent_ready_time'
+  # octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
@@ -203,16 +204,16 @@ pred_bat:
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with 0
-  rates_import:
-    -  start: "23:30:00"
-       end: "05:30:00"
-       rate: 7.5
-    -  start: "05:30:00"
-       end: "23:30:00"
-       rate: 30.0
+  # rates_import:
+  #   -  start: "23:30:00"
+  #      end: "05:30:00"
+  #      rate: 7.5
+  #   -  start: "05:30:00"
+  #      end: "23:30:00"
+  #      rate: 30.0
        
-  rates_export:
-    -  rate: 15.0
+  # rates_export:
+  #   -  rate: 15.0
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -244,8 +245,7 @@ pred_bat:
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous: 
     - 7
-    - 14
-    - 21
+
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
