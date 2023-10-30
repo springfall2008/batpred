@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.10.3'
+THIS_VERSION = 'v7.10.7'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -223,7 +223,12 @@ class Inverter():
             else:
                 self.battery_rate_max_raw = self.base.get_arg('battery_rate_max', index=self.id, default=2600.0)
             ivtime = self.base.get_arg('inverter_time', index=self.id, default=None)
-        
+
+        # Battery can not be zero size
+        if self.soc_max <= 0:
+            self.base.log("ERROR: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
+            raise ValueError
+
         # Battery rate max charge, discharge
         self.battery_rate_max_charge = min(self.base.get_arg('inverter_limit_charge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_discharge = min(self.base.get_arg('inverter_limit_discharge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
@@ -2658,26 +2663,62 @@ class PredBat(hass.Hass):
 
         if prev:
             rates = prev.copy()
-            self.log("Override {} rate info {}".format(rtype, info))
         else:
             # Set to zero
-            self.log("Adding {} rate info {}".format(rtype, info))
             for minute in range(0, 24*60):
                 rates[minute] = 0
 
         max_minute = max(rates) + 1
         midnight = datetime.strptime('00:00:00', "%H:%M:%S")
         for this_rate in info:
-            start = datetime.strptime(this_rate.get('start', "00:00:00"), "%H:%M:%S")
-            end = datetime.strptime(this_rate.get('end', "00:00:00"), "%H:%M:%S")
+            start_str = this_rate.get('start', "00:00:00")
+            start_str = self.resolve_arg('start', start_str, "00:00:00")
+            end_str = this_rate.get('end', "00:00:00")
+            end_str = self.resolve_arg('end', end_str, "00:00:00")
+
+            if start_str.count(':') < 2:
+                start_str += ":00"
+            if end_str.count(':') < 2:
+                end_str += ":00"
+
+            try:
+                start = datetime.strptime(start_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad start time {} provided in energy rates".format(start_str))
+                self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
+                continue
+
+            try:
+                end = datetime.strptime(end_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad end time {} provided in energy rates".format(end_str))
+                self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
+                continue
+
             date = None
             if 'date' in this_rate:
-                date = datetime.strptime(this_rate['date'], "%Y-%m-%d")
-            rate = this_rate.get('rate', 0)
+                date_str = self.resolve_arg('date', this_rate['date'])
+                try:
+                    date = datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError:
+                    self.log("WARN: Bad date {} provided in energy rates".format(this_rate['date']))
+                    self.record_status("Bad date {} provided in energy rates".format(this_rate['date']), had_errors=True)
+                    continue
+    
+            rate = this_rate.get('rate', 0.0)
+            rate = self.resolve_arg('rate', rate, 0.0)
+            try:
+                rate = float(rate)
+            except ValueError:
+                self.log("WARN: Bad rate {} provided in energy rates".format(rate))
+                self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
+                continue
 
             # Time in minutes
             start_minutes = max(self.minutes_to_time(start, midnight), 0)
             end_minutes   = min(self.minutes_to_time(end, midnight), 24*60-1)
+
+            self.log("Adding rate {} => {} to {} @ {} date {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date))
 
             # Make end > start
             if end_minutes <= start_minutes:
@@ -3228,13 +3269,13 @@ class PredBat(hass.Hass):
         html = "<table>"
         html += '<tr>'
         html += '<td><b>Time</b></td>'
-        html += '<td><b>Import</b></td>'
-        html += '<td><b>Export</b></td>'
+        html += '<td><b>Import p</b></td>'
+        html += '<td><b>Export p</b></td>'
         html += '<td><b>State</b></td>'
-        html += '<td><b>Limit</b></td>'
-        html += '<td><b>PV</b></td>'
-        html += '<td><b>Load</b></td>'
-        html += '<td><b>SOC</b></td>'
+        html += '<td><b>Limit %</b></td>'
+        html += '<td><b>PV kWh</b></td>'
+        html += '<td><b>Load kWh</b></td>'
+        html += '<td><b>SOC %</b></td>'
         html += '</tr>'
 
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -3268,6 +3309,15 @@ class PredBat(hass.Hass):
             load_forecast = self.dp2(load_forecast)
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_change = self.predict_soc_best.get(minute_relative + 25, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
+
+            soc_sym = ''
+            if abs(soc_change) < 0.05:
+                soc_sym = '&rarr;'
+            elif soc_change >= 0:
+                soc_sym = '&nearr;'
+            else:
+                soc_sym = '&searr;'
             
             state = ''
             state_color = '#FFFFFF'
@@ -3276,6 +3326,7 @@ class PredBat(hass.Hass):
             rate_color_import = '#FFFFFF'
             rate_color_export = '#FFFFFF'
             soc_color = '#00FF00'
+            pv_symbol = ''
 
             if soc_percent < 20.0:
                 soc_color = '#F16F49'
@@ -3284,8 +3335,10 @@ class PredBat(hass.Hass):
 
             if pv_forecast >= 0.2:
                 pv_color = '#FFAAAA'
+                pv_symbol = '&#9728;'
             elif pv_forecast >= 0.1:
                 pv_color = '#FFFF00'
+                pv_symbol = '&#9728;'
 
             if load_forecast >= 0.5:
                 load_color = '#F16F49'
@@ -3305,8 +3358,8 @@ class PredBat(hass.Hass):
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
                 if limit > self.reserve:
-                    state = 'Charge'
-                    show_limit = str(self.charge_limit_percent_best[charge_window_n]) + "%"
+                    state = 'Charge &Uarr;'
+                    show_limit = str(self.charge_limit_percent_best[charge_window_n])
                     state_color = '#00FF00'
 
             if discharge_window_n >= 0:
@@ -3314,40 +3367,40 @@ class PredBat(hass.Hass):
                 if limit == 99:
                     if state:
                         state += "/"
-                    state += 'Freeze'
+                    state += 'Freeze &dharr;'
                     state_color = '#AAAAAA'
                 elif limit < 99:
                     if state:
                         state += "/"
-                    state += 'Discharge'
-                    show_limit = str(limit) + "%"
+                    state += 'Discharge &Darr;'
+                    show_limit = str(limit)
                     state_color = '#FFFF00'
 
             # Import and export rates -> to string
             if self.rate_import_replicated.get(minute, False):
                 rate_str_import = '<i>' + str(rate_value_import) + ' ?</i>'
             else:
-                rate_str_import = str(rate_value_import) + ' p'
+                rate_str_import = str(rate_value_import)
             if charge_window_n >= 0:
                 rate_str_import = '<b>' + rate_str_import + '</b>'
 
             if self.rate_export_replicated.get(minute, False):
                 rate_str_export = '<i>' + str(rate_value_export) + ' ?</i>'
             else:
-                rate_str_export = str(rate_value_export) + ' p'
+                rate_str_export = str(rate_value_export)
             if discharge_window_n >= 0:
                 rate_str_export = '<b>' + rate_str_export + '</b>'
 
             # Table row
-            html += '<tr>'
-            html += '<td> ' + rate_start.strftime("%a %H:%M") + '</td>'
+            html += '<tr style="color:black">'
+            html += '<td bgcolor=#FFFFFF>' + rate_start.strftime("%a %H:%M") + '</td>'
             html += '<td bgcolor=' + rate_color_import + '>' + str(rate_str_import) + ' </td>'
             html += '<td bgcolor=' + rate_color_export + '>' + str(rate_str_export) + ' </td>'
             html += '<td bgcolor=' + state_color + '>' + state + '</td>'
-            html += '<td> ' + show_limit + '</td>'
-            html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + ' kW</td>'
-            html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + ' kW</td>'
-            html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + ' %</td>'
+            html += '<td bgcolor=#FFFFFF> ' + show_limit + '</td>'
+            html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + pv_symbol + '</td>'
+            html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + '</td>'
+            html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + soc_sym + '</td>'
             html += '</tr>'
         html += "</table>"
         self.set_state(self.prefix + ".plan_html", state='', attributes = {'html' : html, 'friendly_name' : 'Plan in HTML', 'icon': 'mdi:web-box'})
@@ -3565,7 +3618,7 @@ class PredBat(hass.Hass):
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
-        self.soc_max = 0
+        self.soc_max = 10.0
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.metric_min_improvement = 0.0
