@@ -1,3 +1,4 @@
 apps/predbat/config/apps.yaml
 solaredge.yaml
 
+apps/predbat/batpred.code-workspace
