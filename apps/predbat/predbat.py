@@ -39,6 +39,12 @@ for minute in range(0, 24*60, 5):
     timestr = timeobj.strftime("%H:%M:%S")
     OPTIONS_TIME.append(timestr)
 
+INVERTER_TYPES = {
+    "GE": "GivEnergy",
+    "GS": "Ginlong Solis",
+    "SE": "SolarEdge",
+}
+
 CONFIG_ITEMS = [
     {'name' : 'version',                       'friendly_name' : 'Predbat Core Update',            'type' : 'update', 'title' : 'Predbat', 'installed_version' : THIS_VERSION, 'release_url' : 'https://github.com/springfall2008/batpred/releases/tag/' + THIS_VERSION, 'entity_picture' : 'https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png'},
     {'name' : 'pv_metric10_weight',            'friendly_name' : 'Metric 10 Weight',               'type' : 'input_number', 'min' : 0,   'max' : 1.0,  'step' : 0.01, 'unit' : 'fraction', 'icon' : 'mdi:percent'},
@@ -346,12 +352,30 @@ class Inverter():
                 charge_start_time = datetime.strptime(self.base.sim_charge_start_time, "%H:%M:%S")
                 charge_end_time = datetime.strptime(self.base.sim_charge_end_time, "%H:%M:%S")
             else:
-                if self.rest_data:
-                    charge_start_time = datetime.strptime(self.rest_data['Timeslots']['Charge_start_time_slot_1'], "%H:%M:%S")
-                    charge_end_time = datetime.strptime(self.rest_data['Timeslots']['Charge_end_time_slot_1'], "%H:%M:%S")
-                else:
-                    charge_start_time = datetime.strptime(self.base.get_arg('charge_start_time', index=self.id), "%H:%M:%S")
-                    charge_end_time = datetime.strptime(self.base.get_arg('charge_end_time', index=self.id), "%H:%M:%S")
+                if self.inverter_type == "GE":
+                    if self.rest_data:
+                        charge_start_time = datetime.strptime(
+                            self.rest_data["Timeslots"]["Charge_start_time_slot_1"], "%H:%M:%S"
+                        )
+                        charge_end_time = datetime.strptime(
+                            self.rest_data["Timeslots"]["Charge_end_time_slot_1"], "%H:%M:%S"
+                        )
+                    else:
+                        charge_start_time = datetime.strptime(
+                            self.base.get_arg("charge_start_time", index=self.id), "%H:%M:%S"
+                        )
+                        charge_end_time = datetime.strptime(
+                            self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S"
+                        )
+                elif self.inverter_type == "GS":
+                    charge_start_time = datetime.strptime(
+                        f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}',
+                        "%H:%M",
+                    )
+                    eharge_end_time = datetime.strptime(
+                        f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}',
+                        "%H:%M",
+                    )
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -417,12 +441,27 @@ class Inverter():
         # Construct discharge window from GivTCP settings
         self.discharge_window = []
 
-        if self.rest_data:
-            discharge_start = datetime.strptime(self.rest_data['Timeslots']['Discharge_start_time_slot_1'], "%H:%M:%S")
-            discharge_end = datetime.strptime(self.rest_data['Timeslots']['Discharge_end_time_slot_1'], "%H:%M:%S")
-        else:
-            discharge_start = datetime.strptime(self.base.get_arg('discharge_start_time', index=self.id), "%H:%M:%S")
-            discharge_end = datetime.strptime(self.base.get_arg('discharge_end_time', index=self.id), "%H:%M:%S")
+        if self.inverter_type == "GE":
+            if self.rest_data:
+                discharge_start = datetime.strptime(
+                    self.rest_data["Timeslots"]["Discharge_start_time_slot_1"], "%H:%M:%S"
+                )
+                discharge_end = datetime.strptime(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"], "%H:%M:%S")
+            else:
+                discharge_start = datetime.strptime(
+                    self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S"
+                )
+                discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
+
+        elif self.inverter_type == "GS":
+            discharge_start = datetime.strptime(
+                f'{int(self.base.get_arg("discharge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_start_minute", index=self.id)):02d}',
+                "%H:%M",
+            )
+            discharge_end = datetime.strptime(
+                f'{int(self.base.get_arg("discharge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_end_minute", index=self.id)):02d}',
+                "%H:%M",
+            )
 
         # Reverse clock skew
         discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -703,12 +742,24 @@ class Inverter():
             old_start = self.base.sim_discharge_start
             old_end = self.base.sim_discharge_end
         else:
-            if self.rest_data:
-                old_start = self.rest_data['Timeslots']['Discharge_start_time_slot_1']
-                old_end = self.rest_data['Timeslots']['Discharge_end_time_slot_1']
-            else:
-                old_start = self.base.get_arg('discharge_start_time', index=self.id)
-                old_end = self.base.get_arg('discharge_end_time', index=self.id)
+            if self.inverter_type == "GE":
+                if self.rest_data:
+                    old_start = self.rest_data["Timeslots"]["Discharge_start_time_slot_1"]
+                    old_end = self.rest_data["Timeslots"]["Discharge_end_time_slot_1"]
+                else:
+                    old_start = self.base.get_arg("discharge_start_time", index=self.id)
+                    old_end = self.base.get_arg("discharge_end_time", index=self.id)
+
+            elif self.inverter_type == "GS":
+                old_start = datetime.strptime(
+                    f'{int(self.base.get_arg("discharge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_start_minute", index=self.id)):02d}',
+                    "%H:%M",
+                )
+                old_end = datetime.strptime(
+                    f'{int(self.base.get_arg("discharge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_end_minute", index=self.id)):02d}',
+                    "%H:%M",
+                )
+
 
         # Start time to correct format
         if new_start_time:
@@ -737,10 +788,16 @@ class Inverter():
             if SIMULATE:
                 self.base.sim_discharge_start = new_start
             else:
-                if not self.rest_api:
-                    changed_start_end = True
-                    entity_discharge_start_time = self.base.get_entity(self.base.get_arg('discharge_start_time', indirect=False, index=self.id))
-                    self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+                if self.inverter_type == "GE":
+                    if not self.rest_api:
+                        changed_start_end = True
+                        entity_discharge_start_time = self.base.get_entity(
+                            self.base.get_arg("discharge_start_time", indirect=False, index=self.id)
+                        )
+                        self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+
+                elif self.inverter_type == "GS":
+                    self.base.log("*** Write Start to Solis Discharge Registers ***")
 
         # Change end time
         if new_end and new_end != old_end:
@@ -748,11 +805,17 @@ class Inverter():
             if SIMULATE:
                 self.base.sim_discharge_end = new_end
             else:
-                if not self.rest_api:
-                    changed_start_end = True
-                    entity_discharge_end_time = self.base.get_entity(self.base.get_arg('discharge_end_time', indirect=False, index=self.id))
-                    self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
-        
+                if self.inverter_type == "GE":
+                    if not self.rest_api:
+                        changed_start_end = True
+                        entity_discharge_end_time = self.base.get_entity(
+                            self.base.get_arg("discharge_end_time", indirect=False, index=self.id)
+                        )
+                        self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
+
+                elif self.inverter_type == "GS":
+                    self.base.log("*** Write End to Solis Discharge Registers ***")
+
         # REST version of writing slot
         if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
             changed_start_end = True
@@ -813,14 +876,24 @@ class Inverter():
             old_end = self.base.sim_charge_end_time
             old_charge_schedule_enable = self.base.sim_charge_schedule_enable
         else:
-            if self.rest_data:
-                old_start = self.rest_data['Timeslots']['Charge_start_time_slot_1']
-                old_end = self.rest_data['Timeslots']['Charge_end_time_slot_1']
-                old_charge_schedule_enable = self.rest_data['Control']['Enable_Charge_Schedule']
-            else:
-                old_start = self.base.get_arg('charge_start_time', index=self.id)
-                old_end = self.base.get_arg('charge_end_time', index=self.id)
-                old_charge_schedule_enable = self.base.get_arg('scheduled_charge_enable', 'on', index=self.id)
+            if self.inverter_type == "GE":
+                if self.rest_data:
+                    old_start = self.rest_data["Timeslots"]["Charge_start_time_slot_1"]
+                    old_end = self.rest_data["Timeslots"]["Charge_end_time_slot_1"]
+                    old_charge_schedule_enable = self.rest_data["Control"]["Enable_Charge_Schedule"]
+                else:
+                    old_start = self.base.get_arg("charge_start_time", index=self.id)
+                    old_end = self.base.get_arg("charge_end_time", index=self.id)
+                    old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+            elif self.inverter_type == "GS":
+                old_start = datetime.strptime(
+                    f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}',
+                    "%H:%M",
+                )
+                old_end = datetime.strptime(
+                    f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}',
+                    "%H:%M",
+                )
 
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -855,9 +928,15 @@ class Inverter():
                 self.base.sim_charge_start_time = new_start
                 self.base.log("Simulate sim_charge_start_time now {}".format(new_start))
             else:
-                if not self.rest_api:
-                    entity_start = self.base.get_entity(self.base.get_arg('charge_start_time', indirect=False, index=self.id))
-                    self.write_and_poll_option("charge_start_time", entity_start, new_start)
+                if self.inverter_type == "GE":
+                    if not self.rest_api:
+                        entity_start = self.base.get_entity(
+                            self.base.get_arg("charge_start_time", indirect=False, index=self.id)
+                        )
+                        self.write_and_poll_option("charge_start_time", entity_start, new_start)
+
+                elif self.inverter_type == "GS":
+                    self.base.log("*** Write Start to Solis Charge Registers ***")
 
         # Program end slot
         if new_end != old_end:
@@ -865,13 +944,22 @@ class Inverter():
                 self.base.sim_charge_end_time = new_end
                 self.base.log("Simulate sim_charge_end_time now {}".format(new_end))
             else:
-                if not self.rest_api:
-                    entity_end = self.base.get_entity(self.base.get_arg('charge_end_time', indirect=False, index=self.id))
-                    self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                if self.inverter_type == "GE":
+                    if not self.rest_api:
+                        entity_end = self.base.get_entity(
+                            self.base.get_arg("charge_end_time", indirect=False, index=self.id)
+                        )
+                        self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                elif self.inverter_type == "GS":
+                    self.base.log("*** Write End to Solis Charge Registers ***")
 
         if new_start != old_start or new_end != old_end:
-            if self.rest_api and not SIMULATE:
-                self.rest_setChargeSlot1(new_start, new_end)
+            if self.inverter_type == "GE":
+                if self.rest_api and not SIMULATE:
+                    self.rest_setChargeSlot1(new_start, new_end)
+            elif self.inverter_type == "GS":
+                self.base.log("*** Write Solis Charge Current Registers ***")
+
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.record_status("Inverter {} Charge window change to: {} - {}".format(self.id, new_start, new_end))
@@ -879,12 +967,16 @@ class Inverter():
 
         if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable' or have_disabled:
             if not SIMULATE:
-                # Enable scheduled charge if not turned on
-                if self.rest_api:
-                    self.rest_enableChargeSchedule(True)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
-                    self.write_and_poll_switch('scheduled_charge_enable', entity, True)
+                if self.inverter_type == "GE":
+                    # Enable scheduled charge if not turned on
+                    if self.rest_api:
+                        self.rest_enableChargeSchedule(True)
+                    else:
+                        entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
+                        self.write_and_poll_switch('scheduled_charge_enable', entity, True)
+
+                elif self.inverter_type == "GS":
+                    self.base.log("*** Update Solis Switch Code ***")                
 
                 # Only notify if it's a real change and not a temporary one
                 if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable' and self.base.set_soc_notify:
@@ -5712,6 +5804,24 @@ class PredBat(hass.Hass):
         self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
         self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
 
+        if self.inverter_type == "GS":
+            self.log("WARN: Inverter balancing disabled for Ginlong Solis inverters")
+            self.balance_inverters_enable = False
+            self.balance_inverters_charge = False
+            self.balance_inverters_discharge = False
+            self.balance_inverters_crosscharge = False
+            self.solis_charge_current_register = self.get_arg("solis_charge_current_register", 43141)
+            self.solis_dicharge_current_register = self.get_arg("solis_dicharge_current_register", 43142)
+            self.solis_charge_start_hour_register = self.get_arg("solis_charge_start_hour_register", 43143)
+            self.solis_charge_start_minute_register = self.get_arg("solis_charge_start_minute_register", 43144)
+            self.solis_charge_end_hour_register = self.get_arg("solis_charge_end_hour_register", 43145)
+            self.solis_charge_end_minute_register = self.get_arg("solis_charge_end_minute_register", 43146)
+            self.solis_discharge_start_hour_register = self.get_arg("solis_discharge_start_hour_register", 43147)
+            self.solis_discharge_start_minute_register = self.get_arg("solis_discharge_start_minute_register", 43148)
+            self.solis_discharge_end_hour_register = self.get_arg("solis_discharge_end_hour_register", 43149)
+            self.solis_discharge_end_minute_register = self.get_arg("solis_discharge_end_minute_register", 43150)
+
+
         if self.set_read_only:
             self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
 
@@ -6067,6 +6177,9 @@ class PredBat(hass.Hass):
         """
         global SIMULATE
         self.log("Predbat: Startup")
+        self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
+        self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
+
         try:
             self.reset()
             self.auto_config()
