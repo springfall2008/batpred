@@ -541,9 +541,18 @@ class Inverter():
             else:
                 if self.rest_api:
                     self.rest_setChargeRate(new_rate)
-                else:
+                elif 'charge_rate' in self.base.args:                    
                     entity = self.base.get_entity(self.base.get_arg('charge_rate', indirect=False, index=self.id))
                     self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
+                elif 'charge_current' in self.base.args:                    
+                    if 'battery_voltage' in self.base.args:     
+                        voltage = self.base.get_entity(self.base.get_arg('battery_volgae', indirect=True, index=self.id))               
+                    else:
+                        voltage = 50
+                    entity = self.base.get_entity(self.base.get_arg('charge_current', indirect=False, index=self.id))
+                    new_current = new_rate / voltage
+                    self.write_and_poll_value('charge_current', entity, new_current, fuzzy=100)
+
                 if notify and self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
             if notify:
@@ -570,9 +579,17 @@ class Inverter():
             else:
                 if self.rest_api:
                     self.rest_setDischargeRate(new_rate)
-                else:
+                elif 'discharge_rate' in self.base.args:                    
                     entity = self.base.get_entity(self.base.get_arg('discharge_rate', indirect=False, index=self.id))
                     self.write_and_poll_value('discharge_rate', entity, new_rate, fuzzy=100)
+                elif 'discharge_current' in self.base.args:                    
+                    if 'battery_voltage' in self.base.args:     
+                        voltage = self.base.get_entity(self.base.get_arg('battery_volgae', indirect=True, index=self.id))               
+                    else:
+                        voltage = 50
+                    entity = self.base.get_entity(self.base.get_arg('discharge_current', indirect=False, index=self.id))
+                    new_current = new_rate / voltage
+                    self.write_and_poll_value('discharge_current', entity, new_current, fuzzy=100)                    
                 if notify and self.base.set_discharge_notify:
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
             if notify:
@@ -734,7 +751,7 @@ class Inverter():
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-            new_start = new_start_time.strftime("%H:%M:%S")
+            new_start = new_start_time.strftime("%H:%M:%S")[:5]
         else:
             new_start = None
 
@@ -764,10 +781,12 @@ class Inverter():
                     changed_start_end = True
                     entity_discharge_start_time = self.base.get_entity(self.base.get_arg("discharge_start_time", indirect=False, index=self.id))
                     self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
-                elif 'discharge_start_hour' in self.base.args:
+                elif ('discharge_start_hour' in self.base.args) and ('discharge_start_minute' in self.base.args):
                     changed_start_end = True
-                    entity_discharge_start_hour = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                    self.write_and_poll_option("discharge_start_hour", entity_discharge_start_hour, new_start[:5])
+                    entity_start_hour = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
+                    self.write_and_poll_value("discharge_start_hour", entity_start_hour, new_start[:2])
+                    entity_start_minute = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
+                    self.write_and_poll_value("discharge_start_minute", entity_start_minute, new_start[3:5])
                 else:
                     self.log("WARN: Inverter {} unable write discharge start time as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
@@ -783,10 +802,12 @@ class Inverter():
                     changed_start_end = True
                     entity_discharge_end_time = self.base.get_entity(self.base.get_arg("discharge_end_time", indirect=False, index=self.id))
                     self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
-                elif 'discharge_end_hour' in self.base.args:
+                elif ('discharge_end_hour' in self.base.args) and ('discharge_end_minute' in self.base.args):
                     changed_start_end = True
                     entity_discharge_end_hour = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
-                    self.write_and_poll_option("discharge_end_hour", entity_discharge_end_hour, new_end[:5])
+                    self.write_and_poll_value("discharge_end_hour", entity_discharge_end_hour, new_end[:2])
+                    entity_discharge_end_minute = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
+                    self.write_and_poll_value("discharge_end_minute", entity_discharge_end_minute, new_end[3:5])
                 else:
                     self.log("WARN: Inverter {} unable write discharge end time as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
@@ -902,9 +923,11 @@ class Inverter():
                 elif 'charge_start_time' in self.base.args:
                     entity_start = self.base.get_entity(self.base.get_arg("charge_start_time", indirect=False, index=self.id))
                     self.write_and_poll_option("charge_start_time", entity_start, new_start)
-                elif 'charge_start_hour' in self.base.args:
-                    entity_start = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
-                    self.write_and_poll_option("charge_start_hour", entity_start, new_start[:5])
+                elif ('charge_start_hour' in self.base.args) and ('charge_start_minute' in self.base.args):
+                    entity_start_hour = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
+                    self.write_and_poll_value("charge_start_hour", entity_start_hour, new_start[:2])
+                    entity_start_minute = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
+                    self.write_and_poll_value("charge_start_minute", entity_start_minute, new_start[3:5])
                 else:
                     self.log("WARN: Inverter {} unable write charge window start as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
 
@@ -919,9 +942,11 @@ class Inverter():
                 elif 'charge_end_time' in self.base.args:
                     entity_end = self.base.get_entity(self.base.get_arg("charge_end_time", indirect=False, index=self.id))
                     self.write_and_poll_option("charge_end_time", entity_end, new_end)
-                elif 'charge_end_hour' in self.base.args:
-                    entity_end = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                    self.write_and_poll_option("charge_end_hour", entity_end, new_end[:5])
+                elif ('charge_end_hour' in self.base.args) and ('charge_end_minute' in self.base.args):
+                    entity_end_hour = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
+                    self.write_and_poll_value("charge_end_hour", entity_end_hour, new_end[:2])
+                    entity_end_minute = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
+                    self.write_and_poll_value("charge_end_minute", entity_end_minute, new_end[3:5])
                 else:
                     self.log("WARN: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
@@ -929,8 +954,8 @@ class Inverter():
             if self.inverter_type == "GE":
                 if self.rest_api and not SIMULATE:
                     self.rest_setChargeSlot1(new_start, new_end)
-            elif self.inverter_type == "GS":
-                self.base.log("*** Write Solis Charge Current Registers ***")
+            # elif self.inverter_type == "GS":
+            #     self.base.log("*** Write Solis Charge Current Registers ***")
 
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
@@ -5773,23 +5798,6 @@ class PredBat(hass.Hass):
         self.balance_inverters_crosscharge = self.get_arg('balance_inverters_crosscharge', True)
         self.balance_inverters_threshold_charge = max(self.get_arg('balance_inverters_threshold_charge', 1.0), 1.0)
         self.balance_inverters_threshold_discharge = max(self.get_arg('balance_inverters_threshold_discharge', 1.0), 1.0)
-
-        if self.inverter_type == "GS":
-            self.log("WARN: Inverter balancing disabled for Ginlong Solis inverters")
-            self.balance_inverters_enable = False
-            self.balance_inverters_charge = False
-            self.balance_inverters_discharge = False
-            self.balance_inverters_crosscharge = False
-            self.solis_charge_current_register = self.get_arg("solis_charge_current_register", 43141)
-            self.solis_dicharge_current_register = self.get_arg("solis_dicharge_current_register", 43142)
-            self.solis_charge_start_hour_register = self.get_arg("solis_charge_start_hour_register", 43143)
-            self.solis_charge_start_minute_register = self.get_arg("solis_charge_start_minute_register", 43144)
-            self.solis_charge_end_hour_register = self.get_arg("solis_charge_end_hour_register", 43145)
-            self.solis_charge_end_minute_register = self.get_arg("solis_charge_end_minute_register", 43146)
-            self.solis_discharge_start_hour_register = self.get_arg("solis_discharge_start_hour_register", 43147)
-            self.solis_discharge_start_minute_register = self.get_arg("solis_discharge_start_minute_register", 43148)
-            self.solis_discharge_end_hour_register = self.get_arg("solis_discharge_end_hour_register", 43149)
-            self.solis_discharge_end_minute_register = self.get_arg("solis_discharge_end_minute_register", 43150)
 
 
         if self.set_read_only:
