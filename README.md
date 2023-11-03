@@ -466,7 +466,7 @@ For example:
 
 If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors
 
-**binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level)
+**binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level). This does include charge freeze slots where the discharge rate is set to zero without charging the battery.
 **binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include discharge freeze slots where the charge rate is set to zero to export excess solar only.
 
 ### Holiday mode
@@ -528,6 +528,7 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 0                 # Automatic high rate selection
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
+set_charge_freeze - True               # Allow Predbat to hold the current battery level rather than just charge
 calculate_max_windows - 96             # Set to 96 for best results, but if you have host performance issues you can reduce this to 48 or 32
 predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 ```
@@ -552,6 +553,7 @@ rate_low_threshold: 0.8                # Select rates 20 % below average only
 rate_high_threshold: 1.2               # Export rates 20 % above average only
 metric_battery_cycle - ?               # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
+set_charge_freeze - True               # Allow Predbat to hold the current battery level rather than just charge
 ```
 
 ### Half hourly variable rates (e.g. Octopus Agile)
@@ -570,6 +572,7 @@ rate_low_threshold: 0                  # Automatic rate selection (can also be t
 rate_high_threshold: 0                 # Automatic rate selection (can also be tuned manually to find the rates you want)
 calculate_max_windows - 32             # Normally 32 is enough, but you can try more or less to optimise runtime vs results
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
+set_charge_freeze - True               # Allow Predbat to hold the current battery level rather than just charge
 forecast_plan_hours - 48               # In apps.yml set this to 48 hours to consider a full cycle plan
 ```
 
@@ -782,7 +785,9 @@ If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned 
 
 **set_discharge_window** When enabled automatically discharge (forced export) for export during high rate periods.
 
-**set_discharge_freeze** When enabled if a discharge reaches the expected battery level for the discharge slot then charging of the battery will be frozen (charge rate 0) and all non-self consumed solar is exported. When this is disabled the inverter will return to ECO mode (default)
+**set_charge_freeze** When enabled Predbat can hold the current battery level by disabling discharge but not charge the battery, thus drawing the home from the grid. When disabled Predbat can only charge the battery to a target level. The default is enabled.
+
+**set_discharge_freeze** When enabled if a discharge reaches the expected battery level for the discharge slot then charging of the battery will be frozen (charge rate 0) and all non-self consumed solar is exported. When this is disabled the inverter will return to ECO mode. The default is enabled.
 
 **set_discharge_freeze_only** When enabled forced discharge is prevented, but discharge freeze can be used (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for solar exports but don't allow forced export (brown energy).
 
