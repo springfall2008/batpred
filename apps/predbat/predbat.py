@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11'
+THIS_VERSION = 'v7.11.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3974,6 +3974,8 @@ class PredBat(hass.Hass):
         prev_metric = 9999999
         best_soc_step = self.best_soc_step
         best_keep = 0
+        max_soc = self.soc_max
+        min_soc = 0
 
         # For single windows, if the size is 30 minutes or less then use a larger step
         if not all_n:
@@ -3988,22 +3990,47 @@ class PredBat(hass.Hass):
 
         # Assemble list of SOCs to try
         try_socs = []
+        loop_step = max(best_soc_step, 0.1)
         while loop_soc > self.reserve:
             try_soc = max(self.best_soc_min, loop_soc)
             try_soc = max(try_soc, self.reserve)
             try_soc = self.dp2(min(try_soc, self.soc_max))
             if loop_soc not in try_socs:
                 try_socs.append(self.dp2(loop_soc))
-            loop_soc -= max(best_soc_step, 0.1)
+            loop_soc -= loop_step
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
         if 0.0 not in try_socs:
             try_socs.append(0.0)
 
         window_results = {}
+        first_window = True
         for try_soc in try_socs:
             was_debug = self.debug_enable
             self.debug_enable = False
+
+            if not first_window and not all_n:
+                # If the SOC is already saturated then those values greater than what was achieved but not 100% won't do anything
+                if (try_soc > (max_soc + loop_step)):
+                    if self.debug_enable:
+                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, min_soc, max_soc))
+                    continue
+                if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (min_soc - loop_step)):
+                    if self.debug_enable:
+                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, max_soc, min_soc))
+                    continue
+
+            # Get data for 'off' also
+            if first_window and not all_n:
+                try_charge_limit[window_n] = 0
+                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record = end_record)
+                window = charge_window[window_n]
+                predict_minute_start = max(int((window['start'] - self.minutes_now) / 5) * 5, 0)
+                predict_minute_end =  int((window['end'] - self.minutes_now) / 5) * 5
+                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                    start_soc = self.predict_soc[predict_minute_start]
+                    end_soc = self.predict_soc[predict_minute_end]
+                    min_soc = min(start_soc, end_soc)
 
             # Store try value into the window, either all or just this one
             if all_n:
@@ -4017,6 +4044,16 @@ class PredBat(hass.Hass):
 
             # Simulate with 10% PV 
             metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute10_step, end_record = end_record)
+
+            # Get data for fully on
+            if first_window and not all_n:
+                window = charge_window[window_n]
+                predict_minute_start = max(int((window['start'] - self.minutes_now) / 5) * 5, 0)
+                predict_minute_end =  int((window['end'] - self.minutes_now) / 5) * 5
+                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                    start_soc = self.predict_soc[predict_minute_start]
+                    end_soc = self.predict_soc[predict_minute_end]
+                    max_soc = max(start_soc, end_soc)
 
             # Store simulated mid value
             metric = metricmid
@@ -4067,6 +4104,7 @@ class PredBat(hass.Hass):
             
             prev_soc = try_soc
             prev_metric = metric
+            first_window = False
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -4451,7 +4489,7 @@ class PredBat(hass.Hass):
                 # Ignore disabled windows
                 pass
             elif window_length > 0:
-                predict_minute_start = int((window_start - minutes_now) / 5) * 5
+                predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
                 predict_minute_end = int((window_end - minutes_now) / 5) * 5
 
                 if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
@@ -4497,7 +4535,7 @@ class PredBat(hass.Hass):
                 # Ignore disabled windows
                 pass
             elif window_length > 0:
-                predict_minute_start = int((window_start - minutes_now) / 5) * 5
+                predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
                 predict_minute_end = int((window_end - minutes_now) / 5) * 5
                 if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
                     soc_start = predict_soc[predict_minute_start]
