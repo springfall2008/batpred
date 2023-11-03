@@ -3454,24 +3454,24 @@ class PredBat(hass.Hass):
                 limit = self.charge_limit_best[charge_window_n]
                 if limit > 0.0:
                     if limit == self.reserve:
-                        state = 'FreezeChrg&Uarr;'
+                        state = 'FreezeChrg&rarr;'
                         state_color = '#EEEEEE'
                     else:
-                        state = 'Charge&Uarr;'
+                        state = 'Charge&nearr;'
                         state_color = '#00FF00'
-                    show_limit = str(self.charge_limit_percent_best[charge_window_n])
+                    show_limit = str(int(self.charge_limit_percent_best[charge_window_n]))
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
                 if limit == 99:
                     if state:
                         state += "/"
-                    state += 'FreezeDis&dharr;'
+                    state += 'FreezeDis&rarr;'
                     state_color = '#AAAAAA'
                 elif limit < 99:
                     if state:
                         state += "/"
-                    state += 'Discharge&Darr;'
+                    state += 'Discharge&searr;'
                     show_limit = str(limit)
                     state_color = '#FFFF00'
 
@@ -4378,12 +4378,18 @@ class PredBat(hass.Hass):
         for window_n in range(0, max_slots):
             # Only keep slots > than reserve, or keep the last one so we don't have zero slots
             # Also keep a slot if we are already inside it and charging is enabled
-            window = charge_window_best[window_n]
+            window = charge_window_best[window_n].copy()
             start = window['start']
             end = window['end']
-            if (charge_limit_best[window_n] > self.dp2(reserve)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]['end'] == end):
-                new_limit_best.append(charge_limit_best[window_n])
-                new_window_best.append(charge_window_best[window_n])
+            limit = charge_limit_best[window_n]
+
+            if new_window_best and (start == new_window_best[-1]['end']) and (limit == new_limit_best[-1]):
+                new_window_best[-1]['end'] = end
+                if self.debug_enable:
+                    self.log("Combine charge slot {} with previous - target soc {} kWh slot {}".format(window_n, new_limit_best[-1], new_window_best[-1]))
+            elif (limit > 0) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]['end'] == end):
+                new_limit_best.append(limit)
+                new_window_best.append(window)
         return new_limit_best, new_window_best 
 
     def find_spare_energy(self, predict_soc, predict_export, step, first_charge):
@@ -4457,7 +4463,7 @@ class PredBat(hass.Hass):
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
-                    if soc_min > charge_limit_best[window_n]:
+                    if (soc_min > charge_limit_best[window_n]) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
                         self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
                     elif soc_max < charge_limit_best[window_n]:
@@ -5804,7 +5810,7 @@ class PredBat(hass.Hass):
         self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
         self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
         self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
-        self.set_charge_freeze = self.get_arg('set_charge_freeze', False)
+        self.set_charge_freeze = self.get_arg('set_charge_freeze', default_enable_mode)
         self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
         self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
         self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
