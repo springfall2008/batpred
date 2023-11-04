@@ -77,6 +77,7 @@ entities:
   - entity: input_number.predbat_set_window_minutes
   - entity: input_number.predbat_holiday_days_left
   - entity: input_number.predbat_metric_inday_adjust_damping
+  - entity: input_number.predbat_metric_octopus_saving_rate
   - entity: binary_sensor.predbat_car_charging_slot
   - entity: binary_sensor.predbat_export_trigger_large
   - entity: binary_sensor.predbat_export_trigger_small
