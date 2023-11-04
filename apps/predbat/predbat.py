@@ -5810,7 +5810,7 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg('debug_enable', False)
-        self.calculate_max_windows = self.get_arg('calculate_max_windows', 40)
+        self.calculate_max_windows = self.get_arg('calculate_max_windows', 48)
         self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 10), 5)
         self.num_cars = self.get_arg('num_cars', 1)
         self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
@@ -5857,8 +5857,8 @@ class PredBat(hass.Hass):
         self.load_scaling = self.get_arg('load_scaling', 1.0)
         self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
-        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
-        self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0)
+        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0)
         self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
         self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
