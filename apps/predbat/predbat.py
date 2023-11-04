@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.2'
+THIS_VERSION = 'v7.11.3'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4519,7 +4519,7 @@ class PredBat(hass.Hass):
         """
         Clip charge slots that are useless as they don't charge at all
         """
-        for window_n in range(0, record_charge_windows):
+        for window_n in range(0, min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
             limit_soc = self.soc_max * limit / 100.0
@@ -4565,7 +4565,7 @@ class PredBat(hass.Hass):
         """
         Clip discharge slots to the right length
         """
-        for window_n in range(0, record_discharge_windows):
+        for window_n in range(0, min(record_discharge_windows, len(discharge_window_best))):
             window = discharge_window_best[window_n]
             limit = discharge_limits_best[window_n]
             limit_soc = self.soc_max * limit / 100.0
