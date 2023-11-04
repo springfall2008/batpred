@@ -5631,15 +5631,16 @@ class PredBat(hass.Hass):
         if 'octopus_saving_session' in self.args:
             entity_id = self.get_arg('octopus_saving_session', indirect=False)
             if entity_id:
-                saving_rate = self.get_arg('metric_octopus_saving_rate', 100)
-                state = self.get_arg('octopus_saving_session', False)
-                start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
-                end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
-                self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
-                octopus_saving_slot['start'] = start
-                octopus_saving_slot['end'] = end
-                octopus_saving_slot['rate'] = saving_rate
-                octopus_saving_slot['state'] = state
+                saving_rate = self.get_arg('metric_octopus_saving_rate', 0)
+                if saving_rate > 0:
+                    state = self.get_arg('octopus_saving_session', False)
+                    start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
+                    end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
+                    self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+                    octopus_saving_slot['start'] = start
+                    octopus_saving_slot['end'] = end
+                    octopus_saving_slot['rate'] = saving_rate
+                    octopus_saving_slot['state'] = state
 
         # Standing charge
         self.metric_standing_charge = self.get_arg('metric_standing_charge', 0.0) * 100.0
