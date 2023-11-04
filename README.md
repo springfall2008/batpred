@@ -208,7 +208,7 @@ mode: single
 
 For Predbat to automatically manage saving sessions you will need to make sure that **octopus_saving_session** is set in apps.yaml to point to the saving session binary sensor supported by the Octopus Energy plugin (see template apps.yaml for the default name)
 
-When a saving session is active the energy rates for import and export will be overriden with the assumed rate set in Home Assistant with **input_number.predbat_metric_octopus_saving_rate**. You should set this to the saving rate published by Octopus for the session (currently there is no sensor for this rate).
+When a saving session is active the energy rates for import and export will be overriden with the assumed rate set in Home Assistant with **input_number.predbat_metric_octopus_saving_rate**, if this rate is 0 then the feature is disabled (default). You should set this to the saving rate published by Octopus for the session (currently there is no sensor for this rate).
 
 For best results ensure **switch.predbat_combine_charge_slots** is turned off and that you have enough windows (**input_number.predbat_calculate_max_windows**) available to allow Predbat to charge before the event if need be, e.g. a value of 48 would normally be suitable. Set **input_number.rate_low_threshold** and **input_number.rate_high_threshold** to 0 for automatic mode.
 
@@ -335,8 +335,9 @@ They are set to a regular expression and auto-discovered but you can comment out
   - **metric_octopus_import** - Import rates from the Octopus plugin
   - **metric_octopus_export** - Export rates from the Octopus plugin
   - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin installed point to the 'slot' sensor
-  - **octopus_intelligent_charge_rate** - When set to non-zero amount (e.g. 7.5) it's assumed the car charges during Intelligent Octopus slots using this or the data reported by Octopus
-  - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
+  - **octopus_saving_session** - Points to the sesnor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_saving_sessions)
+  - **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
+  - **input_number.predbat_metric_octopus_saving_rate** - Set the assuming saving rate for an Octopus saving session (in pence)
 
 Or you can override these by manually supplying an octopus pricing URL (expert feature)
   - **rates_import_octopus_url**
