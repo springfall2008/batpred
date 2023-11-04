@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.1'
+THIS_VERSION = 'v7.11.2'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -72,6 +72,7 @@ CONFIG_ITEMS = [
     {'name' : 'metric_future_rate_offset_import', 'friendly_name' : 'Metric Future Rate Offset Import','type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_future_rate_offset_export', 'friendly_name' : 'Metric Future Rate Offset Export','type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_inday_adjust_damping',   'friendly_name' : 'In-day adjustment damping factor', 'type' : 'input_number', 'min' : 0.5, 'max' : 2.0, 'step' : 0.05,  'unit' : 'fraction', 'icon' : 'mdi:call-split'},
+    {'name' : 'metric_octopus_saving_rate',    'friendly_name' : 'Octopus Saving session assumed rate', 'type' : 'input_number', 'min' : 1, 'max' : 500, 'step' : 5,  'unit' : 'fraction', 'icon' : 'mdi:currency-usd'},
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
@@ -1533,8 +1534,10 @@ class PredBat(hass.Hass):
     def str2time(self, str):
         if '.' in str:
             tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
-        else:
+        elif 'T' in str:
             tdata = datetime.strptime(str, TIME_FORMAT)
+        else:
+            tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
         return tdata
 
     def load_car_energy(self, now_utc):
@@ -2939,7 +2942,44 @@ class PredBat(hass.Hass):
                 octopus_slots.append(slot)
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
-                
+    
+    def load_saving_slot(self, octopus_saving_slot, export=False):
+        """
+        Load octopus saving session slot
+        """
+        start_minutes = 0
+        end_minutes = 0
+
+        if octopus_saving_slot:
+            start = octopus_saving_slot['start']
+            end = octopus_saving_slot['end']
+            rate = octopus_saving_slot['rate']
+            state = octopus_saving_slot['state']
+
+            if start and end:
+                try:
+                    start = self.str2time(start)
+                    end = self.str2time(end)
+                except ValueError:
+                    start = None
+                    end = None
+                    self.log("WARN: Unable to decode Octopus saving session start/end time")
+            if state and (not start or not end):
+                self.log("Currently in saving session, assume current 30 minute slot")
+                start_minutes = int(self.minutes_now / 30) * 30
+                end_minutes = start_minutes + 30
+            elif start and end:
+                start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
+                end_minutes   = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+
+            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
+                self.log("Setting Octopus saving session in range {} - {} export {} assumed rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
+                for minute in range(start_minutes, end_minutes):
+                    if export:
+                        self.rate_export[minute] = rate            
+                    else:
+                        self.rate_import[minute] = rate
+
     def load_octopus_slots(self, octopus_slots):
         """
         Turn octopus slots into charging plan
@@ -5586,6 +5626,21 @@ class PredBat(hass.Hass):
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg('rates_export', [], indirect=False), 'export')
 
+        # Octopus saving session
+        octopus_saving_slot = {}
+        if 'octopus_saving_session' in self.args:
+            entity_id = self.get_arg('octopus_saving_session', indirect=False)
+            if entity_id:
+                saving_rate = self.get_arg('metric_octopus_saving_rate', 100)
+                state = self.get_arg('octopus_saving_session', False)
+                start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
+                end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
+                self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+                octopus_saving_slot['start'] = start
+                octopus_saving_slot['end'] = end
+                octopus_saving_slot['rate'] = saving_rate
+                octopus_saving_slot['state'] = state
+
         # Standing charge
         self.metric_standing_charge = self.get_arg('metric_standing_charge', 0.0) * 100.0
         self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
@@ -5595,6 +5650,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
+            self.load_saving_slot(octopus_saving_slot, export=False)
             if 'rates_import_override' in self.args:
                 self.rate_import = self.basic_rates(self.get_arg('rates_import_override', [], indirect=False), 'import', self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
@@ -5604,7 +5660,11 @@ class PredBat(hass.Hass):
 
         # Replicate and scan export rates
         if self.rate_export:
+            self.rate_export = self.rate_scan_export(self.rate_export, print=False)
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
+            # For export tariff only load the saving session if enabled
+            if self.rate_export_max > 0:
+                self.load_saving_slot(octopus_saving_slot, export=True)
             if 'rates_export_override' in self.args:
                 self.rate_export = self.basic_rates(self.get_arg('rates_export_override', [], indirect=False), 'export', self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
@@ -5750,7 +5810,7 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg('debug_enable', False)
-        self.calculate_max_windows = self.get_arg('calculate_max_windows', 40)
+        self.calculate_max_windows = self.get_arg('calculate_max_windows', 48)
         self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 10), 5)
         self.num_cars = self.get_arg('num_cars', 1)
         self.inverter_type = self.get_arg('inverter_type', 'GE', indirect=False)
@@ -5797,8 +5857,8 @@ class PredBat(hass.Hass):
         self.load_scaling = self.get_arg('load_scaling', 1.0)
         self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
-        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.8)
-        self.rate_high_threshold = self.get_arg('rate_high_threshold', 1.0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0)
+        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0)
         self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
         self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
