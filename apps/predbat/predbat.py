@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.3'
+THIS_VERSION = 'v7.11.4'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4066,13 +4066,14 @@ class PredBat(hass.Hass):
             if first_window and not all_n:
                 try_charge_limit[window_n] = 0
                 metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record = end_record)
+                predict_soc_nom = self.predict_soc.copy()
+                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute10_step, end_record = end_record)
+
                 window = charge_window[window_n]
                 predict_minute_start = max(int((window['start'] - self.minutes_now) / 5) * 5, 0)
                 predict_minute_end =  int((window['end'] - self.minutes_now) / 5) * 5
                 if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    start_soc = self.predict_soc[predict_minute_start]
-                    end_soc = self.predict_soc[predict_minute_end]
-                    min_soc = min(start_soc, end_soc)
+                    min_soc = min(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end])
 
             # Store try value into the window, either all or just this one
             if all_n:
@@ -4083,19 +4084,19 @@ class PredBat(hass.Hass):
 
             # Simulate with medium PV
             metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record = end_record)
+            predict_soc_nom = self.predict_soc.copy()
 
             # Simulate with 10% PV 
             metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute10_step, end_record = end_record)
-
+            
             # Get data for fully on
             if first_window and not all_n:
                 window = charge_window[window_n]
                 predict_minute_start = max(int((window['start'] - self.minutes_now) / 5) * 5, 0)
                 predict_minute_end =  int((window['end'] - self.minutes_now) / 5) * 5
                 if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    start_soc = self.predict_soc[predict_minute_start]
-                    end_soc = self.predict_soc[predict_minute_end]
-                    max_soc = max(start_soc, end_soc)
+                    max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end])
+
 
             # Store simulated mid value
             metric = metricmid
