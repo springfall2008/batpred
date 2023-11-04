@@ -5869,7 +5869,7 @@ class PredBat(hass.Hass):
         # Metric config
         self.metric_min_improvement = self.get_arg('metric_min_improvement', 0.0)
         self.metric_min_improvement_discharge = self.get_arg('metric_min_improvement_discharge', 0.1)
-        self.metric_battery_cycle = self.get_arg('metric_battery_cycle', 0.0)
+        self.metric_battery_cycle = self.get_arg('metric_battery_cycle', 3.0)
         self.metric_future_rate_offset_import = self.get_arg('metric_future_rate_offset_import', 0.0)
         self.metric_future_rate_offset_export = self.get_arg('metric_future_rate_offset_export', 0.0)
         self.metric_inday_adjust_damping = self.get_arg('metric_inday_adjust_damping', 1.0)
