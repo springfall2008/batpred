@@ -2846,7 +2846,7 @@ class PredBat(hass.Hass):
             price_sorted = self.sort_window_by_price(low_rates)
             price_sorted.reverse()
         else:
-            price_sorted = range(0, len(low_rates))
+            price_sorted = [n for n in range(0, len(low_rates))]
 
         ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
         ready_minutes = ready_time.hour * 60 + ready_time.minute
