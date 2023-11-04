@@ -3991,17 +3991,19 @@ class PredBat(hass.Hass):
         # Assemble list of SOCs to try
         try_socs = []
         loop_step = max(best_soc_step, 0.1)
+        best_soc_min = self.best_soc_min
+        if best_soc_min > 0:
+            best_soc_min = max(self.reserve, best_soc_min)
         while loop_soc > self.reserve:
-            try_soc = max(self.best_soc_min, loop_soc)
-            try_soc = max(try_soc, self.reserve)
+            try_soc = max(best_soc_min, loop_soc)
             try_soc = self.dp2(min(try_soc, self.soc_max))
-            if loop_soc not in try_socs:
-                try_socs.append(self.dp2(loop_soc))
+            if try_soc not in try_socs:
+                try_socs.append(self.dp2(try_soc))
             loop_soc -= loop_step
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
-        if 0.0 not in try_socs:
-            try_socs.append(0.0)
+        if best_soc_min not in try_socs:
+            try_socs.append(best_soc_min)
 
         window_results = {}
         first_window = True
