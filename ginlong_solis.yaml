@@ -25,99 +25,78 @@ pred_bat:
     - sensor.solis_power_generation_today
   #
   # Controls/status - must by 1 per inverter
-  #
+  # 
   num_inverters: 1
  
-
-  battery_rate_max:
-    - 3000
-  charge_current: 
+# This needs an update to the Solax integration (PR#590 submitted)
+  battery_charge_current_limit:
+    - sensor.solis_battery_charge_current_limit  
+  timed_charge_current: 
     - number.solis_timed_charge_current
-  discharge_current: 
+  timed_discharge_current: 
     - number.solis_timed_discharge_current
   battery_voltage:
     - sensor.solis_battery_voltage
 
 
 
-  inverter_mode: 
-  - select.predbat_mode
-
-
-  scheduled_charge_enable: 
-   - on
-  scheduled_discharge_enable:
-   - off
-
-
-# Solis specific parameters (these are based on https://github.com/fboundy/ha_solis_modbus)
+# Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
 
   inverter_type: "GS"
 
+# This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
-  - sensor.solis_date_time_ro
-
+    - sensor.solis_rtc 
   battery_power: 
     - sensor.solis_battery_power
   pv_power: 
     - sensor.solis_pv_total_power
-  load_power: 
-    - sensor.solis_total_load_power  ******
+  house_load_power: 
+    - sensor.solis_house_load  
+  bypass_load_power: 
+    - sensor.solis_bypass_load
   soc_percent:
     - sensor.solis_battery_soc
   soc_max: 
     - 10
   reserve: 
-    - number.solis_battery_minimum_soc
-
-
+    - number.solis_backup_mode_soc
+  energy_storage_control_switch:
+    - sensor.solis_energy_storage_control_switch
+  charge_discharge_update_button:
+    - button.solis_update_charge_discharge_times
   charge_start_hour: 
-   - number.solis_timed_charge_start_hours
+    - number.solis_timed_charge_start_hours
   charge_start_minute: 
-   - number.solis_timed_charge_start_minutes
+    - number.solis_timed_charge_start_minutes
   charge_end_hour: 
-   - number.solis_timed_charge_end_hours
+    - number.solis_timed_charge_end_hours
   charge_end_minute: 
-   - number.solis_timed_charge_end_minutes
-  charge_limit: 
-   - number.solis_timed_charge_current_limit
+    - number.solis_timed_charge_end_minutes
   discharge_start_hour: 
-   - number.solis_timed_discharge_start_hours
+    - number.solis_timed_discharge_start_hours
   discharge_start_minute: 
-   - number.solis_timed_discharge_start_minutes
+    - number.solis_timed_discharge_start_minutes
   discharge_end_hour: 
-   - number.solis_timed_discharge_end_hours
+    - number.solis_timed_discharge_end_hours
   discharge_end_minute: 
-   - number.solis_timed_discharge_end_minutes
-  discharge_limit: 
-   - number.solis_timed_discharge_current_limit
-
-# The following are the Modbus registers on the Solis inverter that control timed charging
-# They should not need changing but are included for completeness. Defaults are loaded by predbat.
-
-  # solis_charge_current_register: 43141
-  # solis_dicharge_current_register: 43142
-  # solis_charge_start_hour_register:  43143
-  # solis_charge_start_minute_register: 43144
-  # solis_charge_end_hour_register: 43145
-  # solis_charge_end_minute_register: 43146
-  # solis_discharge_start_hour_register: 43147
-  # solis_discharge_start_minute_register: 43148
-  # solis_discharge_end_hour_register: 43149
-  # solis_discharge_end_minute_register: 43150
-
-# These are the modbus slave number and hub which also should not need updating in most cases
-  solis_modbus_slave: 1
-  solis_modbus_hub: solis
+    - number.solis_timed_discharge_end_minutes
 
 
-
+# There are no direct Solis equivalents for these for these are dummy helpers created for testing
+  charge_limit:
+    - input_number.solis_charge_limit   #
+  scheduled_discharge_enable:
+    - input_boolean.solis_discharge_enable
+  scheduled_charge_enable:
+    - input_boolean.solis_charge_enable
+  inverter_mode: 
+    - input_select.solis_inverter_mode    
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  #inverter_limit: 
-  # - 3600
-  # - 3600
+  inverter_limit: 3600
+ 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
@@ -135,8 +114,8 @@ pred_bat:
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
-  #inverter_battery_rate_min: 
-  #  - 200
+  inverter_battery_rate_min: 
+   - 100
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc pecentage.
