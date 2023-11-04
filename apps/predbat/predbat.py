@@ -5628,11 +5628,11 @@ class PredBat(hass.Hass):
 
         # Octopus saving session
         octopus_saving_slot = {}
-        if 'metric_octopus_saving_session' in self.args:
-            entity_id = self.get_arg('metric_octopus_saving_session', indirect=False)
+        if 'octopus_saving_session' in self.args:
+            entity_id = self.get_arg('octopus_saving_session', indirect=False)
             if entity_id:
                 saving_rate = self.get_arg('metric_octopus_saving_rate', 100)
-                state = self.get_arg('metric_octopus_saving_session', False)
+                state = self.get_arg('octopus_saving_session', False)
                 start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
                 end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
                 self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
