@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.4'
+THIS_VERSION = 'v7.11.5'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -5635,8 +5635,11 @@ class PredBat(hass.Hass):
                 saving_rate = self.get_arg('metric_octopus_saving_rate', 0)
                 if saving_rate > 0:
                     state = self.get_arg('octopus_saving_session', False)
-                    start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
-                    end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
+                    start = self.get_state(entity_id = entity_id, attribute='current_joined_event_start')
+                    end = self.get_state(entity_id = entity_id, attribute='current_joined_event_end')
+                    if not start or not end:
+                        start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
+                        end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
                     self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
                     octopus_saving_slot['start'] = start
                     octopus_saving_slot['end'] = end
