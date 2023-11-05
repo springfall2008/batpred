@@ -128,6 +128,34 @@ CONFIG_ITEMS = [
     {'name' : 'holiday_days_left',             'friendly_name' : 'Holiday days left',              'type' : 'input_number', 'min' : 0,   'max' : 28,    'step' : 1,    'unit' : 'days', 'icon' : 'mdi:clock-end'},
 ]
 
+INVERTER_DEF={ 
+    "GE": {
+        'has_rest_api': True,
+        'output_charge_control': "current",
+        'has_charge_time_enable': False,
+        'has_dicharge_time_enable': False,
+        'has_target_soc': False,
+        'has_reserve_SOC': True,
+        'time_entity_type': "select",
+        'time_format': "HH:MM:SS",
+        'soc_units': 'kWh'
+     },
+
+
+    "GS": {
+        'has_rest_api': False,
+        'output_charge_control': "current",
+        'has_charge_time_enable': False,
+        'has_dicharge_time_enable': False,
+        'has_target_soc': False,
+        'has_reserve_SOC': True,
+        'time_entity_type': "int",
+        'time_format': "H M",
+        'soc_units': '%'
+     },
+}
+
+
 class Inverter():
     def self_test(self, minutes_now):
         self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
@@ -301,8 +329,38 @@ class Inverter():
         
     def update_status(self, minutes_now, quiet=False):
         """
-        Update inverter status
-        """
+        Update the following with inverter status.
+
+        Inverter Class Parameters
+        =========================
+
+            Parameter                          Type    Units    
+            ---------                          ----    -----    
+            self.rest_data                     bool
+            self.charge_enable_time            bool             
+            self.discharge_enable_time         bool
+            self.charge_rate_now               float
+            self.discharge_rate_now            float
+            self.soc_kw                        float   kWh      
+            self.soc_percent                   float   %        
+            self.battery_power                 float   W        
+            self.pv_power                      float   W
+            self.load_power                    float   W        
+            self.charge_start_time_minutes     int
+            self.charge_end_time_minutes       int
+            self.charge_window                 list of dicts    
+            self.discharge_start_time_minutes  int
+            self.discharge_end_time_minutes    int
+            self.discharge_window              list of dicts
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            None            
+         """
+        
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
@@ -461,7 +519,7 @@ class Inverter():
         self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
         self.discharge_end_time_minutes = discharge_end.hour * 60 + discharge_end.minute
 
-        if self.dicharge_end_time_minutes < self.discharge_start_time_minutes:
+        if self.discharge_end_time_minutes < self.discharge_start_time_minutes:
             # As windows wrap, if end is in the future then move start back, otherwise forward
             if self.discharge_end_time_minutes > minutes_now:
                 self.discharge_start_time_minutes -= 60 * 24
@@ -498,7 +556,20 @@ class Inverter():
 
     def adjust_reserve(self, reserve):
         """
-        Adjust the reserve target % in GivTCP
+        Adjust the output reserve target %
+
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            reserve                            int           % 
+
         """
         
         if SIMULATE:
@@ -536,7 +607,22 @@ class Inverter():
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
+
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            charge_rate                        float         W 
+            *charge_current_limit              float         A 
+
         """
+        
         new_rate = int(new_rate + 0.5)
 
         if SIMULATE:
@@ -573,8 +659,22 @@ class Inverter():
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
-        Adjust discharging rate
-        """
+        Adjust dicharging rate
+
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            discharge_rate                        float         W 
+            *discharge_current_limit              float         A 
+
+        """    
         new_rate = int(new_rate + 0.5)
 
         if SIMULATE:
@@ -611,8 +711,20 @@ class Inverter():
     def adjust_battery_target(self, soc):
         """
         Adjust the battery charging target SOC % in GivTCP
-        """
 
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            charge_limit                       int           % 
+
+        """
         # SOC has no decimal places and clamp in min
         soc = int(soc)
         soc = max(soc, self.reserve_percent)
@@ -700,6 +812,19 @@ class Inverter():
     def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
         """
         Adjust inverter mode between force discharge and ECO
+
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            inverter_mode                      string
+
         """
         if SIMULATE:
             old_inverter_mode = self.base.sim_inverter_mode
@@ -745,7 +870,27 @@ class Inverter():
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
         """
         Adjust force discharge on/off and set the time window correctly
+
+        Inverter Class Parameters
+        =========================
+
+            None            
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            discharge_start_time               string
+            discharge_end_time                 string
+            *discharge_start_hour              int
+            *discharge_start_minute            int
+            *discharge_end_hour                int
+            *discharge_end_minute              int
+            *charge_discharge_update_button    button
+            
         """
+
         if SIMULATE:
             old_start = self.base.sim_discharge_start
             old_end = self.base.sim_discharge_end
@@ -852,6 +997,30 @@ class Inverter():
         """
         Disable charge window
         """
+        """
+        Adjust force discharge on/off and set the time window correctly
+
+        Inverter Class Parameters
+        =========================
+
+            Parameter                          Type          Units
+            ----------                         ----          -----
+            self.charge_enable_time            boole
+
+            
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            scheduled_charge_enable            bool
+            *charge_start_hour                 int
+            *charge_start_minute               int
+            *charge_end_hour                   int
+            *charge_end_minute                 int
+            *charge_discharge_update_button    button
+            
+        """
         if SIMULATE:
             old_charge_schedule_enable = self.base.sim_charge_schedule_enable
         else:
@@ -885,7 +1054,31 @@ class Inverter():
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
         Adjust the charging window times (start and end) in GivTCP
+
+        Inverter Class Parameters
+        =========================
+
+            Parameter                          Type          Units
+            ----------                         ----          -----
+            self.charge_enable_time            boole
+
+
+        Output Entities:
+        ================
+        
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            scheduled_charge_enable            bool
+            charge_start_time                  string
+            charge_end_time                    string
+            *charge_start_hour                 int
+            *charge_start_minute               int
+            *charge_end_hour                   int
+            *charge_end_minute                 int
+            *charge_discharge_update_button    button
+            
         """
+
         if SIMULATE:
             old_start = self.base.sim_charge_start_time
             old_end = self.base.sim_charge_end_time
