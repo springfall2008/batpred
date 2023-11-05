@@ -461,7 +461,7 @@ class Inverter():
         self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
         self.discharge_end_time_minutes = discharge_end.hour * 60 + discharge_end.minute
 
-        if self.charge_end_time_minutes < self.charge_start_time_minutes:
+        if self.dicharge_end_time_minutes < self.discharge_start_time_minutes:
             # As windows wrap, if end is in the future then move start back, otherwise forward
             if self.discharge_end_time_minutes > minutes_now:
                 self.discharge_start_time_minutes -= 60 * 24
@@ -902,6 +902,7 @@ class Inverter():
             elif 'charge_start_hour' in self.base.args:
                 old_start = datetime.strptime(f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}', "%H:%M")
                 old_end = datetime.strptime(f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}', "%H:%M")
+                old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
             else:
                 self.log("WARN: Inverter {} unable read charge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
