@@ -784,6 +784,8 @@ If you set this too high you might not get any export slots. If it's too low you
 
 ### Inverter control options
 
+**set_state_notify** enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc)
+
 **set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates
 Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
 Will also automatically disable charging if not required and re-enable it when required. 
