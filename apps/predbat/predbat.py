@@ -461,7 +461,7 @@ class Inverter():
         self.discharge_start_time_minutes = discharge_start.hour * 60 + discharge_start.minute
         self.discharge_end_time_minutes = discharge_end.hour * 60 + discharge_end.minute
 
-        if self.charge_end_time_minutes < self.charge_start_time_minutes:
+        if self.discharge_end_time_minutes < self.discharge_start_time_minutes:
             # As windows wrap, if end is in the future then move start back, otherwise forward
             if self.discharge_end_time_minutes > minutes_now:
                 self.discharge_start_time_minutes -= 60 * 24
