@@ -245,7 +245,7 @@ pred_bat:
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # rate configured with input_number.predbat_metric_octopus_saving_rate in-side HA
-  octopus_saving_session: 're:binary_sensor.octopus_energy_saving_sessions'
+  octopus_saving_session: 're:(binary_sensor.octopus_energy_saving_session(s|))'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
