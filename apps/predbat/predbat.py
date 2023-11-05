@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.5'
+THIS_VERSION = 'v7.11.6'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -5879,8 +5879,8 @@ class PredBat(hass.Hass):
         self.load_scaling = self.get_arg('load_scaling', 1.0)
         self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
-        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0)
-        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.0)
+        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0.0)
         self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
         self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
