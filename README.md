@@ -538,7 +538,7 @@ metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 0                 # Automatic high rate selection
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
-set_charge_freeze - True               # Allow Predbat to hold the current battery level rather than just charge
+set_charge_freeze - False              # Allow Predbat to hold the current battery level rather than just charge
 calculate_max_windows - 96             # Set to 96 for best results, but if you have host performance issues you can reduce this to 48 or 32
 predbat_metric_battery_cycle - ?       # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
 ```
