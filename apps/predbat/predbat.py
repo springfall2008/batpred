@@ -134,7 +134,7 @@ INVERTER_DEF={
         'has_rest_api': True,
         'output_charge_control': "power",
         'has_charge_time_enable': True,
-        'has_dicharge_time_enable': True,
+        'has_discharge_time_enable': True,
         'has_target_soc': True,
         'has_reserve_SOC': True,
         'time_entity_type': "select",
@@ -147,7 +147,7 @@ INVERTER_DEF={
         'has_rest_api': False,
         'output_charge_control': "current",
         'has_charge_time_enable': False,
-        'has_dicharge_time_enable': False,
+        'has_discharge_time_enable': False,
         'has_target_soc': False,
         'has_reserve_SOC': True,
         'time_entity_type': "int",
@@ -660,7 +660,7 @@ class Inverter():
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
-        Adjust dicharging rate
+        Adjust discharging rate
 
         Inverter Class Parameters
         =========================
@@ -952,7 +952,7 @@ class Inverter():
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
                     else:
-                        self.log("WARN: Discharge_times set but no update button specified in config file so writing to inverter is diabled.")    
+                        self.log("WARN: Diss set but no update button specified in config file so writing to inverter is diabled.")    
                 else:
                     self.log("WARN: Inverter {} unable write discharge start time as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
