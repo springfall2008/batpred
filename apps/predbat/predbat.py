@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.5'
+THIS_VERSION = 'v7.11.7'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -98,6 +98,7 @@ CONFIG_ITEMS = [
     {'name' : 'set_charge_window',             'friendly_name' : 'Set Charge Window',              'type' : 'switch'},
     {'name' : 'set_charge_freeze',             'friendly_name' : 'Set Charge Freeze',              'type' : 'switch'},
     {'name' : 'set_window_notify',             'friendly_name' : 'Set Window Notify',              'type' : 'switch'},
+    {'name' : 'set_status_notify',             'friendly_name' : 'Set Status Notify',               'type' : 'switch'},
     {'name' : 'set_discharge_window',          'friendly_name' : 'Set Discharge Window',           'type' : 'switch'},
     {'name' : 'set_discharge_freeze',          'friendly_name' : 'Set Discharge Freeze',           'type' : 'switch'},
     {'name' : 'set_discharge_freeze_only',     'friendly_name' : 'Set Discharge Freeze Only',      'type' : 'switch'},
@@ -902,15 +903,15 @@ class Inverter():
                 old_start = self.base.get_arg("discharge_start_time", index=self.id)
                 old_end = self.base.get_arg("discharge_end_time", index=self.id)
             elif 'discharge_start_hour' in self.base.args:
-                old_start = datetime.strptime(f'{int(self.base.get_arg("discharge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_start_minute", index=self.id)):02d}', "%H:%M")
-                old_end = datetime.strptime(f'{int(self.base.get_arg("discharge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_end_minute", index=self.id)):02d}', "%H:%M")
+                old_start = f'{int(self.base.get_arg("discharge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_start_minute", index=self.id)):02d}' + ":00"
+                old_end = f'{int(self.base.get_arg("discharge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_end_minute", index=self.id)):02d}' + ":00"
             else:
                 self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-            new_start = new_start_time.strftime("%H:%M:%S")[:5]
+            new_start = new_start_time.strftime("%H:%M:%S")
         else:
             new_start = None
 
@@ -1093,8 +1094,8 @@ class Inverter():
                 old_end = self.base.get_arg("charge_end_time", index=self.id)
                 old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
             elif 'charge_start_hour' in self.base.args:
-                old_start = datetime.strptime(f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}', "%H:%M")
-                old_end = datetime.strptime(f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}', "%H:%M")
+                old_start = f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}' + ":00"
+                old_end = f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}' + ":00"
                 old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
             else:
                 self.log("WARN: Inverter {} unable read charge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
@@ -2182,10 +2183,13 @@ class PredBat(hass.Hass):
             window_n += 1
         return charge_windows
 
-    def record_status(self, message, debug="", had_errors = False):
+    def record_status(self, message, debug="", had_errors = False, notify=False, extra=""):
         """
         Records status to HA sensor
         """
+        if notify and self.previous_status != message and self.set_status_notify:
+            self.call_notify("Predbat status change to: " + message + extra)
+
         self.set_state(self.prefix + ".status", state=message, attributes = {'friendly_name' : 'Status', 'icon' : 'mdi:information', 'last_updated' : datetime.now(), 'debug' : debug})
         if had_errors:
             self.had_errors = True
@@ -3972,6 +3976,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         self.prefix = self.args.get('prefix', "predbat")
+        self.previous_status = None
         self.had_errors = False
         self.plan_valid = False
         self.plan_last_updated = None
@@ -5405,6 +5410,8 @@ class PredBat(hass.Hass):
         self.publish_html_plan(pv_forecast_minute_step, load_minutes_step)
 
     def execute_plan(self):
+        status_extra = ""
+
         if self.holiday_days_left > 0:
             status = "Idle (Holiday)"
         else:
@@ -5465,6 +5472,7 @@ class PredBat(hass.Hass):
                         else:
                             status = "Charging"
                         isCharging = True
+                        status_extra = " target {}%".format(self.charge_limit_percent_best[0])
 
                     # Hold charge mode when enabled
                     if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and (status == "Charging") and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]):
@@ -5524,6 +5532,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_reserve(self.discharge_limits_best[0])
                             setReserve = True
                         status = "Discharging"
+                        status_extra = " target {}%".format(self.discharge_limits_best[0])
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
@@ -5534,8 +5543,10 @@ class PredBat(hass.Hass):
                             inverter.adjust_charge_rate(0)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
+                            status_extra = " target {}%".format(self.discharge_limits_best[0])
                         else:
                             status = "Hold discharging"
+                            status_extra = " target {}%".format(self.discharge_limits_best[0])
                             self.log("Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                         resetReserve = True
                 else:
@@ -5611,7 +5622,7 @@ class PredBat(hass.Hass):
 
         # Set the charge/discharge status information
         self.set_charge_discharge_status(isCharging, isDischarging)
-        return status
+        return status, status_extra
 
     def fetch_sensor_data(self):
         """
@@ -6026,6 +6037,7 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg('debug_enable', False)
+        self.previous_status = self.get_state(self.prefix + ".status")
         self.calculate_max_windows = self.get_arg('calculate_max_windows', 48)
         self.calculate_plan_every = max(self.get_arg('calculate_plan_every', 10), 5)
         self.num_cars = self.get_arg('num_cars', 1)
@@ -6073,8 +6085,8 @@ class PredBat(hass.Hass):
         self.load_scaling = self.get_arg('load_scaling', 1.0)
         self.battery_rate_max_scaling = self.get_arg('battery_rate_max_scaling', 1.0)
         self.best_soc_pass_margin = self.get_arg('best_soc_pass_margin', 0.0)
-        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0)
-        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0)
+        self.rate_low_threshold = self.get_arg('rate_low_threshold', 0.0)
+        self.rate_high_threshold = self.get_arg('rate_high_threshold', 0.0)
         self.rate_low_match_export = self.get_arg('rate_low_match_export', False)
         self.best_soc_step = self.get_arg('best_soc_step', 0.25)
 
@@ -6118,18 +6130,19 @@ class PredBat(hass.Hass):
         self.calculate_best = self.get_arg('calculate_best', True)
         self.set_soc_enable = self.get_arg('set_soc_enable', default_enable_mode)
         self.set_reserve_enable = self.get_arg('set_reserve_enable', default_enable_mode)
-        self.set_reserve_notify = self.get_arg('set_reserve_notify', True)
+        self.set_reserve_notify = self.get_arg('set_reserve_notify', False)
         self.set_reserve_hold = self.get_arg('set_reserve_hold', True)
         self.set_read_only = self.get_arg('set_read_only', False)
-        self.set_soc_notify = self.get_arg('set_soc_notify', True)
-        self.set_window_notify = self.get_arg('set_window_notify', True)
+        self.set_soc_notify = self.get_arg('set_soc_notify', False)
+        self.set_status_notify = self.get_arg('set_status_notify', True)
+        self.set_window_notify = self.get_arg('set_window_notify', False)
         self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
         self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
         self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
         self.set_charge_freeze = self.get_arg('set_charge_freeze', default_enable_mode)
         self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
         self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
-        self.set_discharge_notify = self.get_arg('set_discharge_notify', True)
+        self.set_discharge_notify = self.get_arg('set_discharge_notify', False)
         self.calculate_best_charge = self.get_arg('calculate_best_charge', True)
         self.calculate_best_discharge = self.get_arg('calculate_best_discharge', default_enable_mode)
         self.calculate_discharge_first = self.get_arg('calculate_discharge_first', True)
@@ -6212,7 +6225,7 @@ class PredBat(hass.Hass):
         self.calculate_plan(recompute=recompute)
 
         # Execute the plan
-        status = self.execute_plan()
+        status, status_extra = self.execute_plan()
 
         # If the plan was not updated, and the time has expired lets update it now
         if not recompute:
@@ -6222,7 +6235,7 @@ class PredBat(hass.Hass):
             if ((plan_age_minutes + RUN_EVERY) > self.calculate_plan_every):
                 self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(plan_age_minutes, self.calculate_plan_every))
                 self.calculate_plan(recompute=True)
-                status = self.execute_plan()
+                status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old max age {}".format(plan_age_minutes, self.calculate_plan_every))
         
@@ -6249,7 +6262,7 @@ class PredBat(hass.Hass):
             self.log("Completed run status {} with Errors reported (check log)".format(status))
         else:
             self.log("Completed run status {}".format(status))
-            self.record_status(status, debug="best_charge_limit={} best_charge_window={} best_discharge_limit= {} best_discharge_window={}".format(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best))
+            self.record_status(status, debug="best_charge_limit={} best_charge_window={} best_discharge_limit= {} best_discharge_window={}".format(self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best), notify=True, extra=status_extra)
 
     def select_event(self, event, data, kwargs):
         """
