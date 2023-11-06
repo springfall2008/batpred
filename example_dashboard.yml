@@ -24,7 +24,7 @@ entities:
   - entity: switch.predbat_set_soc_enable
   - entity: switch.predbat_set_soc_notify
   - entity: switch.predbat_set_window_notify
-  - entity: switch.predbat_set_state_notify
+  - entity: switch.predbat_set_status_notify
   - entity: switch.predbat_car_charging_hold
   - entity: switch.predbat_car_charging_plan_smart
   - entity: select.predbat_car_charging_plan_time
