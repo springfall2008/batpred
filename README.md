@@ -1,4 +1,7 @@
 # Predbat
+
+## Introduction
+
 Home battery prediction and automatic charging for Home Assistant with GivTCP
 
 Also known by some as Batpred or Batman!
@@ -11,7 +14,9 @@ This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
 
-For support please raise a Github ticket or use the GivTCP Facebook page: https://www.facebook.com/groups/615579009972782
+For support please raise a Github ticket or use the GivTCP Facebook page: 
+
+[https://www.facebook.com/groups/615579009972782](https://www.facebook.com/groups/615579009972782)
 
 If you want to buy me a beer then please use Paypal - tdlj@tdlj.net
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
