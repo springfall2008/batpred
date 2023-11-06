@@ -6276,11 +6276,11 @@ class PredBat(hass.Hass):
             plan_age_minutes = plan_age.seconds / 60.0
 
             if ((plan_age_minutes + RUN_EVERY) > self.calculate_plan_every):
-                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(plan_age_minutes, self.calculate_plan_every))
+                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(round(plan_age_minutes,1), self.calculate_plan_every))
                 self.calculate_plan(recompute=True)
                 status, status_extra = self.execute_plan()
             else:
-                self.log("Will not recompute the plan, it is {} minutes old max age {}".format(plan_age_minutes, self.calculate_plan_every))
+                self.log("Will not recompute the plan, it is {} minutes old max age {}".format(round(plan_age_minutes,1), self.calculate_plan_every))
         
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
