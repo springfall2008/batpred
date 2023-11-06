@@ -501,6 +501,8 @@ You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_di
 
 The setting **input_number.metric_battery_cycle** can be used to put a cost on using your battery for charging and discharging. In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each cycle is 19kWh and so the cost is £4000 / 19 / 6000 = 3.5p. If you configure this number higher then more expensive plans will be selected which avoid charging and discharging your battery as much. The default is 3p but can be set to 0 if you want to turn this off. Note that the cycle cost will not be included in the cost predictions, just taken into account in the planning stage.
 
+A new experimental feature that tries to model cloud coverage by modulating the PV output can be enabled with **switch.predbat_metric_cloud_enable**. When enabled the difference between PV and PV10 is used to work out a cloud factor, this modulates the PV output predictions up and down accordingly as if there was passing clouds. This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+
 ### Fixed daily rates
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
 
