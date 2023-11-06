@@ -952,7 +952,7 @@ class Inverter():
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
                     else:
-                        self.log("WARN: Diss set but no update button specified in config file so writing to inverter is diabled.")    
+                        self.log("WARN: Discharge_times set but no update button specified in config file so writing to inverter is diabled.")    
                 else:
                     self.log("WARN: Inverter {} unable write discharge start time as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
