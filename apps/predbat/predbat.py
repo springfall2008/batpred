@@ -131,7 +131,7 @@ CONFIG_ITEMS = [
 INVERTER_DEF={ 
     "GE": {
         'has_rest_api': True,
-        'output_charge_control': "current",
+        'output_charge_control': "power",
         'has_charge_time_enable': True,
         'has_dicharge_time_enable': True,
         'has_target_soc': True,
