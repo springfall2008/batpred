@@ -6411,7 +6411,10 @@ class PredBat(hass.Hass):
                     elif item['type'] == 'update':
                         summary = self.releases.get('this_body', '')
                         latest = self.releases.get('latest', 'check HACS')
-                        self.set_state(entity_id = entity, state = 'off', attributes = {'friendly_name' : item['friendly_name'], 'title' : item['title'], 'in_progress' : False, 'auto_update' : False, 
+                        state = 'off'
+                        if item['installed_version'] != latest:
+                            state = 'on'
+                        self.set_state(entity_id = entity, state = state, attributes = {'friendly_name' : item['friendly_name'], 'title' : item['title'], 'in_progress' : False, 'auto_update' : False, 
                                                                                         'installed_version' : item['installed_version'], 'latest_version' : latest, 'entity_picture' : item['entity_picture'], 
                                                                                         'release_url' : item['release_url'], 'skipped_version' : False, 'release_summary' : summary})
 
