@@ -132,9 +132,9 @@ INVERTER_DEF={
     "GE": {
         'has_rest_api': True,
         'output_charge_control': "current",
-        'has_charge_time_enable': False,
-        'has_dicharge_time_enable': False,
-        'has_target_soc': False,
+        'has_charge_time_enable': True,
+        'has_dicharge_time_enable': True,
+        'has_target_soc': True,
         'has_reserve_SOC': True,
         'time_entity_type': "select",
         'time_format': "HH:MM:SS",
