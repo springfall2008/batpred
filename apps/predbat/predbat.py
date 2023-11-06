@@ -135,7 +135,7 @@ INVERTER_DEF={
         'has_rest_api': True,
         'output_charge_control': "power",
         'has_charge_time_enable': True,
-        'has_dicharge_time_enable': True,
+        'has_discharge_time_enable': True,
         'has_target_soc': True,
         'has_reserve_SOC': True,
         'time_entity_type': "select",
@@ -148,7 +148,7 @@ INVERTER_DEF={
         'has_rest_api': False,
         'output_charge_control': "current",
         'has_charge_time_enable': False,
-        'has_dicharge_time_enable': False,
+        'has_discharge_time_enable': False,
         'has_target_soc': False,
         'has_reserve_SOC': True,
         'time_entity_type': "int",
@@ -661,7 +661,7 @@ class Inverter():
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
-        Adjust dicharging rate
+        Adjust discharging rate
 
         Inverter Class Parameters
         =========================
