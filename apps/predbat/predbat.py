@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.7'
+THIS_VERSION = 'v7.11.8'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -337,7 +337,7 @@ class Inverter():
 
             Parameter                          Type    Units    
             ---------                          ----    -----    
-            self.rest_data                     bool
+            self.rest_data                     dict
             self.charge_enable_time            bool             
             self.discharge_enable_time         bool
             self.charge_rate_now               float
@@ -3980,6 +3980,7 @@ class PredBat(hass.Hass):
         self.had_errors = False
         self.plan_valid = False
         self.plan_last_updated = None
+        self.plan_last_updated_minutes = 0
         self.calculate_plan_every = 5
         self.prediction_started = False
         self.update_pending = True
@@ -5283,6 +5284,11 @@ class PredBat(hass.Hass):
            self.discharge_limits_best
         """
 
+        # Re-compute plan due to time wrap
+        if self.plan_last_updated_minutes <= self.minutes_now:
+            self.log("Force recompute due to start of day")
+            recompute = True
+            
         # Recompute as charge window ran out
         if self.charge_window_best:
             window = self.charge_window_best[0]
@@ -5393,6 +5399,7 @@ class PredBat(hass.Hass):
             # Plan is now valid
             self.plan_valid = True
             self.plan_last_updated = self.now_utc
+            self.plan_last_updated_minutes = self.minutes_now
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
