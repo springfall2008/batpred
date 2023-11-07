@@ -379,10 +379,10 @@ class Inverter():
         # Args are also set for these so that no entries are needed for the dummies in the config file
 
         if not self.inv_has_charge_enable_time:
-            self.base.args['charge_enable_time'] = self.create_entity('charge_enable_time', False)
+            self.base.args['scheduled_charge_enable'] = self.create_entity('scheduled_charge_enable', False)
 
         if not self.inv_has_discharge_enable_time:
-            self.base.args['discharge_enable_time'] = self.create_entity('discharge_enable_time', False)
+            self.base.args['scheduled_discharge_enable'] = self.create_entity('scheduled_discharge_enable', False)
 
         if not self.inv_has_reserve_soc:
             self.base.args['reserve'] = self.create_entity('reserve', self.reserve)
