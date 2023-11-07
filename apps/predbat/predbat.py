@@ -312,7 +312,7 @@ class Inverter():
             self.base.log("ERROR: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
             raise ValueError
 
-        # Battery rate max charge, discharge (all converted to kW/h)
+        # Battery rate max charge, discharge (all converted to kW/min)
         self.battery_rate_max_charge = min(self.base.get_arg('inverter_limit_charge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_discharge = min(self.base.get_arg('inverter_limit_discharge', self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
