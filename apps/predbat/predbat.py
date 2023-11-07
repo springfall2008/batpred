@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.9'
+THIS_VERSION = 'v7.11.10'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -5319,7 +5319,7 @@ class PredBat(hass.Hass):
         """
 
         # Re-compute plan due to time wrap
-        if self.plan_last_updated_minutes <= self.minutes_now:
+        if self.plan_last_updated_minutes > self.minutes_now:
             self.log("Force recompute due to start of day")
             recompute = True
             
