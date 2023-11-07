@@ -242,6 +242,9 @@ class Inverter():
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]['has_ge_inverter_mode']
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]['num_load_entities']
 
+        # If it's not a GE inverter then turn Quiet off
+        if self.inverter_type != 'GE':
+            quiet=False
 
         # Rest API for GivEnergy
         if self.inverter_type == 'GE':
@@ -440,7 +443,11 @@ class Inverter():
             ----------                         ----          -----
             None            
          """
-        
+
+        # If it's not a GE inverter then turn Quiet off
+        if self.inverter_type != 'GE':
+            quiet=False
+
         self.battery_power = 0
         self.pv_power = 0
         self.load_power = 0
