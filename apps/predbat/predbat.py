@@ -15,7 +15,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.8'
+THIS_VERSION = 'v7.11.10'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -74,6 +74,7 @@ CONFIG_ITEMS = [
     {'name' : 'metric_future_rate_offset_export', 'friendly_name' : 'Metric Future Rate Offset Export','type' : 'input_number', 'min' : -50, 'max' : 50.0, 'step' : 0.1,  'unit' : 'p/kwh', 'icon' : 'mdi:currency-usd'},
     {'name' : 'metric_inday_adjust_damping',   'friendly_name' : 'In-day adjustment damping factor', 'type' : 'input_number', 'min' : 0.5, 'max' : 2.0, 'step' : 0.05,  'unit' : 'fraction', 'icon' : 'mdi:call-split'},
     {'name' : 'metric_octopus_saving_rate',    'friendly_name' : 'Octopus Saving session assumed rate', 'type' : 'input_number', 'min' : 1, 'max' : 500, 'step' : 5,  'unit' : 'fraction', 'icon' : 'mdi:currency-usd'},
+    {'name' : 'metric_cloud_enable',           'friendly_name' : 'Simulate clouds (beta)',         'type' : 'switch'},
     {'name' : 'set_window_minutes',            'friendly_name' : 'Set Window Minutes',             'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_soc_minutes',               'friendly_name' : 'Set SOC Minutes',                'type' : 'input_number', 'min' : 5,   'max' : 720,  'step' : 5,    'unit' : 'minutes', 'icon' : 'mdi:timer-settings-outline'},
     {'name' : 'set_reserve_min',               'friendly_name' : 'Set Reserve Min',                'type' : 'input_number', 'min' : 4,   'max' : 100,  'step' : 1,    'unit' : '%',  'icon' : 'mdi:percent'},
@@ -2077,6 +2078,7 @@ class PredBat(hass.Hass):
         elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
             # Car charging hold - ignore car charging in computation based on threshold
             load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
+
         return load_yesterday, load_yesterday_raw
 
     def previous_days_modal_filter(self, data):
@@ -2338,7 +2340,29 @@ class PredBat(hass.Hass):
 
         return difference_cap
 
-    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, car_filter=False, load_forecast={}):
+    def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
+        """
+        Work out approximated cloud factor
+        """
+        pv_total = 0
+        pv_total10 = 0
+        for minute in range(0, self.forecast_minutes):
+            pv_total += pv_data.get(minute + minutes_now, 0.0)
+            pv_total10 += pv_data10.get(minute + minutes_now, 0.0)
+
+        pv_factor = None
+        if pv_total > 0:
+            pv_factor = self.dp2(pv_total / pv_total10)
+            pv_factor = min(pv_factor, 2.0)
+            pv_factor = pv_factor - 1.0
+
+        if self.metric_cloud_enable:
+            self.log("PV Forcast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(pv_total, pv_total10, pv_factor))
+            return pv_factor
+        else:
+            return None
+
+    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, type_load=False, load_forecast={}, cloud_factor=None):
         """
         Create cached step data for historical array 
         """
@@ -2351,7 +2375,7 @@ class PredBat(hass.Hass):
             if (minute + minutes_now) > 24*60:
                 scale_today = 1.0
 
-            if car_filter and not forward:
+            if type_load and not forward:
                 load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(item, minute, historical=True, step=step)
                 value += load_yesterday
             else:
@@ -2367,6 +2391,15 @@ class PredBat(hass.Hass):
                 for offset in range(0, step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             values[minute] = value * scale_today + load_extra
+
+            # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
+            if cloud_factor and cloud_factor > 0:
+                cloud_on = (minute / PREDICT_STEP) % 2
+                if cloud_on > 0:
+                    values[minute] = values[minute] + values[minute] * cloud_factor
+                else:
+                    values[minute] = values[minute] - values[minute] * cloud_factor
+
         return values
 
     def calc_percent_limit(self, charge_limit):
@@ -4103,6 +4136,7 @@ class PredBat(hass.Hass):
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
+        self.metric_cloud_coverage = 0.0
 
     def optimise_charge_limit_price(self, price_set, price_links, window_index, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, end_record=None):
         """
@@ -5285,7 +5319,7 @@ class PredBat(hass.Hass):
         """
 
         # Re-compute plan due to time wrap
-        if self.plan_last_updated_minutes <= self.minutes_now:
+        if self.plan_last_updated_minutes > self.minutes_now:
             self.log("Force recompute due to start of day")
             recompute = True
             
@@ -5339,9 +5373,10 @@ class PredBat(hass.Hass):
         self.log('Best discharge window {}'.format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Created optimised step data
-        load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, car_filter=True, load_forecast=self.load_forecast)
-        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True)
+        self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
+        load_minutes_step = self.step_data_history(self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, type_load=True, load_forecast=self.load_forecast)
+        pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Simulate current settings
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep  = self.run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save='base', end_record=self.end_record)
@@ -6086,6 +6121,7 @@ class PredBat(hass.Hass):
         self.metric_future_rate_offset_import = self.get_arg('metric_future_rate_offset_import', 0.0)
         self.metric_future_rate_offset_export = self.get_arg('metric_future_rate_offset_export', 0.0)
         self.metric_inday_adjust_damping = self.get_arg('metric_inday_adjust_damping', 1.0)
+        self.metric_cloud_enable = self.get_arg('metric_cloud_enable', False)
         self.notify_devices = self.get_arg('notify_devices', ['notify'])
         self.pv_scaling = self.get_arg('pv_scaling', 1.0)
         self.pv_metric10_weight = self.get_arg('pv_metric10_weight', 0.15)
@@ -6146,7 +6182,7 @@ class PredBat(hass.Hass):
         self.set_charge_window = self.get_arg('set_charge_window', default_enable_mode)
         self.set_discharge_window = self.get_arg('set_discharge_window', default_enable_mode)
         self.set_discharge_freeze = self.get_arg('set_discharge_freeze', default_enable_mode)
-        self.set_charge_freeze = self.get_arg('set_charge_freeze', default_enable_mode)
+        self.set_charge_freeze = self.get_arg('set_charge_freeze', False)
         self.set_discharge_freeze_only = self.get_arg('set_discharge_freeze_only', False)
         self.set_discharge_during_charge = self.get_arg('set_discharge_during_charge', True)
         self.set_discharge_notify = self.get_arg('set_discharge_notify', False)
@@ -6240,11 +6276,11 @@ class PredBat(hass.Hass):
             plan_age_minutes = plan_age.seconds / 60.0
 
             if ((plan_age_minutes + RUN_EVERY) > self.calculate_plan_every):
-                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(plan_age_minutes, self.calculate_plan_every))
+                self.log("Will recompute the plan as it is now {} minutes old and will exceed the max age of {} before the next run".format(round(plan_age_minutes,1), self.calculate_plan_every))
                 self.calculate_plan(recompute=True)
                 status, status_extra = self.execute_plan()
             else:
-                self.log("Will not recompute the plan, it is {} minutes old max age {}".format(plan_age_minutes, self.calculate_plan_every))
+                self.log("Will not recompute the plan, it is {} minutes old max age {}".format(round(plan_age_minutes,1), self.calculate_plan_every))
         
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
@@ -6375,7 +6411,10 @@ class PredBat(hass.Hass):
                     elif item['type'] == 'update':
                         summary = self.releases.get('this_body', '')
                         latest = self.releases.get('latest', 'check HACS')
-                        self.set_state(entity_id = entity, state = 'off', attributes = {'friendly_name' : item['friendly_name'], 'title' : item['title'], 'in_progress' : False, 'auto_update' : False, 
+                        state = 'off'
+                        if item['installed_version'] != latest:
+                            state = 'on'
+                        self.set_state(entity_id = entity, state = state, attributes = {'friendly_name' : item['friendly_name'], 'title' : item['title'], 'in_progress' : False, 'auto_update' : False, 
                                                                                         'installed_version' : item['installed_version'], 'latest_version' : latest, 'entity_picture' : item['entity_picture'], 
                                                                                         'release_url' : item['release_url'], 'skipped_version' : False, 'release_summary' : summary})
 

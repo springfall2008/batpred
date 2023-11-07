@@ -42,6 +42,7 @@ entities:
   - entity: switch.predbat_balance_inverters_discharge
   - entity: switch.predbat_balance_inverters_crosscharge
   - entity: switch.predbat_calculate_inday_adjustment
+  - entity: switch.predbat_metric_cloud_enable
   - entity: input_number.predbat_balance_inverters_threshold_charge
   - entity: input_number.predbat_balance_inverters_threshold_discharge
   - entity: input_number.predbat_battery_loss
