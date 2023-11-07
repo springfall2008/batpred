@@ -3657,7 +3657,8 @@ class PredBat(hass.Hass):
         html += '<td><b>Limit %</b></td>'
         html += '<td><b>PV kWh</b></td>'
         html += '<td><b>Load kWh</b></td>'
-        html += '<td><b>Car kWh</b></td>'
+        if self.num_cars > 0:
+            html += '<td><b>Car kWh</b></td>'
         html += '<td><b>SOC %</b></td>'
         html += '</tr>'
 
@@ -3704,15 +3705,15 @@ class PredBat(hass.Hass):
             
             state = ''
             state_color = '#FFFFFF'
-            pv_color = '#AAAAAA'
+            pv_color = '#BCBCBC'
             load_color = '#FFFFFF'
             rate_color_import = '#FFFFFF'
             rate_color_export = '#FFFFFF'
-            soc_color = '#00FF00'
+            soc_color = '#3AEE85'
             pv_symbol = ''
 
             if soc_percent < 20.0:
-                soc_color = '#F16F49'
+                soc_color = '#F18261'
             elif soc_percent < 50.0:
                 soc_color = '#FFFF00'
 
@@ -3724,14 +3725,14 @@ class PredBat(hass.Hass):
                 pv_symbol = '&#9728;'
 
             if load_forecast >= 0.5:
-                load_color = '#F16F49'
+                load_color = '#F18261'
             elif load_forecast >= 0.25:
                 load_color = '#FFFF00'
             elif load_forecast > 0.0:
                 load_color = '#AAFFAA'
 
             if rate_value_import <= self.rate_threshold:
-                rate_color_import = '#00FF00'
+                rate_color_import = '#3AEE85'
             elif rate_value_import > (self.rate_threshold * 1.2):
                 rate_color_import = '#FFAAAA'
 
@@ -3746,7 +3747,7 @@ class PredBat(hass.Hass):
                         state_color = '#EEEEEE'
                     else:
                         state = 'Charge&nearr;'
-                        state_color = '#00FF00'
+                        state_color = '#3AEE85'
                     show_limit = str(int(self.charge_limit_percent_best[charge_window_n]))
 
             if discharge_window_n >= 0:
@@ -3760,7 +3761,7 @@ class PredBat(hass.Hass):
                     if state:
                         state += "/"
                     state += 'Discharge&searr;'
-                    show_limit = str(limit)
+                    show_limit = str(int(limit))
                     state_color = '#FFFF00'
 
             # Import and export rates -> to string
@@ -3779,23 +3780,24 @@ class PredBat(hass.Hass):
                 rate_str_export = '<b>' + rate_str_export + '</b>'
 
             # Car charging?
-            car_charging_kwh = 0.0
-            for car_n in range(0, self.num_cars):
-                for window in self.car_charging_slots[car_n]:
-                    start = window['start']
-                    end = window['end']
-                    kwh = (self.dp2(window['kwh']) / (end - start)) * PREDICT_STEP
-                    for offset in range(0, 30, PREDICT_STEP):
-                        minute_offset = minute + offset
-                        if minute_offset >= start and minute < end:
-                            car_charging_kwh += kwh
-            car_charging_kwh = self.dp2(car_charging_kwh)
-            if car_charging_kwh > 0.0:
-                car_charging_str = str(car_charging_kwh)
-                car_color = "FFFF00"
-            else:
-                car_charging_str = ""
-                car_color = "#FFFFFF"
+            if self.num_cars > 0:
+                car_charging_kwh = 0.0
+                for car_n in range(0, self.num_cars):
+                    for window in self.car_charging_slots[car_n]:
+                        start = window['start']
+                        end = window['end']
+                        kwh = (self.dp2(window['kwh']) / (end - start)) * PREDICT_STEP
+                        for offset in range(0, 30, PREDICT_STEP):
+                            minute_offset = minute + offset
+                            if minute_offset >= start and minute < end:
+                                car_charging_kwh += kwh
+                car_charging_kwh = self.dp2(car_charging_kwh)
+                if car_charging_kwh > 0.0:
+                    car_charging_str = str(car_charging_kwh)
+                    car_color = "FFFF00"
+                else:
+                    car_charging_str = ""
+                    car_color = "#FFFFFF"
 
             # Table row
             html += '<tr style="color:black">'
@@ -3806,7 +3808,8 @@ class PredBat(hass.Hass):
             html += '<td bgcolor=#FFFFFF> ' + show_limit + '</td>'
             html += '<td bgcolor=' + pv_color + '>' + str(pv_forecast) + pv_symbol + '</td>'
             html += '<td bgcolor=' + load_color + '>' + str(load_forecast) + '</td>'
-            html += '<td bgcolor=' + car_color + '>' + car_charging_str + '</td>'
+            if self.num_cars > 0: # Don't display car charging data if there's no car
+                html += '<td bgcolor=' + car_color + '>' + car_charging_str + '</td>'
             html += '<td bgcolor=' + soc_color + '>' + str(soc_percent) + soc_sym + '</td>'
             html += '</tr>'
         html += "</table>"
