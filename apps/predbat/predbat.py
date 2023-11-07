@@ -693,7 +693,7 @@ class Inverter():
             Config arg                         Type          Units
             ----------                         ----          -----
             charge_rate                        float         W 
-            *charge_current_limit              float         A 
+            *timed_charge_current              float         A 
 
 
         *If the inverter uses current rather than power we create a dummy entity for the power anyway but also write to the current entity
@@ -722,8 +722,8 @@ class Inverter():
                     self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
                     if self.inv_output_charge_control == 'current':
                         new_current = new_rate / self.battery_voltage
-                        entity = self.base.get_entity(self.base.get_arg('charge_current_limit', indirect=False, index=self.id))
-                        self.write_and_poll_value('charge_current_limit', entity, new_current, fuzzy=100)
+                        entity = self.base.get_entity(self.base.get_arg('timed_charge_current', indirect=False, index=self.id))
+                        self.write_and_poll_value('timed_charge_current', entity, new_current, fuzzy=100)
 
                 if notify and self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
@@ -745,7 +745,7 @@ class Inverter():
             Config arg                         Type          Units
             ----------                         ----          -----
             discharge_rate                        float         W 
-            *discharge_current_limit              float         A 
+            *timed_discharge_current              float         A 
 
         *If the inverter uses current rather than power we create a dummy entity for the power anyway but also write to the current entity
         """    
@@ -758,7 +758,7 @@ class Inverter():
                 current_rate = self.rest_data['Control']['Battery_Discharge_Rate']
             else:
                 current_rate = self.base.get_arg('discharge_rate', index=self.id, default=2600.0)
-
+ 
         if abs(current_rate - new_rate) > 100:
             self.base.log("Inverter {} current discharge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
             if SIMULATE:
@@ -772,8 +772,8 @@ class Inverter():
 
                     if self.inv_output_charge_control == 'current':
                         new_current = new_rate / self.battery_voltage
-                        entity = self.base.get_entity(self.base.get_arg('discharge_current_limit', indirect=False, index=self.id))
-                        self.write_and_poll_value('discharge_current_limit', entity, new_current, fuzzy=100)
+                        entity = self.base.get_entity(self.base.get_arg('timed_discharge_current', indirect=False, index=self.id))
+                        self.write_and_poll_value('timed_discharge_current', entity, new_current, fuzzy=100)
 
                 if notify and self.base.set_discharge_notify:
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
