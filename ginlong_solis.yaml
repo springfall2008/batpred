@@ -16,13 +16,13 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today: 
-    - sensor.solisx_house_load_today
+    - sensor.solis_house_load_today
   import_today: 
-    - sensor.solisx_grid_import_today
+    - sensor.solis_grid_import_today
   export_today: 
-    - sensor.solisx_grid_import_today
+    - sensor.solis_grid_import_today
   pv_today:
-    - sensor.solisx_power_generation_today
+    - sensor.solis_power_generation_today
   #
   # Controls/status - must by 1 per inverter
   # 
@@ -37,10 +37,10 @@ pred_bat:
 # which we write to equivalent current
 
   battery_charge_current_limit:
-    - sensor.solisx_battery_charge_current_limit  
+    - sensor.solis_battery_charge_current_limit  
 
   battery_voltage:
-    - sensor.solisx_battery_voltage
+    - sensor.solis_battery_voltage
 
 
 
@@ -50,48 +50,48 @@ pred_bat:
 
 # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
-    - sensor.solisx_rtc 
+    - sensor.solis_rtc 
   battery_power: 
-    - sensor.solisx_battery_power
+    - sensor.solis_battery_power
   pv_power: 
-    - sensor.solisx_pv_total_power
+    - sensor.solis_pv_total_power
   load_power: 
-    - sensor.solisx_house_load  
+    - sensor.solis_house_load  
   load_power_1: 
-    - sensor.solisx_bypass_load
+    - sensor.solis_bypass_load
   soc_percent:
-    - sensor.solisx_battery_soc
+    - sensor.solis_battery_soc
   soc_max: 
     - 10
   reserve: 
-    - number.solisx_backup_mode_soc
+    - number.solis_backup_mode_soc
 
   charge_discharge_update_button:
-    - button.solisx_update_charge_discharge_times
+    - button.solis_update_charge_discharge_times
 
   timed_charge_current: 
-    - number.solisx_timed_charge_current
+    - number.solis_timed_charge_current
   charge_start_hour: 
-    - number.solisx_timed_charge_start_hours
+    - number.solis_timed_charge_start_hours
   charge_start_minute: 
-    - number.solisx_timed_charge_start_minutes
+    - number.solis_timed_charge_start_minutes
   charge_end_hour: 
-    - number.solisx_timed_charge_end_hours
+    - number.solis_timed_charge_end_hours
   charge_end_minute: 
-    - number.solisx_timed_charge_end_minutes
+    - number.solis_timed_charge_end_minutes
 
 
   timed_discharge_current: 
-    - number.solisx_timed_discharge_current    
+    - number.solis_timed_discharge_current    
 
   discharge_start_hour: 
-    - number.solisx_timed_discharge_start_hours
+    - number.solis_timed_discharge_start_hours
   discharge_start_minute: 
-    - number.solisx_timed_discharge_start_minutes
+    - number.solis_timed_discharge_start_minutes
   discharge_end_hour: 
-    - number.solisx_timed_discharge_end_hours
+    - number.solis_timed_discharge_end_hours
   discharge_end_minute: 
-    - number.solisx_timed_discharge_end_minutes
+    - number.solis_timed_discharge_end_minutes
 
 
 
@@ -218,7 +218,7 @@ pred_bat:
   # Or manually set it to the correct sensor names e.g:
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
   # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
-  metric_octopus_import: sensor.octopus_energy_electricity_19m1337498_1610032016836_current_rate
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
   # Standing charge can be set to a sensor (e.g. Octopus) or manually entered in pounds here (e.g. 0.50 is 50p)
