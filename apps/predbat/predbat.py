@@ -328,9 +328,10 @@ class Inverter():
                     self.inverter_time = datetime.strptime(ivtime, TIME_FORMAT_OCTOPUS)
                 except (ValueError, TypeError):
                     try:
-                        self.inverter_time = datetime.strptime(ivtime, self.inv_clock_time_format, tz=pytz.timezone(self.base.get_arg('timezone', "Europe/London")))       
+                        tz =  pytz.timezone(self.base.get_arg('timezone', "Europe/London"))
+                        self.inverter_time = tz.localize(datetime.strptime(ivtime, self.inv_clock_time_format))
                     except (ValueError, TypeError):
-                        self.base.log("Warn: Unable to read inverter time string {}".format(ivtime))
+                        self.base.log(f"Warn: Unable to read inverter time string {ivtime} using formats {[TIME_FORMAT, TIME_FORMAT_OCTOPUS, self.inv_clock_time_format]}")
                         self.inverter_time = None
 
         # Check inverter time and confirm skew
