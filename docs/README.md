@@ -1,1 +1,1 @@
-/workspaces/batpred/README.md
+../README.md
