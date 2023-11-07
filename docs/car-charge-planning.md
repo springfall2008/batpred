@@ -1,0 +1,18 @@
+# Car charging planning
+
+There are two ways to plan car charging slots:
+
+- If you have Intelligent Octopus import tariff and the Octopus Energy Plugin - in which case Predbat will use the slots allocated by the plugin in battery prediction
+    - Ensure **octopus_intelligent_slot** in `apps.yaml` points to the Intelligent Slot sensor in the Octopus Energy Plugin
+    - Set **octopus_intelligent_charging** to True
+    - Information about the car's battery size will also be extracted from the plugin
+    - You will need to set the cars current soc sensor, **car_charging_soc** correctly to have accurate results
+    - If you set **car_charging_limit** then Batpred can also know if the car's limit is set lower than in Intelligent Octopus
+    - Let the Octopus app control when your car charges
+- Predbat led charging - Here Predbat plans the charging based on the upcoming low rate slots
+    - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly
+    - Set **car_charging_plan_time** in the config or in HA to the time you want the car ready by
+    - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
+    - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
+
+NOTE: Multiple cars can be planned with Predbat, see the planned car charging section below in this guide.
