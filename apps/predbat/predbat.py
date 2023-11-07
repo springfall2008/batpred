@@ -391,8 +391,8 @@ class Inverter():
             self.base.args['charge_limit'] = self.create_entity('charge_limit', 100)
 
         if self.inv_output_charge_control != 'power':
-            self.base.args['charge_rate']=self.create_entity('charge_rate', self.battery_rate_max_charge * 60 * 1000)
-            self.base.args['discharge_rate']=self.create_entity('discharge_rate', self.battery_rate_max_discharge * 60 * 1000)
+            self.base.args['charge_rate']=self.create_entity('charge_rate', self.battery_rate_max_charge * 60 * 1000, uom="W", device_class="power")
+            self.base.args['discharge_rate']=self.create_entity('discharge_rate', self.battery_rate_max_discharge * 60 * 1000, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode:
             self.base.args['inverter_mode']=self.create_entity('inverter_mode', "Eco")
@@ -401,9 +401,10 @@ class Inverter():
             for x in ['charge', 'discharge']:
                 for y in ['start', 'end']:
                     self.base.args[f'{x}_{y}_time'] = self.create_entity(f'{x}_{y}_time', "00:00:00")
+        
    
 
-    def create_entity(self, entity_name, value):
+    def create_entity(self, entity_name, value, uom=None, device_class="None"):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
@@ -412,9 +413,19 @@ class Inverter():
         else:
             prefix = 'prefix'
 
+        attributes = {
+            'state_class': 'measurement', 
+        }
+
+        if uom is not None:
+            attributes['unit_of_measurement'] = uom
+        if device_class is not None:
+            attributes['device_class'] = device_class
+
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{entity_name}"
         entity = self.base.get_entity(entity_id)
-        entity.set_state(state=value) 
+        entity.set_state(state=value, attributes=attributes) 
+
         return entity_id
 
     def update_status(self, minutes_now, quiet=False):
@@ -867,16 +878,26 @@ class Inverter():
         return False
 
     def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
-        """
-        GivTCP Workaround, keep writing until correct
-        """
-        for retry in range(0, 6):
-            entity.call_service("set_value", value=new_value)
-            time.sleep(10)
-            old_value = int(entity.get_state())
-            if (abs(old_value - new_value) <= fuzzy):
-                self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(entity.get_state())))
-                return True
+        # Modified to cope with sensor entities and writing strings
+        domain = entity.domain
+        if domain == 'sensor':
+            entity.set_state(state=new_value)
+
+        else:
+        # GivTCP Workaround, keep writing until correct
+            for retry in range(0, 6):
+                entity.call_service("set_value", value=new_value)
+                time.sleep(10)
+                if isinstance(new_value, str):
+                    old_value = entity.get_state()
+                    if old_value == new_value:
+                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, entity.get_state))
+                        return True
+                else:
+                    old_value = int(entity.get_state())
+                    if (abs(old_value - new_value) <= fuzzy):
+                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(entity.get_state())))
+                        return True
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, int(entity.get_state())))
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
