@@ -142,8 +142,8 @@ INVERTER_DEF={
     "GE": {
         "has_rest_api": True,
         "output_charge_control": "power",
-        "has_charge_time_enable": True,
-        "has_discharge_time_enable": True,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
         "has_target_soc": True,
         "has_reserve_soc": True,
         "charge_time_format": "HH:MM:SS",
@@ -157,8 +157,8 @@ INVERTER_DEF={
     "GS": {
         'has_rest_api': False,
         'output_charge_control': "current",
-        'has_charge_time_enable': False,
-        'has_discharge_time_enable': False,
+        'has_charge_enable_time': False,
+        'has_discharge_enable_time': False,
         'has_target_soc': False,
         'has_reserve_soc': True,
         'charge_time_format': "H M",
@@ -233,8 +233,8 @@ class Inverter():
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
         self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
-        self.inv_has_charge_time_enable = INVERTER_DEF[self.inverter_type]["has_charge_time_enable"]
-        self.inv_has_discharge_time_enable = INVERTER_DEF[self.inverter_type]["has_discharge_time_enable"]
+        self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
+        self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
@@ -378,11 +378,11 @@ class Inverter():
         # Create some dummy entities if PredBat expects them but they don't extist for this Inverter Type:
         # Args are also set for these so that no entries are needed for the dummies in the config file
 
-        if not self.inv_has_charge_time_enable:
-            self.base.args['charge_time_enable'] = self.create_entity('charge_time_enable', False)
+        if not self.inv_has_charge_enable_time:
+            self.base.args['charge_enable_time'] = self.create_entity('charge_enable_time', False)
 
-        if not self.inv_has_discharge_time_enable:
-            self.base.args['discharge_time_enable'] = self.create_entity('discharge_time_enable', False)
+        if not self.inv_has_discharge_enable_time:
+            self.base.args['discharge_enable_time'] = self.create_entity('discharge_enable_time', False)
 
         if not self.inv_has_reserve_soc:
             self.base.args['reserve'] = self.create_entity('reserve', self.reserve)
