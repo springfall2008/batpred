@@ -403,8 +403,12 @@ class Inverter():
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
+        if 'prefix' in self.base.args:
+            prefix = self.base.get_arg('prefix', indirect=False)
+        else:
+            prefix = 'prefix'
 
-        entity_id = f"sensor.predbat_{self.inverter_type}_{entity_name}"
+        entity_id = f"sensor.{prefix}_{self.inverter_type}_{entity_name}"
         entity = self.base.get_entity(entity_id)
         entity.set_state(state=value) 
         return entity_id
