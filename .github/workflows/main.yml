@@ -3,6 +3,8 @@ on:
   push:
     branches:
       - documentation
+  release:
+    types: [published]
 permissions:
   contents: write
 jobs:
