@@ -77,7 +77,7 @@ Control per inverter (only used if REST isn't set):
 - **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
 - **charge_start_time** - GivTCP battery charge start time entity
 - **charge_end_time** - GivTCP battery charge end time entity
-- **charge_rate** - GivTCP battery charge rate entity in watts 
+- **charge_rate** - GivTCP battery charge rate entity in watts
 - **discharge_rate** - GivTCP battery discharge max rate entity in watts
 - **battery_power** - GivTCP current battery power in watts
 - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
@@ -102,7 +102,7 @@ They are set to a regular expression and auto-discovered but you can comment out
 - **metric_octopus_import** - Import rates from the Octopus plugin
 - **metric_octopus_export** - Export rates from the Octopus plugin
 - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin installed point to the 'slot' sensor
-- **octopus_saving_session** - Points to the sesnor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_saving_sessions)
+- **octopus_saving_session** - Points to the sensor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_saving_sessions)
 - **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
 - **input_number.predbat_metric_octopus_saving_rate** - Set the assuming saving rate for an Octopus saving session (in pence)
 
@@ -120,6 +120,7 @@ Predbat also include the daily standing charge in cost predictions (optional)
 ## Manual energy rates
 
 Or manually set your rates in a 24-hour period using these:
+
 ```yaml
   rates_import:
     - start : "HH:MM:SS"
@@ -130,6 +131,7 @@ Or manually set your rates in a 24-hour period using these:
       end : "HH:MM:SS"
       rate : p
 ```
+
 **start** and **end** are in time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
 rate is in pence e.g. 4.2
 
@@ -146,7 +148,7 @@ The override is used to set times where rates are different, e.g. an Octopus Pow
       end : "HH:MM:SS"
       rate : p
       date : "YYYY-MM-DD"
-      
+
 **date** is in date format of "YYYY-MM-DD" e.g. "2023-09-09"
 
 ## Car charging filtering
@@ -156,7 +158,7 @@ You might want to remove your electric car charging data from the historical loa
 - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either charge from the grid or you use the Octopus Energy plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
 - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
 - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for more accurate car charging data to filter out
- 
+
 ## Planned car charging
 
 These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus set up you won't need to change these as it's done automatically via their app and the Octopus Energy plugin.
@@ -167,10 +169,10 @@ Only needed if you don't use Intelligent Octopus:
 
 - **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots, or False to disable or True to always enable
 - **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge in the next low rate slot
-- **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw). 
-- **car_charging_battery_size** - Indicates the cars battery size in kWh, defaults to 100. It will be used to predict car charging stops. 
+- **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw).
+- **car_charging_battery_size** - Indicates the cars battery size in kWh, defaults to 100. It will be used to predict car charging stops.
 
-- **car_charging_now** - When set links to a sensor that tells you that the car is currently charging. Predbat will then assume this 30 minute slot is used for charging regardless of the plan. If Octopus Inteligent Charging is enabled then it will also assume it's a low rate slot for the car/house, otherwise rates are taken from the normal rate data.
+- **car_charging_now** - When set links to a sensor that tells you that the car is currently charging. Predbat will then assume this 30 minute slot is used for charging regardless of the plan. If Octopus Intelligent Charging is enabled then it will also assume it's a low rate slot for the car/house, otherwise rates are taken from the normal rate data.
 - **car_charging_now_response** - Sets the range of positive responses for **car_charging_now**, useful if you have a sensor for your car that isn't binary.
 
 - **car_charging_plan_time** - When using Batpred led planning set this to the time you want the car to be charged by
@@ -252,11 +254,11 @@ If you wish to trigger based on charging or discharging the battery rather than 
 
 ## Holiday mode
 
-When you go away you are likely to use less electric and so the previous load data will be quite pessimistic. Using the configuration item **input_number.predbat_holiday_days_left** in Home assistant you can set the number of full days that you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When holiday days left is non-zero holiday mode is active. 
+When you go away you are likely to use less electric and so the previous load data will be quite pessimistic. Using the configuration item **input_number.predbat_holiday_days_left** in Home assistant you can set the number of full days that you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When holiday days left is non-zero holiday mode is active.
 
-When holiday mode is active the historical load data will be taken from yesterdays data (1 day ago) rather than from the **days_previous** setting in apps.yaml. This means Predbat will adjust more quickly to the new useage pattern. 
+When holiday mode is active the historical load data will be taken from yesterdays data (1 day ago) rather than from the **days_previous** setting in apps.yaml. This means Predbat will adjust more quickly to the new usage pattern.
 
-If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going to take longer for the historical data to catch up, you could then enable holiday more for another 7 days after your return. 
+If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going to take longer for the historical data to catch up, you could then enable holiday more for another 7 days after your return.
 
 In summary:
 

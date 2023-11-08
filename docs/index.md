@@ -6,13 +6,13 @@ Also known by some as Batpred or Batman!
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
-```
+```text
 Copyright (c) Trefor Southwell October 2023 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
 
-For support please raise a Github ticket or use the GivTCP Facebook page: 
+For support please raise a Github ticket or use the GivTCP Facebook page:
 
 [https://www.facebook.com/groups/615579009972782](https://www.facebook.com/groups/615579009972782)
 

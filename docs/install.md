@@ -7,14 +7,14 @@
 
 ## AppDaemon install
 
-- Install AppDaemon add-on https://github.com/hassio-addons/addon-appdaemon
+- Install AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
     - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
     - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
 
 ## HACS install
 
-- Install HACS if you haven't already (https://hacs.xyz/docs/setup/download)
-- Enable AppDaemon in HACS: https://hacs.xyz/docs/categories/appdaemon_apps/
+- Install HACS if you haven't already ([https://hacs.xyz/docs/setup/download](https://hacs.xyz/docs/setup/download))
+- Enable AppDaemon in HACS: [https://hacs.xyz/docs/categories/appdaemon_apps/](https://hacs.xyz/docs/categories/appdaemon_apps/)
 
 ## Predbat install
 
@@ -48,7 +48,7 @@ Predbat needs a solar forecast in order to predict battery levels.
 If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv_forecast_* **
 
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
- 
+
 - Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit) in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and just before your nightly charge slot).
 
 - Example Solcast update script:

@@ -1,6 +1,6 @@
 # FAQ
 
-## I've installed Batpred but I don't see the correct entities:
+## I've installed Batpred but I don't see the correct entities
 
 - First look at AppDaemon.log (can be found in the list of log files in the System/Log area of the GUI). See if any errors are warnings are found. If you see an error it's likely something is configured wrongly, check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions). The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names (some people don't have the solcast_ bit in their names)
@@ -36,6 +36,6 @@
 - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
 - Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
-- If your export slots are too small compared to expected check your inverter_limit is set correctly (see below) 
+- If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
 If you are still having trouble feel free to raise a ticket for support to post on the [GivTCP Facebook group](https://www.facebook.com/groups/615579009972782).
