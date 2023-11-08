@@ -1,15 +1,15 @@
-# Customisation 
+# Customisation
 
 These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly.
 Changing the items in apps.yml will have no effect.
 
-Each config item has an input_number or switch associated with it, see the example dashboard for their exact names ([https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml](https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml))
-
-You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards)) and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities)) to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
+See [Displaying output data](output-data.md#displayng-output-data)
+for information on how to view and edit these entities within
+Home Assistant.
 
 ## Performance related
 
-By default Predbat controls the inverter and updates the plan every 5 minutes, this can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Rasperry PIs and some thin clients.
+By default Predbat controls the inverter and updates the plan every 5 minutes, this can however use a lot of CPU power especially on more complex tariffs like Agile when run on lower power machines such as Raspberry PIs and some thin clients.
 
 You can tweak **input_number.predbat_calculate_plan_every** to reduce the frequency of replanning while keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 minutes should also give good results.
 
@@ -38,10 +38,10 @@ e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported b
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
 **pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
-Use 1.0 to use exactly the solcast data (0.9 would remove 10% from forecast)
+Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
 
 **pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
-A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost. 
+A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost.
 A value of 0.15 is recommended.
 
 ## Historical load data
@@ -66,7 +66,7 @@ For more accurate results can you use an incrementing energy sensor set with **c
 
 ## Car charging plan options
 
-Car charging planning - is only used if Intelligent Octopus isn't enabled and car_charging_planned is connected correctly. 
+Car charging planning - is only used if Intelligent Octopus isn't enabled and car_charging_planned is connected correctly.
 
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
@@ -78,7 +78,7 @@ you must have set **octopus_intelligent_slot** sensor in apps.yml to enable this
 
 ## Calculation options
 
-**switch.predbat_calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed. 
+**switch.predbat_calculate_best** When enables tells Predbat to work out the best battery SOC % based on cost, when disabled no scenarios apart from the default settings are computed.
 This must be enabled to get all the 'best' sensors.
 
 **switch.predbat_calculate_best_charge** If set to False then charge windows will not be calculated and the default inverter settings are used, when True predbat will decide the charge window automatically.
@@ -111,7 +111,7 @@ A better plan is achieved leaving this false but it can speed up run time to hav
 
 **metric_min_improvement** sets the minimum cost improvement that it's worth lowering the battery SOC % for.
 If it's 0 then this is disabled and the battery will be charged less if it's cost neutral.
-If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better 
+If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
 
@@ -120,7 +120,7 @@ You could even go to something like -0.1 to say you would charge less even if it
 **rate_low_threshold** sets the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder. You can set this to 0 for automatic rate selection when combined with setting **calculate_max_windows** to a lower number e.g. 24 or 32.
 
-**rate_low_match_export** When enabled consider import rates that are lower than the highest export rate (minus any battery losses). 
+**rate_low_match_export** When enabled consider import rates that are lower than the highest export rate (minus any battery losses).
 This is if you want to be really aggressive about importing just to export, default is False (recommended).
 
 **rate_high_threshold** Sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
@@ -140,7 +140,7 @@ If you set this too high you might not get any export slots. If it's too low you
 
 **set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates
 Only works if the charging time window has been enabled and import rates are configured with the rates_import or using Octopus import
-Will also automatically disable charging if not required and re-enable it when required. 
+Will also automatically disable charging if not required and re-enable it when required.
 If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on.
 
 **set_window_minutes** defines how many minutes before the charge window we should program it (do not set above 30 if you are using Agile or similar)
@@ -167,7 +167,7 @@ If you have **inverter_hybrid** set to False then if **inverter_soc_reset** is s
 
 **set_reserve_enable** When True the reserve % will be reprogrammed during a charging window or discharging window to match the target SOC/discharge % in order
 to prevent discharge and then reset back to minimum % outside the window. Set the set_reserve_min to your minimum reserve % which is often 4%.
-The feature applies with **set_soc_enable** or **set_discharge_window** is True 
+The feature applies with **set_soc_enable** or **set_discharge_window** is True
 
 **set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the minimum and recommended to make use of the full battery
 

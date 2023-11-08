@@ -15,4 +15,6 @@ There are two ways to plan car charging slots:
     - Enable **car_charging_plan_smart** if you want to use the cheapest slots only
     - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
 
-NOTE: Multiple cars can be planned with Predbat, see the planned car charging section below in this guide.
+NOTE: Multiple cars can be planned with Predbat.
+
+See [Car charging filtering](config-yml-settings.md#car-charging-filtering) and [Planned car charging](config-yml-settings.md#planned-car-charging) in the [config.yml settings](config-yml-settings.md) section of the documentation.

@@ -2,7 +2,7 @@
 
 Many people have been asking for video guides for Predbat so I'm going to start recording some of them.
 
-## Overiew
+## Overview
 
 - [https://www.loom.com/share/e7092cce5c6b4caeb87516f98fcb3292?sid=e064dcef-e4aa-4b61-9698-3fa7922d5a69](https://www.loom.com/share/e7092cce5c6b4caeb87516f98fcb3292?sid=e064dcef-e4aa-4b61-9698-3fa7922d5a69)
 

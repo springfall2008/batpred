@@ -1,6 +1,6 @@
-# Step by step guide
+# Installation summary
 
-Note there is a step by step guide video, see the video guides section below for a link. 
+Note there are [step by step installation](video-guides.md#basic-installation) videos, see the [video guides](video-guides.md) section for those and other videos.
 
 Please see the sections below for how to achieve each step. This is just a checklist of things:
 
@@ -29,4 +29,3 @@ Please see the sections below for how to achieve each step. This is just a check
 Overview of the key configuration elements:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/7c9350e0-2b6d-49aa-8f61-93d0547ae6d0)
-

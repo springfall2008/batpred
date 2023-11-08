@@ -3,19 +3,23 @@ theme:
   name: readthedocs
 nav:
   - Introduction: index.md
-  - operation.md
-  - step-by-step-guide.md
-  - install.md
-  - energy-rates.md
-  - car-charge-planning.md
-  - config-yml-settings.md
-  - configuration-guide.md
-  - video-guides.md
-  - faq.md
-  - customisation.md
-  - output-data.md
-  - creating-charts.md
-  - predbat-plan-card.md
-  - todo-list.md
+  - 'What does Predbat do?': what-does-predbat-do.md
+  - 'Installing & configuring Predbat':
+    - 'Install summary': installation-summary.md
+    - 'Install details': install.md
+    - energy-rates.md
+    - car-charge-planning.md
+    - config-yml-settings.md
+    - configuration-guide.md
+    - customisation.md
+    - video-guides.md
+    - faq.md
+  - 'Viewing Predbat data':
+    - output-data.md
+    - creating-charts.md
+    - predbat-plan-card.md
+  - 'Predbat development':
+    - todo-list.md
+    - developing.md
 markdown_extensions:
   - sane_lists
