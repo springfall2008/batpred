@@ -51,21 +51,29 @@ pred_bat:
 # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
     - sensor.solis_rtc 
+
+# This is disabled by default in the Solax integration so it must be manually enabled.
   battery_power: 
     - sensor.solis_battery_power
   pv_power: 
     - sensor.solis_pv_total_power
+
   load_power: 
     - sensor.solis_house_load  
+  # For Solis we need to add the bypass (backup) load to the main house load
   load_power_1: 
     - sensor.solis_bypass_load
+
   soc_percent:
     - sensor.solis_battery_soc
+
+  # Battery capacity in kWh
   soc_max: 
     - 10
   reserve: 
     - number.solis_backup_mode_soc
 
+  # With the Solax integration we need to press a button to send the time to
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times
 

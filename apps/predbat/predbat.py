@@ -153,6 +153,7 @@ INVERTER_DEF={
         "has_ge_inverter_mode": True,
         "time_button_press": False,
         "clock_time_format": "%H:%M:%S",
+        "write_and_poll_sleep": 10, 
     },
     "GS": {
         'has_rest_api': False,
@@ -167,7 +168,8 @@ INVERTER_DEF={
         'num_load_entities': 2,
         'has_ge_inverter_mode': False,
         'time_button_press': False,        
-        "clock_time_format": "%Y-%m-%d %H:%M:%S",        
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",       
+        "write_and_poll_sleep": 0, 
      },
 }
 
@@ -244,6 +246,8 @@ class Inverter():
         self.inv_time_button_press = INVERTER_DEF[self.inverter_type]["time_button_press"]
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]['has_ge_inverter_mode']
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]['num_load_entities']
+        self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]['write_and_poll_sleep']
+
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != 'GE':
@@ -857,13 +861,20 @@ class Inverter():
         """
         GivTCP Workaround, keep writing until correct
         """
+        domain=entity.domain
+        if domain == 'sensor':
+            if new_value:
+                entity.set_state(state='on')
+            else:
+                entity.set_state(state='off')
+            return True
         tries = 6
         for retry in range(0, 6):
             if new_value:
                 entity.call_service('turn_on')
             else:
                 entity.call_service('turn_off')
-            time.sleep(10)
+            time.sleep(self.inv_write_and_poll_sleep)
             old_value = entity.get_state()
             if isinstance(old_value, str):
                 if old_value.lower() in ['on', 'enable', 'true']:
@@ -882,23 +893,23 @@ class Inverter():
         domain = entity.domain
         if domain == 'sensor':
             entity.set_state(state=new_value)
-
+            return True
         else:
         # GivTCP Workaround, keep writing until correct
             for retry in range(0, 6):
-                entity.call_service("set_value", value=new_value)
-                time.sleep(10)
+                entity.call_service("set_value", value=int(new_value))
+                time.sleep(self.inv_write_and_poll_sleep)
                 if isinstance(new_value, str):
                     old_value = entity.get_state()
                     if old_value == new_value:
                         self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, entity.get_state))
                         return True
                 else:
-                    old_value = int(entity.get_state())
+                    old_value = int(float(entity.get_state()))
                     if (abs(old_value - new_value) <= fuzzy):
-                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(entity.get_state())))
+                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(float(entity.get_state()))))
                         return True
-        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, int(entity.get_state())))
+        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
@@ -908,7 +919,7 @@ class Inverter():
         """
         for retry in range(0, 6):
             entity.call_service("select_option", option=new_value)
-            time.sleep(10)
+            time.sleep(self.inv_write_and_poll_sleep)
             old_value = entity.get_state()
             if old_value == new_value:
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
@@ -1056,10 +1067,10 @@ class Inverter():
 
                     if self.inv_charge_time_format == 'H M':
                         # If the inverter uses hours and minutes then write to these entities too
-                        entity_start_hour = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_hour", entity_start_hour, int(new_start[:2]))
-                        entity_start_minute = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_minute", entity_start_minute, int(new_start[3:5]))
+                        entity = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
+                        self.write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
+                        entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
+                        self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
 
                     # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
@@ -1087,10 +1098,10 @@ class Inverter():
                         self.write_and_poll_value("discharge_end_time", entity_discharge_end_time, new_end)                        
 
                     if self.inv_charge_time_format == 'H M':
-                        entity_discharge_end_hour = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_hour", entity_discharge_end_hour, int(new_end[:2]))
-                        entity_discharge_end_minute = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_minute", entity_discharge_end_minute, int(new_end[3:5]))
+                        entity = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
+                        self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2])) 
+                        entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
+                        self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
                     # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
@@ -1160,6 +1171,14 @@ class Inverter():
                 else:
                     entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     self.write_and_poll_switch('scheduled_charge_enable', entity, False)
+                    # If there's no charge enable switch then we can disable using start and end time
+                    if not self.inv_has_charge_enable_time:
+                        for x in ['start', 'end']:
+                            for y in ['hour', 'end']:
+                                name = f"charge_{x}_{y}"
+                                entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
+                                self.write_and_poll_value(name, entity, 0)    
+                        
                 if self.base.set_soc_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
@@ -1263,10 +1282,10 @@ class Inverter():
 
                     if self.inv_charge_time_format == 'H M':
                         # If the inverter uses hours and minutes then write to these entities too
-                        entity_start_hour = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_hour", entity_start_hour, int(new_start[:2]))
-                        entity_start_minute = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_minute", entity_start_minute, int(new_start[3:5]))
+                        entity = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
+                        self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
+                        entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
+                        self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
                     # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
@@ -1291,10 +1310,10 @@ class Inverter():
                         self.write_and_poll_value("charge_end_time", entity_end, new_end)
 
                     if self.inv_charge_time_format == 'H M':
-                        entity_end_hour = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_hour", entity_end_hour, int(new_end[:2]))
-                        entity_end_minute = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_minute", entity_end_minute, int(new_end[3:5]))
+                        entity = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
+                        self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
+                        entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
+                        self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
                     # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
