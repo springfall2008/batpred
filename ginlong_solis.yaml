@@ -15,6 +15,24 @@ pred_bat:
   # Sensors, currently more than one can be specified and they will be summed up automatically
   # however if you have two inverters only set one of them as they will both read the same.
   #
+
+
+  inverter_type: "GS"
+  num_inverters: 1
+  #
+  # Controls/status - must by 1 per inverter
+  # 
+
+
+  # Max inverter power from battery
+  battery_rate_max:
+    - 3600 
+  # Battery capacity in kWh
+  soc_max: 
+    - 10
+
+  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
+
   load_today: 
     - sensor.solis_house_load_today
   import_today: 
@@ -23,53 +41,29 @@ pred_bat:
     - sensor.solis_grid_import_today
   pv_today:
     - sensor.solis_power_generation_today
-  #
-  # Controls/status - must by 1 per inverter
-  # 
-  num_inverters: 1
- 
-# Refactors much of the support for additional inverters. The approach is to treat the GE model as the default and where
-# a differnt brand has different requirements to mimic the GE approach with dummy entities which are set internally. The
-# external entities as then in addition to these GE entities and are set via the config.yaml
-
-# An example is "charge_rate": GE uses power but GS uses current so we creat a dummy power entity `sensor.predbat_GS_charge_rate`` 
-# and write and read to that as usual but in parallet we get a `timed_charge_current` entity from the config file and when to 
-# which we write to equivalent current
-
-  battery_charge_current_limit:
-    - sensor.solis_battery_charge_current_limit  
 
   battery_voltage:
     - sensor.solis_battery_voltage
 
-
-
-# Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
-
-  inverter_type: "GS"
-
-# This is disabled by default in the Solax integration so it must be manually enabled.
+  # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
     - sensor.solis_rtc 
 
-# This is disabled by default in the Solax integration so it must be manually enabled.
+  # This is disabled by default in the Solax integration so it must be manually enabled.
   battery_power: 
     - sensor.solis_battery_power
   pv_power: 
     - sensor.solis_pv_total_power
 
+  # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
   load_power: 
     - sensor.solis_house_load  
-  # For Solis we need to add the bypass (backup) load to the main house load
   load_power_1: 
     - sensor.solis_bypass_load
 
   soc_percent:
     - sensor.solis_battery_soc
 
-  # Battery capacity in kWh
-  soc_max: 
-    - 10
   reserve: 
     - number.solis_backup_mode_soc
 
@@ -109,7 +103,7 @@ pred_bat:
  
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
-  #export_limit:
+  #export_limit: 
   # - 3600
   # - 3600
   #
