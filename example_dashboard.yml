@@ -1,8 +1,8 @@
-# This is just a list of all the entities in case you want to add them to a dasboard
+# This is just a list of all the entities in case you want to add them to a dashboard
 type: entities
 entities:
   - entity: predbat.status
-  - entity: switch.predbat_set_read_only 
+  - entity: switch.predbat_set_read_only
   - entity: switch.predbat_debug_enable
   - entity: switch.predbat_calculate_best
   - entity: switch.predbat_calculate_best_charge

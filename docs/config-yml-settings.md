@@ -11,7 +11,7 @@ Basic configuration items
 - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
 - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
 - **forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
-  
+
 ## Inverter information
 
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
@@ -24,7 +24,7 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 ### Data from GivTCP
 
   It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
-  
+
 - **load_today**   - GivTCP Entity name for the house load in kWh today (must be incrementing)
 - **import_today** - GivTCP Imported energy today in kWh (incrementing)
 - **export_today** - GivTCP Exported energy today in kWh (incrementing)
@@ -93,7 +93,7 @@ The following are entity names in Solcast, unlikely to need changing although a 
 - **pv_forecast_tomorrow** - Entity name for solcast forecast for tomorrow
 - **pv_forecast_d3** - Entity name for solcast forecast for day 3
 - **pv_forecast_d4** - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
-  
+
 ## Octopus Energy
 
 The following are entity names in the Octopus Energy plugin.
@@ -177,7 +177,7 @@ Only needed if you don't use Intelligent Octopus:
 
 - **car_charging_plan_time** - When using Batpred led planning set this to the time you want the car to be charged by
 - **car_charging_plan_smart** - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
-  
+
 Connect to your cars sensors for accurate data:
 
 - **car_charging_limit** - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
