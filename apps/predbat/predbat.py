@@ -45,6 +45,7 @@ INVERTER_TYPES = {
     "GE": "GivEnergy",
     "GS": "Ginlong Solis",
     "SE": "SolarEdge",
+    "SX4": "Solax Gen4 (Modbus Power Control)"
 }
 
 CONFIG_ITEMS = [
@@ -173,7 +174,23 @@ INVERTER_DEF={
         "write_and_poll_sleep": 2, 
         "has_time_window": True,
      },
-
+    "SX4": {
+        'has_rest_api': False,
+        'output_charge_control': "power",
+        'has_charge_enable_time': False,
+        'has_discharge_enable_time': False,
+        'has_target_soc': False,
+        'has_reserve_soc': False,
+        'charge_time_format': "S",
+        "charge_time_entity_is_option": False,
+        'soc_units': '%',
+        'num_load_entities': 1,
+        'has_ge_inverter_mode': False,
+        'time_button_press': True,        
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",       
+        "write_and_poll_sleep": 2, 
+        "has_time_window": False,
+     },     
 }
 
 
@@ -806,9 +823,7 @@ class Inverter():
                     self.write_and_poll_value('discharge_rate', entity, new_rate, fuzzy=100)
 
                     if self.inv_output_charge_control == 'current':
-                        new_current = new_rate / self.battery_voltage
-                        entity = self.base.get_entity(self.base.get_arg('timed_discharge_current', indirect=False, index=self.id))
-                        self.write_and_poll_value('timed_discharge_current', entity, new_current, fuzzy=100)
+                        self.set_current_from_power("discharge", new_rate)
 
                 if notify and self.base.set_discharge_notify:
                     self.base.call_notify('Predbat: Inverter {} discharge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
@@ -1172,13 +1187,9 @@ class Inverter():
                 else:
                     entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     self.write_and_poll_switch('scheduled_charge_enable', entity, False)
-                    # If there's no charge enable switch then we can disable using start and end time
+                    # If there's no charge enable switch then we can enable using start and end time
                     if not self.inv_has_charge_enable_time:
-                        for x in ['start', 'end']:
-                            for y in ['hour', 'end']:
-                                name = f"charge_{x}_{y}"
-                                entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
-                                self.write_and_poll_value(name, entity, 0)    
+                        self.enable_charge_discharge_with_time_current(self, "charge", False)
                         
                 if self.base.set_soc_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
@@ -1193,6 +1204,24 @@ class Inverter():
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_end_time_minutes = self.base.forecast_minutes
+
+    def enable_charge_discharge_with_time_current(self, direction, enable):
+        # To enable we set the current based on the required power
+        if enable:
+            power = self.base.get_arg(f'{direction}_rate', index=self.id, default=2600.0)
+            self.set_current_from_power(power)
+        else:
+        # To disable we set both times to 00:00
+            for x in ['start', 'end']:
+                for y in ['hour', 'minute']:
+                    name = f"{direction}_{x}_{y}"
+                    entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
+                    self.write_and_poll_value(name, entity, 0)    
+
+    def set_current_from_power(self, direction, power):
+        new_current = power / self.battery_voltage
+        entity = self.base.get_entity(self.base.get_arg(f'timed_{direction}_current', indirect=False, index=self.id))
+        self.write_and_poll_value('timed_direction_current', entity, new_current, fuzzy=100)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -1337,6 +1366,8 @@ class Inverter():
                 elif 'scheduled_charge_enable' in self.base.args:
                     entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     self.write_and_poll_switch('scheduled_charge_enable', entity, True)
+                    if not self.inv_has_charge_enable_time:
+                        self.enable_charge_discharge_with_time_current(self, "charge", True)                    
                 else:           
                     self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
