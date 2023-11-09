@@ -1076,11 +1076,6 @@ class Inverter():
                         self.write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
                         entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
-
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
-                    if self.inv_time_button_press:
-                        entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                        entity.call_service("button/press")
                 else:
                     self.log("WARN: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
 
@@ -1107,13 +1102,14 @@ class Inverter():
                         self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2])) 
                         entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
-                    if self.inv_time_button_press:
-                        entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                        entity.call_service("button/press")
-
                 else:
                     self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
+
+        if (new_end != old_end) or (new_start != old_start):
+            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+            if self.inv_time_button_press:
+                entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
+                entity.call_service("button/press")
 
         # REST version of writing slot
         if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
@@ -1291,10 +1287,7 @@ class Inverter():
                         self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
-                    if self.inv_time_button_press:
-                        entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                        entity.call_service("button/press")
+
                 else:
                     self.log("WARN: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
@@ -1319,10 +1312,6 @@ class Inverter():
                         self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
-                    if self.inv_time_button_press:
-                        entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                        entity.call_service("button/press")
                 else:
                     self.log("WARN: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
@@ -1330,6 +1319,11 @@ class Inverter():
             if self.rest_api and not SIMULATE:
                 self.rest_setChargeSlot1(new_start, new_end)
 
+            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+            if self.inv_time_button_press:
+                entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
+                entity.call_service("button/press")
+                
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
             self.base.record_status("Inverter {} Charge window change to: {} - {}".format(self.id, new_start, new_end))
@@ -1357,6 +1351,20 @@ class Inverter():
 
             if old_charge_schedule_enable == 'off' or old_charge_schedule_enable == 'disable':
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
+
+    def press_and_poll_button(self, entity):
+        for retry in range(0, 6):
+            entity.call_service("button/press")
+            time.sleep(self.inv_write_and_poll_sleep)
+            time_pressed = datetime.strptime(entity.get_state(),TIME_FORMAT_SECONDS)
+            
+            if (pytz.timezone("UTC") .localize(datetime.now())-time_pressed).seconds < 10:
+                self.base.log(f"Successfully pressed button {entity} on Inverter {self.id}")
+                return True
+        self.base.log(f"WARN: Inverter {self.id} Trying to press {entity} didn't complete")
+        self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity} didn't complete")
+        return False
+
 
     def rest_readData(self, api='readData'):
         """
