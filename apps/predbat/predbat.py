@@ -1121,7 +1121,7 @@ class Inverter():
             # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
                 entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                entity.call_service("button/press")
+                self.press_and_poll_button(entity)
 
         # REST version of writing slot
         if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
@@ -1346,7 +1346,7 @@ class Inverter():
             # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
                 entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
-                entity.call_service("button/press")
+                self.press_and_poll_button(entity)
                 
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
