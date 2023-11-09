@@ -1,0 +1,30 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+    -   id: file-contents-sorter
+        files: ^(\.cspell\/custom-dictionary-workspace.txt)$
+        args: ["--ignore-case", "--unique"]
+    -   id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+        exclude: (example_chart.yml|solaredge.yaml)
+# -   repo: https://github.com/psf/black
+#     rev: 22.10.0
+#     hooks:
+#     -   id: black
+# - repo: https://github.com/igorshubovych/markdownlint-cli
+#   rev: master  # or specific git tag
+#   hooks:
+#     - id: markdownlint # Configure in .mdlrc
+- repo: https://github.com/streetsidesoftware/cspell-cli
+  rev: v8.0.0
+  hooks:
+    - id: cspell
+      additional_dependencies:
+        - "@cspell/dict-en-gb"
+      # args:
+        # - "lint"
+        # - "--locale"
+        # - "en-GB" # We do this for this doc's simplicity
