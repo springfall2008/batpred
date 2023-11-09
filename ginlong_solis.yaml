@@ -6,7 +6,7 @@ pred_bat:
   prefix: predbat
 
   # XXX: This is a configuration template, delete this line once you edit your configuration
-  # template: True
+  template: True
 
   # Timezone to work in
   timezone: Europe/London
@@ -16,13 +16,11 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
 
-
   inverter_type: "GS"
   num_inverters: 1
   #
   # Controls/status - must by 1 per inverter
   #
-
 
   # Max inverter power from battery
   battery_rate_max:

@@ -19,6 +19,7 @@ nav:
     - creating-charts.md
     - predbat-plan-card.md
   - 'Predbat development':
+    - other-inverters.md
     - todo-list.md
     - developing.md
 markdown_extensions:

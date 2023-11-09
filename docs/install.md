@@ -1,15 +1,21 @@
 # Install
 
-## GivTCP install
+## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
-- You must have GivTCP installed and running first ([https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp))
-    - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
+The Integration that communicates with your inverter will be dependen on the brand:
+
+| Brand     | Integration  | Github Link                                                                      |
+| :-------- | :----------- | :------------------------------------------------------------------------------- |
+| GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
+| Solis     | SolaX ModBus | https://github.com/wills106/homeassistant-solax-modbus                           |
+
+- You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 
 ## AppDaemon install
 
 - Install AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-    - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
-    - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
+  - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
+  - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
 
 ## HACS install
 
@@ -25,11 +31,11 @@
 - Add https://github.com/springfall2008/batpred as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
 
-*After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update (If this happens you will get a template configuration error).*
+_After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update (If this happens you will get a template configuration error)._
 
 - Edit in HomeAssistant config/appdaemon/apps/predbat/config/apps.yml to configure
-    - You must delete the 'template: True' line in the configuration to enable Predbat once you are happy with your configuration
-    - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
+  - You must delete the 'template: True' line in the configuration to enable Predbat once you are happy with your configuration
+  - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
 
 ## Predbat manual install
 
@@ -45,7 +51,7 @@
 
 Predbat needs a solar forecast in order to predict battery levels.
 
-If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv_forecast_* **
+If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv*forecast*\* **
 
 - Make sure Solcast is installed and working (https://github.com/oziee/ha-solcast-solar)
 
