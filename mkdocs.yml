@@ -1,0 +1,25 @@
+site_name: Predbat Documentation
+theme:
+  name: readthedocs
+nav:
+  - Introduction: index.md
+  - 'What does Predbat do?': what-does-predbat-do.md
+  - 'Installing & configuring Predbat':
+    - 'Install summary': installation-summary.md
+    - 'Install details': install.md
+    - energy-rates.md
+    - car-charge-planning.md
+    - config-yml-settings.md
+    - configuration-guide.md
+    - customisation.md
+    - video-guides.md
+    - faq.md
+  - 'Viewing Predbat data':
+    - output-data.md
+    - creating-charts.md
+    - predbat-plan-card.md
+  - 'Predbat development':
+    - todo-list.md
+    - developing.md
+markdown_extensions:
+  - sane_lists
