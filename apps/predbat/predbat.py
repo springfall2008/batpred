@@ -154,6 +154,7 @@ INVERTER_DEF={
         "time_button_press": False,
         "clock_time_format": "%H:%M:%S",
         "write_and_poll_sleep": 10, 
+        "has_time_window": True,
     },
     "GS": {
         'has_rest_api': False,
@@ -169,8 +170,10 @@ INVERTER_DEF={
         'has_ge_inverter_mode': False,
         'time_button_press': False,        
         "clock_time_format": "%Y-%m-%d %H:%M:%S",       
-        "write_and_poll_sleep": 0, 
+        "write_and_poll_sleep": 2, 
+        "has_time_window": True,
      },
+
 }
 
 
@@ -303,8 +306,7 @@ class Inverter():
                 self.battery_rate_max_raw = self.base.get_arg('charge_rate', attribute='max', index=self.id, default=2600.0)
             elif 'battery_rate_max' in self.base.args:
                 self.battery_rate_max_raw = self.base.get_arg('battery_rate_max', index=self.id, default=2600.0)
-            elif 'battery_charge_current_limit' in self.base.args: 
-                    self.battery_rate_max_raw = self.base.get_arg('battery_charge_current_limit', index=self.id, default=65.0) * self.battery_voltage
+
 
             else:
                 self.battery_rate_max_raw = 2600.0
@@ -404,7 +406,7 @@ class Inverter():
         if self.inv_charge_time_format != "HH:MM:SS":
             for x in ['charge', 'discharge']:
                 for y in ['start', 'end']:
-                    self.base.args[f'{x}_{y}_time'] = self.create_entity(f'{x}_{y}_time', "00:00:00")
+                    self.base.args[f'{x}_{y}_time'] = self.create_entity(f'{x}_{y}_time', "23:59:00")
         
    
 
