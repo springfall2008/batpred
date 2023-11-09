@@ -343,10 +343,10 @@ class Inverter():
             tdiff = self.inverter_time - self.base.now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60*24)
             if not quiet:
-                self.base.log("Invertor time {} AppDeamon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
+                self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
             if abs(tdiff) >= 5:
-                self.base.log("WARN: Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff))
-                self.base.record_status("Invertor time is {} AppDeamon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDeamon time zone".format(self.inverter_time, self.base.now_utc, tdiff), had_errors=True)
+                self.base.log("WARN: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(self.inverter_time, self.base.now_utc, tdiff))
+                self.base.record_status("Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(self.inverter_time, self.base.now_utc, tdiff), had_errors=True)
 
         # Get current reserve value
         if self.rest_data:
@@ -372,14 +372,14 @@ class Inverter():
         self.export_limit = min(self.export_limit, self.inverter_limit)
 
 
-        # Log inveter details
+        # Log inverter details
         if not quiet:
             self.base.log("New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(self.id, self.base.dp2(self.soc_max),
                 self.base.dp2(self.nominal_capacity), self.base.dp2(self.battery_rate_max_raw), self.base.dp2(self.battery_rate_max_charge * 60.0), self.base.dp2(self.battery_rate_max_discharge * 60.0), self.base.dp2(self.battery_rate_min * 60.0 * 1000.0),
                 self.base.dp2(self.inverter_limit*60), self.base.dp2(self.export_limit*60), self.reserve_percent, self.reserve_percent_current))
 
 
-        # Create some dummy entities if PredBat expects them but they don't extist for this Inverter Type:
+        # Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type:
         # Args are also set for these so that no entries are needed for the dummies in the config file
 
         if not self.inv_has_charge_enable_time:
@@ -1075,7 +1075,7 @@ class Inverter():
                         entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
 
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+                    # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
@@ -1105,7 +1105,7 @@ class Inverter():
                         self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2]))
                         entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+                    # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
@@ -1289,7 +1289,7 @@ class Inverter():
                         self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+                    # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
@@ -1317,7 +1317,7 @@ class Inverter():
                         self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
                         self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
-                    # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+                    # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
                     if self.inv_time_button_press:
                         entity = self.base.get_entity(self.base.get_arg('charge_discharge_update_button', indirect=False, index=self.id))
                         entity.call_service("button/press")
@@ -1418,7 +1418,7 @@ class Inverter():
             self.rest_data = self.rest_runAll()
             new = self.rest_data['Control']['Battery_Charge_Rate']
             if abs(new - rate) <  100:
-                self.base.log("Inverter {} set charge rate {} via REST succesfull on retry {}".format(self.id, rate, retry))
+                self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
         self.base.log("WARN: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data['Control']['Battery_Charge_Rate']))
@@ -1438,7 +1438,7 @@ class Inverter():
             self.rest_data = self.rest_runAll()
             new = self.rest_data['Control']['Battery_Discharge_Rate']
             if abs(new - rate) <  100:
-                self.base.log("Inverter {} set discharge rate {} via REST succesfull on retry {}".format(self.id, rate, retry))
+                self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
         self.base.log("WARN: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data['Control']['Battery_Discharge_Rate']))
@@ -2465,7 +2465,7 @@ class PredBat(hass.Hass):
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
-        # Work out diveragence
+        # Work out divergence
         if not self.calculate_inday_adjustment:
             difference_cap = 1.0
         else:
@@ -2515,7 +2515,7 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forcast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(pv_total, pv_total10, pv_factor))
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(pv_total, pv_total10, pv_factor))
             return pv_factor
         else:
             return None
@@ -4926,7 +4926,7 @@ class PredBat(hass.Hass):
                 state = 'on'
             else:
                 state = 'off'
-            self.log("Evalute trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
+            self.log("Evaluate trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
             self.set_state(sensor_name, state=state, attributes = {'friendly_name' : 'Predbat export trigger ' + name, 'required' : energy, 'available' : self.dp2(total_energy), 'minutes' : minutes, 'icon': 'mdi:clock-start'})
 
     def set_charge_discharge_status(self, isCharging, isDischarging):
@@ -5039,7 +5039,7 @@ class PredBat(hass.Hass):
         new_enable = []
         for window_n in range(0, len(discharge_limits_best)):
             if discharge_limits_best[window_n] < 100.0:
-                # Also merge contigous enabled windows
+                # Also merge contiguous enabled windows
                 if new_best and (discharge_window_best[window_n]['start'] == new_best[-1]['end']) and (discharge_limits_best[window_n] == new_enable[-1]):
                     new_best[-1]['end'] = discharge_window_best[window_n]['end']
                     if self.debug_enable:
@@ -5191,7 +5191,7 @@ class PredBat(hass.Hass):
         self.car_charging_planned_response = self.get_arg('car_charging_planned_response', ['yes', 'on', 'enable', 'true'])
         self.car_charging_now_response = self.get_arg('car_charging_now_response', ['yes', 'on', 'enable', 'true'])
 
-        # Car charging plannned sensor
+        # Car charging planned sensor
         for car_n in range(0, self.num_cars):
             # Get car N planned status
             planned = self.get_arg('car_charging_planned', "no", index=car_n)
@@ -5236,8 +5236,8 @@ class PredBat(hass.Hass):
         total_sensor = 0
 
         if argname in self.args:
-            # Found out if detailedForcast is present or not, then set the attribute name
-            # in newer solcast plugings only forecast is used
+            # Found out if detailedForecast is present or not, then set the attribute name
+            # in newer solcast plugins only forecast is used
             attribute = 'detailedForecast'
             entity_id = self.get_arg(argname, None, indirect=False)
             if entity_id:
@@ -5651,7 +5651,7 @@ class PredBat(hass.Hass):
                 minutes_start = window['start']
                 minutes_end = window['end']
 
-                # Combine contigous windows
+                # Combine contiguous windows
                 for windows in self.charge_window_best:
                     if minutes_end == windows['start']:
                         minutes_end = windows['end']
@@ -6073,7 +6073,7 @@ class PredBat(hass.Hass):
                     if not start or not end:
                         start = self.get_state(entity_id = entity_id, attribute='next_joined_event_start')
                         end = self.get_state(entity_id = entity_id, attribute='next_joined_event_end')
-                    self.log("Next Octopus saving sesssion: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+                    self.log("Next Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
                     octopus_saving_slot['start'] = start
                     octopus_saving_slot['end'] = end
                     octopus_saving_slot['rate'] = saving_rate
@@ -6154,7 +6154,7 @@ class PredBat(hass.Hass):
         if self.import_today:
             self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
 
-        # Fetch PV forecast if enbled, today must be enabled, other days are optional
+        # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
 
         # Fetch extra load forecast
@@ -6738,8 +6738,8 @@ class PredBat(hass.Hass):
 
         # Catch template configurations and exit
         if self.get_arg('template', False):
-            self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDeamon if you just updated with HACS")
-            self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDeamon if you just updated with HACS")
+            self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
+            self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
 
         if SIMULATE and SIMULATE_LENGTH:
