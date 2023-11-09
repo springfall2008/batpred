@@ -407,10 +407,10 @@ class Inverter():
             self.base.args['scheduled_discharge_enable'] = self.create_entity('scheduled_discharge_enable', False)
 
         if not self.inv_has_reserve_soc:
-            self.base.args['reserve'] = self.create_entity('reserve', self.reserve)
+            self.base.args['reserve'] = self.create_entity('reserve', self.reserve,device_class='battery', uom="%")
 
         if not self.inv_has_target_soc:
-            self.base.args['charge_limit'] = self.create_entity('charge_limit', 100)
+            self.base.args['charge_limit'] = self.create_entity('charge_limit', 100, device_class='battery', uom="%")
 
         if self.inv_output_charge_control != 'power':
             self.base.args['charge_rate']=self.create_entity('charge_rate', self.battery_rate_max_charge * 60 * 1000, uom="W", device_class="power")
