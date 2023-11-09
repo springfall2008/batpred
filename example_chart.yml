@@ -205,7 +205,7 @@ series:
       Date(key).getTime(), -value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
     show:
-      in_header: raw      
+      in_header: raw
   - entity: predbat.base10_metric
     stroke_width: 1
     curve: smooth
@@ -383,9 +383,9 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
-      
+
 ##############################################################################################
-# Example car battery prediction chart  
+# Example car battery prediction chart
 # Change sensor.tsunami_battery to your own car battery % sensor
 ##############################################################################################
 type: custom:apexcharts-card
