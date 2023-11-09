@@ -616,6 +616,17 @@ class Inverter():
         else:
             self.current_charge_limit = 0.0
 
+        # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
+        if not self.inv_has_target_soc:
+            if (self.soc_percent >= self.current_charge_limit) and (self.base.get_arg(f'timed_charge_current', index=self.id) > 0 ):
+                self.set_current_from_power("charge", 0)
+                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Charge power set to 0")
+            elif (self.soc_percent < self.current_charge_limit) and (self.base.get_arg(f'timed_charge_current', index=self.id) == 0):
+                self.base.get_arg('charge_rate', index=self.id, default=2600.0)
+                self.set_current_from_power("charge", self.base.get_arg('charge_rate', index=self.id, default=2600.0))
+                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
+
+
         if not quiet:
             if self.charge_enable_time:
                 self.base.log("Inverter {} Charge settings: {}-{} limit {} power {} kw".format(self.id, self.base.time_abs_str(self.charge_start_time_minutes), self.base.time_abs_str(self.charge_end_time_minutes), self.current_charge_limit, self.charge_rate_now * 60.0))
@@ -770,9 +781,7 @@ class Inverter():
                     # Write
                     self.write_and_poll_value('charge_rate', entity, new_rate, fuzzy=100)
                     if self.inv_output_charge_control == 'current':
-                        new_current = new_rate / self.battery_voltage
-                        entity = self.base.get_entity(self.base.get_arg('timed_charge_current', indirect=False, index=self.id))
-                        self.write_and_poll_value('timed_charge_current', entity, new_current, fuzzy=100)
+                        self.set_current_from_power("charge", new_rate)
 
                 if notify and self.base.set_soc_notify:
                     self.base.call_notify('Predbat: Inverter {} charge rate changes to {} at {}'.format(self.id, new_rate, self.base.time_now_str()))
@@ -855,10 +864,10 @@ class Inverter():
             if self.rest_data:
                 current_soc = float(self.rest_data['Control']['Target_SOC'])
             else:
-                current_soc = self.base.get_arg('charge_limit', index=self.id)
+                current_soc = int(self.base.get_arg('charge_limit', index=self.id))
 
         if current_soc != soc:
-            self.base.log("Inverter {} Current charge Limit is {} % and new target is {} %".format(self.id, current_soc, soc))
+            self.base.log("Inverter {} Current charge limit is {} % and new target is {} %".format(self.id, current_soc, soc))
             if SIMULATE:
                 self.base.sim_soc = soc
             else:
@@ -1215,9 +1224,9 @@ class Inverter():
                     self.write_and_poll_value(name, entity, 0)    
 
     def set_current_from_power(self, direction, power):
-        new_current = power / self.battery_voltage
+        new_current = round(power / self.battery_voltage,1)
         entity = self.base.get_entity(self.base.get_arg(f'timed_{direction}_current', indirect=False, index=self.id))
-        self.write_and_poll_value('timed_direction_current', entity, new_current, fuzzy=100)
+        self.write_and_poll_value(f'timed_{direction}_current', entity, new_current, fuzzy=100)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
