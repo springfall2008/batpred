@@ -1,7 +1,9 @@
 # Custom Dictionary Words
+adbase
 Anson
 apexcharts
 appdaemon
+appkey
 automations
 Batpred
 bierner
@@ -10,10 +12,13 @@ collapsable
 crosscharge
 customisation
 Customise
+datapoints
 devcontainer
 devcontainers
 diverter
+gekey
 geserial
+Ginlong
 givtcp
 HACS
 hass
@@ -21,6 +26,7 @@ hassapi
 homeassistant
 iboost
 inday
+Krakenflex
 linebreak
 lockstep
 markdownlint
@@ -35,12 +41,15 @@ Predbat
 Predheat
 pytz
 SolarEdge
+Solax
 Solcast
 Southwell
 stepline
+timelapse
 timeobj
 timezone
 Trefor
+treforsiphone
 Wallbox
 xaxis
 yaxis
