@@ -26,7 +26,7 @@ set_reserve_enable - True          # Use the reserve to stop fluctuations in the
 set_reserve_hold - True            # Means if you don't need to charge then charging won't be enabled
 calculate_best_charge - True       # You want the tool to calculate charging
 combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
-metric_min_improvement - 0         # Charge less if it's cost neutral 
+metric_min_improvement - 0         # Charge less if it's cost neutral
 set_charge_window - True           # You want to have Predbat control the charge window
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
 best_soc_min - 0.0                 # You can also set this to best_soc_keep if you don't want charging to be turned off overnight when it's not required
@@ -45,7 +45,7 @@ calculate_discharge_first - True       # Give priority to discharge when it's pr
 combine_charge_slots - True            # Keep one big charge slot
 combine_discharge_slots - False        # For fixed export rate you have to break up the discharge slots
 set_discharge_window - True            # Allow the tool to control the discharge slots
-metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0   # Discharge even if cost neutral, as you often need many slots to see the improvement
 rate_high_threshold: 0                 # Automatic high rate selection
 set_discharge_freeze - True            # Allow Predbat to hold the current battery level rather than just discharge
@@ -68,7 +68,7 @@ calculate_discharge_first - True       # Give priority to discharge when it's pr
 combine_charge_slots - True            # Keep one big charge slot
 combine_discharge_slots - True         # As these rates have fixed longer periods then a single slot is fine
 set_discharge_window - True            # Allow the tool to control the discharge slots
-metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_low_threshold: 0.8                # Select rates 20 % below average only
 rate_high_threshold: 1.2               # Export rates 20 % above average only
@@ -86,7 +86,7 @@ calculate_best_discharge - True        # Enable discharge calculation
 calculate_discharge_first - True       # Give priority to discharge when it's profitable
 set_discharge_window - True            # Allow the tool to control the discharge slots
 combine_discharge_slots - False        # Split into 30 minute chunks for best optimisation
-metric_min_improvement - 0             # Charge less if it's cost neutral 
+metric_min_improvement - 0             # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0.1 # Make sure discharge only happens if it makes a profit
 rate_low_match_export - False          # Start with this at False but you can try it as True if you want to charge at higher rates to export even more
 rate_low_threshold: 0                  # Automatic rate selection (can also be tuned manually to find the rates you want)
