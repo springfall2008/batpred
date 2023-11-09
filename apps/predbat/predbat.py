@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.12'
+THIS_VERSION = 'v7.11.12.1'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1186,7 +1186,7 @@ class Inverter():
                     self.write_and_poll_switch('scheduled_charge_enable', entity, False)
                     # If there's no charge enable switch then we can enable using start and end time
                     if not self.inv_has_charge_enable_time:
-                        self.enable_charge_discharge_with_time_current(self, "charge", False)
+                        self.enable_charge_discharge_with_time_current("charge", False)
                 if self.base.set_soc_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
@@ -1362,7 +1362,7 @@ class Inverter():
                     entity = self.base.get_entity(self.base.get_arg('scheduled_charge_enable', indirect=False, index=self.id))
                     self.write_and_poll_switch('scheduled_charge_enable', entity, True)
                     if not self.inv_has_charge_enable_time:
-                        self.enable_charge_discharge_with_time_current(self, "charge", True)                    
+                        self.enable_charge_discharge_with_time_current("charge", True)                    
                 else:           
                     self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
