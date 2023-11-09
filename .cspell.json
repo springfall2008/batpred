@@ -1,0 +1,24 @@
+{
+    "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+    "version": "0.2",
+
+    // Enable your dictionary by adding it to the list of `dictionaries`
+    "dictionaries": ["custom-dictionary-workspace"],
+
+    // Tell CSpell about your dictionary
+    "dictionaryDefinitions": [
+        {
+            // The name of the dictionary is used to look it up.
+            "name": "custom-dictionary-workspace",
+            // Path to the custom word file. Relative to this `cspell.json` file.
+            "path": "./.cspell/custom-dictionary-workspace.txt",
+            // Some editor extensions will use `addWords` for adding words to your
+            // personal dictionary.
+            "addWords": true
+        }
+    ],
+    "import": [
+        "@cspell/dict-en-gb/cspell-ext.json"
+    ],
+    "language": "en,en-GB"
+}
