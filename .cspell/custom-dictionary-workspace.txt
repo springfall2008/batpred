@@ -38,6 +38,7 @@ SolarEdge
 Solcast
 Southwell
 stepline
+testword
 timeobj
 timezone
 Trefor
