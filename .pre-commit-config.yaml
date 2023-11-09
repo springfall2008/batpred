@@ -3,7 +3,7 @@ repos:
     rev: v4.5.0
     hooks:
     -   id: file-contents-sorter
-        files: ^(\.cspell\/custom-dictionary-workspace.txt)$
+        files: ^(\.cspell\/custom-dictionary-workspace.txt|requirements\.txt)$
         args: ["--ignore-case", "--unique"]
     -   id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
