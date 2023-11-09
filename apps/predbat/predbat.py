@@ -1205,7 +1205,7 @@ class Inverter():
         # To enable we set the current based on the required power
         if enable:
             power = self.base.get_arg(f'{direction}_rate', index=self.id, default=2600.0)
-            self.set_current_from_power(power)
+            self.set_current_from_power("charge", power)
         else:
         # To disable we set both times to 00:00
             for x in ['start', 'end']:
