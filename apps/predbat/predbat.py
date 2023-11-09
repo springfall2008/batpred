@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = 'v7.11.11'
+THIS_VERSION = 'v7.11.12'
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4461,10 +4461,11 @@ class PredBat(hass.Hass):
             if try_soc not in try_socs:
                 try_socs.append(self.dp2(try_soc))
             loop_soc -= loop_step
-        if self.set_charge_freeze and (self.reserve not in try_socs):
-            try_socs.append(self.reserve)
+        # Give priority to off to avoid spurious charge freezes
         if best_soc_min not in try_socs:
             try_socs.append(best_soc_min)
+        if self.set_charge_freeze and (self.reserve not in try_socs):
+            try_socs.append(self.reserve)
 
         window_results = {}
         first_window = True
@@ -4963,7 +4964,7 @@ class PredBat(hass.Hass):
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
-                    if (soc_min > charge_limit_best[window_n]) and (charge_limit_best[window_n] != self.reserve):
+                    if (soc_min > (charge_limit_best[window_n] + 10 * self.battery_rate_max_charge_scaled)) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
                         self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
                     elif soc_max < charge_limit_best[window_n]:
