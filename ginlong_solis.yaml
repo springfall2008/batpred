@@ -37,8 +37,8 @@ pred_bat:
     - sensor.solis_house_load_today
   import_today:
     - sensor.solis_grid_import_today
-  export_today:
-    - sensor.solis_grid_import_today
+  export_today: 
+    - sensor.solis_grid_export_today
   pv_today:
     - sensor.solis_power_generation_today
 
@@ -283,7 +283,7 @@ pred_bat:
   # The number of hours ahead to count in charge planning (for cost estimates)
   # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
   # tariffs like Agile
-  forecast_plan_hours: 48
+  forecast_plan_hours: 24
 
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices:
