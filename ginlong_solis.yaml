@@ -122,7 +122,7 @@ pred_bat:
    - 100
 
   # Some batteries tail off their charge rate at high soc%
-  # enter the charging curve here as a % of the max charge rate for each soc pecentage.
+  # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   #battery_charge_power_curve:
   #  91 : 0.91
@@ -137,17 +137,17 @@ pred_bat:
   #  100 : 0.24
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
-  # Seperate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
-  # Seperate discharge skew for discharge windows only
+  # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
+  # Separate discharge skew for discharge windows only
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0
   inverter_clock_skew_discharge_end: 0
 
-  # Clock skew adjusts the Appdeamon time
+  # Clock skew adjusts the Appdaemon time
   # This is the time that Predbat takes actions like starting discharge/charging
-  # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDeamon issue)
-  # 1 means add 1 minute to AppDeamon time, -1 takes it away
+  # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDaemon issue)
+  # 1 means add 1 minute to AppDaemon time, -1 takes it away
   clock_skew: 0
 
   # Set these to match solcast sensor names
@@ -190,7 +190,7 @@ pred_bat:
   #   - 'locked'
   #   - 'plugged in'
 
-  # To make planned car charging more accurate, either using car_charging_planned or Octopus Inteligent
+  # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
   # If you have intelligent the battery size and limit will be extracted from Intelligent directly
   # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
@@ -212,7 +212,7 @@ pred_bat:
   # octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
 
   # Energy rates
-  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latestly basic metric
+  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 
   # Set import and export entity to point to the Octopus Energy plugin
   # automatically matches your meter number assuming you have only one
@@ -250,8 +250,8 @@ pred_bat:
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
 
-  # Import rates can be overriden with rate_import_override
-  # Export rates can be overriden with rate_export_override
+  # Import rates can be overridden with rate_import_override
+  # Export rates can be overridden with rate_export_override
   # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
   # This will override even the Octopus plugin rates if enabled
   #
