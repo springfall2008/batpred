@@ -156,7 +156,6 @@ INVERTER_DEF={
         "clock_time_format": "%H:%M:%S",
         "write_and_poll_sleep": 10, 
         "has_time_window": True,
-        "write_and_poll_sleep": 10,
     },
     "GS": {
         'has_rest_api': False,
@@ -194,6 +193,17 @@ INVERTER_DEF={
      },     
 }
 
+
+SOLAX_SOLIS_MODES = {
+    "Selfuse - No Grid Charging": 1,
+    "Timed Charge/Discharge - No Grid Charging": 3,
+    "Selfuse": 33,
+    "Timed Charge/Discharge": 35,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Battery Awaken + Timed Charge/Discharge": 43,
+    "Backup/Reserve": 51,
+}
 
 class Inverter():
     def self_test(self, minutes_now):
@@ -428,24 +438,25 @@ class Inverter():
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
-        if 'prefix' in self.base.args:
-            prefix = self.base.get_arg('prefix', indirect=False)
+        if "prefix" in self.base.args:
+            prefix = self.base.get_arg("prefix", indirect=False)
         else:
-            prefix = 'prefix'
-
-        attributes = {
-            'state_class': 'measurement',
-        }
-
-        if uom is not None:
-            attributes['unit_of_measurement'] = uom
-        if device_class is not None:
-            attributes['device_class'] = device_class
+            prefix = "prefix"
 
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{entity_name}"
-        entity = self.base.get_entity(entity_id)
-        entity.set_state(state=value, attributes=attributes)
 
+        if not self.base.entity_exists(entity_id):
+            attributes = {
+                "state_class": "measurement",
+            }
+
+            if uom is not None:
+                attributes["unit_of_measurement"] = uom
+            if device_class is not None:
+                attributes["device_class"] = device_class
+
+            entity = self.base.get_entity(entity_id)
+            entity.set_state(state=value, attributes=attributes)
         return entity_id
 
     def update_status(self, minutes_now, quiet=False):
@@ -618,14 +629,7 @@ class Inverter():
 
         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
         if not self.inv_has_target_soc:
-            if (self.soc_percent >= float(self.current_charge_limit)) and (float(self.base.get_arg(f'timed_charge_current', index=self.id)) > 0 ):
-                self.set_current_from_power("charge", 0)
-                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Charge power set to 0")
-            elif (self.soc_percent < float(self.current_charge_limit)) and (float(self.base.get_arg(f'timed_charge_current', index=self.id) == 0)):
-                self.base.get_arg('charge_rate', index=self.id, default=2600.0)
-                self.set_current_from_power("charge", self.base.get_arg('charge_rate', index=self.id, default=2600.0))
-                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
-
+            self.mimic_target_soc()
 
         if not quiet:
             if self.charge_enable_time:
@@ -687,6 +691,21 @@ class Inverter():
 
         if INVERTER_TEST:
             self.self_test(minutes_now)
+
+    def mimic_target_soc(self):
+        if self.soc_percent >= float(self.current_charge_limit):
+            # If current SOC is above Target SOC, turn Grid Charging off
+            self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
+            self.base.log(
+                f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Grid Charge disabled."
+            )
+        else:
+            # If we drop below the target, turn grid charging back on and make sure the charge current is correct
+            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
+            self.set_current_from_power("charge", self.base.get_arg("charge_rate", index=self.id, default=2600.0))
+            self.base.log(
+                f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
+            )
 
     def adjust_reserve(self, reserve):
         """
@@ -881,44 +900,54 @@ class Inverter():
                     self.base.call_notify('Predbat: Inverter {} Target SOC has been changed to {} % at {}'.format(self.id, soc, self.base.time_now_str()))
             self.base.record_status("Inverter {} set soc to {}".format(self.id, soc))
         else:
-            self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
+            self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
 
+        if not self.inv_has_target_soc:
+            self.mimic_target_soc()
 
     def write_and_poll_switch(self, name, entity, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         # Re-writtem to minimise writes
-        domain=entity.domain    
-        
+        domain = entity.domain
+
         current_state = entity.get_state()
         if isinstance(current_state, str):
-            current_state = current_state.lower() in ['on', 'enable', 'true']
-        
+            current_state = current_state.lower() in ["on", "enable", "true"]
+
         retry = 0
         while current_state != new_value and retry < 6:
             retry += 1
-            if domain == 'sensor':
+            if domain == "sensor":
                 if new_value:
-                    entity.set_state(state='on')
+                    entity.set_state(state="on")
                 else:
-                    entity.set_state(state='off')
+                    entity.set_state(state="off")
             else:
                 if new_value:
-                    entity.call_service('turn_on')
+                    entity.call_service("turn_on")
                 else:
-                    entity.call_service('turn_off')
+                    entity.call_service("turn_off")
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = entity.get_state()
             if isinstance(current_state, str):
-                current_state = current_state.lower() in ['on', 'enable', 'true']
+                current_state = current_state.lower() in ["on", "enable", "true"]
 
         if current_state == new_value:
-            self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
+            self.base.log(
+                "Inverter {} Wrote {} to {} successfully and got {}".format(
+                    self.id, name, new_value, entity.get_state()
+                )
+            )
             return True
         else:
-            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+            self.base.log(
+                "WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(
+                    self.id, name, new_value, entity.get_state()
+                )
+            )
             self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
@@ -928,28 +957,38 @@ class Inverter():
         domain = entity.domain
         current_state = entity.get_state()
 
-        retry = 0
+        if isinstance(new_value, str):
+            matched = current_state == new_value
+        else:
+            matched = abs(float(current_state) - new_value) <= fuzzy
 
-        while (not(isinstance(new_value, str)) and (abs(float(current_state) - new_value) > fuzzy)) and (isinstance(new_value, str) and (current_state != new_value)) and (retry < 6):
+        retry = 0
+        while (not matched) and (retry < 6):
             retry += 1
-            if domain == 'sensor':
+            if domain == "sensor":
                 entity.set_state(state=new_value)
             else:
                 # if isinstance(new_value, str):
                 entity.call_service("set_value", value=new_value)
-                # elif isinstance(new_value, int):
-                #     entity.call_service("set_value", value=int(new_value))
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = entity.get_state()
-    
-        if (not(isinstance(new_value, str)) and (abs(float(current_state) - new_value) <= fuzzy)) or (isinstance(new_value, str) and (current_state == new_value)):
-            self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, entity.get_state))
+            if isinstance(new_value, str):
+                matched = current_state == new_value
+            else:
+                matched = abs(float(current_state) - new_value) <= fuzzy
+
+        if retry == 0:
+            self.base.log(f"Inverter {self.id} No write needed for {name}: {new_value} == {current_state}")
             return True
-        
+        elif matched:
+            self.base.log(f"Inverter {self.id} Wrote {new_value} to {name}, successfully now {current_state}")
+            return True
         else:
-            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
-            self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
+            self.base.log(
+                f"WARN: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}"
+            )
+            self.base.record_status(f"Warn - Inverter {self.id} write to {name} failed", had_errors=True)
             return False
 
     def write_and_poll_option(self, name, entity, new_value):
@@ -963,7 +1002,11 @@ class Inverter():
             if old_value == new_value:
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
                 return True
-        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+        self.base.log(
+            "WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(
+                self.id, name, new_value, entity.get_state()
+            )
+        )
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
@@ -1212,7 +1255,7 @@ class Inverter():
                 if self.base.set_soc_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
             else:
-                self.base.sim_charge_schedule_enable = 'off'
+                self.base.sim_charge_schedule_enable = "off"
 
             if notify:
                 self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
@@ -1223,23 +1266,80 @@ class Inverter():
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_end_time_minutes = self.base.forecast_minutes
 
+    def alt_charge_discharge_enable(self, direction, enable, grid=True, timed=False):
+        """
+        Alternative enable and disable of timed charging for non-GE inverters
+        """
+        if not grid and not timed:
+            self.base.log("WARN: Unable to set Solis Energy Controls Switch: both Grid and Timed are False")
+            return False
+
+        if enable:
+            str_enable = "enable"
+        else:
+            str_enable = "disable"
+
+        str_type = ""
+        if grid:
+            str_type += "grid "
+        if timed:
+            if grid:
+                str += "and "
+            str += "timed "
+
+        if self.inverter_type == "GS":
+            # Solis just has a single switch for both directions
+            # Need to check the logic of how this is called if both charging and dischaging
+
+            entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
+            entity = self.base.get_entity(entity_id)
+            switch = SOLAX_SOLIS_MODES.get(entity.get_state(), 0)
+            # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
+            mask = 2 * timed + 32 * grid
+            if switch > 0:
+                # Timed charging is Bit 1 so we OR with 2 to set and AND with ~2 to clear
+                if enable:
+                    new_switch = switch | mask
+                else:
+                    new_switch = switch & ~mask
+
+                if new_switch != switch:
+                    self.base.log(
+                        f"Setting Solis Energy Control Switch to {new_switch} from {switch} to {str_enable} {str_type} charging"
+                    )
+                    # Now lookup the new mode in an inverted dict:
+                    new_mode = {SOLAX_SOLIS_MODES[x]: x for x in SOLAX_SOLIS_MODES}[new_switch]
+
+                    self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
+                    return True
+                else:
+                    self.base.log(
+                        f"Solis Energy Control Switch setting {switch} is correct for {str_enable} {str_type} charging"
+                    )
+                    return True
+            else:
+                self.base.log(
+                    f"WARN: Unable to read current value of Solis Mode switch {entity_id}. Unable to {str_enable} {str_type} charging"
+                )
+                return False
+
     def enable_charge_discharge_with_time_current(self, direction, enable):
         # To enable we set the current based on the required power
         if enable:
-            power = self.base.get_arg(f'{direction}_rate', index=self.id, default=2600.0)
+            power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
             self.set_current_from_power("charge", power)
         else:
-        # To disable we set both times to 00:00
-            for x in ['start', 'end']:
-                for y in ['hour', 'minute']:
+            # To disable we set both times to 00:00
+            for x in ["start", "end"]:
+                for y in ["hour", "minute"]:
                     name = f"{direction}_{x}_{y}"
                     entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
-                    self.write_and_poll_value(name, entity, 0)    
+                    self.write_and_poll_value(name, entity, 0)
 
     def set_current_from_power(self, direction, power):
-        new_current = round(power / self.battery_voltage,1)
-        entity = self.base.get_entity(self.base.get_arg(f'timed_{direction}_current', indirect=False, index=self.id))
-        self.write_and_poll_value(f'timed_{direction}_current', entity, new_current, fuzzy=100)
+        new_current = round(power / self.battery_voltage, 1)
+        entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
+        self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -1406,15 +1506,14 @@ class Inverter():
             self.base.call_service("button/press", entity_id=entity_id)
             entity = self.base.get_entity(entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
-            time_pressed = datetime.strptime(entity.get_state(),TIME_FORMAT_SECONDS)
-            
-            if (pytz.timezone("UTC") .localize(datetime.now())-time_pressed).seconds < 10:
+            time_pressed = datetime.strptime(entity.get_state(), TIME_FORMAT_SECONDS)
+
+            if (pytz.timezone("UTC").localize(datetime.now()) - time_pressed).seconds < 10:
                 self.base.log(f"Successfully pressed button {entity_id} on Inverter {self.id}")
                 return True
         self.base.log(f"WARN: Inverter {self.id} Trying to press {entity_id} didn't complete")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
-
 
     def rest_readData(self, api='readData'):
         """
