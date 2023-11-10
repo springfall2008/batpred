@@ -413,8 +413,8 @@ class Inverter():
             self.base.args['charge_limit'] = self.create_entity('charge_limit', 100, device_class='battery', uom="%")
 
         if self.inv_output_charge_control != 'power':
-            self.base.args['charge_rate']=self.create_entity('charge_rate', self.battery_rate_max_charge * 60 * 1000, uom="W", device_class="power")
-            self.base.args['discharge_rate']=self.create_entity('discharge_rate', self.battery_rate_max_discharge * 60 * 1000, uom="W", device_class="power")
+            self.base.args['charge_rate']=self.create_entity('charge_rate', int(self.battery_rate_max_charge * 60 * 1000), uom="W", device_class="power")
+            self.base.args['discharge_rate']=self.create_entity('discharge_rate', int(self.battery_rate_max_discharge * 60 * 1000), uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode:
             self.base.args['inverter_mode']=self.create_entity('inverter_mode', "Eco")
@@ -618,10 +618,10 @@ class Inverter():
 
         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
         if not self.inv_has_target_soc:
-            if (self.soc_percent >= self.current_charge_limit) and (self.base.get_arg(f'timed_charge_current', index=self.id) > 0 ):
+            if (self.soc_percent >= float(self.current_charge_limit)) and (float(self.base.get_arg(f'timed_charge_current', index=self.id)) > 0 ):
                 self.set_current_from_power("charge", 0)
                 self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Charge power set to 0")
-            elif (self.soc_percent < self.current_charge_limit) and (self.base.get_arg(f'timed_charge_current', index=self.id) == 0):
+            elif (self.soc_percent < float(self.current_charge_limit)) and (float(self.base.get_arg(f'timed_charge_current', index=self.id) == 0)):
                 self.base.get_arg('charge_rate', index=self.id, default=2600.0)
                 self.set_current_from_power("charge", self.base.get_arg('charge_rate', index=self.id, default=2600.0))
                 self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
@@ -883,61 +883,74 @@ class Inverter():
         else:
             self.base.log("Inverter {} Current SOC is {} already at target".format(self.id, current_soc))
 
+
     def write_and_poll_switch(self, name, entity, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
-        domain=entity.domain
-        if domain == 'sensor':
-            if new_value:
-                entity.set_state(state='on')
-            else:
-                entity.set_state(state='off')
-            return True
-        tries = 6
-        for retry in range(0, 6):
-            if new_value:
-                entity.call_service('turn_on')
-            else:
-                entity.call_service('turn_off')
-            time.sleep(self.inv_write_and_poll_sleep)
-            old_value = entity.get_state()
-            if isinstance(old_value, str):
-                if old_value.lower() in ['on', 'enable', 'true']:
-                    old_value = True
+        # Re-writtem to minimise writes
+        domain=entity.domain    
+        
+        current_state = entity.get_state()
+        if isinstance(current_state, str):
+            current_state = current_state.lower() in ['on', 'enable', 'true']
+        
+        retry = 0
+        while current_state != new_value and retry < 6:
+            retry += 1
+            if domain == 'sensor':
+                if new_value:
+                    entity.set_state(state='on')
                 else:
-                    old_value = False
-            if old_value == new_value:
-                self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
-                return True
-        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
-        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
-        return False
+                    entity.set_state(state='off')
+            else:
+                if new_value:
+                    entity.call_service('turn_on')
+                else:
+                    entity.call_service('turn_off')
+
+            time.sleep(self.inv_write_and_poll_sleep)
+            current_state = entity.get_state()
+            if isinstance(current_state, str):
+                current_state = current_state.lower() in ['on', 'enable', 'true']
+
+        if current_state == new_value:
+            self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
+            return True
+        else:
+            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+            self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
+            return False
 
     def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
         # Modified to cope with sensor entities and writing strings
+        # Re-writtem to minimise writes
         domain = entity.domain
-        if domain == 'sensor':
-            entity.set_state(state=new_value)
+        current_state = entity.get_state()
+
+        retry = 0
+
+        while (not(isinstance(new_value, str)) and (abs(float(current_state) - new_value) > fuzzy)) and (isinstance(new_value, str) and (current_state != new_value)) and (retry < 6):
+            retry += 1
+            if domain == 'sensor':
+                entity.set_state(state=new_value)
+            else:
+                # if isinstance(new_value, str):
+                entity.call_service("set_value", value=new_value)
+                # elif isinstance(new_value, int):
+                #     entity.call_service("set_value", value=int(new_value))
+
+            time.sleep(self.inv_write_and_poll_sleep)
+            current_state = entity.get_state()
+    
+        if (not(isinstance(new_value, str)) and (abs(float(current_state) - new_value) <= fuzzy)) or (isinstance(new_value, str) and (current_state == new_value)):
+            self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, entity.get_state))
             return True
+        
         else:
-        # GivTCP Workaround, keep writing until correct
-            for retry in range(0, 6):
-                entity.call_service("set_value", value=int(new_value))
-                time.sleep(self.inv_write_and_poll_sleep)
-                if isinstance(new_value, str):
-                    old_value = entity.get_state()
-                    if old_value == new_value:
-                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, entity.get_state))
-                        return True
-                else:
-                    old_value = int(float(entity.get_state()))
-                    if (abs(old_value - new_value) <= fuzzy):
-                        self.base.log("Inverter {} Wrote {} to {}, successfully now {}".format(self.id, name, new_value, int(float(entity.get_state()))))
-                        return True
-        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
-        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
-        return False
+            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
+            self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
+            return False
 
     def write_and_poll_option(self, name, entity, new_value):
         """
