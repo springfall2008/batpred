@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.11.12"
+THIS_VERSION = "v7.11.13"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -6392,7 +6392,7 @@ class PredBat(hass.Hass):
         for window_n in range(0, min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
-            limit_soc = self.calc_percent_limit(limit)
+            limit_soc = self.soc_max * limit / 100.0
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
@@ -6448,7 +6448,7 @@ class PredBat(hass.Hass):
         for window_n in range(0, min(record_discharge_windows, len(discharge_window_best))):
             window = discharge_window_best[window_n]
             limit = discharge_limits_best[window_n]
-            limit_soc = self.calc_percent_limit(limit)
+            limit_soc = self.soc_max * limit / 100.0
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
