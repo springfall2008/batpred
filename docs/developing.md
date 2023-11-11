@@ -99,4 +99,48 @@ due to the way in which ports on your environment are shared.*
 
 ## Coding standards
 
-TBC once we agree them
+### Enforced standards
+
+Certain coding standards are enforced within the repository.
+Some of them can be auto-fixed, if you do a commit that
+fails one of those standards; other issues will need fixing
+first, as your pull request won't merge in GitHub until it passes.
+
+These standards are enforced by [pre-commit](https://pre-commit.com),
+a tool which is able to run other tools to check, and potentially fix
+(for certain types of issues) any mistakes you've made.
+
+The `.pre-commit-config.yaml` file lists all checks that are
+currently carried out within the repository. Bear in mind that
+these checks are done according to the config within that file
+in the branch that you are working in,
+so if someone adds a new check, or changes some of the related settings,
+it won't apply on your branch until you've merged in their changes.
+
+Some of the tools have their own related config files:
+
+* CSpell - `.cspell.json` and `.cspell/custom-dictionary-workspace.txt`
+* Black - `pyproject.toml`
+* Markdown Lint - `.markdownlint.jsonc`
+
+#### Running the checks locally
+
+If you are using a Codespaces environment, you'll already have `pre-commit`
+installed automatically.
+
+Running `pre-commit` will run all the checks against any files that you
+have modified and staged.
+
+Alternatively, running `pre-commit run --all-files` will run all the checks
+against all files within the repository.
+
+Note that if `pre-commit` makes any changes to any files when it runs,
+those changes will not be staged. You will need to stage those changes too
+before committing.
+
+You may notice `pre-commit` mentioning about stashing changes - this is
+because when it runs, any changes that aren't stages are stashed (saved
+away temporarily) so it runs against only the staged changes;
+after it has run, it pulls back those stashed changes, so they appear
+again (still unstaged).
+
