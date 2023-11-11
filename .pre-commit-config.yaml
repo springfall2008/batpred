@@ -28,7 +28,7 @@ repos:
 - repo: https://github.com/igorshubovych/markdownlint-cli
   rev: v0.37.0
   hooks:
-    - id: markdownlint # Configure in .mdlrc
+    - id: markdownlint-fix # Configure in .mdlrc
 - repo: https://github.com/streetsidesoftware/cspell-cli
   rev: v8.0.0
   hooks:
