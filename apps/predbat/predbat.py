@@ -43,6 +43,88 @@ for minute in range(0, 24 * 60, 5):
 
 INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
 
+CONFIG_GROUPS = {
+    "Cheap Night / Bad Export": {
+        "example": "Octopus Go / Economy 7",
+        "description": "In this scenario you will want to charge overnight based on the next days solar forecast.",
+        "items": {
+            "set_soc_enable": True,
+            "set_reserve_enable": True,
+            "set_reserve_hold": True,
+            "calculate_best_charge": True,
+            "combine_charge_slots": True,
+            "metric_min_improvement": 0,
+            "set_charge_window": True,
+            "best_soc_keep": 2.0,
+            "best_soc_min": 0.0,
+            "rate_low_threshold": 0.8,
+            "forecast_plan_hours": 24,
+            "calculate_discharge_first": False,
+        },
+    },
+    "Cheap Night / Good Export": {
+        "example": "Intelligent Octopus with Octopus Outgoing Economy 7",
+        "description": "Follow the instructions from Cheap Night / Bad Export, but also you will want to have automatic discharge when the export rates are profitable.",
+        "items": {
+            "set_soc_enable": True,
+            "set_reserve_enable": True,
+            "set_reserve_hold": True,
+            "calculate_best_charge": True,
+            "combine_charge_slots": True,
+            "metric_min_improvement": 0,
+            "set_charge_window": True,
+            "best_soc_keep": 2.0,
+            "best_soc_min": 0.0,
+            "rate_low_threshold": 0.8,
+            "forecast_plan_hours": 24,
+            "calculate_discharge_first": False,
+            "calculate_best_discharge": True,
+            "calculate_discharge_first": True,
+            "combine_charge_slots": True,
+            "combine_discharge_slots": False,
+            "set_discharge_window": True,
+            "metric_min_improvement": 0,
+            "metric_min_improvement_discharge": 0,
+            "rate_high_threshold": 0,
+            "set_discharge_freeze": True,
+            "set_charge_freeze": False,
+            "calculate_max_windows": 96,
+            "predbat_metric_battery_cycle": 3,
+        },
+    },
+    "Multiple rates for import and export": {
+        "example": "Octopus Flux & Cozy",
+        "description": "Follow the instructions from Cheap Night / Bad Export, but also you will want to have automatic discharge when the export rates are profitable.",
+        "items": {
+            "set_soc_enable": True,
+            "set_reserve_enable": True,
+            "set_reserve_hold": True,
+            "calculate_best_charge": True,
+            "combine_charge_slots": True,
+            "metric_min_improvement": 0,
+            "set_charge_window": True,
+            "best_soc_keep": 2.0,
+            "best_soc_min": 0.0,
+            "rate_low_threshold": 0.8,
+            "forecast_plan_hours": 24,
+            "calculate_discharge_first": False,
+            "calculate_best_discharge": True,
+            "calculate_discharge_first": True,
+            "combine_charge_slots": True,
+            "combine_discharge_slots": True,
+            "set_discharge_window": True,
+            "metric_min_improvement": 0,
+            "metric_min_improvement_discharge": 0.1,
+            "rate_low_threshold": 0.8,
+            "rate_high_threshold": 1.2,
+            "metric_battery_cycle": 2,
+            "set_discharge_freeze": True,
+            "set_charge_freeze": True,
+        },
+    },
+}
+
+
 CONFIG_ITEMS = [
     {
         "name": "version",
@@ -304,6 +386,8 @@ CONFIG_ITEMS = [
     {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w"},
     {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent"},
     {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end"},
+    {"name": "config_grouping", "friendly_name": "PredBat Config Group", "type": "select", "options": list(CONFIG_GROUPS.keys()), "icon": "mdi:list-box-outline"},
+
 ]
 
 """
@@ -1489,6 +1573,7 @@ class Inverter:
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
             entity = self.base.get_entity(entity_id)
             switch = SOLAX_SOLIS_MODES.get(entity.get_state(), 0)
+            self.base.log(f">> switch:{switch} ")
             # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
             mask = 2 * timed + 32 * grid
             if switch > 0:
@@ -1497,7 +1582,6 @@ class Inverter:
                     new_switch = switch | mask
                 else:
                     new_switch = switch & ~mask
-
                 if new_switch != switch:
                     self.base.log(f"Setting Solis Energy Control Switch to {new_switch} from {switch} to {str_enable} {str_type} charging")
                     # Now lookup the new mode in an inverted dict:
@@ -5641,6 +5725,9 @@ class PredBat(hass.Hass):
         self.set_read_only = True
         self.metric_cloud_coverage = 0.0
 
+        self.config_grouping = list(CONFIG_GROUPS.keys())[0]
+
+
     def optimise_charge_limit_price(
         self,
         price_set,
@@ -8284,16 +8371,28 @@ class PredBat(hass.Hass):
         service_data = data.get("service_data", {})
         value = service_data.get("option", None)
         entities = service_data.get("entity_id", [])
-
+ 
         # Can be a string or an array
         if isinstance(entities, str):
             entities = [entities]
+
+        config_group_entity = ([i['entity'] for i in CONFIG_ITEMS if (i['name']=='config_grouping') & ('entity' in i)]+[None])[0]
 
         for item in CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("select_event: {} = {}".format(entity, value))
                 self.expose_config(item["name"], value)
+                self.log(f"Entity: {entity} Group: {config_group_entity}")
+                if entity == config_group_entity:
+                    group = self.get_arg(entity, default=list(CONFIG_GROUPS.keys())[0])
+                    self.log(f"Loading default config for {group}")
+                    items = CONFIG_GROUPS[group]['items']
+                    for name in items:
+                        value=items[name]
+                        self.log(f"Setting {name} to {value}")
+                        self.expose_config(name=name, value=value)
+
                 self.update_pending = True
                 self.plan_valid = False
                 return
@@ -8556,6 +8655,9 @@ class PredBat(hass.Hass):
             self.log("ERROR: Exception raised {}".format(e))
             self.record_status("ERROR: Exception raised {}".format(e))
             raise e
+
+        self.config_grouping = self.get_arg("config_grouping", default=list(CONFIG_GROUPS.keys())[0])
+
 
         # Catch template configurations and exit
         if self.get_arg("template", False):
