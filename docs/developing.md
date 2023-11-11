@@ -142,5 +142,5 @@ You may notice `pre-commit` mentioning about stashing changes - this is
 because when it runs, any changes that aren't stages are stashed (saved
 away temporarily) so it runs against only the staged changes;
 after it has run, it pulls back those stashed changes, so they appear
-again (still unstaged).
+again (still unstaged). 
 
