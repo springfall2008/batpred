@@ -73,6 +73,7 @@ Predbat
 Predheat
 pwindow
 pylint
+pyproject
 pytz
 rarr
 rtype
