@@ -96,6 +96,8 @@ pred_bat:
     - number.solis_timed_discharge_end_minutes
 
 
+  energy_control_switch:
+    - select.solis_energy_storage_control_switch
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
