@@ -2,7 +2,7 @@ name: linting
 on:
   pull_request:
   push:
-    branches: [code-style, code-style-*]
+    branches: [code-style-*]
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
