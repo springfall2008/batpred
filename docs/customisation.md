@@ -19,28 +19,30 @@ If you have performance problems leave **switch.predbat_calculate_second_pass** 
 
 ## Battery loss options
 
-**battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
+**input_number.battery_loss** accounts for energy lost charging the battery, default 0.05 is 5%
 
-**battery_loss_discharge** accounts for energy lost discharging the battery, default 0.05 is 5%
+**input_number.battery_loss_discharge** accounts for energy lost discharging the battery, default 0.05 is 5%
 
-**inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
+**input_number.inverter_loss** accounts for energy loss during going from DC to AC or AC to DC, default is 0% for legacy reasons but please adjust.
 
-**inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
+**switch.inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false you have inverter losses as it's AC coupled battery.
 
 **input_number.metric_battery_cycle**  Sets the cost in pence per kWh of using your battery for charging and discharging. Higher numbers will reduce battery cycles at the expensive of higher energy costs. Figures of around 1p-5p are recommended, the default is 0.
 
+**input_number.predbat_metric_battery_value_scaling** Can be used to scale the value of the energy in the battery at the end of the plan. The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses. A value of 1.0 means no change to this, while lower than 1.0 means to value future battery levels less, greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
+
 ## Scaling and weight options
 
-**battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
+**input_number.battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
 e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported by the inverter
 
-**load_scaling** is a Scaling factor applied to historical load, tune up if you want to be more pessimistic on future consumption
+**input_number.load_scaling** is a Scaling factor applied to historical load, tune up if you want to be more pessimistic on future consumption
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
-**pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
+**input_number.pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
 
-**pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
+**input_number.pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
 A value of 0.1 assumes that 1:10 times we get the 10% scenario and hence to count this in the metric benefit/cost.
 A value of 0.15 is recommended.
 
