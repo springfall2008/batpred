@@ -10,7 +10,7 @@ Basic configuration items
 - **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**. Keep in mind HA default history is only 10 days.
 - **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
 - **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
-- **forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
+- **input_number.forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
 
 ## Inverter information
 
