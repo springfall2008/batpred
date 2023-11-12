@@ -67,6 +67,9 @@ pred_bat:
   reserve:
     - number.solis_backup_mode_soc
 
+  battery_min_soc:
+    - sensor.solis_battery_minimum_soc
+
   # With the Solax integration we need to press a button to send the time to
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times

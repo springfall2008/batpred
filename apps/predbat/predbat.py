@@ -314,7 +314,7 @@ CONFIG_ITEMS = [
     {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w"},
     {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent"},
     {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end"},
-    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 8, "unit": "hours", "icon": "mdi:clock-end"}
+    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 8, "unit": "hours", "icon": "mdi:clock-end"},
 ]
 
 """
@@ -420,6 +420,7 @@ class Inverter:
     def __init__(self, base, id=0, quiet=False):
         self.id = id
         self.base = base
+        self.log = self.base.log
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_start_end_minutes = self.base.forecast_minutes
@@ -433,8 +434,8 @@ class Inverter:
         self.inverter_limit = 7500.0
         self.export_limit = 99999.0
         self.inverter_time = None
-        self.reserve_percent = 4.0
-        self.reserve_percent_current = 4.0
+        self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
         self.reserve_max = 100
         self.battery_rate_max_raw = 0
         self.battery_rate_max_charge = 0
@@ -576,12 +577,20 @@ class Inverter:
         if self.rest_data:
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            self.reserve_percent_current = max(self.base.get_arg("reserve", default=0.0, index=self.id), 4.0)
+            self.reserve_percent_current = max(self.base.get_arg("reserve", default=0.0, index=self.id), self.base.get_arg("battery_min_soc", default=4.0, index=self.id))
         self.reserve_current = self.base.dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         # Get the expected minimum reserve value
+        battery_min_soc = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.reserve_min = self.base.get_arg("set_reserve_min", 4.0)
+        if self.reserve_min < battery_min_soc:
+            self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
+            self.base.expose_config("set_reserve_min", battery_min_soc)
+            self.reserve_min = battery_min_soc
+
+        self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
         if self.base.set_reserve_enable:
-            self.reserve_percent = max(self.base.get_arg("set_reserve_min", 4.0), 4.0)
+            self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
@@ -5951,7 +5960,7 @@ class PredBat(hass.Hass):
                 if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            # Minor weighting against charge freeze to avoid supurious ones
+            # Minor weighting against charge freeze to avoid supurious ones
             if self.set_charge_freeze and try_soc == self.reserve:
                 metric += 0.01
 
@@ -6652,14 +6661,16 @@ class PredBat(hass.Hass):
                         # Do highest price first
                         if start_at_low:
                             continue
-                       
+
                         if self.calculate_best_discharge:
                             if not printed_set:
                                 self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
                                 printed_set = True
 
                             if not self.calculate_discharge_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
+                                hit_charge = self.hit_charge_window(
+                                    self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
                             average = self.discharge_window_best[window_n]["average"]
@@ -7081,7 +7092,7 @@ class PredBat(hass.Hass):
         power_enough_discharge = []  # Inverter drawing enough power to be worth balancing
         power_enough_charge = []  # Inverter drawing enough power to be worth balancing
         for id in range(0, num_inverters):
-            above_reserve.append((socs[id] - reserves[id]) >= 4.0)
+            above_reserve.append((socs[id] - reserves[id]) >= 4.0))
             below_full.append(socs[id] < 100.0)
             can_power_house.append((total_discharge_rates - discharge_rates[id] - 200) >= total_battery_power)
             can_store_pv.append(total_pv_power <= (total_charge_rates - charge_rates[id]))
