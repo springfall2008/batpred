@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.11.13"
+THIS_VERSION = "v7.11.14"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4920,7 +4920,7 @@ class PredBat(hass.Hass):
                 attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
             )
 
-    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step):
+    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
         """
         Publish the current plan in HTML format
         """
@@ -4939,7 +4939,7 @@ class PredBat(hass.Hass):
         html += "</tr>"
 
         minute_now_align = int(self.minutes_now / 30) * 30
-        for minute in range(minute_now_align, self.forecast_minutes + minute_now_align, 30):
+        for minute in range(minute_now_align, min(end_record, self.forecast_minutes) + minute_now_align, 30):
             minute_relative = max(minute - self.minutes_now, 0)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             rate_start = minute_timestamp
@@ -4969,6 +4969,8 @@ class PredBat(hass.Hass):
             load_forecast = self.dp2(load_forecast)
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative + 30.0, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent_max = max(soc_percent, soc_percent_end)
             soc_change = self.predict_soc_best.get(minute_relative + 30, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
 
             soc_sym = ""
@@ -5028,12 +5030,12 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
-                if limit == 99:
+                if limit < 100 and limit > soc_percent_max:
                     if state:
                         state += "/"
                     state += "FreezeDis&rarr;"
                     state_color = "#AAAAAA"
-                elif limit < 99:
+                elif limit < 100:
                     if state:
                         state += "/"
                     state += "Discharge&searr;"
@@ -5745,8 +5747,8 @@ class PredBat(hass.Hass):
 
                 # Balancing payment to account for battery left over
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min)
-                metric -= soc * max(rate_min, 1.0) / self.battery_loss
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.battery_loss * self.inverter_loss
+                metric -= soc * max(rate_min, 1.0)
 
                 # Adjustment for battery cycles metric
                 metric += battery_cycle * self.metric_battery_cycle + metric_keep
@@ -5913,9 +5915,9 @@ class PredBat(hass.Hass):
 
             # Balancing payment to account for battery left over
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            rate_min = self.rate_min_forward.get(end_record, self.rate_min)
-            metric -= soc * max(rate_min, 1.0) / self.battery_loss
-            metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
+            rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.battery_loss * self.inverter_loss
+            metric -= soc * max(rate_min, 1.0)
+            metric10 -= soc10 * max(rate_min, 1.0)
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
@@ -6069,9 +6071,9 @@ class PredBat(hass.Hass):
 
                 # Balancing payment to account for battery left over
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min)
-                metric -= soc * max(rate_min, 1.0) / self.battery_loss
-                metric10 -= soc10 * max(rate_min, 1.0) / self.battery_loss
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.battery_loss * self.inverter_loss
+                metric -= soc * max(rate_min, 1.0)
+                metric10 -= soc10 * max(rate_min, 1.0)
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -7319,7 +7321,7 @@ class PredBat(hass.Hass):
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
         # HTML data
-        self.publish_html_plan(pv_forecast_minute_step, load_minutes_step)
+        self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
     def execute_plan(self):
         status_extra = ""
