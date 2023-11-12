@@ -50,6 +50,7 @@ entities:
   - entity: input_number.predbat_inverter_loss
   - entity: input_number.predbat_battery_rate_max_scaling
   - entity: input_number.predbat_metric_battery_cycle
+  - entity: input_number.predbat_metric_battery_value_scaling
   - entity: input_number.predbat_best_soc_keep
   - entity: input_number.predbat_best_soc_margin
   - entity: input_number.predbat_best_soc_min
@@ -80,6 +81,7 @@ entities:
   - entity: input_number.predbat_holiday_days_left
   - entity: input_number.predbat_metric_inday_adjust_damping
   - entity: input_number.predbat_metric_octopus_saving_rate
+  - entity: input_number.predbat_forecast_plan_hours
   - entity: binary_sensor.predbat_car_charging_slot
   - entity: binary_sensor.predbat_export_trigger_large
   - entity: binary_sensor.predbat_export_trigger_small
