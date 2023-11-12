@@ -1,2 +1,4 @@
 batpred.code-workspace
 .vscode/settings.json
+apps/predbat/fix_config.py
+apps/predbat/test.py
