@@ -611,6 +611,7 @@ class Inverter:
     def __init__(self, base, id=0, quiet=False):
         self.id = id
         self.base = base
+        self.log = self.base.log
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_start_end_minutes = self.base.forecast_minutes
@@ -624,8 +625,8 @@ class Inverter:
         self.inverter_limit = 7500.0
         self.export_limit = 99999.0
         self.inverter_time = None
-        self.reserve_percent = 4.0
-        self.reserve_percent_current = 4.0
+        self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
         self.reserve_max = 100
         self.battery_rate_max_raw = 0
         self.battery_rate_max_charge = 0
@@ -767,12 +768,20 @@ class Inverter:
         if self.rest_data:
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            self.reserve_percent_current = max(self.base.get_arg("reserve", default=0.0, index=self.id), 4.0)
+            self.reserve_percent_current = max(self.base.get_arg("reserve", default=0.0, index=self.id), self.base.get_arg("battery_min_soc", default=4.0, index=self.id))
         self.reserve_current = self.base.dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         # Get the expected minimum reserve value
+        battery_min_soc = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.reserve_min = self.base.get_arg("set_reserve_min", 4.0)
+        if self.reserve_min < battery_min_soc:
+            self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
+            self.base.expose_config("set_reserve_min", battery_min_soc)
+            self.reserve_min = battery_min_soc
+
+        self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
         if self.base.set_reserve_enable:
-            self.reserve_percent = max(self.base.get_arg("set_reserve_min", 4.0), 4.0)
+            self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
