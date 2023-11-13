@@ -2240,6 +2240,125 @@ class PredBat(hass.Hass):
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
+
+    def futurerate_analysis(self):
+        """
+        Analyise futurerate energy data
+        """
+        if 'futurerate_url' in self.args:
+            url = self.get_arg("futurerate_url", indirect=False)
+        self.log("Fetching futurerate data from {}".format(url))
+        if not url:
+            return {}
+
+        pdata = self.download_futurerate_data(url)
+        nord_tz = pytz.timezone("Europe/Oslo")
+        now_offset = datetime.now(nord_tz).strftime("%z")
+        extracted_data = {}
+        extracted_keys = []
+        array_values = []
+        mdata = {}
+
+        if pdata:
+            if 'Rows' in pdata:
+                for row in pdata['Rows']:
+                    if 'Name' in row:
+                        rname = row.get("Name", "")
+                        rstart = row.get('StartTime', "") + now_offset
+                        rend = row.get('EndTime', "") + now_offset
+                    if 'Columns' in row:
+                        for column in row['Columns']:
+                            cname = column.get("Name", "")
+                            cvalue = column.get('Value', "")
+                            date_start, time_start = rstart.split('T')
+                            date_end, time_end = rend.split('T')
+                            if '-' in cname and ',' in cvalue and cname:
+                                date_start = cname
+                                date_end = cname
+                                cvalue = cvalue.replace(',', '.')
+                                cvalue = float(cvalue)
+                                rstart = date_start + "T" + time_start
+                                rend = date_end + "T" + time_end
+                                TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
+                                time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)                      
+                                time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
+                                item = {}
+                                item['from'] = time_date_start.strftime(TIME_FORMAT)
+                                item['to'] = time_date_end.strftime(TIME_FORMAT)
+                                item['rate'] = cvalue
+                                extracted_data[time_date_start] = item
+                                if time_date_start not in extracted_keys:
+                                    extracted_keys.append(time_date_start)
+        
+        if extracted_keys:
+            extracted_keys.sort()
+            for key in extracted_keys:
+                array_values.append(extracted_data[key])
+            self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
+            mdata = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate", "from", backwards=False, to_key="to")
+        return mdata
+
+    def download_futurerate_data(self, url):
+        """
+        Download futurerate data directly from a URL or return from cache if recent
+        Retry 3 times and then throw error
+        """
+
+        # Check the cache first
+        now = datetime.now()
+        if url in self.futurerate_url_cache:
+            stamp = self.futurerate_url_cache[url]["stamp"]
+            pdata = self.futurerate_url_cache[url]["data"]
+            age = now - stamp
+            if age.seconds < (120 * 60):
+                self.log("Return cached futurerate data for {} age {} minutes".format(url, age.seconds / 60))
+                return pdata
+
+        # Retry up to 3 minutes
+        for retry in range(0, 3):
+            pdata = self.download_futurerate_data_func(url)
+            if pdata:
+                break
+
+        # Download failed?
+        if not pdata:
+            self.log("WARN: Unable to download futurerate data from URL {}".format(url))
+            self.record_status("Warn - Unable to download futurerate data from cloud", debug=url, had_errors=True)
+            if url in self.octopus_url_cache:
+                pdata = self.futurerate_url_cache[url]["data"]
+                return pdata
+            else:
+                raise ValueError
+
+        # Cache New Octopus data
+        self.futurerate_url_cache[url] = {}
+        self.futurerate_url_cache[url]["stamp"] = now
+        self.futurerate_url_cache[url]["data"] = pdata
+        return pdata
+
+    def download_futurerate_data_func(self, url):
+        """
+        Download octopus rates directly from a URL
+        """
+        mdata = {}
+
+        if self.debug_enable:
+            self.log("Download {}".format(url))
+        r = requests.get(url)
+        try:
+            data = r.json()
+        except requests.exceptions.JSONDecodeError:
+            self.log("WARN: Error downloading futurerate data from url {}".format(url))
+            self.record_status("Warn - Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
+        if "data" in data:
+            mdata = data["data"]
+        else:
+            self.log("WARN: Error downloading futurerate data from url {}".format(url))
+            self.record_status("Warn - Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
+        return mdata
+
     def download_octopus_rates_func(self, url):
         """
         Download octopus rates directly from a URL
@@ -4027,10 +4146,17 @@ class PredBat(hass.Hass):
 
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
+                    if self.future_energy_rates:
+                        if minute in self.future_energy_rates and minute_mod in self.future_energy_rates:
+                            if (is_import and self.get_arg('futurerate_adjust_import', False)) or (not is_import and self.get_arg('futurerate_adjust_import', False)):
+                                rate_change = self.future_energy_rates[minute] / self.future_energy_rates[minute_mod]
+                                rate_offset = rate_offset * rate_change                
+                                self.log("futurerate data says minute {} is {} and previous day minute {} was {} - rate_change {} new_rate {}".format(minute, self.future_energy_rates[minute], minute_mod, self.future_energy_rates[minute_mod], rate_change, rate_offset))
                     if is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                     else:
                         rate_offset = max(rate_offset + self.metric_future_rate_offset_export, 0)
+
                     adjusted_rates[minute] = True
 
                 rates[minute] = rate_offset
@@ -5647,6 +5773,7 @@ class PredBat(hass.Hass):
         self.sim_soc_charge = []
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
+        self.futurerate_url_cache = {}
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
@@ -5663,6 +5790,7 @@ class PredBat(hass.Hass):
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
         self.metric_cloud_coverage = 0.0
+        self.future_energy_rates = {}
 
     def optimise_charge_limit_price(
         self,
@@ -7733,6 +7861,9 @@ class PredBat(hass.Hass):
             )
         )
 
+        # futurerate data
+        self.future_energy_rates = self.futurerate_analysis()
+
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from url {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
@@ -8009,6 +8140,7 @@ class PredBat(hass.Hass):
         # Apply modal filter to historical data
         self.previous_days_modal_filter(self.load_minutes)
         self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
 
     def fetch_inverter_data(self):
         """
