@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.12"
+THIS_VERSION = "v7.12.1"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3234,7 +3234,7 @@ class PredBat(hass.Hass):
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
                 and discharge_limits[discharge_window_n] < 100.0
-                and soc > ((self.soc_max * discharge_limits[discharge_window_n]) / 100.0)
+                and (soc - step * self.battery_rate_max_discharge_scaled) > (self.soc_max * discharge_limits[discharge_window_n] / 100.0)
             ):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
@@ -5738,16 +5738,15 @@ class PredBat(hass.Hass):
                     if not all_d:
                         continue
 
-                    if not self.calculate_discharge_oncharge:
-                        for window_n in all_d:
-                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
-                            if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
-                                continue
-                            try_discharge[window_n] = 0
+                    for window_n in all_d:
+                        hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
+                        if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                            continue
+                        try_discharge[window_n] = 0
 
                 # Skip this one as it's the same as selected already
                 if try_charge_limit == best_limits and best_discharge == try_discharge and best_metric != 9999999:
-                    self.log("Skip this optimisation as it's the same charge {} discharge {}".format(try_charge_limit, try_discharge))
+                    self.log("Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable))
                     continue
 
                 # Turn off debug for this sim
@@ -6147,7 +6146,7 @@ class PredBat(hass.Hass):
 
                 window_size = window["end"] - start
                 window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
-                window_results[window_key] = metric
+                window_results[window_key] = self.dp2(metric)
 
                 # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
                 # and it doesn't fall below the soc_keep threshold
