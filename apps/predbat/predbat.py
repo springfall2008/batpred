@@ -1321,6 +1321,16 @@ class Inverter:
             elif "discharge_start_time" in self.base.args:
                 old_start = self.base.get_arg("discharge_start_time", index=self.id)
                 old_end = self.base.get_arg("discharge_end_time", index=self.id)
+                if self.inv_charge_time_format == "H M":
+                    # If the inverter uses hours and minutes then read these entities too and check they are correct
+                    old_start_hm = f'{int(self.base.get_arg("discharge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_start_minute", index=self.id)):02d}:00'
+                    old_end_hm = f'{int(self.base.get_arg("discharge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("discharge_end_minute", index=self.id)):02d}:00'
+                    if old_start_hm != old_start:
+                        self.base.log(f"Start time discrepancy: {old_start} | {old_start_hm}")
+                        old_start = old_start_hm
+                    if old_end_hm != old_end:
+                        self.base.log(f"End time discrepancy: {old_end} | {old_end_hm}")
+                        old_start = old_start_hm
             else:
                 self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
