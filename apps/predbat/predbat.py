@@ -1591,6 +1591,16 @@ class Inverter:
                 old_start = self.base.get_arg("charge_start_time", index=self.id)
                 old_end = self.base.get_arg("charge_end_time", index=self.id)
                 old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+                if self.inv_charge_time_format == "H M":
+                    # If the inverter uses hours and minutes then read these entities too and check they are correct
+                    old_start_hm = f'{int(self.base.get_arg("charge_start_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_start_minute", index=self.id)):02d}:00'
+                    old_end_hm = f'{int(self.base.get_arg("charge_end_hour", index=self.id)):02d}:{int(self.base.get_arg("charge_end_minute", index=self.id)):02d}:00'
+                    if old_start_hm != old_start:
+                        self.base.log(f"Start time discrepancy: {old_start} | {old_start_hm}")
+                        old_start = old_start_hm
+                    if old_end_hm != old_end:
+                        self.base.log(f"End time discrepancy: {old_end} | {old_end_hm}")
+                        old_start = old_start_hm
             else:
                 self.log("WARN: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
 
@@ -1640,9 +1650,9 @@ class Inverter:
                     if self.inv_charge_time_format == "H M":
                         # If the inverter uses hours and minutes then write to these entities too
                         entity = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
+                        self.write_and_poll_value("charge_start_hour", entity, int(new_start.split(":")[0]))
                         entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
+                        self.write_and_poll_value("charge_start_minute", entity, int(new_start.split(":")[1]))
                 else:
                     self.log("WARN: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
