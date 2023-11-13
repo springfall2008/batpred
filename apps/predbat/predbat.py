@@ -773,12 +773,7 @@ class Inverter:
 
         self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
         if self.base.set_reserve_enable:
-<<<<<<< Updated upstream
             self.reserve_percent = self.reserve_min
-=======
-            self.base.log(f">>>Min: self.base.{set_reserve_min}")
-            self.reserve_percent = max(self.base.get_arg("set_reserve_min", 4.0), 4.0)
->>>>>>> Stashed changes
         else:
             self.reserve_percent = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
@@ -1156,8 +1151,8 @@ class Inverter:
         if reserve < self.reserve_percent:
             reserve = self.reserve_percent
 
-        # Clamp reserve at max and min setting
-        reserve = max(min(reserve, self.reserve_max), self.base.set_reserve_min)
+        # Clamp reserve at max setting
+        reserve = min(reserve, self.reserve_max)
 
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {} % and new target is {} %".format(self.id, current_reserve, reserve))
@@ -1366,7 +1361,6 @@ class Inverter:
         # Re-writtem to minimise writes
         domain = entity.domain
         current_state = entity.get_state()
-        self.base.log(f"Domain: {domain} entity_id: {name} value: {new_value}")
 
         if isinstance(new_value, str):
             matched = current_state == new_value
@@ -1379,8 +1373,7 @@ class Inverter:
             if domain == "sensor":
                 entity.set_state(state=new_value)
             else:
-                self.base.call_service("number/set_value", entity_id=entity)
-                # entity.call_service("set_value", value=new_value)
+                entity.call_service("set_value", value=new_value)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = entity.get_state()
@@ -8298,7 +8291,7 @@ class PredBat(hass.Hass):
             except:
                 self.log(f"WARN: Failed to load self.{item['name']} from args or config")
 
-            self.log(f"{item['name']:30s} {str(item['default']):30s}  {str(self.__dict__.get(item['name'], None)):30s}")
+            # self.log(f"{item['name']:30s} {str(item['default']):30s}  {str(self.__dict__.get(item['name'], None)):30s}")
 
         # A few are not in CONFIG_ITEMS - should they be?
         self.best_soc_pass_margin = self.get_arg("best_soc_pass_margin", 0.0)
@@ -8501,7 +8494,7 @@ class PredBat(hass.Hass):
 
                     else:
                         self.log(f"Loading {group} Configuration Group")
-                        for item in [i for i in CONFIG_ITEMS if i["name"] != "version"]:
+                        for item in [i for i in CONFIG_ITEMS if i["name"] != "version" and i["name"] != "config_grouping"]:
                             if item["name"] in CONFIG_GROUPS[group]:
                                 new_value = CONFIG_GROUPS[group][item["name"]]
                             else:
@@ -8514,12 +8507,12 @@ class PredBat(hass.Hass):
 
                             if ((type(current_value) == type(new_value)) or (isinstance(current_value, float) and isinstance(new_value, int))) and (current_value is not None):
                                 if current_value != new_value:
-                                    self.expose_config(item["name"], new_value)
-                                    self.log(f"{item['name']:>30} updated from {str(current_value):10s} to {str(new_value):10s}")
+                                    self.expose_config(item["name"], new_value, verbose=False)
+                                    self.log(f"    {item['name']:40s} CHANGED from {str(current_value):>10s} to {str(new_value):10s}")
                                 else:
-                                    self.log(f"{item['name']:>30} remains at   {str(current_value):10s}")
+                                    self.log(f"    {item['name']:40s}              {str(current_value):>10s}")
                             else:
-                                self.log(f"WARN: {item['name']:24s} unable to update from {current_value}({type(current_value)}) to {new_value}({type(new_value)})")
+                                self.log(f"WARN: {item['name']:38s} FAILED  from {str(current_value):>10s} to {str(new_value):10s}")
 
                 else:
                     if "(Custom)" not in self.config_grouping:
@@ -8592,7 +8585,7 @@ class PredBat(hass.Hass):
                 return value
         return None
 
-    def expose_config(self, name, value):
+    def expose_config(self, name, value, verbose=True):
         """
         Share the config with HA
         """
@@ -8604,7 +8597,8 @@ class PredBat(hass.Hass):
                     if value is None:
                         self.log(f"WARN: Unable to update HA config for {name} as new value is None")
                     else:
-                        self.log("Updating HA config {} to {}".format(name, value))
+                        if verbose:
+                            self.log("Updating HA config {} to {}".format(name, value))
                         if item["type"] == "input_number":
                             icon = item.get("icon", "mdi:numeric")
                             self.set_state(
