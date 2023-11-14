@@ -43,6 +43,8 @@ for minute in range(0, 24 * 60, 5):
 
 INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
 
+# Each group uses the defaults set in CONFIG_ITEMS unless specified
+# EXCEPT 'Custom' which does not change anything
 CONFIG_GROUPS = {
     "Custom": {},
     "Eco7 | No Export": {},
@@ -84,10 +86,10 @@ CONFIG_GROUPS = {
         "rate_low_threshold": 0,
         "rate_high_threshold": 0,
         "metric_battery_cycle": 2,
-        "calculate_,ax_windows": 32,
+        "calculate_max_windows": 32,
         "set_discharge_freeze": True,
         "set_charge_freeze": True,
-        "forecast_plan_hours": 48,
+        "forecast_plan_hours": 36,
     },
 }
 
@@ -167,7 +169,7 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
-        "default": 0.03,
+        "default": 2,
     },
     {
         "name": "metric_future_rate_offset_import",
@@ -482,22 +484,6 @@ CONFIG_ITEMS = [
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "car_charging_plan_time", "friendly_name": "Car charging planned ready time", "type": "select", "options": [], "icon": "mdi:clock-end", "default": "07:00:00"},
-    {
-        "name": "config_grouping",
-        "friendly_name": "PredBat Config Group",
-        "type": "select",
-        "options": ["Eco7 | No Export", "Eco 7 | Octopus Export", "Octopus Flux / Cozy", "Octopus Agile"],
-        "icon": "mdi:list-box-outline",
-        "default": "Eco7 | No Export",
-    },
-    {
-        "name": "config_grouping",
-        "friendly_name": "PredBat Config Group",
-        "type": "select",
-        "options": list(CONFIG_GROUPS.keys()),
-        "icon": "mdi:list-box-outline",
-        "default": list(CONFIG_GROUPS.keys())[0],
-    },
 ]
 
 
@@ -769,7 +755,7 @@ class Inverter:
         self.reserve_min = self.base.get_arg("set_reserve_min", 4.0)
         if self.reserve_min < battery_min_soc:
             self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
-            self.base.expose_config("set_reserve_min", battery_min_soc)
+            # self.base.expose_config("set_reserve_min", battery_min_soc)
             self.reserve_min = battery_min_soc
 
         self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
@@ -1297,7 +1283,7 @@ class Inverter:
             if self.rest_data:
                 current_soc = float(self.rest_data["Control"]["Target_SOC"])
             else:
-                current_soc = int(self.base.get_arg("charge_limit", index=self.id))
+                current_soc = int(float(self.base.get_arg("charge_limit", index=self.id)))
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge limit is {} % and new target is {} %".format(self.id, current_soc, soc))
@@ -8663,51 +8649,52 @@ class PredBat(hass.Hass):
         if isinstance(entities, str):
             entities = [entities]
 
-        config_group_entity_id = ([i["entity"] for i in CONFIG_ITEMS if "config_grouping" in i["name"] and "entity" in i] + [None])[0]
-        self.log(f"Group entity: {config_group_entity_id}")
-        for item in CONFIG_ITEMS:
-            if ("entity" in item) and (item["entity"] in entities):
-                entity = item["entity"]
-                self.log("select_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+        self.log(f"{self.config_group_entity_id} {entities}")
+        if self.config_group_entity_id in entities:
+            self.log(f"Loading {value} Configuration Group")
 
-                if entity == config_group_entity_id:
-                    group = value
-                    # If the group has been cuctomised we don't need to load the group defaults
-                    if "Custom" in group:
-                        pass
+            if "Custom" in value:
+                # if it's a custom group, try loading it from HA
+                try:
+                    new_config = self.get_state(entity_id=self.config_group_entity_id, attribute="custom_config")
+                except:
+                    self.log("No Custom configuration is saved")
+                    new_config = {}
 
+            else:
+                new_config = {}
+                for item in [i for i in CONFIG_ITEMS if i["name"] != "config_group"]:
+                    if item["name"] in CONFIG_GROUPS[value]:
+                        new_config[item["name"]] = CONFIG_GROUPS[value][item["name"]]
                     else:
-                        self.log(f"Loading {group} Configuration Group")
-                        for item in [i for i in CONFIG_ITEMS if i["name"] != "version" and i["name"] != "config_grouping"]:
-                            if item["name"] in CONFIG_GROUPS[group]:
-                                new_value = CONFIG_GROUPS[group][item["name"]]
-                            else:
-                                try:
-                                    new_value = item["default"]
-                                except:
-                                    self.log(f"Can't get default for {item['name']}")
+                        new_config[item["name"]] = item.get("default", None)
 
-                            current_value = self.get_arg(item["name"])
+            for item_name in new_config:
+                current_value = self.get_arg(item_name)
+                new_value = new_config[item_name]
 
-                            if ((type(current_value) == type(new_value)) or (isinstance(current_value, float) and isinstance(new_value, int))) and (current_value is not None):
-                                if current_value != new_value:
-                                    self.expose_config(item["name"], new_value, verbose=False)
-                                    self.log(f"    {item['name']:40s} CHANGED from {str(current_value):>10s} to {str(new_value):10s}")
-                                else:
-                                    self.log(f"    {item['name']:40s}              {str(current_value):>10s}")
-                            else:
-                                self.log(f"WARN: {item['name']:38s} FAILED  from {str(current_value):>10s} to {str(new_value):10s}")
-
+                if ((type(current_value) == type(new_value)) or (isinstance(current_value, float) and isinstance(new_value, int))) and (new_value is not None):
+                    if current_value != new_value:
+                        self.expose_config(item_name, new_value, verbose=False)
+                        self.log(f"    {item_name:40s} CHANGED to {str(new_value):>10s} from {str(current_value):10s}")
+                    else:
+                        self.log(f"    {item_name:40s}            {str(current_value):>10s}")
                 else:
-                    if "(Custom)" not in self.config_grouping:
-                        self.config_grouping = "Custom"
-                        self.log(f"Updating Config Group to {self.config_grouping}")
-                        self.expose_config("config_grouping", self.config_grouping)
+                    self.log(f"WARN: {item_name:37s} FAILED from {str(current_value):>10s}  to  {str(current_value):10s}")
 
-                self.update_pending = True
-                self.plan_valid = False
-                return
+            self.expose_config_group(value)
+
+        else:
+            # Try to find the item in CONFIG_ITEMS
+            for item in CONFIG_ITEMS:
+                if ("entity" in item) and (item["entity"] in entities):
+                    entity = item["entity"]
+                    self.log("select_event: {} = {}".format(entity, value))
+                    self.expose_config(item["name"], value, event=True)
+
+        self.update_pending = True
+        self.plan_valid = False
+        return
 
     def number_event(self, event, data, kwargs):
         """
@@ -8725,7 +8712,7 @@ class PredBat(hass.Hass):
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("number_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
                 return
@@ -8755,7 +8742,7 @@ class PredBat(hass.Hass):
                     value = not value
 
                 self.log("switch_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
                 return
@@ -8770,55 +8757,77 @@ class PredBat(hass.Hass):
                 return value
         return None
 
-    def expose_config(self, name, value, verbose=True):
+    def expose_config_group(self, group):
+        # Set the HA entity to the name of the group and populate the attributes
+        self.config_group_entity_id = "select.predbat_config_group"
+        self.config_group = group
+        # self.set_state(entity_id=self.config_group_entity_id, state=group, attributes={"options": options, "custom_config": {}})
+        custom_config = {item["name"]: self.get_state(item["entity"]) for item in CONFIG_ITEMS}
+        self.set_state(entity_id=self.config_group_entity_id, state=group, attributes={"custom_config": custom_config})
+
+    def expose_config(self, name, value, verbose=True, event=False):
         """
         Share the config with HA
         """
-        for item in CONFIG_ITEMS:
-            if item["name"] == name:
-                entity = item.get("entity")
-                if entity and ((item.get("value") is None) or (value != item["value"])):
-                    item["value"] = value
-                    if value is None:
-                        self.log(f"WARN: Unable to update HA config for {name} as new value is None")
-                    else:
-                        if verbose:
-                            self.log("Updating HA config {} to {}".format(name, value))
-                        if item["type"] == "input_number":
-                            icon = item.get("icon", "mdi:numeric")
-                            self.set_state(
-                                entity_id=entity,
-                                state=value,
-                                attributes={"friendly_name": item["friendly_name"], "min": item["min"], "max": item["max"], "step": item["step"], "icon": icon},
-                            )
-                        elif item["type"] == "switch":
-                            icon = item.get("icon", "mdi:light-switch")
-                            self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
-                        elif item["type"] == "select":
-                            icon = item.get("icon", "mdi:format-list-bulleted")
-                            self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
-                        elif item["type"] == "update":
-                            summary = self.releases.get("this_body", "")
-                            latest = self.releases.get("latest", "check HACS")
-                            state = "off"
-                            if item["installed_version"] != latest:
-                                state = "on"
-                            self.set_state(
-                                entity_id=entity,
-                                state=state,
-                                attributes={
-                                    "friendly_name": item["friendly_name"],
-                                    "title": item["title"],
-                                    "in_progress": False,
-                                    "auto_update": False,
-                                    "installed_version": item["installed_version"],
-                                    "latest_version": latest,
-                                    "entity_picture": item["entity_picture"],
-                                    "release_url": item["release_url"],
-                                    "skipped_version": False,
-                                    "release_summary": summary,
-                                },
-                            )
+
+        items = [i for i in CONFIG_ITEMS if i["name"] == name]
+        if len(items) == 0:
+            return
+
+        item = items[0]
+        if not "entity" in item:
+            self.log(f"No HA entity set for {name}")
+            return
+
+        else:
+            entity_id = item.get("entity")
+            if entity_id and ((item.get("value") is None) or (value != item["value"])):
+                item["value"] = value
+
+                if verbose:
+                    self.log("Updating HA config {} to {}".format(name, value))
+                if item["type"] == "input_number":
+                    icon = item.get("icon", "mdi:numeric")
+                    self.set_state(
+                        entity_id=entity_id,
+                        state=value,
+                        attributes={"friendly_name": item["friendly_name"], "min": item["min"], "max": item["max"], "step": item["step"], "icon": icon},
+                    )
+                elif item["type"] == "switch":
+                    icon = item.get("icon", "mdi:light-switch")
+                    self.set_state(entity_id=entity_id, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
+                elif item["type"] == "select":
+                    icon = item.get("icon", "mdi:format-list-bulleted")
+                    self.set_state(entity_id=entity_id, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
+                elif item["type"] == "update":
+                    summary = self.releases.get("this_body", "")
+                    latest = self.releases.get("latest", "check HACS")
+                    state = "off"
+                    if item["installed_version"] != latest:
+                        state = "on"
+                    self.set_state(
+                        entity_id=entity_id,
+                        state=state,
+                        attributes={
+                            "friendly_name": item["friendly_name"],
+                            "title": item["title"],
+                            "in_progress": False,
+                            "auto_update": False,
+                            "installed_version": item["installed_version"],
+                            "latest_version": latest,
+                            "entity_picture": item["entity_picture"],
+                            "release_url": item["release_url"],
+                            "skipped_version": False,
+                            "release_summary": summary,
+                        },
+                    )
+
+                # If we weren't in a Custom Group we are once we change something from an event:
+                if "Custom" not in self.config_group and event:
+                    self.log(f"Setting Config Group to Custom because {name} chanaged to {value}")
+                    self.expose_config_group("Custom")
+
+            return entity_id
 
     def load_user_config(self):
         """
@@ -8864,6 +8873,7 @@ class PredBat(hass.Hass):
             if ha_value is not None:
                 self.expose_config(item["name"], ha_value)
 
+    def load_events(self):
         # Register HA services
         self.fire_event("service_registered", domain="input_number", service="set_value")
         self.fire_event("service_registered", domain="input_number", service="increment")
@@ -8967,13 +8977,23 @@ class PredBat(hass.Hass):
             self.reset()
             self.auto_config()
             self.load_user_config()
+
         except Exception as e:
             self.log("ERROR: Exception raised {}".format(e))
             self.record_status("ERROR: Exception raised {}".format(e))
             raise e
 
-        self.config_grouping = self.get_arg("config_grouping", list(CONFIG_GROUPS.keys())[0])
-        self.log(f"Current Configuration Group is {self.config_grouping}")
+        self.expose_config_group("Custom")
+        self.log(f"Current Configuration Group is {self.config_group}")
+
+        # Don't start to listen for events until eveything is initialised
+        try:
+            self.load_events()
+        except Exception as e:
+            self.log("ERROR: Exception raised {}".format(e))
+            self.record_status("ERROR: Exception raised {}".format(e))
+            raise e
+
         # Catch template configurations and exit
         if self.get_arg("template", False):
             self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
