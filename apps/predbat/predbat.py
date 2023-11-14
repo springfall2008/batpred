@@ -1376,9 +1376,9 @@ class Inverter:
                     if self.inv_charge_time_format == "H M":
                         # If the inverter uses hours and minutes then write to these entities too
                         entity = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
+                        self.write_and_poll_value("discharge_start_hour", entity, int(new_start.split(":")[0]))
                         entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
+                        self.write_and_poll_value("discharge_start_minute", entity, int(new_start.split(":")[1]))
                 else:
                     self.log("WARN: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
 
@@ -1402,9 +1402,9 @@ class Inverter:
 
                     if self.inv_charge_time_format == "H M":
                         entity = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2]))
+                        self.write_and_poll_value("discharge_end_hour", entity, int(new_end.split(":")[0]))
                         entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
+                        self.write_and_poll_value("discharge_end_minute", entity, int(new_end.split(":")[1]))
                 else:
                     self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
 
@@ -1684,9 +1684,9 @@ class Inverter:
 
                     if self.inv_charge_time_format == "H M":
                         entity = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
+                        self.write_and_poll_value("charge_end_hour", entity, int(new_end.split(":")[0]))
                         entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
+                        self.write_and_poll_value("charge_end_minute", entity, int(new_end.split(":")[1]))
                 else:
                     self.log("WARN: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
@@ -5766,7 +5766,9 @@ class PredBat(hass.Hass):
 
                 # Skip this one as it's the same as selected already
                 if try_charge_limit == best_limits and best_discharge == try_discharge and best_metric != 9999999:
-                    self.log("Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable))
+                    self.log(
+                        "Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable)
+                    )
                     continue
 
                 # Turn off debug for this sim
