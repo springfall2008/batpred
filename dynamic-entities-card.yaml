@@ -3,6 +3,10 @@ title: Predbat 🦇
 cards:
   - type: entity
     entity: predbat.status
+  - type: entities
+    entities:
+      - entity: select.predbat_config_group
+    title: Group    
   - type: custom:collapsable-cards
     title: 🔀 Control
     defaultOpen: false
