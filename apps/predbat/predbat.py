@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.12.1"
+THIS_VERSION = "v7.12.2"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2245,6 +2245,8 @@ class PredBat(hass.Hass):
         """
         Analyise futurerate energy data
         """
+
+        url = None
         if 'futurerate_url' in self.args:
             url = self.get_arg("futurerate_url", indirect=False)
         self.log("Fetching futurerate data from {}".format(url))
@@ -2258,6 +2260,18 @@ class PredBat(hass.Hass):
         extracted_keys = []
         array_values = []
         mdata = {}
+
+        peak_start = datetime.strptime(self.get_arg('futurerate_peak_start', "00:00:00"), "%H:%M:%S")
+        peak_end = datetime.strptime(self.get_arg('futurerate_peak_end', "00:00:00"), "%H:%M:%S")
+        peak_start_minutes = peak_start.minute + peak_start.hour * 60
+        peak_end_minutes = peak_end.minute + peak_end.hour * 60
+        if peak_end_minutes < peak_start_minutes:
+            peak_end_minutes += 24*60
+
+        peak_premium_import = self.get_arg('futurerate_peak_premium_import', 0)
+        peak_premium_export = self.get_arg('futurerate_peak_premium_export', 0)
+
+        self.log("Future rates - peak rate is {} - {} minutes premium import {} export {}".format(peak_start_minutes, peak_end_minutes, peak_premium_import, peak_premium_export))
 
         if pdata:
             if 'Rows' in pdata:
@@ -2282,11 +2296,31 @@ class PredBat(hass.Hass):
                                 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
                                 time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)                      
                                 time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
+                                delta_start = time_date_start - self.midnight_utc
+                                delta_end = time_date_end - self.midnight_utc
+
+                                minutes_start = delta_start.seconds / 60
+                                minutes_end = delta_end.seconds / 60
+                                if minutes_end < minutes_start:
+                                    minutes_end += 24*60
+
+                                # Convert to pence with Agile formula, starts in pounds per Megawhat hour
+                                rate_import = (cvalue / 10) * 2.2
+                                rate_export = (cvalue / 10) * 0.95
+                                if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
+                                    rate_import += peak_premium_import
+                                    rate_export += peak_premium_export
+                                rate_import = min(rate_import, 95) # Cap
+                                rate_export = max(rate_export, 0) # Cap
+                                rate_import = rate_import * 1.05 # Vat only on import
+
                                 item = {}
                                 item['from'] = time_date_start.strftime(TIME_FORMAT)
                                 item['to'] = time_date_end.strftime(TIME_FORMAT)
-                                item['rate'] = cvalue
+                                item['rate_import'] = self.dp2(rate_import)
+                                item['rate_export'] = self.dp2(rate_export)
                                 extracted_data[time_date_start] = item
+
                                 if time_date_start not in extracted_keys:
                                     extracted_keys.append(time_date_start)
         
@@ -2295,8 +2329,16 @@ class PredBat(hass.Hass):
             for key in extracted_keys:
                 array_values.append(extracted_data[key])
             self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
-            mdata = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate", "from", backwards=False, to_key="to")
-        return mdata
+            mdata_import = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
+            mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
+
+        future_data = []
+        for minute in range(0, 24*60, 60):
+            if mdata_import.get(minute) or mdata_export.get(minute):
+                future_data.append("{} => {} / {}".format(minute, mdata_import.get(minute), mdata_export.get(minute)))
+
+        self.log("Predicted future rates: {}".format(future_data))
+        return mdata_import, mdata_export
 
     def download_futurerate_data(self, url):
         """
@@ -2310,7 +2352,7 @@ class PredBat(hass.Hass):
             stamp = self.futurerate_url_cache[url]["stamp"]
             pdata = self.futurerate_url_cache[url]["data"]
             age = now - stamp
-            if age.seconds < (120 * 60):
+            if age.seconds < (60 * 60):
                 self.log("Return cached futurerate data for {} age {} minutes".format(url, age.seconds / 60))
                 return pdata
 
@@ -4146,13 +4188,13 @@ class PredBat(hass.Hass):
 
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
-                    if self.future_energy_rates:
-                        if minute in self.future_energy_rates and minute_mod in self.future_energy_rates:
-                            if (is_import and self.get_arg('futurerate_adjust_import', False)) or (not is_import and self.get_arg('futurerate_adjust_import', False)):
-                                rate_change = self.future_energy_rates[minute] / self.future_energy_rates[minute_mod]
-                                rate_offset = rate_offset * rate_change                
-                                self.log("futurerate data says minute {} is {} and previous day minute {} was {} - rate_change {} new_rate {}".format(minute, self.future_energy_rates[minute], minute_mod, self.future_energy_rates[minute_mod], rate_change, rate_offset))
-                    if is_import:
+                    if is_import and self.get_arg('futurerate_adjust_import', False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                        prev_rate = rate_offset
+                        rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
+                    elif (not is_import) and self.get_arg('futurerate_adjust_export', False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                        prev_rate = rate_offset
+                        rate_offset = rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute]
+                    elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                     else:
                         rate_offset = max(rate_offset + self.metric_future_rate_offset_export, 0)
@@ -5790,7 +5832,8 @@ class PredBat(hass.Hass):
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
         self.metric_cloud_coverage = 0.0
-        self.future_energy_rates = {}
+        self.future_energy_rates_import = {}
+        self.future_energy_rates_export = {}
 
     def optimise_charge_limit_price(
         self,
@@ -7862,7 +7905,7 @@ class PredBat(hass.Hass):
         )
 
         # futurerate data
-        self.future_energy_rates = self.futurerate_analysis()
+        self.future_energy_rates_import, self.future_energy_rates_export = self.futurerate_analysis()
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
