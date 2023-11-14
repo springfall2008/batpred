@@ -2251,7 +2251,7 @@ class PredBat(hass.Hass):
             url = self.get_arg("futurerate_url", indirect=False)
         self.log("Fetching futurerate data from {}".format(url))
         if not url:
-            return {}
+            return {}, {}
 
         pdata = self.download_futurerate_data(url)
         nord_tz = pytz.timezone("Europe/Oslo")
@@ -2333,7 +2333,7 @@ class PredBat(hass.Hass):
             mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
         future_data = []
-        for minute in range(0, 24*60, 60):
+        for minute in range(self.minutes_now, self.forecast_plan_hours*60 + self.minutes_now, 60):
             if mdata_import.get(minute) or mdata_export.get(minute):
                 future_data.append("{} => {} / {}".format(minute, mdata_import.get(minute), mdata_export.get(minute)))
 
