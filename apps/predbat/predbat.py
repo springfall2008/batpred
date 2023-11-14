@@ -44,6 +44,7 @@ for minute in range(0, 24 * 60, 5):
 INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
 
 CONFIG_GROUPS = {
+    "Custom": {},
     "Eco7 | No Export": {},
     "Eco 7 | Octopus Export": {
         "calculate_best_discharge": True,
@@ -8673,7 +8674,7 @@ class PredBat(hass.Hass):
                 if entity == config_group_entity_id:
                     group = value
                     # If the group has been cuctomised we don't need to load the group defaults
-                    if "(Custom)" in group:
+                    if "Custom" in group:
                         pass
 
                     else:
@@ -8700,7 +8701,7 @@ class PredBat(hass.Hass):
 
                 else:
                     if "(Custom)" not in self.config_grouping:
-                        self.config_grouping = self.config_grouping + " (Custom)"
+                        self.config_grouping = "Custom"
                         self.log(f"Updating Config Group to {self.config_grouping}")
                         self.expose_config("config_grouping", self.config_grouping)
 
