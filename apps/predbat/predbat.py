@@ -8472,6 +8472,7 @@ class PredBat(hass.Hass):
         # These are just from arguments in the YAML
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
+        self.notify_devices = self.get_arg("notify_devices", ["notify"])
 
         # Losses need converting to 1 - entered value
         self.battery_loss = 1.0 - self.battery_loss
