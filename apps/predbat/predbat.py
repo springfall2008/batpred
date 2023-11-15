@@ -43,6 +43,56 @@ for minute in range(0, 24 * 60, 5):
 
 INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
 
+# Each group uses the defaults set in CONFIG_ITEMS unless specified
+# EXCEPT 'Custom' which does not change anything
+CONFIG_GROUPS = {
+    "Custom": {},
+    "Eco7 | No Export": {},
+    "Eco 7 | Octopus Export": {
+        "calculate_best_discharge": True,
+        "calculate_discharge_first": True,
+        "combine_charge_slots": True,
+        "combine_discharge_slots": False,
+        "set_discharge_window": True,
+        "metric_min_improvement": 0,
+        "metric_min_improvement_discharge": 0,
+        "rate_high_threshold": 0,
+        "set_discharge_freeze": True,
+        "set_charge_freeze": False,
+        "calculate_max_windows": 96,
+        "predbat_metric_battery_cycle": 3,
+    },
+    "Octopus Flux / Cozy": {
+        "calculate_best_discharge": True,
+        "calculate_discharge_first": True,
+        "combine_charge_slots": True,
+        "combine_discharge_slots": True,
+        "set_discharge_window": True,
+        "metric_min_improvement": 0,
+        "metric_min_improvement_discharge": 0.1,
+        "rate_low_threshold": 0.8,
+        "rate_high_threshold": 1.2,
+        "metric_battery_cycle": 2,
+        "set_discharge_freeze": True,
+        "set_charge_freeze": True,
+    },
+    "Octopus Agile": {
+        "calculate_best_discharge": True,
+        "calculate_discharge_first": True,
+        "combine_discharge_slots": False,
+        "set_discharge_window": True,
+        "metric_min_improvement": 0,
+        "metric_min_improvement_discharge": 0.1,
+        "rate_low_threshold": 0,
+        "rate_high_threshold": 0,
+        "metric_battery_cycle": 2,
+        "calculate_max_windows": 32,
+        "set_discharge_freeze": True,
+        "set_charge_freeze": True,
+        "forecast_plan_hours": 36,
+    },
+}
+
 CONFIG_ITEMS = [
     {
         "name": "version",
@@ -2240,14 +2290,13 @@ class PredBat(hass.Hass):
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
-
     def futurerate_analysis(self):
         """
         Analyise futurerate energy data
         """
 
         url = None
-        if 'futurerate_url' in self.args:
+        if "futurerate_url" in self.args:
             url = self.get_arg("futurerate_url", indirect=False)
         self.log("Fetching futurerate data from {}".format(url))
         if not url:
@@ -2261,40 +2310,40 @@ class PredBat(hass.Hass):
         array_values = []
         mdata = {}
 
-        peak_start = datetime.strptime(self.get_arg('futurerate_peak_start', "00:00:00"), "%H:%M:%S")
-        peak_end = datetime.strptime(self.get_arg('futurerate_peak_end', "00:00:00"), "%H:%M:%S")
+        peak_start = datetime.strptime(self.get_arg("futurerate_peak_start", "00:00:00"), "%H:%M:%S")
+        peak_end = datetime.strptime(self.get_arg("futurerate_peak_end", "00:00:00"), "%H:%M:%S")
         peak_start_minutes = peak_start.minute + peak_start.hour * 60
         peak_end_minutes = peak_end.minute + peak_end.hour * 60
         if peak_end_minutes < peak_start_minutes:
-            peak_end_minutes += 24*60
+            peak_end_minutes += 24 * 60
 
-        peak_premium_import = self.get_arg('futurerate_peak_premium_import', 0)
-        peak_premium_export = self.get_arg('futurerate_peak_premium_export', 0)
+        peak_premium_import = self.get_arg("futurerate_peak_premium_import", 0)
+        peak_premium_export = self.get_arg("futurerate_peak_premium_export", 0)
 
         self.log("Future rates - peak rate is {} - {} minutes premium import {} export {}".format(peak_start_minutes, peak_end_minutes, peak_premium_import, peak_premium_export))
 
         if pdata:
-            if 'Rows' in pdata:
-                for row in pdata['Rows']:
-                    if 'Name' in row:
+            if "Rows" in pdata:
+                for row in pdata["Rows"]:
+                    if "Name" in row:
                         rname = row.get("Name", "")
-                        rstart = row.get('StartTime', "") + now_offset
-                        rend = row.get('EndTime', "") + now_offset
-                    if 'Columns' in row:
-                        for column in row['Columns']:
+                        rstart = row.get("StartTime", "") + now_offset
+                        rend = row.get("EndTime", "") + now_offset
+                    if "Columns" in row:
+                        for column in row["Columns"]:
                             cname = column.get("Name", "")
-                            cvalue = column.get('Value', "")
-                            date_start, time_start = rstart.split('T')
-                            date_end, time_end = rend.split('T')
-                            if '-' in cname and ',' in cvalue and cname:
+                            cvalue = column.get("Value", "")
+                            date_start, time_start = rstart.split("T")
+                            date_end, time_end = rend.split("T")
+                            if "-" in cname and "," in cvalue and cname:
                                 date_start = cname
                                 date_end = cname
-                                cvalue = cvalue.replace(',', '.')
+                                cvalue = cvalue.replace(",", ".")
                                 cvalue = float(cvalue)
                                 rstart = date_start + "T" + time_start
                                 rend = date_end + "T" + time_end
                                 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-                                time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)                      
+                                time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
                                 time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
                                 delta_start = time_date_start - self.midnight_utc
                                 delta_end = time_date_end - self.midnight_utc
@@ -2302,7 +2351,7 @@ class PredBat(hass.Hass):
                                 minutes_start = delta_start.seconds / 60
                                 minutes_end = delta_end.seconds / 60
                                 if minutes_end < minutes_start:
-                                    minutes_end += 24*60
+                                    minutes_end += 24 * 60
 
                                 # Convert to pence with Agile formula, starts in pounds per Megawhat hour
                                 rate_import = (cvalue / 10) * 2.2
@@ -2310,20 +2359,20 @@ class PredBat(hass.Hass):
                                 if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
                                     rate_import += peak_premium_import
                                     rate_export += peak_premium_export
-                                rate_import = min(rate_import, 95) # Cap
-                                rate_export = max(rate_export, 0) # Cap
-                                rate_import = rate_import * 1.05 # Vat only on import
+                                rate_import = min(rate_import, 95)  # Cap
+                                rate_export = max(rate_export, 0)  # Cap
+                                rate_import = rate_import * 1.05  # Vat only on import
 
                                 item = {}
-                                item['from'] = time_date_start.strftime(TIME_FORMAT)
-                                item['to'] = time_date_end.strftime(TIME_FORMAT)
-                                item['rate_import'] = self.dp2(rate_import)
-                                item['rate_export'] = self.dp2(rate_export)
+                                item["from"] = time_date_start.strftime(TIME_FORMAT)
+                                item["to"] = time_date_end.strftime(TIME_FORMAT)
+                                item["rate_import"] = self.dp2(rate_import)
+                                item["rate_export"] = self.dp2(rate_export)
                                 extracted_data[time_date_start] = item
 
                                 if time_date_start not in extracted_keys:
                                     extracted_keys.append(time_date_start)
-        
+
         if extracted_keys:
             extracted_keys.sort()
             for key in extracted_keys:
@@ -2333,7 +2382,7 @@ class PredBat(hass.Hass):
             mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
         future_data = []
-        for minute in range(self.minutes_now, self.forecast_plan_hours*60 + self.minutes_now, 60):
+        for minute in range(self.minutes_now, self.forecast_plan_hours * 60 + self.minutes_now, 60):
             if mdata_import.get(minute) or mdata_export.get(minute):
                 future_data.append("{} => {} / {}".format(minute, mdata_import.get(minute), mdata_export.get(minute)))
 
@@ -4188,10 +4237,20 @@ class PredBat(hass.Hass):
 
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
-                    if is_import and self.get_arg('futurerate_adjust_import', False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    if (
+                        is_import
+                        and self.get_arg("futurerate_adjust_import", False)
+                        and (minute in self.future_energy_rates_import)
+                        and (minute_mod in self.future_energy_rates_import)
+                    ):
                         prev_rate = rate_offset
                         rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
-                    elif (not is_import) and self.get_arg('futurerate_adjust_export', False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (
+                        (not is_import)
+                        and self.get_arg("futurerate_adjust_export", False)
+                        and (minute in self.future_energy_rates_export)
+                        and (minute_mod in self.future_energy_rates_export)
+                    ):
                         prev_rate = rate_offset
                         rate_offset = rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute]
                     elif is_import:
@@ -5917,7 +5976,9 @@ class PredBat(hass.Hass):
 
                 # Skip this one as it's the same as selected already
                 if try_charge_limit == best_limits and best_discharge == try_discharge and best_metric != 9999999:
-                    self.log("Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable))
+                    self.log(
+                        "Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable)
+                    )
                     continue
 
                 # Turn off debug for this sim
@@ -8183,7 +8244,6 @@ class PredBat(hass.Hass):
         # Apply modal filter to historical data
         self.previous_days_modal_filter(self.load_minutes)
         self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
-
 
     def fetch_inverter_data(self):
         """
