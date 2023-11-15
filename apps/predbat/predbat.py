@@ -562,34 +562,25 @@ SOLAX_SOLIS_MODES = {
 
 
 class Inverter:
-    def self_test(self, minutes_now):
-        self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
-        self.adjust_battery_target(99)
-        self.adjust_battery_target(100)
-        self.adjust_reserve(100)
-        self.adjust_reserve(6)
-        self.adjust_reserve(4)
-        self.disable_charge_window()
-        timea = datetime.strptime("23:00:00", "%H:%M:%S")
-        timeb = datetime.strptime("23:01:00", "%H:%M:%S")
-        timec = datetime.strptime("05:00:00", "%H:%M:%S")
-        timed = datetime.strptime("05:01:00", "%H:%M:%S")
-        self.adjust_charge_window(timeb, timed, minutes_now)
-        self.adjust_charge_window(timea, timec, minutes_now)
-        self.adjust_force_discharge(False, timec, timed)
-        self.adjust_force_discharge(True, timea, timeb)
-        self.adjust_force_discharge(False)
-        self.base.log("======= INVERTER CONTROL SELF TEST END ========")
-
-        if self.rest_api:
-            self.rest_api = None
-            self.rest_data = None
-            self.self_test(minutes_now)
-        exit
-
     def __init__(self, base, id=0, quiet=False):
-        self.id = id
         self.base = base
+        self.id = id
+        self.quiet = quiet
+
+        self._init_attributes()
+        self._init_brand()
+        self._init_api()
+        self._init_battery()
+        self._init_time()
+        self._init_reserve()
+        self._init_max_rates()
+        if self.inverter_type != "GE":
+            self._init_dummy_entities()
+
+    def _init_attributes(self):
+        self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False)
+
+        self.id = id
         self.log = self.base.log
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes
@@ -617,8 +608,11 @@ class Inverter:
         self.load_power = 0
         self.rest_api = None
 
-        self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False)
+        # If it's not a GE inverter then turn Quiet off
+        if self.inverter_type != "GE":
+            quiet = False
 
+    def _init_brand(self):
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
         self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
@@ -636,20 +630,8 @@ class Inverter:
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
 
-        # If it's not a GE inverter then turn Quiet off
-        if self.inverter_type != "GE":
-            quiet = False
-
-        # Rest API for GivEnergy
-        if self.inverter_type == "GE":
-            self.rest_api = self.base.get_arg("givtcp_rest", None, indirect=False, index=self.id)
-            if self.rest_api:
-                if not quiet:
-                    self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
-                self.rest_data = self.rest_readData()
-
+    def _init_battery(self):
         # Battery size, charge and discharge rates
-        ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
             idetails = self.rest_data["Invertor_Details"]
             self.soc_max = float(idetails["Battery_Capacity_kWh"])
@@ -680,6 +662,7 @@ class Inverter:
             # Inverter time
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
+
         else:
             self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.base.battery_scaling
             self.nominal_capacity = self.soc_max
@@ -695,8 +678,6 @@ class Inverter:
             else:
                 self.battery_rate_max_raw = 2600.0
 
-            ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
-
         # Battery can not be zero size
         if self.soc_max <= 0:
             self.base.log("ERROR: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
@@ -708,6 +689,27 @@ class Inverter:
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
         self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
+
+    def _init_api(self):
+        # Rest API for GivEnergy
+        if self.inverter_type == "GE":
+            self.rest_api = self.base.get_arg("givtcp_rest", None, indirect=False, index=self.id)
+            if self.rest_api:
+                if not self.quiet:
+                    self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
+                self.rest_data = self._rest_readData()
+
+    def _init_time(self):
+        ivtime = None
+
+        if self.rest_data and ("Invertor_Details" in self.rest_data):
+            idetails = self.rest_data["Invertor_Details"]
+            if "Invertor_Time" in idetails:
+                ivtime = idetails["Invertor_Time"]
+
+        if ivtime is None:
+            # This catches the case whete there's no Time in Details
+            ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
         # Convert inverter time into timestamp
         if ivtime:
@@ -728,7 +730,7 @@ class Inverter:
         if self.inverter_time:
             tdiff = self.inverter_time - self.base.now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
-            if not quiet:
+            if not self.quiet:
                 self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
             if abs(tdiff) >= 5:
                 self.base.log(
@@ -743,6 +745,7 @@ class Inverter:
                     had_errors=True,
                 )
 
+    def _init_reserve(self):
         # Get current reserve value
         if self.rest_data:
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
@@ -764,6 +767,7 @@ class Inverter:
             self.reserve_percent = self.reserve_percent_current
         self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
 
+    def _init_max_rates(self):
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
             self.inverter_limit = self.base.get_arg("inverter_limit", self.inverter_limit, index=self.id) / (1000 * 60.0)
@@ -773,7 +777,7 @@ class Inverter:
         self.export_limit = min(self.export_limit, self.inverter_limit)
 
         # Log inverter details
-        if not quiet:
+        if not self.quiet:
             self.base.log(
                 "New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(
                     self.id,
@@ -790,34 +794,37 @@ class Inverter:
                 )
             )
 
-        # Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type:
-        # Args are also set for these so that no entries are needed for the dummies in the config file
+    def _init_dummy_entities(self):
+        """
+        Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type
+        Args are also set for these so that no entries are needed for the dummies in the config file
+        """
 
         if not self.inv_has_charge_enable_time:
-            self.base.args["scheduled_charge_enable"] = self.create_entity("scheduled_charge_enable", False)
+            self.base.args["scheduled_charge_enable"] = self._create_entity("scheduled_charge_enable", False)
 
         if not self.inv_has_discharge_enable_time:
-            self.base.args["scheduled_discharge_enable"] = self.create_entity("scheduled_discharge_enable", False)
+            self.base.args["scheduled_discharge_enable"] = self._create_entity("scheduled_discharge_enable", False)
 
         if not self.inv_has_reserve_soc:
-            self.base.args["reserve"] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
+            self.base.args["reserve"] = self._create_entity("reserve", self.reserve, device_class="battery", uom="%")
 
         if not self.inv_has_target_soc:
-            self.base.args["charge_limit"] = self.create_entity("charge_limit", 100, device_class="battery", uom="%")
+            self.base.args["charge_limit"] = self._create_entity("charge_limit", 100, device_class="battery", uom="%")
 
         if self.inv_output_charge_control != "power":
-            self.base.args["charge_rate"] = self.create_entity("charge_rate", int(self.battery_rate_max_charge * 60 * 1000), uom="W", device_class="power")
-            self.base.args["discharge_rate"] = self.create_entity("discharge_rate", int(self.battery_rate_max_discharge * 60 * 1000), uom="W", device_class="power")
+            self.base.args["charge_rate"] = self._create_entity("charge_rate", int(self.battery_rate_max_charge * 60 * 1000), uom="W", device_class="power")
+            self.base.args["discharge_rate"] = self._create_entity("discharge_rate", int(self.battery_rate_max_discharge * 60 * 1000), uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode:
-            self.base.args["inverter_mode"] = self.create_entity("inverter_mode", "Eco")
+            self.base.args["inverter_mode"] = self._create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
-                    self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
+                    self.base.args[f"{x}_{y}_time"] = self._create_entity(f"{x}_{y}_time", "23:59:00")
 
-    def create_entity(self, entity_name, value, uom=None, device_class="None"):
+    def _create_entity(self, entity_name, value, uom=None, device_class="None"):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
         """
@@ -841,6 +848,31 @@ class Inverter:
             entity = self.base.get_entity(entity_id)
             entity.set_state(state=value, attributes=attributes)
         return entity_id
+
+    def self_test(self, minutes_now):
+        self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
+        self.adjust_battery_target(99)
+        self.adjust_battery_target(100)
+        self.adjust_reserve(100)
+        self.adjust_reserve(6)
+        self.adjust_reserve(4)
+        self.disable_charge_window()
+        timea = datetime.strptime("23:00:00", "%H:%M:%S")
+        timeb = datetime.strptime("23:01:00", "%H:%M:%S")
+        timec = datetime.strptime("05:00:00", "%H:%M:%S")
+        timed = datetime.strptime("05:01:00", "%H:%M:%S")
+        self.adjust_charge_window(timeb, timed, minutes_now)
+        self.adjust_charge_window(timea, timec, minutes_now)
+        self.adjust_force_discharge(False, timec, timed)
+        self.adjust_force_discharge(True, timea, timeb)
+        self.adjust_force_discharge(False)
+        self.base.log("======= INVERTER CONTROL SELF TEST END ========")
+
+        if self.rest_api:
+            self.rest_api = None
+            self.rest_data = None
+            self.self_test(minutes_now)
+        exit
 
     def update_status(self, minutes_now, quiet=False):
         """
@@ -886,7 +918,7 @@ class Inverter:
         self.load_power = 0
 
         if self.rest_api:
-            self.rest_data = self.rest_readData()
+            self.rest_data = self._rest_readData()
 
         if self.rest_data:
             self.charge_enable_time = self.rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
@@ -1093,15 +1125,15 @@ class Inverter:
         if INVERTER_TEST:
             self.self_test(minutes_now)
 
-    def mimic_target_soc(self):
+    def _mimic_target_soc(self):
         if self.soc_percent >= float(self.current_charge_limit):
             # If current SOC is above Target SOC, turn Grid Charging off
-            self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
+            self._alt_charge_discharge_enable("charge", False, grid=True, timed=False)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Grid Charge disabled.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
-            self.set_current_from_power("charge", self.base.get_arg("charge_rate", index=self.id, default=2600.0))
+            self._alt_charge_discharge_enable("charge", True, grid=True, timed=False)
+            self._set_current_from_power("charge", self.base.get_arg("charge_rate", index=self.id, default=2600.0))
             self.base.log(
                 f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
             )
@@ -1146,15 +1178,42 @@ class Inverter:
                 self.base.sim_reserve = reserve
             else:
                 if self.rest_api:
-                    self.rest_setReserve(reserve)
+                    self._rest_setReserve(reserve)
                 else:
                     entity_soc = self.base.get_entity(self.base.get_arg("reserve", indirect=False, index=self.id))
-                    self.write_and_poll_value("reserve", entity_soc, reserve)
+                    self._write_and_poll_value("reserve", entity_soc, reserve)
                 if self.base.set_reserve_notify:
                     self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
                 self.base.record_status("Inverter {} set reserve to {}".format(self.id, reserve))
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
+
+    def _adjust_rate(self, new_rate, direction, notify=True):
+        if self.rest_data:
+            current_rate = self.rest_data["Control"][f"Battery_{direction.title()}_Rate"]
+        else:
+            current_rate = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
+
+        if abs(current_rate - new_rate) > 100:
+            self.base.log(f"Inverter {self.id} current {direction} rate is {current_rate} and new target is {new_rate}")
+
+            if self.rest_api:
+                if direction == "charge":
+                    self._rest_setChargeRate(new_rate)
+                else:
+                    self._rest_setDischargeRate(new_rate)
+
+            else:
+                entity = self.base.get_entity(self.base.get_arg(f"{direction}_rate", indirect=False, index=self.id))
+                # Write
+                self._write_and_poll_value("f{direction}_rate", entity, new_rate, fuzzy=100)
+                if self.inv_output_charge_control == "current":
+                    self._set_current_from_power(direction, new_rate)
+
+            if notify and self.base.set_soc_notify:
+                self.base.call_notify(f"Predbat: Inverter {self.id} {direction} rate changes to {new_rate} at {self.base.time_now_str()}")
+            if notify:
+                self.base.record_status(f"Inverter {self.id} charge rate changed to {new_rate}")
 
     def adjust_charge_rate(self, new_rate, notify=True):
         """
@@ -1181,30 +1240,9 @@ class Inverter:
 
         if SIMULATE:
             current_rate = self.base.sim_charge_rate_now
+            self.base.sim_charge_rate_now = new_rate
         else:
-            if self.rest_data:
-                current_rate = self.rest_data["Control"]["Battery_Charge_Rate"]
-            else:
-                current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-
-        if abs(current_rate - new_rate) > 100:
-            self.base.log("Inverter {} current charge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
-            if SIMULATE:
-                self.base.sim_charge_rate_now = new_rate
-            else:
-                if self.rest_api:
-                    self.rest_setChargeRate(new_rate)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
-                    # Write
-                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=100)
-                    if self.inv_output_charge_control == "current":
-                        self.set_current_from_power("charge", new_rate)
-
-                if notify and self.base.set_soc_notify:
-                    self.base.call_notify("Predbat: Inverter {} charge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
-            if notify:
-                self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
+            self._adjust_rate(new_rate, "charge", notify=notify)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -1229,30 +1267,9 @@ class Inverter:
 
         if SIMULATE:
             current_rate = self.base.sim_discharge_rate_now
+            self.base.sim_discharge_rate_now = new_rate
         else:
-            if self.rest_data:
-                current_rate = self.rest_data["Control"]["Battery_Discharge_Rate"]
-            else:
-                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
-
-        if abs(current_rate - new_rate) > 100:
-            self.base.log("Inverter {} current discharge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
-            if SIMULATE:
-                self.base.sim_discharge_rate_now = new_rate
-            else:
-                if self.rest_api:
-                    self.rest_setDischargeRate(new_rate)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
-                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=100)
-
-                    if self.inv_output_charge_control == "current":
-                        self.set_current_from_power("discharge", new_rate)
-
-                if notify and self.base.set_discharge_notify:
-                    self.base.call_notify("Predbat: Inverter {} discharge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
-            if notify:
-                self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
+            self._adjust_rate(new_rate, "discharge", notify=notify)
 
     def adjust_battery_target(self, soc):
         """
@@ -1290,10 +1307,10 @@ class Inverter:
                 self.base.sim_soc = soc
             else:
                 if self.rest_api:
-                    self.rest_setChargeTarget(soc)
+                    self._rest_setChargeTarget(soc)
                 else:
                     entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id))
-                    self.write_and_poll_value("charge_limit", entity_soc, soc)
+                    self._write_and_poll_value("charge_limit", entity_soc, soc)
 
                 if self.base.set_soc_notify:
                     self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {} % at {}".format(self.id, soc, self.base.time_now_str()))
@@ -1302,9 +1319,9 @@ class Inverter:
             self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
 
         if not self.inv_has_target_soc:
-            self.mimic_target_soc()
+            self._mimic_target_soc()
 
-    def write_and_poll_switch(self, name, entity, new_value):
+    def _write_and_poll_switch(self, name, entity, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
@@ -1342,7 +1359,7 @@ class Inverter:
             self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
+    def _write_and_poll_value(self, name, entity, new_value, fuzzy=0):
         # Modified to cope with sensor entities and writing strings
         # Re-writtem to minimise writes
         domain = entity.domain
@@ -1379,7 +1396,7 @@ class Inverter:
             self.base.record_status(f"Warn - Inverter {self.id} write to {name} failed", had_errors=True)
             return False
 
-    def write_and_poll_option(self, name, entity, new_value):
+    def _write_and_poll_option(self, name, entity, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
@@ -1440,13 +1457,13 @@ class Inverter:
                 self.base.sim_inverter_mode = new_inverter_mode
             else:
                 if self.rest_api:
-                    self.rest_setBatteryMode(new_inverter_mode)
+                    self._rest_setBatteryMode(new_inverter_mode)
                 else:
                     entity = self.base.get_entity(self.base.get_arg("inverter_mode", indirect=False, index=self.id))
                     if self.inv_has_ge_inverter_mode:
-                        self.write_and_poll_option("inverter_mode", entity, new_inverter_mode)
+                        self._write_and_poll_option("inverter_mode", entity, new_inverter_mode)
                     else:
-                        self.write_and_poll_value("inverter_mode", entity, new_inverter_mode)
+                        self._write_and_poll_value("inverter_mode", entity, new_inverter_mode)
 
                 # Notify
                 if self.base.set_discharge_notify:
@@ -1454,269 +1471,6 @@ class Inverter:
 
             self.base.record_status("Inverter {} Set discharge mode to {}".format(self.id, new_inverter_mode))
             self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
-
-    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
-        """
-        Adjust force discharge on/off and set the time window correctly
-
-        Inverter Class Parameters
-        =========================
-
-            None
-
-        Output Entities:
-        ================
-
-            Config arg                         Type          Units
-            ----------                         ----          -----
-            discharge_start_time               string
-            discharge_end_time                 string
-            *discharge_start_hour              int
-            *discharge_start_minute            int
-            *discharge_end_hour                int
-            *discharge_end_minute              int
-            *charge_discharge_update_button    button
-
-        """
-
-        if SIMULATE:
-            old_start = self.base.sim_discharge_start
-            old_end = self.base.sim_discharge_end
-        else:
-            if self.rest_data:
-                old_start = self.rest_data["Timeslots"]["Discharge_start_time_slot_1"]
-                old_end = self.rest_data["Timeslots"]["Discharge_end_time_slot_1"]
-            elif "discharge_start_time" in self.base.args:
-                old_start = self.base.get_arg("discharge_start_time", index=self.id)
-                old_end = self.base.get_arg("discharge_end_time", index=self.id)
-            else:
-                self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
-
-        # Start time to correct format
-        if new_start_time:
-            new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-            new_start = new_start_time.strftime("%H:%M:%S")
-        else:
-            new_start = None
-
-        # End time to correct format
-        if new_end_time:
-            new_end_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
-            new_end = new_end_time.strftime("%H:%M:%S")
-        else:
-            new_end = None
-
-        # Eco mode, turn it on before we change the discharge window
-        if not force_discharge:
-            self.adjust_inverter_mode(force_discharge)
-
-        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, old_start, old_end, new_start, new_end))
-        changed_start_end = False
-
-        # Change start time
-        if new_start and new_start != old_start:
-            self.base.log("Inverter {} set new start time to {}".format(self.id, new_start))
-            if SIMULATE:
-                self.base.sim_discharge_start = new_start
-            else:
-                if self.rest_api:
-                    pass  # REST writes as a single start/end time
-
-                elif "discharge_start_time" in self.base.args:
-                    # Always write to this as it is the GE default
-                    changed_start_end = True
-                    entity_discharge_start_time = self.base.get_entity(self.base.get_arg("discharge_start_time", indirect=False, index=self.id))
-                    if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
-                    else:
-                        self.write_and_poll_value("discharge_start_time", entity_discharge_start_time, new_start)
-
-                    if self.inv_charge_time_format == "H M":
-                        # If the inverter uses hours and minutes then write to these entities too
-                        entity = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
-                else:
-                    self.log("WARN: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
-
-        # Change end time
-        if new_end and new_end != old_end:
-            self.base.log("Inverter {} Set new end time to {} was {}".format(self.id, new_end, old_end))
-            if SIMULATE:
-                self.base.sim_discharge_end = new_end
-            else:
-                if self.rest_api:
-                    pass  # REST writes as a single start/end time
-                elif "discharge_end_time" in self.base.args:
-                    # Always write to this as it is the GE default
-                    changed_start_end = True
-                    entity_discharge_end_time = self.base.get_entity(self.base.get_arg("discharge_end_time", indirect=False, index=self.id))
-                    if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
-                        # If the inverter uses hours and minutes then write to these entities too
-                    else:
-                        self.write_and_poll_value("discharge_end_time", entity_discharge_end_time, new_end)
-
-                    if self.inv_charge_time_format == "H M":
-                        entity = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
-                else:
-                    self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
-
-        if (new_end != old_end) or (new_start != old_start):
-            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
-            if self.inv_time_button_press:
-                entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
-                self.press_and_poll_button(entity_id)
-
-        # REST version of writing slot
-        if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
-            changed_start_end = True
-            if not SIMULATE:
-                self.rest_setDischargeSlot1(new_start, new_end)
-
-        # Force discharge, turn it on after we change the window
-        if force_discharge:
-            self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
-
-        # Notify
-        if changed_start_end:
-            self.base.record_status("Inverter {} set discharge slot to {} - {}".format(self.id, new_start, new_end))
-            if self.base.set_discharge_notify:
-                self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
-
-    def disable_charge_window(self, notify=True):
-        """
-        Disable charge window
-        """
-        """
-        Adjust force discharge on/off and set the time window correctly
-
-        Inverter Class Parameters
-        =========================
-
-            Parameter                          Type          Units
-            ----------                         ----          -----
-            self.charge_enable_time            boole
-
-
-        Output Entities:
-        ================
-
-            Config arg                         Type          Units
-            ----------                         ----          -----
-            scheduled_charge_enable            bool
-            *charge_start_hour                 int
-            *charge_start_minute               int
-            *charge_end_hour                   int
-            *charge_end_minute                 int
-            *charge_discharge_update_button    button
-
-        """
-        if SIMULATE:
-            old_charge_schedule_enable = self.base.sim_charge_schedule_enable
-        else:
-            if self.rest_data:
-                old_charge_schedule_enable = self.rest_data["Control"]["Enable_Charge_Schedule"]
-            else:
-                old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
-
-        if old_charge_schedule_enable == "on" or old_charge_schedule_enable == "enable":
-            if not SIMULATE:
-                # Enable scheduled charge if not turned on
-                if self.rest_api:
-                    self.rest_enableChargeSchedule(False)
-                else:
-                    entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
-                    self.write_and_poll_switch("scheduled_charge_enable", entity, False)
-                    # If there's no charge enable switch then we can enable using start and end time
-                    if not self.inv_has_charge_enable_time:
-                        self.enable_charge_discharge_with_time_current("charge", False)
-                if self.base.set_soc_notify and notify:
-                    self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
-            else:
-                self.base.sim_charge_schedule_enable = "off"
-
-            if notify:
-                self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
-            self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
-
-        # Updated cached status to disabled
-        self.charge_enable_time = False
-        self.charge_start_time_minutes = self.base.forecast_minutes
-        self.charge_end_time_minutes = self.base.forecast_minutes
-
-    def alt_charge_discharge_enable(self, direction, enable, grid=True, timed=False):
-        """
-        Alternative enable and disable of timed charging for non-GE inverters
-        """
-        if not grid and not timed:
-            self.base.log("WARN: Unable to set Solis Energy Controls Switch: both Grid and Timed are False")
-            return False
-
-        if enable:
-            str_enable = "enable"
-        else:
-            str_enable = "disable"
-
-        str_type = ""
-        if grid:
-            str_type += "grid "
-        if timed:
-            if grid:
-                str += "and "
-            str += "timed "
-
-        if self.inverter_type == "GS":
-            # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and dischaging
-
-            entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            entity = self.base.get_entity(entity_id)
-            switch = SOLAX_SOLIS_MODES.get(entity.get_state(), 0)
-            # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
-            mask = 2 * timed + 32 * grid
-            if switch > 0:
-                # Timed charging is Bit 1 so we OR with 2 to set and AND with ~2 to clear
-                if enable:
-                    new_switch = switch | mask
-                else:
-                    new_switch = switch & ~mask
-
-                if new_switch != switch:
-                    self.base.log(f"Setting Solis Energy Control Switch to {new_switch} from {switch} to {str_enable} {str_type} charging")
-                    # Now lookup the new mode in an inverted dict:
-                    new_mode = {SOLAX_SOLIS_MODES[x]: x for x in SOLAX_SOLIS_MODES}[new_switch]
-
-                    self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
-                    return True
-                else:
-                    self.base.log(f"Solis Energy Control Switch setting {switch} is correct for {str_enable} {str_type} charging")
-                    return True
-            else:
-                self.base.log(f"WARN: Unable to read current value of Solis Mode switch {entity_id}. Unable to {str_enable} {str_type} charging")
-                return False
-
-    def enable_charge_discharge_with_time_current(self, direction, enable):
-        # To enable we set the current based on the required power
-        if enable:
-            power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
-            self.set_current_from_power("charge", power)
-        else:
-            # To disable we set both times to 00:00
-            for x in ["start", "end"]:
-                for y in ["hour", "minute"]:
-                    name = f"{direction}_{x}_{y}"
-                    entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
-                    self.write_and_poll_value(name, entity, 0)
-
-    def set_current_from_power(self, direction, power):
-        new_current = round(power / self.battery_voltage, 1)
-        entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
-        self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -1801,16 +1555,16 @@ class Inverter:
                     # Always write to this as it is the GE default
                     entity_start = self.base.get_entity(self.base.get_arg("charge_start_time", indirect=False, index=self.id))
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("charge_start_time", entity_start, new_start)
+                        self._write_and_poll_option("charge_start_time", entity_start, new_start)
                     else:
-                        self.write_and_poll_value("charge_start_time", entity_start, new_start)
+                        self._write_and_poll_value("charge_start_time", entity_start, new_start)
 
                     if self.inv_charge_time_format == "H M":
                         # If the inverter uses hours and minutes then write to these entities too
                         entity = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
+                        self._write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
+                        self._write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
                 else:
                     self.log("WARN: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
@@ -1826,26 +1580,26 @@ class Inverter:
                     # Always write to this as it is the GE default
                     entity_end = self.base.get_entity(self.base.get_arg("charge_end_time", indirect=False, index=self.id))
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                        self._write_and_poll_option("charge_end_time", entity_end, new_end)
                     else:
-                        self.write_and_poll_value("charge_end_time", entity_end, new_end)
+                        self._write_and_poll_value("charge_end_time", entity_end, new_end)
 
                     if self.inv_charge_time_format == "H M":
                         entity = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
+                        self._write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
                         entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
+                        self._write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
                 else:
                     self.log("WARN: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
         if new_start != old_start or new_end != old_end:
             if self.rest_api and not SIMULATE:
-                self.rest_setChargeSlot1(new_start, new_end)
+                self._rest_setChargeSlot1(new_start, new_end)
 
             # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
                 entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
-                self.press_and_poll_button(entity_id)
+                self._press_and_poll_button(entity_id)
 
             if self.base.set_window_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
@@ -1856,12 +1610,12 @@ class Inverter:
             if not SIMULATE:
                 # Enable scheduled charge if not turned on
                 if self.rest_api:
-                    self.rest_enableChargeSchedule(True)
+                    self._rest_enableChargeSchedule(True)
                 elif "scheduled_charge_enable" in self.base.args:
                     entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
-                    self.write_and_poll_switch("scheduled_charge_enable", entity, True)
+                    self._write_and_poll_switch("scheduled_charge_enable", entity, True)
                     if not self.inv_has_charge_enable_time:
-                        self.enable_charge_discharge_with_time_current("charge", True)
+                        self._enable_charge_discharge_with_time_current("charge", True)
                 else:
                     self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
@@ -1878,7 +1632,270 @@ class Inverter:
             if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
-    def press_and_poll_button(self, entity_id):
+    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
+        """
+        Adjust force discharge on/off and set the time window correctly
+
+        Inverter Class Parameters
+        =========================
+
+            None
+
+        Output Entities:
+        ================
+
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            discharge_start_time               string
+            discharge_end_time                 string
+            *discharge_start_hour              int
+            *discharge_start_minute            int
+            *discharge_end_hour                int
+            *discharge_end_minute              int
+            *charge_discharge_update_button    button
+
+        """
+
+        if SIMULATE:
+            old_start = self.base.sim_discharge_start
+            old_end = self.base.sim_discharge_end
+        else:
+            if self.rest_data:
+                old_start = self.rest_data["Timeslots"]["Discharge_start_time_slot_1"]
+                old_end = self.rest_data["Timeslots"]["Discharge_end_time_slot_1"]
+            elif "discharge_start_time" in self.base.args:
+                old_start = self.base.get_arg("discharge_start_time", index=self.id)
+                old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            else:
+                self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
+
+        # Start time to correct format
+        if new_start_time:
+            new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
+            new_start = new_start_time.strftime("%H:%M:%S")
+        else:
+            new_start = None
+
+        # End time to correct format
+        if new_end_time:
+            new_end_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
+            new_end = new_end_time.strftime("%H:%M:%S")
+        else:
+            new_end = None
+
+        # Eco mode, turn it on before we change the discharge window
+        if not force_discharge:
+            self.adjust_inverter_mode(force_discharge)
+
+        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, old_start, old_end, new_start, new_end))
+        changed_start_end = False
+
+        # Change start time
+        if new_start and new_start != old_start:
+            self.base.log("Inverter {} set new start time to {}".format(self.id, new_start))
+            if SIMULATE:
+                self.base.sim_discharge_start = new_start
+            else:
+                if self.rest_api:
+                    pass  # REST writes as a single start/end time
+
+                elif "discharge_start_time" in self.base.args:
+                    # Always write to this as it is the GE default
+                    changed_start_end = True
+                    entity_discharge_start_time = self.base.get_entity(self.base.get_arg("discharge_start_time", indirect=False, index=self.id))
+                    if self.inv_charge_time_entity_is_option:
+                        self._write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+                    else:
+                        self._write_and_poll_value("discharge_start_time", entity_discharge_start_time, new_start)
+
+                    if self.inv_charge_time_format == "H M":
+                        # If the inverter uses hours and minutes then write to these entities too
+                        entity = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
+                        self._write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
+                        entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
+                        self._write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
+                else:
+                    self.log("WARN: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
+
+        # Change end time
+        if new_end and new_end != old_end:
+            self.base.log("Inverter {} Set new end time to {} was {}".format(self.id, new_end, old_end))
+            if SIMULATE:
+                self.base.sim_discharge_end = new_end
+            else:
+                if self.rest_api:
+                    pass  # REST writes as a single start/end time
+                elif "discharge_end_time" in self.base.args:
+                    # Always write to this as it is the GE default
+                    changed_start_end = True
+                    entity_discharge_end_time = self.base.get_entity(self.base.get_arg("discharge_end_time", indirect=False, index=self.id))
+                    if self.inv_charge_time_entity_is_option:
+                        self._write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
+                        # If the inverter uses hours and minutes then write to these entities too
+                    else:
+                        self._write_and_poll_value("discharge_end_time", entity_discharge_end_time, new_end)
+
+                    if self.inv_charge_time_format == "H M":
+                        entity = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
+                        self._write_and_poll_value("discharge_end_hour", entity, int(new_end[:2]))
+                        entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
+                        self._write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
+                else:
+                    self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
+
+        if (new_end != old_end) or (new_start != old_start):
+            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+            if self.inv_time_button_press:
+                entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
+                self._press_and_poll_button(entity_id)
+
+        # REST version of writing slot
+        if self.rest_api and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
+            changed_start_end = True
+            if not SIMULATE:
+                self._rest_setDischargeSlot1(new_start, new_end)
+
+        # Force discharge, turn it on after we change the window
+        if force_discharge:
+            self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
+
+        # Notify
+        if changed_start_end:
+            self.base.record_status("Inverter {} set discharge slot to {} - {}".format(self.id, new_start, new_end))
+            if self.base.set_discharge_notify:
+                self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+
+    def disable_charge_window(self, notify=True):
+        """
+        Disable charge window
+        """
+        """
+        Adjust force discharge on/off and set the time window correctly
+
+        Inverter Class Parameters
+        =========================
+
+            Parameter                          Type          Units
+            ----------                         ----          -----
+            self.charge_enable_time            boole
+
+
+        Output Entities:
+        ================
+
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            scheduled_charge_enable            bool
+            *charge_start_hour                 int
+            *charge_start_minute               int
+            *charge_end_hour                   int
+            *charge_end_minute                 int
+            *charge_discharge_update_button    button
+
+        """
+        if SIMULATE:
+            old_charge_schedule_enable = self.base.sim_charge_schedule_enable
+        else:
+            if self.rest_data:
+                old_charge_schedule_enable = self.rest_data["Control"]["Enable_Charge_Schedule"]
+            else:
+                old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+
+        if old_charge_schedule_enable == "on" or old_charge_schedule_enable == "enable":
+            if not SIMULATE:
+                # Enable scheduled charge if not turned on
+                if self.rest_api:
+                    self._rest_enableChargeSchedule(False)
+                else:
+                    entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
+                    self._write_and_poll_switch("scheduled_charge_enable", entity, False)
+                    # If there's no charge enable switch then we can enable using start and end time
+                    if not self.inv_has_charge_enable_time:
+                        self._enable_charge_discharge_with_time_current("charge", False)
+                if self.base.set_soc_notify and notify:
+                    self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
+            else:
+                self.base.sim_charge_schedule_enable = "off"
+
+            if notify:
+                self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
+            self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
+
+        # Updated cached status to disabled
+        self.charge_enable_time = False
+        self.charge_start_time_minutes = self.base.forecast_minutes
+        self.charge_end_time_minutes = self.base.forecast_minutes
+
+    def _alt_charge_discharge_enable(self, direction, enable, grid=True, timed=False):
+        """
+        Alternative enable and disable of timed charging for non-GE inverters
+        """
+        if not grid and not timed:
+            self.base.log("WARN: Unable to set Solis Energy Controls Switch: both Grid and Timed are False")
+            return False
+
+        if enable:
+            str_enable = "enable"
+        else:
+            str_enable = "disable"
+
+        str_type = ""
+        if grid:
+            str_type += "grid "
+        if timed:
+            if grid:
+                str += "and "
+            str += "timed "
+
+        if self.inverter_type == "GS":
+            # Solis just has a single switch for both directions
+            # Need to check the logic of how this is called if both charging and dischaging
+
+            entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
+            entity = self.base.get_entity(entity_id)
+            switch = SOLAX_SOLIS_MODES.get(entity.get_state(), 0)
+            # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
+            mask = 2 * timed + 32 * grid
+            if switch > 0:
+                # Timed charging is Bit 1 so we OR with 2 to set and AND with ~2 to clear
+                if enable:
+                    new_switch = switch | mask
+                else:
+                    new_switch = switch & ~mask
+
+                if new_switch != switch:
+                    self.base.log(f"Setting Solis Energy Control Switch to {new_switch} from {switch} to {str_enable} {str_type} charging")
+                    # Now lookup the new mode in an inverted dict:
+                    new_mode = {SOLAX_SOLIS_MODES[x]: x for x in SOLAX_SOLIS_MODES}[new_switch]
+
+                    self._write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
+                    return True
+                else:
+                    self.base.log(f"Solis Energy Control Switch setting {switch} is correct for {str_enable} {str_type} charging")
+                    return True
+            else:
+                self.base.log(f"WARN: Unable to read current value of Solis Mode switch {entity_id}. Unable to {str_enable} {str_type} charging")
+                return False
+
+    def _enable_charge_discharge_with_time_current(self, direction, enable):
+        # To enable we set the current based on the required power
+        if enable:
+            power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
+            self._set_current_from_power("charge", power)
+        else:
+            # To disable we set both times to 00:00
+            for x in ["start", "end"]:
+                for y in ["hour", "minute"]:
+                    name = f"{direction}_{x}_{y}"
+                    entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
+                    self._write_and_poll_value(name, entity, 0)
+
+    def _set_current_from_power(self, direction, power):
+        new_current = round(power / self.battery_voltage, 1)
+        entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
+        self._write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
+
+    def _press_and_poll_button(self, entity_id):
         for retry in range(0, 6):
             self.base.call_service("button/press", entity_id=entity_id)
             entity = self.base.get_entity(entity_id)
@@ -1892,7 +1909,7 @@ class Inverter:
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
 
-    def rest_readData(self, api="readData"):
+    def _rest_readData(self, api="readData"):
         """
         Get inverter status
         """
@@ -1916,13 +1933,13 @@ class Inverter:
             self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
             return None
 
-    def rest_runAll(self):
+    def _rest_runAll(self):
         """
         Updated and get inverter status
         """
-        return self.rest_readData(api="runAll")
+        return self._rest_readData(api="runAll")
 
-    def rest_setChargeTarget(self, target):
+    def _rest_setChargeTarget(self, target):
         """
         Configure charge target % via REST
         """
@@ -1932,7 +1949,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
@@ -1941,7 +1958,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
         return False
 
-    def rest_setChargeRate(self, rate):
+    def _rest_setChargeRate(self, rate):
         """
         Configure charge target % via REST
         """
@@ -1951,7 +1968,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -1961,7 +1978,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
         return False
 
-    def rest_setDischargeRate(self, rate):
+    def _rest_setDischargeRate(self, rate):
         """
         Configure charge target % via REST
         """
@@ -1971,7 +1988,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             new = self.rest_data["Control"]["Battery_Discharge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -1983,7 +2000,7 @@ class Inverter:
         )
         return False
 
-    def rest_setBatteryMode(self, inverter_mode):
+    def _rest_setBatteryMode(self, inverter_mode):
         """
         Configure invert mode via REST
         """
@@ -1993,7 +2010,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
@@ -2002,7 +2019,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
         return False
 
-    def rest_setReserve(self, target):
+    def _rest_setReserve(self, target):
         """
         Configure reserve % via REST
         """
@@ -2013,7 +2030,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
@@ -2023,7 +2040,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
         return False
 
-    def rest_enableChargeSchedule(self, enable):
+    def _rest_enableChargeSchedule(self, enable):
         """
         Configure reserve % via REST
         """
@@ -2033,7 +2050,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
                 if new_value.lower() in ["enable", "on", "true"]:
@@ -2048,7 +2065,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
         return False
 
-    def rest_setChargeSlot1(self, start, finish):
+    def _rest_setChargeSlot1(self, start, finish):
         """
         Configure charge slot via REST
         """
@@ -2058,7 +2075,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
@@ -2067,7 +2084,7 @@ class Inverter:
         self.base.record_status("Warn - Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
         return False
 
-    def rest_setDischargeSlot1(self, start, finish):
+    def _rest_setDischargeSlot1(self, start, finish):
         """
         Configure charge slot via REST
         """
@@ -2077,7 +2094,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self._rest_runAll()
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
