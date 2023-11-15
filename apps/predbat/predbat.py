@@ -755,7 +755,6 @@ class Inverter:
         self.reserve_min = self.base.get_arg("set_reserve_min", 4.0)
         if self.reserve_min < battery_min_soc:
             self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
-            self.base.expose_config("set_reserve_min", battery_min_soc)
             self.reserve_min = battery_min_soc
 
         self.base.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
@@ -1360,7 +1359,6 @@ class Inverter:
             if domain == "sensor":
                 entity.set_state(state=new_value)
             else:
-                # if isinstance(new_value, str):
                 entity.call_service("set_value", value=new_value)
 
             time.sleep(self.inv_write_and_poll_sleep)
@@ -2727,7 +2725,7 @@ class PredBat(hass.Hass):
 
         # Check history is valid
         if not history:
-            self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
+            self.log("WARN, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
         # Process history
@@ -8118,7 +8116,7 @@ class PredBat(hass.Hass):
                     data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key="is_intelligent_adjusted"
                 )
             else:
-                self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
+                self.log("WARN: metric_octopus_import is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_import not set correctly", had_errors=True)
                 raise ValueError
         else:
@@ -8241,7 +8239,7 @@ class PredBat(hass.Hass):
                     to_key = "valid_to"
                 self.rate_export = self.minute_data(data_all_export, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key)
             else:
-                self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
+                self.log("WARN: metric_octopus_export is not set correctly, ignoring..")
                 self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
         else:
             # Basic rates defined by user over time
@@ -8280,7 +8278,7 @@ class PredBat(hass.Hass):
                 self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
-            self.log("Warning: No import rate data provided")
+            self.log("WARN: No import rate data provided")
             self.record_status(message="Error - No import rate data provided", had_errors=True)
 
         # Replicate and scan export rates
@@ -8294,7 +8292,7 @@ class PredBat(hass.Hass):
                 self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
         else:
-            self.log("Warning: No export rate data provided")
+            self.log("WARN: No export rate data provided")
             self.record_status(message="Error - No export rate data provided", had_errors=True)
 
         # Set rate thresholds
