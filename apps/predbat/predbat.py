@@ -2351,9 +2351,24 @@ class PredBat(hass.Hass):
         if url in self.futurerate_url_cache:
             stamp = self.futurerate_url_cache[url]["stamp"]
             pdata = self.futurerate_url_cache[url]["data"]
+            update_time_since_midnight = stamp - self.midnight
+            now_since_midnight = now - self.midnight
             age = now - stamp
-            if age.seconds < (60 * 60):
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, age.seconds / 60))
+            needs_update = False
+
+            # Update if last data was yesterday
+            if update_time_since_midnight.seconds < 0:
+                needs_update = True
+
+            # data updates at 11am CET so update every 30 minutes during this period
+            if now_since_midnight.seconds > (9.5*60*60) and now_since_midnight.seconds < (11*60*60):
+                if age.seconds > (0.5*60*60):
+                    needs_update = True
+            if age.seconds > (12*60*60):
+                needs_update = True
+
+            if not needs_update:
+                self.log("Return cached futurerate data for {} age {} minutes".format(url, int(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes
@@ -5876,16 +5891,16 @@ class PredBat(hass.Hass):
             all_n = []
             all_d = []
             highest_price_charge = price_set[-1]
+            window_prices = {}
             for price in price_set:
                 links = price_links[price]
                 if loop_price >= price:
                     for key in links:
                         window_n = window_index[key]["id"]
                         typ = window_index[key]["type"]
+                        window_prices[window_n] = price
                         if typ == "c":
                             all_n.append(window_n)
-                            if price > highest_price_charge:
-                                highest_price_charge = price
                 else:
                     # For prices above threshold try discharge
                     for key in links:
@@ -5899,6 +5914,8 @@ class PredBat(hass.Hass):
                 try_charge_limit = best_limits.copy()
                 for window_n in range(0, record_charge_windows):
                     if window_n in all_n:
+                        if window_prices[window_n] > highest_price_charge:
+                            highest_price_charge = window_prices[window_n]
                         try_charge_limit[window_n] = self.soc_max
                     else:
                         try_charge_limit[window_n] = 0
@@ -5971,11 +5988,11 @@ class PredBat(hass.Hass):
                         )
                     )
         self.log(
-            "Optimise all charge for all bands best price threshold {} at metric {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
+            "Optimise all charge for all bands best price threshold {} charges at {} at metric {} cost {} soc_min {} limits {} discharge {}".format(
+                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
             )
         )
-        return best_limits, best_discharge, best_price
+        return best_limits, best_discharge, best_price_charge
 
     def optimise_charge_limit(
         self,
@@ -6172,7 +6189,7 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        self.log("Try optimising charge window(s) {} results {} selected {}".format(all_n if all_n else window_n, window_results, best_soc))
+        self.log("Try optimising charge window(s) {} price {} results {} selected {}".format(all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc))
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def optimise_discharge(
@@ -6334,7 +6351,7 @@ class PredBat(hass.Hass):
         optimized = all_n
         if not optimized:
             optimized = window_n
-        self.log("Try optimizing discharge window(s) {} gives {} => selected {}% size {}".format(optimized, window_results, best_discharge, best_size))
+        self.log("Try optimising discharge window(s) {} price {} gives {} => selected {}% size {}".format(optimized, window["average"], window_results, best_discharge, best_size))
         return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def window_sort_func(self, window):
@@ -6372,16 +6389,15 @@ class PredBat(hass.Hass):
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher
                 if stand_alone:
-                    average = window["average"]
+                    average = self.dp2(window["average"])
                 else:
                     average = self.dp2(window["average"] / self.inverter_loss / self.battery_loss)
-                average = int(average + 0.5)  # Round to nearest penny to avoid too many bands
-                sort_key = "%04.2f%03d_c%02d" % (5000 - average, 999 - id, id)
+                sort_key = "%04.2f_%03d_c%02d" % (5000 - average, 999 - id, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = average
+                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
                 id += 1
 
         # Add discharge windows
@@ -6390,8 +6406,7 @@ class PredBat(hass.Hass):
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge)
-                average = int(average + 0.5)  # Round to nearest penny to avoid too many bands
-                sort_key = "%04.2f%03d_d%02d" % (5000 - average, 999 - id, id)
+                sort_key = "%04.2f_%03d_d%02d" % (5000 - average, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
@@ -6399,7 +6414,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = average
+                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
                 id += 1
 
         if window_sort:
@@ -6842,7 +6857,12 @@ class PredBat(hass.Hass):
                                 )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
+
                             average = self.discharge_window_best[window_n]["average"]
+                            if price < best_price:
+                                self.log("Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, self.dp2(average)))
+                                continue
+
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                                 window_n,
                                 record_discharge_windows,
