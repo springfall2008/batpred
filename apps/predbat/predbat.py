@@ -8454,21 +8454,32 @@ class PredBat(hass.Hass):
         Fetch all the configuration options
         """
 
-        self.debug_enable = self.get_arg("debug_enable", False)
-        self.previous_status = self.get_state(self.prefix + ".status")
-        self.calculate_max_windows = self.get_arg("calculate_max_windows", 48)
-        self.calculate_plan_every = max(self.get_arg("calculate_plan_every", 10), 5)
+        # Most attributes can be loaded directly
+        for item in CONFIG_ITEMS:
+            try:
+                self.__dict__[item["name"]] = self.get_arg(item["name"], item["default"])
+            except:
+                self.log(f"WARN: Failed to load self.{item['name']} from args or config")
+
+            # self.log(f"{item['name']:30s} {str(item['default']):30s}  {str(self.__dict__.get(item['name'], None)):30s}")
+
+        # A few are not in CONFIG_ITEMS - should they be?
+        self.best_soc_pass_margin = self.get_arg("best_soc_pass_margin", 0.0)
+        self.battery_scaling = self.get_arg("battery_scaling", 1.0)
+        self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
+        self.iboost_energy_scaling = self.get_arg("iboost_energy_scaling", 1.0)
+
+        # These are just from arguments in the YAML
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
 
-        self.log(
-            "Inverter type {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(
-                self.inverter_type, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every
-            )
-        )
+        # Losses need converting to 1 - entered value
+        self.battery_loss = 1.0 - self.battery_loss
+        self.battery_loss_discharge = 1.0 - self.battery_loss_discharge
+        self.inverter_loss = 1.0 - self.inverter_loss
 
-        # Days previous
-        self.holiday_days_left = self.get_arg("holiday_days_left", 0)
+        self.previous_status = self.get_state(self.prefix + ".status")
+
         self.days_previous = self.get_arg("days_previous", [7])
         self.days_previous_weight = self.get_arg("days_previous_weight", [1 for i in range(0, len(self.days_previous))])
         if len(self.days_previous) > len(self.days_previous_weight):
@@ -8494,113 +8505,40 @@ class PredBat(hass.Hass):
         if self.inverter_clock_skew_discharge_start != 0 or self.inverter_clock_skew_discharge_end != 0:
             self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
 
-        # Metric config
-        self.metric_min_improvement = self.get_arg("metric_min_improvement", 0.0)
-        self.metric_min_improvement_discharge = self.get_arg("metric_min_improvement_discharge", 0.1)
-        self.metric_battery_cycle = self.get_arg("metric_battery_cycle", 2.0)
-        self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling", 1.0)
-        self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import", 0.0)
-        self.metric_future_rate_offset_export = self.get_arg("metric_future_rate_offset_export", 0.0)
-        self.metric_inday_adjust_damping = self.get_arg("metric_inday_adjust_damping", 1.0)
-        self.metric_cloud_enable = self.get_arg("metric_cloud_enable", False)
-        self.notify_devices = self.get_arg("notify_devices", ["notify"])
-        self.pv_scaling = self.get_arg("pv_scaling", 1.0)
-        self.pv_metric10_weight = self.get_arg("pv_metric10_weight", 0.15)
-        self.load_scaling = self.get_arg("load_scaling", 1.0)
-        self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling", 1.0)
-        self.best_soc_pass_margin = self.get_arg("best_soc_pass_margin", 0.0)
-        self.rate_low_threshold = self.get_arg("rate_low_threshold", 0.0)
-        self.rate_high_threshold = self.get_arg("rate_high_threshold", 0.0)
-        self.rate_low_match_export = self.get_arg("rate_low_match_export", False)
-        self.best_soc_step = self.get_arg("best_soc_step", 0.25)
-
-        # Battery charging options
-        self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal", False)
-        self.battery_loss = 1.0 - self.get_arg("battery_loss", 0.03)
-        self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge", 0.03)
-        self.inverter_loss = 1.0 - self.get_arg("inverter_loss", 0.04)
-        self.inverter_hybrid = self.get_arg("inverter_hybrid", True)
-        self.inverter_soc_reset = self.get_arg("inverter_soc_reset", False)
-        self.battery_scaling = self.get_arg("battery_scaling", 1.0)
         self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
         # Check power curve is a dictionary
         if not isinstance(self.battery_charge_power_curve, dict):
             self.battery_charge_power_curve = {}
             self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
             self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
-        self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
-        self.best_soc_margin = self.get_arg("best_soc_margin", 0.0)
-        self.best_soc_min = self.get_arg("best_soc_min", 0.0)
-        self.best_soc_max = self.get_arg("best_soc_max", 0.0)
-        self.best_soc_keep = self.get_arg("best_soc_keep", 2.0)
-        self.set_soc_minutes = self.get_arg("set_soc_minutes", 30)
-        self.set_window_minutes = self.get_arg("set_window_minutes", 30)
-        self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging", True)
+
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
-        self.combine_mixed_rates = self.get_arg("combine_mixed_rates", False)
-        self.combine_discharge_slots = self.get_arg("combine_discharge_slots", False)
-        self.combine_charge_slots = self.get_arg("combine_charge_slots", True)
         self.discharge_slot_split = 30
         self.charge_slot_split = 30
 
-        # Enables
-        default_enable_mode = True
+        self.log(
+            "Inverter type {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(
+                self.inverter_type, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every
+            )
+        )
+
         if self.inverter_type != "GE":
             default_enable_mode = False
             self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
 
-        self.calculate_best = self.get_arg("calculate_best", True)
-        self.set_soc_enable = self.get_arg("set_soc_enable", default_enable_mode)
-        self.set_reserve_enable = self.get_arg("set_reserve_enable", default_enable_mode)
-        self.set_reserve_notify = self.get_arg("set_reserve_notify", False)
-        self.set_reserve_hold = self.get_arg("set_reserve_hold", True)
-        self.set_read_only = self.get_arg("set_read_only", False)
-        self.set_soc_notify = self.get_arg("set_soc_notify", False)
-        self.set_status_notify = self.get_arg("set_status_notify", True)
-        self.set_window_notify = self.get_arg("set_window_notify", False)
-        self.set_charge_window = self.get_arg("set_charge_window", default_enable_mode)
-        self.set_discharge_window = self.get_arg("set_discharge_window", default_enable_mode)
-        self.set_discharge_freeze = self.get_arg("set_discharge_freeze", default_enable_mode)
-        self.set_charge_freeze = self.get_arg("set_charge_freeze", False)
-        self.set_discharge_freeze_only = self.get_arg("set_discharge_freeze_only", False)
-        self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge", True)
-        self.set_discharge_notify = self.get_arg("set_discharge_notify", False)
-        self.calculate_best_charge = self.get_arg("calculate_best_charge", True)
-        self.calculate_best_discharge = self.get_arg("calculate_best_discharge", default_enable_mode)
-        self.calculate_discharge_first = self.get_arg("calculate_discharge_first", True)
-        self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge", True)
-        self.calculate_second_pass = self.get_arg("calculate_second_pass", False)
-        self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment", False)
-        self.balance_inverters_enable = self.get_arg("balance_inverters_enable", False)
-        self.balance_inverters_charge = self.get_arg("balance_inverters_charge", True)
-        self.balance_inverters_discharge = self.get_arg("balance_inverters_discharge", True)
-        self.balance_inverters_crosscharge = self.get_arg("balance_inverters_crosscharge", True)
-        self.balance_inverters_threshold_charge = max(self.get_arg("balance_inverters_threshold_charge", 1.0), 1.0)
-        self.balance_inverters_threshold_discharge = max(self.get_arg("balance_inverters_threshold_discharge", 1.0), 1.0)
-
         if self.set_read_only:
             self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
 
-        # Enable load filtering
-        self.load_filter_modal = self.get_arg("load_filter_modal", False)
-
-        # Iboost model
-        self.iboost_enable = self.get_arg("iboost_enable", False)
-        self.iboost_max_energy = self.get_arg("iboost_max_energy", 3.0)
-        self.iboost_max_power = self.get_arg("iboost_max_power", 2400) / 1000 / 60.0
-        self.iboost_min_power = self.get_arg("iboost_min_power", 500) / 1000 / 60.0
+        self.iboost_max_power /= 1000 * 60.0
+        self.iboost_min_power /= 1000 * 60.0
         self.iboost_min_soc = self.get_arg("iboost_min_soc", 0.0)
-        self.iboost_today = self.get_arg("iboost_today", 0.0)
+        # self.iboost_today = self.get_arg("iboost_today", 0.0)
         self.iboost_next = self.iboost_today
-        self.iboost_energy_scaling = self.get_arg("iboost_energy_scaling", 1.0)
         self.iboost_energy_today = {}
 
-        # Car options
-        self.car_charging_hold = self.get_arg("car_charging_hold", True)
-        self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
-        self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
+        self.car_charging_threshold /= 60
 
     @ad.app_lock
     def update_pred(self, scheduled=True):
