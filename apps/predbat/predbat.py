@@ -8972,6 +8972,7 @@ class PredBat(hass.Hass):
         self.log("Predbat: Startup")
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
         self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
+        self.config_group = "Custom"
 
         try:
             self.reset()
