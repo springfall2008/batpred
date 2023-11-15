@@ -60,7 +60,7 @@ CONFIG_GROUPS = {
         "set_discharge_freeze": True,
         "set_charge_freeze": False,
         "calculate_max_windows": 96,
-        "predbat_metric_battery_cycle": 3,
+        "metric_battery_cycle": 3,
     },
     "Octopus Flux / Cozy": {
         "calculate_best_discharge": True,
