@@ -8768,47 +8768,65 @@ class PredBat(hass.Hass):
         """
         Share the config with HA
         """
-        for item in CONFIG_ITEMS:
-            if item["name"] == name:
-                entity = item.get("entity")
-                if entity and ((item.get("value") is None) or (value != item["value"])):
-                    item["value"] = value
+
+        items = [i for i in CONFIG_ITEMS if i["name"] == name]
+        if len(items) == 0:
+            return
+
+        item = items[0]
+        if not "entity" in item:
+            self.log(f"No HA entity set for {name}")
+            return
+
+        else:
+            entity_id = item.get("entity")
+            if entity_id and ((item.get("value") is None) or (value != item["value"])):
+                item["value"] = value
+
+                if verbose:
                     self.log("Updating HA config {} to {}".format(name, value))
-                    if item["type"] == "input_number":
-                        icon = item.get("icon", "mdi:numeric")
-                        self.set_state(
-                            entity_id=entity,
-                            state=value,
-                            attributes={"friendly_name": item["friendly_name"], "min": item["min"], "max": item["max"], "step": item["step"], "icon": icon},
-                        )
-                    elif item["type"] == "switch":
-                        icon = item.get("icon", "mdi:light-switch")
-                        self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
-                    elif item["type"] == "select":
-                        icon = item.get("icon", "mdi:format-list-bulleted")
-                        self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
-                    elif item["type"] == "update":
-                        summary = self.releases.get("this_body", "")
-                        latest = self.releases.get("latest", "check HACS")
-                        state = "off"
-                        if item["installed_version"] != latest:
-                            state = "on"
-                        self.set_state(
-                            entity_id=entity,
-                            state=state,
-                            attributes={
-                                "friendly_name": item["friendly_name"],
-                                "title": item["title"],
-                                "in_progress": False,
-                                "auto_update": False,
-                                "installed_version": item["installed_version"],
-                                "latest_version": latest,
-                                "entity_picture": item["entity_picture"],
-                                "release_url": item["release_url"],
-                                "skipped_version": False,
-                                "release_summary": summary,
-                            },
-                        )
+                if item["type"] == "input_number":
+                    icon = item.get("icon", "mdi:numeric")
+                    self.set_state(
+                        entity_id=entity_id,
+                        state=value,
+                        attributes={"friendly_name": item["friendly_name"], "min": item["min"], "max": item["max"], "step": item["step"], "icon": icon},
+                    )
+                elif item["type"] == "switch":
+                    icon = item.get("icon", "mdi:light-switch")
+                    self.set_state(entity_id=entity_id, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
+                elif item["type"] == "select":
+                    icon = item.get("icon", "mdi:format-list-bulleted")
+                    self.set_state(entity_id=entity_id, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
+                elif item["type"] == "update":
+                    summary = self.releases.get("this_body", "")
+                    latest = self.releases.get("latest", "check HACS")
+                    state = "off"
+                    if item["installed_version"] != latest:
+                        state = "on"
+                    self.set_state(
+                        entity_id=entity_id,
+                        state=state,
+                        attributes={
+                            "friendly_name": item["friendly_name"],
+                            "title": item["title"],
+                            "in_progress": False,
+                            "auto_update": False,
+                            "installed_version": item["installed_version"],
+                            "latest_version": latest,
+                            "entity_picture": item["entity_picture"],
+                            "release_url": item["release_url"],
+                            "skipped_version": False,
+                            "release_summary": summary,
+                        },
+                    )
+
+                # If we weren't in a Custom Group we are once we change something from an event:
+                if "Custom" not in self.config_group and event:
+                    self.log(f"Setting Config Group to Custom because {name} chanaged to {value}")
+                    self.expose_config_group("Custom")
+
+            return entity_id
 
     def load_user_config(self):
         """
