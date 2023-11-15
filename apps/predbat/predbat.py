@@ -8872,6 +8872,7 @@ class PredBat(hass.Hass):
             if ha_value is not None:
                 self.expose_config(item["name"], ha_value)
 
+    def load_events(self):
         # Register HA services
         self.fire_event("service_registered", domain="input_number", service="set_value")
         self.fire_event("service_registered", domain="input_number", service="increment")
@@ -8975,6 +8976,18 @@ class PredBat(hass.Hass):
             self.reset()
             self.auto_config()
             self.load_user_config()
+
+        except Exception as e:
+            self.log("ERROR: Exception raised {}".format(e))
+            self.record_status("ERROR: Exception raised {}".format(e))
+            raise e
+
+        self.expose_config_group("Custom")
+        self.log(f"Current Configuration Group is {self.config_group}")
+
+        # Don't start to listen for events until eveything is initialised
+        try:
+            self.load_events()
         except Exception as e:
             self.log("ERROR: Exception raised {}".format(e))
             self.record_status("ERROR: Exception raised {}".format(e))
