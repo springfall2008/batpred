@@ -8648,14 +8648,52 @@ class PredBat(hass.Hass):
         if isinstance(entities, str):
             entities = [entities]
 
-        for item in CONFIG_ITEMS:
-            if ("entity" in item) and (item["entity"] in entities):
-                entity = item["entity"]
-                self.log("select_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
-                self.update_pending = True
-                self.plan_valid = False
-                return
+        self.log(f"{self.config_group_entity_id} {entities}")
+        if self.config_group_entity_id in entities:
+            self.log(f"Loading {value} Configuration Group")
+
+            if "Custom" in value:
+                # if it's a custom group, try loading it from HA
+                try:
+                    new_config = self.get_state(entity_id=self.config_group_entity_id, attribute="custom_config")
+                except:
+                    self.log("No Custom configuration is saved")
+                    new_config = {}
+
+            else:
+                new_config = {}
+                for item in [i for i in CONFIG_ITEMS if i["name"] != "config_group"]:
+                    if item["name"] in CONFIG_GROUPS[value]:
+                        new_config[item["name"]] = CONFIG_GROUPS[value][item["name"]]
+                    else:
+                        new_config[item["name"]] = item.get("default", None)
+
+            for item_name in new_config:
+                current_value = self.get_arg(item_name)
+                new_value = new_config[item_name]
+
+                if ((type(current_value) == type(new_value)) or (isinstance(current_value, float) and isinstance(new_value, int))) and (new_value is not None):
+                    if current_value != new_value:
+                        self.expose_config(item_name, new_value, verbose=False)
+                        self.log(f"    {item_name:40s} CHANGED to {str(new_value):>10s} from {str(current_value):10s}")
+                    else:
+                        self.log(f"    {item_name:40s}            {str(current_value):>10s}")
+                else:
+                    self.log(f"WARN: {item_name:37s} FAILED from {str(current_value):>10s}  to  {str(current_value):10s}")
+
+            self.expose_config_group(value)
+
+        else:
+            # Try to find the item in CONFIG_ITEMS
+            for item in CONFIG_ITEMS:
+                if ("entity" in item) and (item["entity"] in entities):
+                    entity = item["entity"]
+                    self.log("select_event: {} = {}".format(entity, value))
+                    self.expose_config(item["name"], value, event=True)
+
+        self.update_pending = True
+        self.plan_valid = False
+        return
 
     def number_event(self, event, data, kwargs):
         """
