@@ -8711,7 +8711,7 @@ class PredBat(hass.Hass):
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("number_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
                 return
@@ -8741,7 +8741,7 @@ class PredBat(hass.Hass):
                     value = not value
 
                 self.log("switch_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
                 return
@@ -8756,7 +8756,15 @@ class PredBat(hass.Hass):
                 return value
         return None
 
-    def expose_config(self, name, value):
+    def expose_config_group(self, group):
+        # Set the HA entity to the name of the group and populate the attributes
+        self.config_group_entity_id = "select.predbat_config_group"
+        self.config_group = group
+        # self.set_state(entity_id=self.config_group_entity_id, state=group, attributes={"options": options, "custom_config": {}})
+        custom_config = {item["name"]: self.get_state(item["entity"]) for item in CONFIG_ITEMS}
+        self.set_state(entity_id=self.config_group_entity_id, state=group, attributes={"custom_config": custom_config})
+
+    def expose_config(self, name, value, verbose=True, event=False):
         """
         Share the config with HA
         """
