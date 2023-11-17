@@ -8,8 +8,44 @@
 ## AppDaemon install
 
 - Install AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-    - Set the **time_zone** correctly in appdaemon.yml (e.g. Europe/London)
-    - Add **thread_duration_warning_threshold: 30** to the appdaemon.yml file in the appdaemon section
+    - You will find the appdeamon.yaml file in addon_configs/a0d7b954_appadeamon
+        - Add to the appdamon: setion **apps_dir** which should point to /homeassistant/appdaemon/apps
+        - Set the **time_zone** correctly in appdaemon.yaml (e.g. Europe/London)
+        - Add **thread_duration_warning_threshold: 120** to the appdaemon.yml file in the appdaemon section
+        - It's recommended you set a new logfile location so that you can see the complete logs, I set mine to /homeassistant/appdaemon/appdaemon.log and increase the maximum size to capture a days woth
+     
+Example config:
+```
+---
+appdaemon:
+  latitude: 52.379189
+  longitude: 4.899431
+  elevation: 2
+  time_zone: Europe/London
+  thread_duration_warning_threshold: 120
+  plugins:
+    HASS:
+      type: hass
+  app_dir: /homeassistant/appdaemon/apps
+http:
+  url: http://homeassistant.local:5050
+admin:
+api:
+hadashboard:
+logs:
+  main_log: 
+    filename: /homeassistant/appdaemon/appdaemon.log
+    log_size: 10000000
+```
+ 
+CAUTION: Migration from an older Appdaemon to 0.15.2 or above:
+
+- Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
+Update AppDaemon to 0.15.2
+- Go into addon_configs/a0d7b954_appadeamon and edit appdemon.yaml. You need to add app_dir (see above) to point to the old location and update your logfile location (if you have set it)
+- Move the entire 'apps' directory from addon_configs/a0d7b954_appadeamon (new location) to config/appdaemon (the old location)
+- Restart appdaemon
+- Check it has started and confirm Predbat is running correctly again.
 
 ## HACS install
 
