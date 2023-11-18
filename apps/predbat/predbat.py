@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.12.2"
+THIS_VERSION = "v7.12.3"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4475,14 +4475,14 @@ class PredBat(hass.Hass):
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_saving_slot(self, octopus_saving_slot, export=False):
+    def load_saving_slot(self, octopus_saving_slots, export=False):
         """
         Load octopus saving session slot
         """
         start_minutes = 0
         end_minutes = 0
 
-        if octopus_saving_slot:
+        for octopus_saving_slot in octopus_saving_slots:
             start = octopus_saving_slot["start"]
             end = octopus_saving_slot["end"]
             rate = octopus_saving_slot["rate"]
@@ -4501,7 +4501,7 @@ class PredBat(hass.Hass):
                 start_minutes = int(self.minutes_now / 30) * 30
                 end_minutes = start_minutes + 30
             elif start and end:
-                start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
                 end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
             if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
@@ -4512,9 +4512,9 @@ class PredBat(hass.Hass):
                 )
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        self.rate_export[minute] = rate
+                        self.rate_export[minute] += rate
                     else:
-                        self.rate_import[minute] = rate
+                        self.rate_import[minute] += rate
 
     def load_octopus_slots(self, octopus_slots):
         """
@@ -8107,23 +8107,38 @@ class PredBat(hass.Hass):
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "export")
 
         # Octopus saving session
-        octopus_saving_slot = {}
+        octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
                 saving_rate = self.get_arg("metric_octopus_saving_rate", 0)
                 if saving_rate > 0:
                     state = self.get_arg("octopus_saving_session", False)
-                    start = self.get_state(entity_id=entity_id, attribute="current_joined_event_start")
-                    end = self.get_state(entity_id=entity_id, attribute="current_joined_event_end")
-                    if not start or not end:
-                        start = self.get_state(entity_id=entity_id, attribute="next_joined_event_start")
-                        end = self.get_state(entity_id=entity_id, attribute="next_joined_event_end")
-                    self.log("Next Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
-                    octopus_saving_slot["start"] = start
-                    octopus_saving_slot["end"] = end
-                    octopus_saving_slot["rate"] = saving_rate
-                    octopus_saving_slot["state"] = state
+
+                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                    if joined_events:
+                        for event in joined_events:
+                            start = event.get('start', None)
+                            end = event.get('end', None)
+                            if start and end:
+                                octopus_saving_slot = {}
+                                octopus_saving_slot["start"] = start
+                                octopus_saving_slot["end"] = end
+                                octopus_saving_slot["rate"] = saving_rate
+                                octopus_saving_slot["state"] = state
+                                octopus_saving_slots.append(octopus_saving_slot)
+                                self.log("Joined Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+
+                    # In saving session that's not reported, assumed 30-minutes
+                    if state and not joined_events:
+                        octopus_saving_slot = {}
+                        octopus_saving_slot["start"] = None
+                        octopus_saving_slot["end"] = None
+                        octopus_saving_slot["rate"] = saving_rate
+                        octopus_saving_slot["state"] = state
+                        octopus_saving_slots.append(octopus_saving_slot)
+                    if state:
+                        self.log("Octopus Saving session is active!")
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -8134,7 +8149,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.load_saving_slot(octopus_saving_slot, export=False)
+            self.load_saving_slot(octopus_saving_slots, export=False)
             if "rates_import_override" in self.args:
                 self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
@@ -8148,7 +8163,7 @@ class PredBat(hass.Hass):
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(octopus_saving_slot, export=True)
+                self.load_saving_slot(octopus_saving_slots, export=True)
             if "rates_export_override" in self.args:
                 self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
