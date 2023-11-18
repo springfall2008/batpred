@@ -42,7 +42,7 @@ CAUTION: Migration from an older Appdaemon to 0.15.2 or above:
 
 - Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
 Update AppDaemon to 0.15.2
-- Go into addon_configs/a0d7b954_appadeamon and edit appdemon.yaml. You need to add app_dir (see above) to point to the old location and update your logfile location (if you have set it)
+- Go into addon_configs/a0d7b954_appadeamon and edit appdemon.yaml. You need to add app_dir (see above) to point to the old location and update your logfile location (if you have set it). You should remove the line that points to secret.yaml (most people don't use this file) or adjust it's path to the new location (/homeassistant/secrets.yaml).
 - Move the entire 'apps' directory from addon_configs/a0d7b954_appadeamon (new location) to config/appdaemon (the old location)
 - Restart appdaemon
 - Check it has started and confirm Predbat is running correctly again.
