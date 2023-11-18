@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.12.2"
+THIS_VERSION = "v7.12.3"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2518,9 +2518,24 @@ class PredBat(hass.Hass):
         if url in self.futurerate_url_cache:
             stamp = self.futurerate_url_cache[url]["stamp"]
             pdata = self.futurerate_url_cache[url]["data"]
+            update_time_since_midnight = stamp - self.midnight
+            now_since_midnight = now - self.midnight
             age = now - stamp
-            if age.seconds < (60 * 60):
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, age.seconds / 60))
+            needs_update = False
+
+            # Update if last data was yesterday
+            if update_time_since_midnight.seconds < 0:
+                needs_update = True
+
+            # data updates at 11am CET so update every 30 minutes during this period
+            if now_since_midnight.seconds > (9.5*60*60) and now_since_midnight.seconds < (11*60*60):
+                if age.seconds > (0.5*60*60):
+                    needs_update = True
+            if age.seconds > (12*60*60):
+                needs_update = True
+
+            if not needs_update:
+                self.log("Return cached futurerate data for {} age {} minutes".format(url, int(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes
@@ -4637,14 +4652,14 @@ class PredBat(hass.Hass):
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_saving_slot(self, octopus_saving_slot, export=False):
+    def load_saving_slot(self, octopus_saving_slots, export=False):
         """
         Load octopus saving session slot
         """
         start_minutes = 0
         end_minutes = 0
 
-        if octopus_saving_slot:
+        for octopus_saving_slot in octopus_saving_slots:
             start = octopus_saving_slot["start"]
             end = octopus_saving_slot["end"]
             rate = octopus_saving_slot["rate"]
@@ -4663,7 +4678,7 @@ class PredBat(hass.Hass):
                 start_minutes = int(self.minutes_now / 30) * 30
                 end_minutes = start_minutes + 30
             elif start and end:
-                start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
                 end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
             if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
@@ -4674,9 +4689,9 @@ class PredBat(hass.Hass):
                 )
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        self.rate_export[minute] = rate
+                        self.rate_export[minute] += rate
                     else:
-                        self.rate_import[minute] = rate
+                        self.rate_import[minute] += rate
 
     def load_octopus_slots(self, octopus_slots):
         """
@@ -6039,6 +6054,7 @@ class PredBat(hass.Hass):
         best_soc_min = self.reserve
         best_cost = 0
         best_price_charge = price_set[-1]
+        tried_list = {}
 
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
@@ -6050,111 +6066,128 @@ class PredBat(hass.Hass):
         all_prices = price_set[::] + [price_set[-1] - 1]
         self.log("All prices {}".format(all_prices))
         for loop_price in all_prices:
-            all_n = []
-            all_d = []
-            highest_price_charge = price_set[-1]
-            for price in price_set:
-                links = price_links[price]
-                if loop_price >= price:
-                    for key in links:
-                        window_n = window_index[key]["id"]
-                        typ = window_index[key]["type"]
-                        if typ == "c":
-                            all_n.append(window_n)
-                            if price > highest_price_charge:
-                                highest_price_charge = price
-                else:
-                    # For prices above threshold try discharge
-                    for key in links:
-                        typ = window_index[key]["type"]
-                        window_n = window_index[key]["id"]
-                        if typ == "d":
-                            all_d.append(window_n)
-
-            for discharge_enable in discharge_enable_options:
-                # This price band setting for charge
-                try_charge_limit = best_limits.copy()
-                for window_n in range(0, record_charge_windows):
-                    if window_n in all_n:
-                        try_charge_limit[window_n] = self.soc_max
+            window_prices = {}
+            for divide in [96, 16, 8, 4]:
+                all_n = []
+                all_d = []
+                highest_price_charge = price_set[-1]
+                divide_count_c = 0
+                divide_count_d = 0
+                for price in price_set:
+                    links = price_links[price]
+                    if loop_price >= price:
+                        for key in links:
+                            window_n = window_index[key]["id"]
+                            typ = window_index[key]["type"]
+                            window_prices[window_n] = price
+                            if typ == "c":
+                                if price == loop_price:
+                                    if (int(divide_count_c / divide) % 2) == 0:
+                                        all_n.append(window_n)
+                                    divide_count_c += 1
+                                else:
+                                    all_n.append(window_n)
                     else:
-                        try_charge_limit[window_n] = 0
+                        # For prices above threshold try discharge
+                        for key in links:
+                            typ = window_index[key]["type"]
+                            window_n = window_index[key]["id"]
+                            if typ == "d":
+                                if price == loop_price:
+                                    if (int(divide_count_d / divide) % 2) == 0:
+                                        all_d.append(window_n)
+                                    divide_count_d += 1
+                                else:
+                                    all_d.append(window_n)
 
-                # Try discharge on/off
-                try_discharge = discharge_limits.copy()
-                if discharge_enable:
-                    if not all_d:
-                        continue
+                for discharge_enable in discharge_enable_options:
+                    # This price band setting for charge
+                    try_charge_limit = best_limits.copy()
+                    for window_n in range(0, record_charge_windows):
+                        if window_n in all_n:
+                            if window_prices[window_n] > highest_price_charge:
+                                highest_price_charge = window_prices[window_n]
+                            try_charge_limit[window_n] = self.soc_max
+                        else:
+                            try_charge_limit[window_n] = 0
 
-                    for window_n in all_d:
-                        hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
-                        if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                    # Try discharge on/off
+                    try_discharge = discharge_limits.copy()
+                    if discharge_enable:
+                        if not all_d:
                             continue
-                        try_discharge[window_n] = 0
 
-                # Skip this one as it's the same as selected already
-                if try_charge_limit == best_limits and best_discharge == try_discharge and best_metric != 9999999:
-                    self.log(
-                        "Skip this optimisation with windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(all_n, all_d, discharge_enable)
+                        for window_n in all_d:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
+                            if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                continue
+                            try_discharge[window_n] = 0
+
+                    # Skip this one as it's the same as selected already
+                    try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
+                    if try_hash in tried_list:
+                        if self.debug_enable:
+                            self.log("Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(divide, all_n, all_d, discharge_enable))
+                        continue
+                    tried_list[try_hash] = True
+
+                    # Turn off debug for this sim
+                    was_debug = self.debug_enable
+                    self.debug_enable = False
+
+
+                    # Simulate with medium PV
+                    metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                        try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
                     )
-                    continue
 
-                # Turn off debug for this sim
-                was_debug = self.debug_enable
-                self.debug_enable = False
+                    # Debug re-enable if it was on
+                    self.debug_enable = was_debug
 
-                # Simulate with medium PV
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
-                    try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
-                )
+                    # Store simulated mid value
+                    metric = metricmid
+                    cost = metricmid
 
-                # Debug re-enable if it was on
-                self.debug_enable = was_debug
+                    # Balancing payment to account for battery left over
+                    # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+                    rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
+                    metric -= soc * max(rate_min, 1.0)
 
-                # Store simulated mid value
-                metric = metricmid
-                cost = metricmid
+                    # Adjustment for battery cycles metric
+                    metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
-                # Balancing payment to account for battery left over
-                # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-                metric -= soc * max(rate_min, 1.0)
-
-                # Adjustment for battery cycles metric
-                metric += battery_cycle * self.metric_battery_cycle + metric_keep
-
-                # Optimise
-                if discharge_enable:
-                    self.log(
-                        "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge on {}".format(
-                            loop_price, self.dp2(metric), self.dp2(soc_min), all_n, all_d
+                    # Optimise
+                    if discharge_enable:
+                        self.log(
+                            "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge on {}".format(
+                                loop_price, self.dp2(metric), self.dp2(soc_min), all_n, all_d
+                            )
                         )
-                    )
-                else:
-                    self.log(
-                        "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(loop_price, self.dp2(metric), self.dp2(soc_min), all_n)
-                    )
-
-                # For the first pass just pick the most cost effective threshold, consider soc keep later
-                if metric < best_metric:
-                    best_metric = metric
-                    best_price = loop_price
-                    best_price_charge = highest_price_charge
-                    best_limits = try_charge_limit.copy()
-                    best_discharge = try_discharge.copy()
-                    best_soc_min = soc_min
-                    best_cost = cost
-                    self.log(
-                        "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(
-                            loop_price, best_price, best_metric, self.dp2(best_cost), best_limits, best_discharge
+                    else:
+                        self.log(
+                            "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(loop_price, self.dp2(metric), self.dp2(soc_min), all_n)
                         )
-                    )
+
+                    # For the first pass just pick the most cost effective threshold, consider soc keep later
+                    if metric < best_metric:
+                        best_metric = metric
+                        best_price = loop_price
+                        best_price_charge = highest_price_charge
+                        best_limits = try_charge_limit.copy()
+                        best_discharge = try_discharge.copy()
+                        best_soc_min = soc_min
+                        best_cost = cost
+                        self.log(
+                            "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(
+                                loop_price, best_price, best_metric, self.dp2(best_cost), best_limits, best_discharge
+                            )
+                        )
         self.log(
-            "Optimise all charge for all bands best price threshold {} at metric {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
+            "Optimise all charge for all bands best price threshold {} charges at {} at metric {} cost {} soc_min {} limits {} discharge {}".format(
+                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
             )
         )
-        return best_limits, best_discharge, best_price
+        return best_limits, best_discharge, best_price_charge
 
     def optimise_charge_limit(
         self,
@@ -6351,7 +6384,7 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        self.log("Try optimising charge window(s) {} results {} selected {}".format(all_n if all_n else window_n, window_results, best_soc))
+        self.log("Try optimising charge window(s) {} price {} results {} selected {}".format(all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc))
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def optimise_discharge(
@@ -6513,7 +6546,7 @@ class PredBat(hass.Hass):
         optimized = all_n
         if not optimized:
             optimized = window_n
-        self.log("Try optimizing discharge window(s) {} gives {} => selected {}% size {}".format(optimized, window_results, best_discharge, best_size))
+        self.log("Try optimising discharge window(s) {} price {} gives {} => selected {}% size {}".format(optimized, window["average"], window_results, best_discharge, best_size))
         return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def window_sort_func(self, window):
@@ -6551,16 +6584,15 @@ class PredBat(hass.Hass):
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher
                 if stand_alone:
-                    average = window["average"]
+                    average = self.dp2(window["average"])
                 else:
                     average = self.dp2(window["average"] / self.inverter_loss / self.battery_loss)
-                average = int(average + 0.5)  # Round to nearest penny to avoid too many bands
-                sort_key = "%04.2f%03d_c%02d" % (5000 - average, 999 - id, id)
+                sort_key = "%04.2f_%03d_c%02d" % (5000 - average, 999 - id, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = average
+                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
                 id += 1
 
         # Add discharge windows
@@ -6569,8 +6601,7 @@ class PredBat(hass.Hass):
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge)
-                average = int(average + 0.5)  # Round to nearest penny to avoid too many bands
-                sort_key = "%04.2f%03d_d%02d" % (5000 - average, 999 - id, id)
+                sort_key = "%04.2f_%03d_d%02d" % (5000 - average, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
@@ -6578,7 +6609,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = average
+                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
                 id += 1
 
         if window_sort:
@@ -6945,6 +6976,7 @@ class PredBat(hass.Hass):
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
+        self.log("Starting second optimisation with charge limits {} based on".format(self.charge_limit_best))
         for start_at_low in [False, True]:
             if start_at_low:
                 price_set.reverse()
@@ -7021,7 +7053,13 @@ class PredBat(hass.Hass):
                                 )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
+
                             average = self.discharge_window_best[window_n]["average"]
+                            if price < best_price:
+                                if self.debug_enable:
+                                    self.log("Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, self.dp2(average)))
+                                continue
+
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                                 window_n,
                                 record_discharge_windows,
@@ -8246,23 +8284,38 @@ class PredBat(hass.Hass):
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "export")
 
         # Octopus saving session
-        octopus_saving_slot = {}
+        octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
                 saving_rate = self.get_arg("metric_octopus_saving_rate", 0)
                 if saving_rate > 0:
                     state = self.get_arg("octopus_saving_session", False)
-                    start = self.get_state(entity_id=entity_id, attribute="current_joined_event_start")
-                    end = self.get_state(entity_id=entity_id, attribute="current_joined_event_end")
-                    if not start or not end:
-                        start = self.get_state(entity_id=entity_id, attribute="next_joined_event_start")
-                        end = self.get_state(entity_id=entity_id, attribute="next_joined_event_end")
-                    self.log("Next Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
-                    octopus_saving_slot["start"] = start
-                    octopus_saving_slot["end"] = end
-                    octopus_saving_slot["rate"] = saving_rate
-                    octopus_saving_slot["state"] = state
+
+                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                    if joined_events:
+                        for event in joined_events:
+                            start = event.get('start', None)
+                            end = event.get('end', None)
+                            if start and end:
+                                octopus_saving_slot = {}
+                                octopus_saving_slot["start"] = start
+                                octopus_saving_slot["end"] = end
+                                octopus_saving_slot["rate"] = saving_rate
+                                octopus_saving_slot["state"] = state
+                                octopus_saving_slots.append(octopus_saving_slot)
+                                self.log("Joined Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+
+                    # In saving session that's not reported, assumed 30-minutes
+                    if state and not joined_events:
+                        octopus_saving_slot = {}
+                        octopus_saving_slot["start"] = None
+                        octopus_saving_slot["end"] = None
+                        octopus_saving_slot["rate"] = saving_rate
+                        octopus_saving_slot["state"] = state
+                        octopus_saving_slots.append(octopus_saving_slot)
+                    if state:
+                        self.log("Octopus Saving session is active!")
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -8273,7 +8326,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.load_saving_slot(octopus_saving_slot, export=False)
+            self.load_saving_slot(octopus_saving_slots, export=False)
             if "rates_import_override" in self.args:
                 self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
@@ -8287,7 +8340,7 @@ class PredBat(hass.Hass):
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(octopus_saving_slot, export=True)
+                self.load_saving_slot(octopus_saving_slots, export=True)
             if "rates_export_override" in self.args:
                 self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
