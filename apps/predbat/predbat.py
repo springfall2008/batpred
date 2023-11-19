@@ -8729,6 +8729,40 @@ class PredBat(hass.Hass):
                 self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item['name']))
         return True
 
+    def create_entity_list(self):
+        """
+        Create the standard entity list
+        """
+
+        text = ""
+        text += "# Predbat Dashboard\n"
+        text += "type: entities\n"
+        text += "Title: Predbat\n"
+        text += "entities:\n"
+        enable_list = [None]
+        for item in CONFIG_ITEMS:
+            enable = item.get('enable', None)
+            if enable and enable not in enable_list:
+                enable_list.append(enable)
+
+        for try_enable in enable_list:
+            for item in CONFIG_ITEMS:
+                entity = item["entity"]
+                enable = item.get('enable', None)
+
+                if enable == try_enable and self.user_config_item_enabled(item):
+                    text += "  - entity: " + entity + "\n"
+
+        filename = "/homeassistant/predbat_dashboard.yaml"
+        han = open(filename, "w")
+        if han:
+            self.log("Creating predbat dashboard at {}".format(filename))
+            han.write(text)
+            han.close()
+        else:
+            self.log("Failed to write predbat dashboard to {}".format(filename))
+
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -8918,6 +8952,8 @@ class PredBat(hass.Hass):
             self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
+
+        self.create_entity_list()
 
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
         self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
