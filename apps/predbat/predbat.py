@@ -53,7 +53,7 @@ CONFIG_ITEMS = [
         "release_url": "https://github.com/springfall2008/batpred/releases/tag/" + THIS_VERSION,
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
     },
-    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", 'default' : False},
+    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", 'default' : True},
     {"name": "pv_metric10_weight", "friendly_name": "Metric 10 Weight", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:percent", 'default' : 0.15},
     {"name": "pv_scaling", "friendly_name": "PV Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
     {"name": "load_scaling", "friendly_name": "Load Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
@@ -2024,8 +2024,6 @@ class PredBat(hass.Hass):
             if not isinstance(value, list):
                 value = [value]
 
-        # Set to user config
-        self.expose_config(arg, value)
         return value
 
     def get_ge_url(self, url, headers, now_utc):
@@ -8331,7 +8329,6 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg("debug_enable")
-        self.expert_mode = self.get_arg("expert_mode")
         self.previous_status = self.get_state(self.prefix + ".status")
         forecast_hours = self.get_arg("forecast_hours", 48)
 
@@ -8737,10 +8734,22 @@ class PredBat(hass.Hass):
         Load config from HA
         """
         self.config_index = {}
+
+        # New install, used to set default of expert mode
+        new_install = True
+        current_status = self.get_state('predbat.status')
+        if current_status:
+            new_install = False
+
         # Build config index
         for item in CONFIG_ITEMS:
             name = item["name"]
             self.config_index[name] = item
+
+            # Set the default for expert mode to False for new installs only
+            if name == 'expert_mode':
+                if new_install:
+                    item["default"] = False
 
         # Find values and monitor config
         for item in CONFIG_ITEMS:
