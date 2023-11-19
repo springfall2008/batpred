@@ -53,10 +53,10 @@ CONFIG_ITEMS = [
         "release_url": "https://github.com/springfall2008/batpred/releases/tag/" + THIS_VERSION,
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
     },
-    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch"},
-    {"name": "pv_metric10_weight", "friendly_name": "Metric 10 Weight", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:percent"},
-    {"name": "pv_scaling", "friendly_name": "PV Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication"},
-    {"name": "load_scaling", "friendly_name": "Load Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication"},
+    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", 'default' : False},
+    {"name": "pv_metric10_weight", "friendly_name": "Metric 10 Weight", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:percent", 'default' : 0.15},
+    {"name": "pv_scaling", "friendly_name": "PV Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
+    {"name": "load_scaling", "friendly_name": "Load Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
     {
         "name": "battery_rate_max_scaling",
         "friendly_name": "Battery rate max scaling",
@@ -66,8 +66,9 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "multiple",
         "icon": "mdi:multiplication",
+        'default' : 1.0,
     },
-    {"name": "battery_loss", "friendly_name": "Battery loss charge ", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split"},
+    {"name": "battery_loss", "friendly_name": "Battery loss charge ", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.03},
     {
         "name": "battery_loss_discharge",
         "friendly_name": "Battery loss discharge",
@@ -76,12 +77,13 @@ CONFIG_ITEMS = [
         "max": 1.0,
         "step": 0.01,
         "unit": "fraction",
-        "icon": "mdi:call-split",
+        "icon": "mdi:call-split", 
+        'default' : 0.03,
     },
-    {"name": "inverter_loss", "friendly_name": "Inverter Loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split"},
-    {"name": "inverter_hybrid", "friendly_name": "Inverter Hybrid", "type": "switch"},
-    {"name": "inverter_soc_reset", "friendly_name": "Inverter SOC Reset", "type": "switch"},
-    {"name": "battery_capacity_nominal", "friendly_name": "Use the Battery Capacity Nominal size", "type": "switch"},
+    {"name": "inverter_loss", "friendly_name": "Inverter Loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.04},
+    {"name": "inverter_hybrid", "friendly_name": "Inverter Hybrid", "type": "switch", 'default' : True},
+    {"name": "inverter_soc_reset", "friendly_name": "Inverter SOC Reset", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "battery_capacity_nominal", "friendly_name": "Use the Battery Capacity Nominal size", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
     {
         "name": "car_charging_energy_scale",
         "friendly_name": "Car charging energy scale",
@@ -91,6 +93,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "fraction",
         "icon": "mdi:multiplication",
+        'default' : 1.0,
     },
     {
         "name": "car_charging_threshold",
@@ -101,12 +104,13 @@ CONFIG_ITEMS = [
         "step": 0.10,
         "unit": "kw",
         "icon": "mdi:ev-station",
+        'default' : 6.0,
     },
-    {"name": "car_charging_rate", "friendly_name": "Car charging rate", "type": "input_number", "min": 1, "max": 8.5, "step": 0.10, "unit": "kw", "icon": "mdi:ev-station"},
-    {"name": "car_charging_loss", "friendly_name": "Car charging loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split"},
-    {"name": "best_soc_min", "friendly_name": "Best SOC Min", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50"},
-    {"name": "best_soc_max", "friendly_name": "Best SOC Max", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50"},
-    {"name": "best_soc_keep", "friendly_name": "Best SOC Keep", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50"},
+    {"name": "car_charging_rate", "friendly_name": "Car charging rate", "type": "input_number", "min": 1, "max": 8.5, "step": 0.10, "unit": "kw", "icon": "mdi:ev-station", 'default' : 7.4},
+    {"name": "car_charging_loss", "friendly_name": "Car charging loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.08},
+    {"name": "best_soc_min", "friendly_name": "Best SOC Min", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'enable' : 'expert_mode', 'default' : 0.0},
+    {"name": "best_soc_max", "friendly_name": "Best SOC Max", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'enable' : 'expert_mode', 'default' : 0.0},
+    {"name": "best_soc_keep", "friendly_name": "Best SOC Keep", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'default' : 2.0},
     {
         "name": "metric_min_improvement",
         "friendly_name": "Metric Min Improvement",
@@ -116,6 +120,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:currency-usd",
+        'enable' : 'expert_mode',
+        'default' : 0.0,
     },
     {
         "name": "metric_min_improvement_discharge",
@@ -126,6 +132,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:currency-usd",
+        'enable' : 'expert_mode',
+        'default' : 0.1,
     },
     {
         "name": "metric_battery_cycle",
@@ -136,6 +144,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
+        'enable' : 'expert_mode',
+        'default' : 2.0,
     },
     {
         "name": "metric_battery_value_scaling",
@@ -146,6 +156,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "fraction",
         "icon": "mdi:multiplication",
+        'enable' : 'expert_mode',
+        'default' : 1.0,
     },
     {
         "name": "metric_future_rate_offset_import",
@@ -156,6 +168,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
+        'enable' : 'expert_mode',
+        'default' : 0.0,
     },
     {
         "name": "metric_future_rate_offset_export",
@@ -166,6 +180,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
+        'enable' : 'expert_mode',
+        'default' : 0.0,
     },
     {
         "name": "metric_inday_adjust_damping",
@@ -176,6 +192,8 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "fraction",
         "icon": "mdi:call-split",
+        'enable' : 'expert_mode',
+        'default' : 0.95,
     },
     {
         "name": "metric_octopus_saving_rate",
@@ -186,8 +204,20 @@ CONFIG_ITEMS = [
         "step": 2,
         "unit": "fraction",
         "icon": "mdi:currency-usd",
+        'default' : 0.0,
     },
-    {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent"},
+    {
+        "name": "set_reserve_min", 
+        "friendly_name": 
+        "Set Reserve Min", 
+        "type": "input_number", 
+        "min": 4, 
+        "max": 100, 
+        "step": 1, 
+        "unit": "%", 
+        "icon": "mdi:percent", 
+        'default' : 4.0
+    },
     {
         "name": "rate_low_threshold",
         "friendly_name": "Rate Low Threshold",
@@ -197,6 +227,8 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "multiple",
         "icon": "mdi:multiplication",
+        'enable' : 'expert_mode',
+        'default' : 0.0,
     },
     {
         "name": "rate_high_threshold",
@@ -207,17 +239,19 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "multiple",
         "icon": "mdi:multiplication",
+        'enable' : 'expert_mode',
+        'default' : 0.0,
     },
-    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch"},
-    {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch"},
-    {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch"},
-    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch"},
-    {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch"},
-    {"name": "calculate_best_charge", "friendly_name": "Calculate Best Charge", "type": "switch"},
-    {"name": "calculate_best_discharge", "friendly_name": "Calculate Best Discharge", "type": "switch"},
-    {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch"},
-    {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch"},
-    {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch"},
+    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", 'default' : True},
+    {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", 'default' : True},
+    {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", 'default' : False},
+    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", 'default' : False},
+    {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
+    {"name": "calculate_best_charge", "friendly_name": "Calculate Best Charge", "type": "switch", 'default' : True},
+    {"name": "calculate_best_discharge", "friendly_name": "Calculate Best Discharge", "type": "switch", 'default' : True},
+    {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
+    {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
     {
         "name": "calculate_plan_every",
         "friendly_name": "Calculate plan every N minutes",
@@ -227,19 +261,21 @@ CONFIG_ITEMS = [
         "step": 5,
         "unit": "kwh",
         "icon": "mdi:clock-end",
+        'enable' : 'expert_mode',
+        'default' : 10,
     },
-    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch"},
-    {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch"},
-    {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch"},
-    {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch"},
-    {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch"},
-    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch"},
-    {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch"},
-    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch"},
-    {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch"},
-    {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch"},
-    {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch"},
-    {"name": "balance_inverters_crosscharge", "friendly_name": "Balance Inverters for cross-charging", "type": "switch"},
+    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", 'default' : True},
+    {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", 'default' : True},
+    {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", 'default' : False},
+    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", 'default' : True},
+    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", 'default' : False},
+    {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch", 'default' : False},
+    {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
+    {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
+    {"name": "balance_inverters_crosscharge", "friendly_name": "Balance Inverters for cross-charging", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
     {
         "name": "balance_inverters_threshold_charge",
         "friendly_name": "Balance Inverters threshold charge",
@@ -249,6 +285,8 @@ CONFIG_ITEMS = [
         "step": 1,
         "unit": "%",
         "icon": "mdi:percent",
+        'enable' : 'balance_inverters_enable',
+        'default' : 1.0,
     },
     {
         "name": "balance_inverters_threshold_discharge",
@@ -259,18 +297,20 @@ CONFIG_ITEMS = [
         "step": 1,
         "unit": "%",
         "icon": "mdi:percent",
+        'enable' : 'balance_inverters_enable',
+        'default' : 1.0,
     },
-    {"name": "debug_enable", "friendly_name": "Debug Enable", "type": "switch", "icon": "mdi:bug-outline"},
-    {"name": "car_charging_plan_time", "friendly_name": "Car charging planned ready time", "type": "select", "options": OPTIONS_TIME, "icon": "mdi:clock-end"},
-    {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch"},
-    {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch"},
-    {"name": "iboost_max_energy", "friendly_name": "IBoost max energy", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh"},
-    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh"},
-    {"name": "iboost_max_power", "friendly_name": "IBoost max power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w"},
-    {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w"},
-    {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent"},
-    {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end"},
-    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end"},
+    {"name": "debug_enable", "friendly_name": "Debug Enable", "type": "switch", "icon": "mdi:bug-outline", 'default' : False},
+    {"name": "car_charging_plan_time", "friendly_name": "Car charging planned ready time", "type": "select", "options": OPTIONS_TIME, "icon": "mdi:clock-end", 'default' : "07:00:00"},
+    {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
+    {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", 'default' : False},
+    {"name": "iboost_max_energy", "friendly_name": "IBoost max energy", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", 'enable' : 'iboost_enable', 'default' : 3.0},
+    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", 'enable' : 'iboost_enable', 'default' : 0.0},
+    {"name": "iboost_max_power", "friendly_name": "IBoost max power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 2400},
+    {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 500},
+    {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent", 'enable' : 'iboost_enable', 'default' : 0.0},
+    {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end", 'default' : 0},
+    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 96},
 ]
 
 """
@@ -1950,7 +1990,7 @@ class PredBat(hass.Hass):
         value = None
 
         # Get From HA config
-        value = self.get_ha_config(arg)
+        value, default = self.get_ha_config(arg, default)
 
         # Resolve locally if no HA config
         if value is None:
@@ -5668,9 +5708,11 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.config_index = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.previous_status = None
         self.had_errors = False
+        self.expert_mode = False
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
@@ -7023,10 +7065,10 @@ class PredBat(hass.Hass):
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
-            self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate", 7.4, index=car_n))
+            self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
             self.car_charging_limit[car_n] = (float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0
 
-        self.car_charging_from_battery = self.get_arg("car_charging_from_battery", True)
+        self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
         if self.num_cars > 0:
             self.log(
                 "Cars {} charging from battery {} planned {}, charging_now {} smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(
@@ -7942,7 +7984,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "import")
 
         # Work out current car SOC and limit
-        self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss", 0.08))
+        self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
         # Octopus intelligent slots
         if "octopus_intelligent_slot" in self.args:
@@ -8068,7 +8110,7 @@ class PredBat(hass.Hass):
         if "octopus_saving_session" in self.args:
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
-                saving_rate = self.get_arg("metric_octopus_saving_rate", 0)
+                saving_rate = self.get_arg("metric_octopus_saving_rate")
                 if saving_rate > 0:
                     state = self.get_arg("octopus_saving_session", False)
 
@@ -8288,15 +8330,15 @@ class PredBat(hass.Hass):
         Fetch all the configuration options
         """
 
-        self.debug_enable = self.get_arg("debug_enable", False)
-        self.expert_mode = self.get_arg("expert_mode", False)
+        self.debug_enable = self.get_arg("debug_enable")
+        self.expert_mode = self.get_arg("expert_mode")
         self.previous_status = self.get_state(self.prefix + ".status")
         forecast_hours = self.get_arg("forecast_hours", 48)
 
         self.calculate_max_windows = max(int(forecast_hours), 24)
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
-        self.calculate_plan_every = max(self.get_arg("calculate_plan_every", 10), 5) if self.expert_mode else 10
+        self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
 
         self.log(
             "Inverter type {} forecast_hours {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(
@@ -8306,7 +8348,7 @@ class PredBat(hass.Hass):
         )
 
         # Days previous
-        self.holiday_days_left = self.get_arg("holiday_days_left", 0)
+        self.holiday_days_left = self.get_arg("holiday_days_left")
         self.days_previous = self.get_arg("days_previous", [7])
         self.days_previous_weight = self.get_arg("days_previous_weight", [1 for i in range(0, len(self.days_previous))])
         if len(self.days_previous) > len(self.days_previous_weight):
@@ -8319,7 +8361,7 @@ class PredBat(hass.Hass):
 
         self.forecast_days = int((forecast_hours + 23) / 24)
         self.forecast_minutes = forecast_hours * 60
-        self.forecast_plan_hours = max(min(self.get_arg("forecast_plan_hours", 24), forecast_hours), 8) if self.expert_mode else forecast_hours
+        self.forecast_plan_hours = max(min(self.get_arg("forecast_plan_hours", 96), forecast_hours), 8)
         self.inverter_clock_skew_start = self.get_arg("inverter_clock_skew_start", 0)
         self.inverter_clock_skew_end = self.get_arg("inverter_clock_skew_end", 0)
         self.inverter_clock_skew_discharge_start = self.get_arg("inverter_clock_skew_discharge_start", 0)
@@ -8332,33 +8374,33 @@ class PredBat(hass.Hass):
             self.log("Inverter clock skew discharge start {} end {} applied".format(self.inverter_clock_skew_discharge_start, self.inverter_clock_skew_discharge_end))
 
         # Metric config
-        self.metric_min_improvement = self.get_arg("metric_min_improvement", 0.0) if self.expert_mode else 0.0
-        self.metric_min_improvement_discharge = self.get_arg("metric_min_improvement_discharge", 0.1) if self.expert_mode else 0.1
-        self.metric_battery_cycle = self.get_arg("metric_battery_cycle", 2.0) if self.expert_mode else 0
-        self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import", 0.0) if self.expert_mode else 0
-        self.metric_future_rate_offset_export = self.get_arg("metric_future_rate_offset_export", 0.0)
-        self.metric_inday_adjust_damping = self.get_arg("metric_inday_adjust_damping", 0.95) if self.expert_mode else 0.95
-        self.rate_low_threshold = self.get_arg("rate_low_threshold", 0.0) if self.expert_mode else 0
-        self.inverter_soc_reset = self.get_arg("inverter_soc_reset", False) if self.expert_mode else False
-        self.rate_high_threshold = self.get_arg("rate_high_threshold", 0.0) if self.expert_mode else 0
+        self.metric_min_improvement = self.get_arg("metric_min_improvement")
+        self.metric_min_improvement_discharge = self.get_arg("metric_min_improvement_discharge")
+        self.metric_battery_cycle = self.get_arg("metric_battery_cycle")
+        self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import")
+        self.metric_future_rate_offset_export = self.get_arg("metric_future_rate_offset_export")
+        self.metric_inday_adjust_damping = self.get_arg("metric_inday_adjust_damping")
+        self.rate_low_threshold = self.get_arg("rate_low_threshold")
+        self.rate_high_threshold = self.get_arg("rate_high_threshold")
+        self.inverter_soc_reset = self.get_arg("inverter_soc_reset")
 
-        self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling", 1.0)
+        self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling")
         self.notify_devices = self.get_arg("notify_devices", ["notify"])
-        self.pv_scaling = self.get_arg("pv_scaling", 1.0)
-        self.pv_metric10_weight = self.get_arg("pv_metric10_weight", 0.15)
-        self.load_scaling = self.get_arg("load_scaling", 1.0)
-        self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling", 1.0)
+        self.pv_scaling = self.get_arg("pv_scaling")
+        self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
+        self.load_scaling = self.get_arg("load_scaling")
+        self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
 
         self.best_soc_step = 0.25
         self.metric_cloud_enable = True
 
         # Battery charging options
-        self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal", False)
-        self.battery_loss = 1.0 - self.get_arg("battery_loss", 0.03)
-        self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge", 0.03)
-        self.inverter_loss = 1.0 - self.get_arg("inverter_loss", 0.04)
-        self.inverter_hybrid = self.get_arg("inverter_hybrid", True)
-        self.battery_scaling = self.get_arg("battery_scaling", 1.0)
+        self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
+        self.battery_loss = 1.0 - self.get_arg("battery_loss")
+        self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
+        self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
+        self.inverter_hybrid = self.get_arg("inverter_hybrid")
+        self.battery_scaling = self.get_arg("battery_scaling")
         self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
         # Check power curve is a dictionary
         if not isinstance(self.battery_charge_power_curve, dict):
@@ -8367,29 +8409,27 @@ class PredBat(hass.Hass):
             self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_margin = 0.0
-        self.best_soc_min = self.get_arg("best_soc_min", 0.0) if self.expert_mode else 0
-        self.best_soc_max = self.get_arg("best_soc_max", 0.0) if self.expert_mode else 0
-        self.best_soc_keep = self.get_arg("best_soc_keep", 2.0)
+        self.best_soc_min = self.get_arg("best_soc_min")
+        self.best_soc_max = self.get_arg("best_soc_max")
+        self.best_soc_keep = self.get_arg("best_soc_keep")
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
-        self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging", True)
+        self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
         self.combine_mixed_rates = False
-        self.combine_discharge_slots = self.get_arg("combine_discharge_slots", False) if self.expert_mode else False
-        self.combine_charge_slots = self.get_arg("combine_charge_slots", False) if self.expert_mode else False
+        self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
+        self.combine_charge_slots = self.get_arg("combine_charge_slots")
         self.discharge_slot_split = 60
         self.charge_slot_split = 60
 
         # Enables
-        default_enable_mode = True
         if self.inverter_type != "GE":
-            default_enable_mode = False
             self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
 
-        self.calculate_best = self.get_arg("calculate_best", True) if self.expert_mode else True
-        self.set_read_only = self.get_arg("set_read_only", False)
+        self.calculate_best = self.get_arg("calculate_best")
+        self.set_read_only = self.get_arg("set_read_only")
 
         # hard wired options, can be configured per inverter later on
         self.set_soc_enable = True
@@ -8399,47 +8439,46 @@ class PredBat(hass.Hass):
         self.set_charge_freeze = True
         self.calculate_discharge_first = True
 
-        self.set_status_notify = self.get_arg("set_status_notify", True)
-        self.set_inverter_notify = self.get_arg("set_inverter_notify", False)
-        self.set_discharge_freeze_only = self.get_arg("set_discharge_freeze_only", False)
-        self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge", True)
-        self.set_charge_window = self.get_arg("set_charge_window", default_enable_mode)
-        self.calculate_best_charge = self.get_arg("calculate_best_charge", True)
-        self.calculate_best_discharge = self.get_arg("calculate_best_discharge", default_enable_mode)
+        self.set_status_notify = self.get_arg("set_status_notify")
+        self.set_inverter_notify = self.get_arg("set_inverter_notify")
+        self.set_discharge_freeze_only = self.get_arg("set_discharge_freeze_only")
+        self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
+        self.set_charge_window = self.get_arg("set_charge_window")
+        self.calculate_best_charge = self.get_arg("calculate_best_charge")
+        self.calculate_best_discharge = self.get_arg("calculate_best_discharge")
         self.set_discharge_window = self.calculate_best_discharge
-        self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge", True) if self.expert_mode else True
-        self.calculate_second_pass = self.get_arg("calculate_second_pass", False) if self.expert_mode else False
-        self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment", True) if self.expert_mode else True
+        self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge", True)
+        self.calculate_second_pass = self.get_arg("calculate_second_pass", False)
+        self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment", True)
 
-        self.balance_inverters_enable = self.get_arg("balance_inverters_enable", False)
-        self.balance_inverters_charge = self.get_arg("balance_inverters_charge", True) if self.balance_inverters_enable else True
-        self.balance_inverters_discharge = self.get_arg("balance_inverters_discharge", True) if self.balance_inverters_enable else True
-        self.balance_inverters_crosscharge = self.get_arg("balance_inverters_crosscharge", True) if self.balance_inverters_enable else True
-        self.balance_inverters_threshold_charge = max(self.get_arg("balance_inverters_threshold_charge", 1.0), 1.0) if self.balance_inverters_enable else 1.0
-        self.balance_inverters_threshold_discharge = max(self.get_arg("balance_inverters_threshold_discharge", 1.0), 1.0)  if self.balance_inverters_enable else 1.0
+        self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
+        self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
+        self.balance_inverters_discharge = self.get_arg("balance_inverters_discharge")
+        self.balance_inverters_crosscharge = self.get_arg("balance_inverters_crosscharge")
+        self.balance_inverters_threshold_charge = max(self.get_arg("balance_inverters_threshold_charge"), 1.0)
+        self.balance_inverters_threshold_discharge = max(self.get_arg("balance_inverters_threshold_discharge"), 1.0)
 
         if self.set_read_only:
             self.log("NOTE: Read-only mode is enabled, the inverter controls will not be used!!")
 
         # Enable load filtering
-        self.load_filter_modal = self.get_arg("load_filter_modal", True) if self.expert_mode else True
+        self.load_filter_modal = self.get_arg("load_filter_modal")
 
         # Iboost model
-        self.iboost_enable = self.get_arg("iboost_enable", False)
+        self.iboost_enable = self.get_arg("iboost_enable")
 
-        self.iboost_max_energy = self.get_arg("iboost_max_energy", 3.0) if self.iboost_enable else 0.0
-        self.iboost_max_power = self.get_arg("iboost_max_power", 2400) / 1000 / 60.0 if self.iboost_enable else 0
-        self.iboost_min_power = self.get_arg("iboost_min_power", 500) / 1000 / 60.0 if self.iboost_enable else 0
-        self.iboost_min_soc = self.get_arg("iboost_min_soc", 0.0) if self.iboost_enable else 0
-        self.iboost_today = self.get_arg("iboost_today", 0.0) if self.iboost_enable else 0
+        self.iboost_max_energy = self.get_arg("iboost_max_energy")
+        self.iboost_max_power = self.get_arg("iboost_max_power") / 1000 / 60.0
+        self.iboost_min_power = self.get_arg("iboost_min_power") / 1000 / 60.0
+        self.iboost_min_soc = self.get_arg("iboost_min_soc")
+        self.iboost_today = self.get_arg("iboost_today")
         self.iboost_next = self.iboost_today
-        self.iboost_energy_scaling = self.get_arg("iboost_energy_scaling", 1.0) if self.iboost_enable else 1.0
         self.iboost_energy_today = {}
 
         # Car options
-        self.car_charging_hold = self.get_arg("car_charging_hold", True)
-        self.car_charging_threshold = float(self.get_arg("car_charging_threshold", 6.0)) / 60.0
-        self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale", 1.0)
+        self.car_charging_hold = self.get_arg("car_charging_hold")
+        self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
+        self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 
     @ad.app_lock
     def update_pred(self, scheduled=True):
@@ -8609,26 +8648,37 @@ class PredBat(hass.Hass):
                 self.plan_valid = False
                 return
 
-    def get_ha_config(self, name):
+    def get_ha_config(self, name, default):
         """
-        Get Home assistant config
+        Get Home assistant config value, use default if not set
         """
-        for item in CONFIG_ITEMS:
+        item = self.config_index.get(name)
+        if item:
             if item["name"] == name:
-                value = item.get("value")
-                return value
-        return None
+                value = item.get("value", None)
+                if default is None:
+                    default = item.get("default", None)
+                if value is None:
+                    value = default
+                return value, default
+        return None, default
 
-    def expose_config(self, name, value):
+    def expose_config(self, name, value, quiet=True):
         """
         Share the config with HA
         """
-        for item in CONFIG_ITEMS:
-            if item["name"] == name:
+        item = self.config_index.get(name, None)
+        if item:
+            enabled = self.user_config_item_enabled(item)
+            if not enabled:
+                self.log("Not updating HA config {} to {} as disabled".format(name, value))
+                item['value'] = None
+            else:
                 entity = item.get("entity")
                 if entity and ((item.get("value") is None) or (value != item["value"])):
                     item["value"] = value
-                    self.log("Updating HA config {} to {}".format(name, value))
+                    if not quiet:
+                        self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
                         icon = item.get("icon", "mdi:numeric")
                         self.set_state(
@@ -8665,29 +8715,67 @@ class PredBat(hass.Hass):
                             },
                         )
 
-    def load_user_config(self):
+    def user_config_item_enabled(self, item):
+        """
+        Check if user config item is enable
+        """
+        enable = item.get('enable', None)
+        if enable:
+            citem = self.config_index.get(enable, None)
+            if citem:
+                enabled_value = citem.get('value', True)
+                if not enabled_value:
+                    return False
+                else:
+                    return True
+            else:
+                self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item['name']))
+        return True
+
+    def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
         """
+        self.config_index = {}
+        # Build config index
+        for item in CONFIG_ITEMS:
+            name = item["name"]
+            self.config_index[name] = item
 
         # Find values and monitor config
         for item in CONFIG_ITEMS:
             name = item["name"]
             type = item["type"]
+            enabled = self.user_config_item_enabled(item)
+
             entity = type + "." + self.prefix + "_" + name
             item["entity"] = entity
             ha_value = None
 
-            # Get from current state?
-            if not self.args.get("user_config_reset", False):
-                ha_value = self.get_state(entity)
+            if not enabled:
+                if not quiet:
+                    self.log("Note: Disabled configuration item {}".format(name))
+                item['value'] = None
 
-                # Get from history?
-                if ha_value is None:
-                    history = self.get_history(entity_id=entity)
-                    if history:
-                        history = history[0]
-                        ha_value = history[-1]["state"]
+                # Remove the state if the entity still exists
+                ha_value = self.get_state(entity)
+                if ha_value is not None:
+                    self.set_state(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
+                continue
+
+            # Get from current state?
+            ha_value = self.get_state(entity)
+
+            # Get from history?
+            if ha_value is None:
+                history = self.get_history(entity_id=entity)
+                if history:
+                    history = history[0]
+                    ha_value = history[-1]["state"]
+            
+            # Default?
+            if ha_value is None:
+                ha_value = item["default"]
 
             # Switch convert to text
             if type == "switch" and isinstance(ha_value, str):
@@ -8707,31 +8795,32 @@ class PredBat(hass.Hass):
 
             # Push back into current state
             if ha_value is not None:
-                self.expose_config(item["name"], ha_value)
+                self.expose_config(item["name"], ha_value, quiet=quiet)
 
         # Register HA services
-        self.fire_event("service_registered", domain="input_number", service="set_value")
-        self.fire_event("service_registered", domain="input_number", service="increment")
-        self.fire_event("service_registered", domain="input_number", service="decrement")
-        self.fire_event("service_registered", domain="switch", service="turn_on")
-        self.fire_event("service_registered", domain="switch", service="turn_off")
-        self.fire_event("service_registered", domain="switch", service="toggle")
-        self.fire_event("service_registered", domain="select", service="select_option")
-        self.fire_event("service_registered", domain="select", service="select_first")
-        self.fire_event("service_registered", domain="select", service="select_last")
-        self.fire_event("service_registered", domain="select", service="select_next")
-        self.fire_event("service_registered", domain="select", service="select_previous")
-        self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
-        self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
-        self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
-        self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
-        self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
-        self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
-        self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
-        self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
-        self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
-        self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
-        self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
+        if register:
+            self.fire_event("service_registered", domain="input_number", service="set_value")
+            self.fire_event("service_registered", domain="input_number", service="increment")
+            self.fire_event("service_registered", domain="input_number", service="decrement")
+            self.fire_event("service_registered", domain="switch", service="turn_on")
+            self.fire_event("service_registered", domain="switch", service="turn_off")
+            self.fire_event("service_registered", domain="switch", service="toggle")
+            self.fire_event("service_registered", domain="select", service="select_option")
+            self.fire_event("service_registered", domain="select", service="select_first")
+            self.fire_event("service_registered", domain="select", service="select_last")
+            self.fire_event("service_registered", domain="select", service="select_next")
+            self.fire_event("service_registered", domain="select", service="select_previous")
+            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
+            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
+            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
+            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
+            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
+            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
+            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
+            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
+            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
+            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
+            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
@@ -8805,13 +8894,11 @@ class PredBat(hass.Hass):
         """
         global SIMULATE
         self.log("Predbat: Startup")
-        self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
-        self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
 
         try:
             self.reset()
             self.auto_config()
-            self.load_user_config()
+            self.load_user_config(quiet=False, register=True)
         except Exception as e:
             self.log("ERROR: Exception raised {}".format(e))
             self.record_status("ERROR: Exception raised {}".format(e))
@@ -8822,6 +8909,9 @@ class PredBat(hass.Hass):
             self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
+
+        self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
+        self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
 
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
@@ -8883,6 +8973,8 @@ class PredBat(hass.Hass):
         """
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
+            if self.update_pending:
+                self.load_user_config()
             self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
@@ -8900,6 +8992,8 @@ class PredBat(hass.Hass):
         """
         if not self.prediction_started:
             self.prediction_started = True
+            if self.update_pending:
+                self.load_user_config()
             self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
