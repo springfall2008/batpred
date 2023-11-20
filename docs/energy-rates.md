@@ -12,7 +12,7 @@ For Predbat to automatically manage saving sessions you will need to make sure t
 
 When a saving session is active the energy rates for import and export will be overridden with the assumed rate set in Home Assistant with **input_number.predbat_metric_octopus_saving_rate**, if this rate is 0 then the feature is disabled (default). You should set this to the saving rate published by Octopus for the session (currently there is no sensor for this rate).
 
-For best results ensure **switch.predbat_combine_charge_slots** is turned off and that you have enough windows (**input_number.predbat_calculate_max_windows**) available to allow Predbat to charge before the event if need be, e.g. a value of 48 would normally be suitable. Set **input_number.rate_low_threshold** and **input_number.rate_high_threshold** to 0 for automatic mode.
+If you are using expert mode, for best results: **switch.predbat_combine_charge_slots** (_expert mode_) is turned off. Set **input_number.rate_low_threshold** (_expert mode_) and **input_number.rate_high_threshold** (_expert mode_) to 0 for automatic mode.
 
 ## Rate bands
 
@@ -20,7 +20,7 @@ For best results ensure **switch.predbat_combine_charge_slots** is turned off an
 
 ## Rate offsets
 
-- Note that you can tune future unknown energy rates by adjusting **input_number.predbat_metric_future_rate_offset_import** and **input_number.predbat_metric_future_rate_offset_export** inside Home Assistant to set the predicted offset for future unknown rates
+- Note that you can tune future unknown energy rates by adjusting **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) and **input_number.predbat_metric_future_rate_offset_export** (_expert mode_) inside Home Assistant to set the predicted offset for future unknown rates
 
 ## Future Agile energy rates
 
