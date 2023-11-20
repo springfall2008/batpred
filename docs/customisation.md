@@ -92,11 +92,11 @@ you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable thi
 
 ## Battery margins and metrics options
 
-**best_soc_min** sets the minimum charge level (in kWh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots)
-
-**best_soc_max** sets the maximum charge level (in kWh) for charging during each slot. A value of 0 disables this feature.
-
 **best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time, soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin in case you use more energy than planned between charge slots.
+
+**best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the minimum discharge level also (set to 0 if you want to skip some slots). If you set this non-zero you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
+
+**best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot. A value of 0 disables this feature.
 
 **combine_charge_slots** (_expert mode_) controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
 Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is disabled (False)
