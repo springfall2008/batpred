@@ -8770,7 +8770,7 @@ class PredBat(hass.Hass):
         for entity in self.dashboard_index:
             text += "  - entity: " + entity + "\n"
 
-        filename = "/homeassistant/predbat_dashboard.yaml"
+        filename = "/config/predbat_dashboard.yaml"
         han = open(filename, "w")
         if han:
             self.log("Creating predbat dashboard at {}".format(filename))
