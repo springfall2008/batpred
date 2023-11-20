@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13"
+THIS_VERSION = "v7.13.1"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2838,7 +2838,7 @@ class PredBat(hass.Hass):
             idx += 1
 
         self.log("Historical data totals for days {} are {} - min {}".format(self.days_previous, sum_days, min_sum))
-        if self.load_filter_modal and total_points >= 2 and (min_sum_day > 0):
+        if self.load_filter_modal and total_points >= 3 and (min_sum_day > 0):
             self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(self.days_previous)))
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
@@ -2918,6 +2918,9 @@ class PredBat(hass.Hass):
         """
         Records status to HA sensor
         """
+        if not extra:
+            extra = ""
+
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
 
@@ -8483,6 +8486,7 @@ class PredBat(hass.Hass):
         """
         Update the prediction state, everything is called from here right now
         """
+        status_extra = ""
         self.had_errors = False
         self.dashboard_index = []
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
