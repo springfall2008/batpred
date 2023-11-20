@@ -2921,7 +2921,7 @@ class PredBat(hass.Hass):
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
 
-        self.set_state(self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug})
+        self.dashboard_item(self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug})
         if had_errors:
             self.had_errors = True
 
@@ -3074,7 +3074,7 @@ class PredBat(hass.Hass):
                     stamp = minute_timestamp.strftime(TIME_FORMAT)
                     load_adjusted_stamp[stamp] = load_adjusted
 
-        self.set_state(
+        self.dashboard_item(
             self.prefix + ".load_inday_adjustment",
             state=self.dp2(difference_cap * 100.0),
             attributes={
@@ -3085,7 +3085,7 @@ class PredBat(hass.Hass):
                 "icon": "mdi:percent",
             },
         )
-        self.set_state(
+        self.dashboard_item(
             self.prefix + ".load_energy_actual",
             state=self.dp3(actual_total_today),
             attributes={
@@ -3096,7 +3096,7 @@ class PredBat(hass.Hass):
                 "icon": "mdi:percent",
             },
         )
-        self.set_state(
+        self.dashboard_item(
             self.prefix + ".load_energy_predicted",
             state=self.dp3(load_total_pred),
             attributes={
@@ -3107,7 +3107,7 @@ class PredBat(hass.Hass):
                 "icon": "mdi:percent",
             },
         )
-        self.set_state(
+        self.dashboard_item(
             self.prefix + ".load_energy_adjusted",
             state=self.dp3(load_adjusted),
             attributes={
@@ -3613,7 +3613,7 @@ class PredBat(hass.Hass):
 
         # Save data to HA state
         if save and save == "base" and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_hours_left",
                 state=self.dp2(hours_left),
                 attributes={"friendly_name": "Predicted Battery Hours left", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
@@ -3622,7 +3622,7 @@ class PredBat(hass.Hass):
             for car_n in range(0, self.num_cars):
                 if car_n > 0:
                     postfix = "_" + str(car_n)
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".car_soc" + postfix,
                     state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
                     attributes={
@@ -3633,17 +3633,17 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery",
                     },
                 )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_h0",
                 state=self.dp3(self.predict_soc[0]),
                 attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
                 attributes={"results": predict_soc_time, "friendly_name": "Predicted SOC kwh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_power",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3654,7 +3654,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_cycle",
                 state=self.dp3(final_battery_cycle),
                 attributes={
@@ -3665,12 +3665,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".pv_power",
                 state=self.dp3(final_soc),
                 attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kw", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".grid_power",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3681,7 +3681,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".load_power",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3692,7 +3692,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_min_kwh",
                 state=self.dp3(soc_min),
                 attributes={
@@ -3703,7 +3703,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery-arrow-down-outline",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".export_energy",
                 state=self.dp3(final_export_kwh),
                 attributes={
@@ -3715,12 +3715,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-export",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".export_energy_h0",
                 state=self.dp3(export_kwh_h0),
                 attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-export"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".load_energy",
                 state=self.dp3(final_load_kwh),
                 attributes={
@@ -3731,22 +3731,22 @@ class PredBat(hass.Hass):
                     "icon": "mdi:home-lightning-bolt",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".load_energy_h0",
                 state=self.dp3(load_kwh_h0),
                 attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".pv_energy",
                 state=self.dp3(final_pv_kwh),
                 attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".pv_energy_h0",
                 state=self.dp3(pv_kwh_h0),
                 attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".import_energy",
                 state=self.dp3(final_import_kwh),
                 attributes={
@@ -3757,23 +3757,23 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-import",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".import_energy_h0",
                 state=self.dp3(import_kwh_h0),
                 attributes={"friendly_name": "Current import kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".import_energy_battery",
                 state=self.dp3(final_import_kwh_battery),
                 attributes={"friendly_name": "Predicted import to battery", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".import_energy_house",
                 state=self.dp3(final_import_kwh_house),
                 attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
             )
             self.log("Battery has {} hours left - now at {}".format(self.dp2(hours_left), self.dp2(self.soc_kw)))
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".metric",
                 state=self.dp2(final_metric),
                 attributes={
@@ -3784,14 +3784,14 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".duration",
                 state=self.dp2(end_record / 60),
                 attributes={"friendly_name": "Prediction duration", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:arrow-split-vertical"},
             )
 
         if save and save == "best" and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_battery_hours_left",
                 state=self.dp2(hours_left),
                 attributes={"friendly_name": "Predicted Battery Hours left best", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
@@ -3800,7 +3800,7 @@ class PredBat(hass.Hass):
             for car_n in range(0, self.num_cars):
                 if car_n > 0:
                     postfix = "_" + str(car_n)
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".car_soc_best" + postfix,
                     state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
                     attributes={
@@ -3811,7 +3811,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery",
                     },
                 )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_best",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3822,7 +3822,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_power_best",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3833,7 +3833,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_cycle_best",
                 state=self.dp3(final_battery_cycle),
                 attributes={
@@ -3844,7 +3844,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".pv_power_best",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3855,7 +3855,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".grid_power_best",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3866,7 +3866,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".load_power_best",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3877,22 +3877,22 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_best_h1",
                 state=self.dp3(self.predict_soc[60]),
                 attributes={"friendly_name": "Predicted SOC kwh best + 1h", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_best_h8",
                 state=self.dp3(self.predict_soc[60 * 8]),
                 attributes={"friendly_name": "Predicted SOC kwh best + 8h", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_best_h12",
                 state=self.dp3(self.predict_soc[60 * 12]),
                 attributes={"friendly_name": "Predicted SOC kwh best + 12h", "state_class": "measurement", "unit _of_measurement": "kwh", "icon": "mdi:battery"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_soc_min_kwh",
                 state=self.dp3(soc_min),
                 attributes={
@@ -3903,7 +3903,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery-arrow-down-outline",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_export_energy",
                 state=self.dp3(final_export_kwh),
                 attributes={
@@ -3915,7 +3915,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-export",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_load_energy",
                 state=self.dp3(final_load_kwh),
                 attributes={
@@ -3926,12 +3926,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:home-lightning-bolt",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_pv_energy",
                 state=self.dp3(final_pv_kwh),
                 attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV best", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_import_energy",
                 state=self.dp3(final_import_kwh),
                 attributes={
@@ -3942,7 +3942,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-import",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_import_energy_battery",
                 state=self.dp3(final_import_kwh_battery),
                 attributes={
@@ -3952,12 +3952,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-import",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_import_energy_house",
                 state=self.dp3(final_import_kwh_house),
                 attributes={"friendly_name": "Predicted import to house best", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best_metric",
                 state=self.dp2(final_metric),
                 attributes={
@@ -3968,8 +3968,8 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
-            self.set_state(self.prefix + ".record", state=0.0, attributes={"results": record_time, "friendly_name": "Prediction window", "state_class": "measurement"})
-            self.set_state(
+            self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": record_time, "friendly_name": "Prediction window", "state_class": "measurement"})
+            self.dashboard_item(
                 self.prefix + ".iboost_best",
                 state=self.dp2(final_iboost_kwh),
                 attributes={
@@ -3983,7 +3983,7 @@ class PredBat(hass.Hass):
             self.find_spare_energy(predict_soc, predict_export, step, first_charge)
 
         if save and save == "debug" and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".pv_power_debug",
                 state=self.dp3(final_soc),
                 attributes={
@@ -3994,7 +3994,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".grid_power_debug",
                 state=self.dp3(final_soc),
                 attributes={
@@ -4005,7 +4005,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".load_power_debug",
                 state=self.dp3(final_soc),
                 attributes={
@@ -4016,7 +4016,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".battery_power_debug",
                 state=self.dp3(final_soc),
                 attributes={
@@ -4029,7 +4029,7 @@ class PredBat(hass.Hass):
             )
 
         if save and save == "best10" and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_best10",
                 state=self.dp3(final_soc),
                 attributes={
@@ -4040,7 +4040,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best10_pv_energy",
                 state=self.dp3(final_pv_kwh),
                 attributes={
@@ -4051,7 +4051,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:solar-power",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best10_metric",
                 state=self.dp2(final_metric),
                 attributes={
@@ -4062,7 +4062,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best10_export_energy",
                 state=self.dp3(final_export_kwh),
                 attributes={
@@ -4074,12 +4074,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-export",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best10_load_energy",
                 state=self.dp3(final_load_kwh),
                 attributes={"friendly_name": "Predicted load best 10%", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".best10_import_energy",
                 state=self.dp3(final_import_kwh),
                 attributes={
@@ -4092,7 +4092,7 @@ class PredBat(hass.Hass):
             )
 
         if save and save == "base10" and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".soc_kw_base10",
                 state=self.dp3(final_soc),
                 attributes={
@@ -4103,7 +4103,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:battery",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".base10_pv_energy",
                 state=self.dp3(final_pv_kwh),
                 attributes={
@@ -4114,7 +4114,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:solar-power",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".base10_metric",
                 state=self.dp2(final_metric),
                 attributes={
@@ -4125,7 +4125,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".base10_export_energy",
                 state=self.dp3(final_export_kwh),
                 attributes={
@@ -4137,12 +4137,12 @@ class PredBat(hass.Hass):
                     "icon": "mdi:transmission-tower-export",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".base10_load_energy",
                 state=self.dp3(final_load_kwh),
                 attributes={"friendly_name": "Predicted load base 10%", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".base10_import_energy",
                 state=self.dp3(final_import_kwh),
                 attributes={
@@ -4589,12 +4589,12 @@ class PredBat(hass.Hass):
             if car_n > 0:
                 postfix = "_" + str(car_n)
             if not self.car_charging_slots[car_n]:
-                self.set_state(
+                self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
                     attributes={"planned": plan, "cost": None, "kwh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state="undefined",
                     attributes={
@@ -4614,7 +4614,7 @@ class PredBat(hass.Hass):
                 time_format_time = "%H:%M:%S"
                 car_startt = self.midnight_utc + timedelta(minutes=window["start"])
                 car_start_time_str = car_startt.strftime(time_format_time)
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
                     attributes={
@@ -4644,7 +4644,7 @@ class PredBat(hass.Hass):
                     total_kwh += kwh
                     plan.append(show)
 
-                self.set_state(
+                self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="on" if slot else "off",
                     attributes={
@@ -4678,7 +4678,7 @@ class PredBat(hass.Hass):
                 time_format_time = "%H:%M:%S"
 
                 if window_n == 0 and not SIMULATE:
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_start",
                         state=rate_high_start_date.strftime(time_format_time),
                         attributes={
@@ -4688,7 +4688,7 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_end",
                         state=rate_high_end_date.strftime(time_format_time),
                         attributes={
@@ -4698,25 +4698,25 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_cost",
                         state=self.dp2(rate_high_average),
                         attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
                     )
                     in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
-                    self.set_state(
+                    self.dashboard_item(
                         "binary_sensor." + self.prefix + "_high_rate_export_slot",
                         state="on" if in_high_rate else "off",
                         attributes={"friendly_name": "Predbat high rate slot", "icon": "mdi:home-lightning-bolt-outline"},
                     )
                     high_rate_minutes = (rate_high_end - self.minutes_now) if in_high_rate else (rate_high_end - rate_high_start)
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_duration",
                         state=high_rate_minutes,
                         attributes={"friendly_name": "Next high export rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
                     )
                 if window_n == 1 and not SIMULATE:
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_start_2",
                         state=rate_high_start_date.strftime(time_format_time),
                         attributes={
@@ -4726,7 +4726,7 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_end_2",
                         state=rate_high_end_date.strftime(time_format_time),
                         attributes={
@@ -4736,7 +4736,7 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".high_rate_export_cost_2",
                         state=self.dp2(rate_high_average),
                         attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
@@ -4749,43 +4749,43 @@ class PredBat(hass.Hass):
         # Clear rates that aren't available
         if not self.high_export_rates and not SIMULATE:
             self.log("No high rate period found")
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_start",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next high export rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_end",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next high export rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_cost",
                 state=self.dp2(self.rate_export_average),
                 attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
             )
-            self.set_state(
+            self.dashboard_item(
                 "binary_sensor." + self.prefix + "_high_rate_export_slot",
                 state="off",
                 attributes={"friendly_name": "Predbat high export rate slot", "icon": "mdi:home-lightning-bolt-outline"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_duration",
                 state=0,
                 attributes={"friendly_name": "Next high export rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
         if len(self.high_export_rates) < 2 and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_start_2",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next+1 high export rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_end_2",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next+1 high export rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".high_rate_export_cost_2",
                 state=self.dp2(self.rate_export_average),
                 attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
@@ -5013,7 +5013,7 @@ class PredBat(hass.Hass):
 
                 time_format_time = "%H:%M:%S"
                 if window_n == 0 and not SIMULATE:
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_start",
                         state=rate_low_start_date.strftime(time_format_time),
                         attributes={
@@ -5023,30 +5023,30 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_end",
                         state=rate_low_end_date.strftime(time_format_time),
                         attributes={"date": rate_low_end_date.strftime(TIME_FORMAT), "friendly_name": "Next low rate end", "state_class": "timestamp", "icon": "mdi:table-clock"},
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_cost",
                         state=rate_low_average,
                         attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
                     )
                     in_low_rate = self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end
-                    self.set_state(
+                    self.dashboard_item(
                         "binary_sensor." + self.prefix + "_low_rate_slot",
                         state="on" if in_low_rate else "off",
                         attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"},
                     )
                     low_rate_minutes = (rate_low_end - self.minutes_now) if in_low_rate else (rate_low_end - rate_low_start)
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_duration",
                         state=low_rate_minutes,
                         attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
                     )
                 if window_n == 1 and not SIMULATE:
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_start_2",
                         state=rate_low_start_date.strftime(time_format_time),
                         attributes={
@@ -5056,12 +5056,12 @@ class PredBat(hass.Hass):
                             "icon": "mdi:table-clock",
                         },
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_end_2",
                         state=rate_low_end_date.strftime(time_format_time),
                         attributes={"date": rate_low_end_date.strftime(TIME_FORMAT), "friendly_name": "Next+1 low rate end", "state_class": "timestamp", "icon": "mdi:table-clock"},
                     )
-                    self.set_state(
+                    self.dashboard_item(
                         self.prefix + ".low_rate_cost_2",
                         state=rate_low_average,
                         attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
@@ -5073,41 +5073,41 @@ class PredBat(hass.Hass):
         # Clear rates that aren't available
         if not self.low_rates and not SIMULATE:
             self.log("No low rate period found")
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_start",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next low rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_end",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next low rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_cost",
                 state=self.rate_average,
                 attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_duration",
                 state=0,
                 attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 "binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"}
             )
         if len(self.low_rates) < 2 and not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next+1 low rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_end_2",
                 state="undefined",
                 attributes={"date": None, "friendly_name": "Next+1 low rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".low_rate_cost_2",
                 state=self.rate_average,
                 attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
@@ -5284,7 +5284,7 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "</tr>"
         html += "</table>"
-        self.set_state(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+        self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
     def publish_rates(self, rates, export):
         """
@@ -5304,7 +5304,7 @@ class PredBat(hass.Hass):
 
         if not SIMULATE:
             if export:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".rates_export",
                     state=self.dp2(rates[self.minutes_now]),
                     attributes={
@@ -5320,7 +5320,7 @@ class PredBat(hass.Hass):
                     },
                 )
             else:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".rates",
                     state=self.dp2(rates[self.minutes_now]),
                     attributes={
@@ -5382,12 +5382,12 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
 
         if not SIMULATE:
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".cost_today",
                 state=self.dp2(day_cost),
                 attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".cost_today_import",
                 state=self.dp2(day_cost_import),
                 attributes={
@@ -5398,7 +5398,7 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
-            self.set_state(
+            self.dashboard_item(
                 self.prefix + ".cost_today_export",
                 state=self.dp2(day_cost_export),
                 attributes={
@@ -5466,7 +5466,7 @@ class PredBat(hass.Hass):
                 discharge_end_date = discharge_endt.strftime(TIME_FORMAT)
 
             if best:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_discharge_limit_kw",
                     state=self.dp2(discharge_limit_soc),
                     attributes={
@@ -5477,7 +5477,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_discharge_limit",
                     state=discharge_limit_percent,
                     attributes={
@@ -5488,7 +5488,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_discharge_start",
                     state=discharge_start_str,
                     attributes={
@@ -5500,7 +5500,7 @@ class PredBat(hass.Hass):
                         "unit_of_measurement": None,
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_discharge_end",
                     state=discharge_end_str,
                     attributes={
@@ -5513,7 +5513,7 @@ class PredBat(hass.Hass):
                     },
                 )
             else:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".discharge_limit_kw",
                     state=self.dp2(discharge_limit_soc),
                     attributes={
@@ -5524,7 +5524,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".discharge_limit",
                     state=discharge_limit_percent,
                     attributes={
@@ -5535,7 +5535,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".discharge_start",
                     state=discharge_start_str,
                     attributes={
@@ -5547,7 +5547,7 @@ class PredBat(hass.Hass):
                         "unit_of_measurement": None,
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".discharge_end",
                     state=discharge_end_str,
                     attributes={
@@ -5608,7 +5608,7 @@ class PredBat(hass.Hass):
                     charge_end_date = charge_endt.strftime(TIME_FORMAT)
 
             if best:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_charge_limit_kw",
                     state=self.dp2(charge_limit_first),
                     attributes={
@@ -5619,7 +5619,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_charge_limit",
                     state=charge_limit_percent_first,
                     attributes={
@@ -5630,7 +5630,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_charge_start",
                     state=charge_start_str,
                     attributes={
@@ -5642,7 +5642,7 @@ class PredBat(hass.Hass):
                         "unit_of_measurement": None,
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".best_charge_end",
                     state=charge_end_str,
                     attributes={
@@ -5655,7 +5655,7 @@ class PredBat(hass.Hass):
                     },
                 )
             else:
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".charge_limit_kw",
                     state=self.dp2(charge_limit_first),
                     attributes={
@@ -5666,7 +5666,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".charge_limit",
                     state=charge_limit_percent_first,
                     attributes={
@@ -5677,7 +5677,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:battery-charging",
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".charge_start",
                     state=charge_start_str,
                     attributes={
@@ -5689,7 +5689,7 @@ class PredBat(hass.Hass):
                         "unit_of_measurement": None,
                     },
                 )
-                self.set_state(
+                self.dashboard_item(
                     self.prefix + ".charge_end",
                     state=charge_end_str,
                     attributes={
@@ -5707,6 +5707,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         self.config_index = {}
+        self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
         self.previous_status = None
         self.had_errors = False
@@ -6601,7 +6602,7 @@ class PredBat(hass.Hass):
             else:
                 state = "off"
             self.log("Evaluate trigger {} results {} total_energy {}".format(trigger, state, self.dp2(total_energy)))
-            self.set_state(
+            self.dashboard_item(
                 sensor_name,
                 state=state,
                 attributes={
@@ -6617,10 +6618,10 @@ class PredBat(hass.Hass):
         """
         Reports status on charging/discharging to binary sensor
         """
-        self.set_state(
+        self.dashboard_item(
             "binary_sensor." + self.prefix + "_charging", state="on" if isCharging else "off", attributes={"friendly_name": "Predbat is charging", "icon": "mdi:battery-arrow-up"}
         )
-        self.set_state(
+        self.dashboard_item(
             "binary_sensor." + self.prefix + "_discharging",
             state="on" if isDischarging else "off",
             attributes={"friendly_name": "Predbat is discharging", "icon": "mdi:battery-arrow-down"},
@@ -8483,6 +8484,7 @@ class PredBat(hass.Hass):
         Update the prediction state, everything is called from here right now
         """
         self.had_errors = False
+        self.dashboard_index = []
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
         skew = self.get_arg("clock_skew", 0)
         if skew:
@@ -8729,6 +8731,14 @@ class PredBat(hass.Hass):
                 self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item['name']))
         return True
 
+    def dashboard_item(self, entity, state, attributes):
+        """
+        Publish state and log dashboard item
+        """
+        self.set_state(entity_id=entity, state=state, attributes=attributes)
+        if entity not in self.dashboard_index:
+            self.dashboard_index.append(entity)
+
     def create_entity_list(self):
         """
         Create the standard entity list
@@ -8752,6 +8762,9 @@ class PredBat(hass.Hass):
 
                 if enable == try_enable and self.user_config_item_enabled(item):
                     text += "  - entity: " + entity + "\n"
+
+        for entity in self.dashboard_index:
+            text += "  - entity: " + entity + "\n"
 
         filename = "/homeassistant/predbat_dashboard.yaml"
         han = open(filename, "w")
@@ -8953,8 +8966,6 @@ class PredBat(hass.Hass):
             self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
 
-        self.create_entity_list()
-
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
         self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
 
@@ -9012,17 +9023,18 @@ class PredBat(hass.Hass):
                 next_time_balance = midnight + timedelta(seconds=seconds_next_balance)
                 self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
+    @ad.app_lock
     def update_time_loop(self, cb_args):
         """
         Called every 15 seconds
         """
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
-            if self.update_pending:
-                self.load_user_config()
+            self.load_user_config()
             self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
+                self.create_entity_list()
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
@@ -9031,14 +9043,17 @@ class PredBat(hass.Hass):
                 self.prediction_started = False
             self.prediction_started = False
 
+    @ad.app_lock
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
         """
         if not self.prediction_started:
+            config_changed = False
             self.prediction_started = True
             if self.update_pending:
                 self.load_user_config()
+                config_changed = True
             self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
@@ -9048,6 +9063,8 @@ class PredBat(hass.Hass):
                 raise e
             finally:
                 self.prediction_started = False
+            if config_changed:
+                self.create_entity_list()
             self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
