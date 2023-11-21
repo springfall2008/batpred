@@ -102,7 +102,7 @@ They are set to a regular expression and auto-discovered but you can comment out
 - **metric_octopus_import** - Import rates from the Octopus plugin, should point to the sensor
 - **metric_octopus_export** - Export rates from the Octopus plugin, should point to the sensor
 
- **CAUTION: To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following events which are disabled by the plugin by default:
+ **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following events which are disabled by the plugin by default:
  ```
          event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
          event.octopus_energy_electricity_xxxxxxxx_current_day_rates
