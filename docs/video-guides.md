@@ -12,9 +12,10 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 - [https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862](https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862)
 - [https://www.loom.com/share/a245dcf30b744e3dbfab3ed874f52855?sid=6bd07f2f-b507-4575-877f-840c4b6cc8c7](https://www.loom.com/share/a245dcf30b744e3dbfab3ed874f52855?sid=6bd07f2f-b507-4575-877f-840c4b6cc8c7)
 
-## AppDaemon log files
+## AppDaemon
 
-- [https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
+- Fixing the new version so HACS still works: https://www.loom.com/share/d1f9e4432c2443eca1e236939b25bb99?sid=fe0627c7-85c1-4de4-a778-de50b58e4687
+- Log files: [https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
 
 ## Historical data
 
