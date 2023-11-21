@@ -26,6 +26,7 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 - Configuration of apps.yml: [https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5](https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5)
 - Configuration inside HA: [https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36](https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36)
 - Multiple cars: [https://www.loom.com/share/c8858d80ea334b2a885f09121dc72650?sid=f37aadc3-d804-4c4f-8c60-a3d0bc43298b](https://www.loom.com/share/c8858d80ea334b2a885f09121dc72650?sid=f37aadc3-d804-4c4f-8c60-a3d0bc43298b)
+- Octopus Energy plugin >v9.0.0: [https://www.loom.com/share/f11e36eaa4784c6980c5a8a68ee4f674](https://www.loom.com/share/f11e36eaa4784c6980c5a8a68ee4f674?sid=195fc492-3c0a-4acf-9ed6-b6b8c5757ebe)
 
 ## Charts
 
