@@ -50,16 +50,38 @@ To be documented later.
 
 ## Working on the documentation
 
+### Overview of the Predbat documentation
+
+The documentation site at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/)
+is built from Markdown files in this repo.
+
+The Markdown files used to build the documentation are in the `docs/` folder,
+with additional config for building the documentation site in `./mkdocs.yml`.
+
+If you're making minor changes to the documentation e.g. fixing a spelling,
+you can just edit the Markdown files directly, and it will be pushed to the
+main documentation site as outlined in [the documentation build process](#the-documentation-build-process)
+section below, once your changes are merged into `main` and released.
+
+However, if you're doing more than that, e.g. adding new sections, working
+with lists etc. we recommend you follow the instructions in
+[working locally on the documentation](#working-locally-on-the-documentation)
+below, as this will give you a live preview of what the documentation
+will look like once it's build and published. This will avoid any
+unexpected results appearing in the main documentation site.
+
 ### The documentation build process
 
 The documentation for the site is built using `mkdocs`, which will
 already be installed if you're using a GitHub Codespaces environment.
 
-`mkdocs.yml` contains the config for defining the documentation site,
-and is built by `mkdocs` reading the Markdown files in the `docs/` folder,
-and creating HTML files from those files.
+As briefly covered above, `mkdocs.yml` contains the config for defining the documentation site,
+and the documentation is built by `mkdocs` reading the Markdown files in the `docs/` folder,
+and creating HTML files from those files. `mkdocs` can be used locally for previewing,
+but is also used as part of the documentation build process that publishes
+the official documentation site.
 
-The building of the documentation is triggered by a GitHub action,
+The publishing of the documentation is triggered by a GitHub action,
 as defined in `.github/workflows/main.yml`.
 
 In short, after configuring the build environment, `mkdocs` builds the
@@ -78,11 +100,23 @@ that will be built before merging it in.
 ### Working locally on the documentation
 
 If you are making changes to the documentation, you can see
-a live updated version of the documentation as it will be
+a live preview version of the documentation as it will be
 built and deployed.
 
-To do this, run `mkdocs serve` - this will cause `mkdocs` to build the
-documentation site, and to temporarily publish it on port 8000 - it will
+This preview version is local to your environment, is
+temporary, and does not impact the published version in any way.
+
+It's recommended for anything other than simple changes
+like fixing spellings, adding a sentence or two. Things like
+new sections, lists, new pages etc. are best previewed
+due to the complications of various Markdown standards,
+as what works on GitHub READMEs, for example, does not
+necessarily work with the published documentation site
+(which follows a more strict Markdown standard).
+
+To run the live preview, run `mkdocs serve` - this will cause `mkdocs` to build a
+local temporary version of the documentation site,
+and to temporarily publish it on port 8000 - it will
 show the link where you can access the documentation.
 
 Also, it will watch the `docs/` folder, and any time you change the
