@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.2"
+THIS_VERSION = "v7.13.3"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8430,7 +8430,7 @@ class PredBat(hass.Hass):
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
-        self.battery_scaling = self.get_arg("battery_scaling")
+        self.battery_scaling = self.get_arg("battery_scaling", 1.0)
         self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
         # Check power curve is a dictionary
         if not isinstance(self.battery_charge_power_curve, dict):
