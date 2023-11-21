@@ -26,6 +26,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
+combine_charge_slots - True        # Use one big charge slot 
 ```
 
 If you are using expert mode then these options maybe worth reviewing:
@@ -47,6 +48,7 @@ calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 calculate_best_discharge - True    # Enable discharge calculation
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
+combine_charge_slots - True        # Use one big charge slot 
 ```
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
@@ -56,6 +58,7 @@ predbat_metric_battery_cycle - ?        # You can set this to maybe 2-5p if you 
 combine_charge_slots - True             # Keep one big charge slot
 metric_min_improvement - 0              # Charge less if it's cost neutral
 metric_min_improvement_discharge - 0.1  # Discharge even if cost neutral, as you often need many slots to see the improvement
+combine_charge_slots - ?                # If you set this to False then you can allow import in larger periods of day rates to fund extra export
 ```
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
