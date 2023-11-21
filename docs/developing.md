@@ -99,6 +99,17 @@ due to the way in which ports on your environment are shared.*
 
 ## Coding standards
 
+### Expected standards
+
+This section will be enhanced following discussions as we go.
+
+However, here's a starting point:
+
+* Variable names should be `lower_case_with_underscores` - this fits
+with most existing variables, is a common standard for Python code,
+and also allows the spell checking to check individual words within
+the variable name.
+
 ### Enforced standards
 
 Certain coding standards are enforced within the repository.
