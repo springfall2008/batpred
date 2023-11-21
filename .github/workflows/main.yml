@@ -1,8 +1,5 @@
 name: build
 on:
-  push:
-    branches:
-      - documentation
   release:
     types: [published]
 permissions:
