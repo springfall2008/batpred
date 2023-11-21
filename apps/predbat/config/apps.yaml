@@ -235,27 +235,33 @@ pred_bat:
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
 
-  # If you have Intelligent Octopus, enable the Intelligent slot information to add to pricing
+  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
-  # When enabled it overrides the 'car_charging_planned' feature for car 0 and predict the car charging based on the Intelligent plan (unless Octopus Intelligent charging is False)
-  # This matches the Intelligent slot from the Octopus Energy plugin
-  octopus_intelligent_slot: 're:binary_sensor.octopus_energy_intelligent_dispatching'
-  octopus_ready_time: 're:time.octopus_energy_intelligent_ready_time'
-  octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
-
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
+  # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # rate configured with input_number.predbat_metric_octopus_saving_rate in-side HA
-  octopus_saving_session: 're:(binary_sensor.octopus_energy_saving_session(s|))'
+  octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 
-  # Set import and export entity to point to the Octopus Energy plugin
+  # Set import and export entity to point to the Octopus Energy plugin import and export sensors
   # automatically matches your meter number assuming you have only one (no need to edit the below)
-  # Will be ignored if you don't have the sensor
-  # Or manually set it to the correct sensor names if the automatic match doesn't work e.g:
-  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
-  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
+  # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
+  # NOTE: To get detailed energy rates you need to go in and manually enable the following events in HA
+  #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  # and if you have export enable:
+  #       event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  # Predbat will automatically find the event. entities from the link below to the sensors
   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
@@ -320,11 +326,6 @@ pred_bat:
   # Number of hours forward to forecast, best left as-is unless you have specific reason
   forecast_hours: 48
 
-  # The number of hours ahead to count in charge planning (for cost estimates)
-  # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
-  # tariffs like Agile
-  forecast_plan_hours: 24
-
   # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
   #notify_devices:
   #  - mobile_app_treforsiphone12_2
@@ -354,3 +355,12 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
+
+  # Nordpool market energy rates
+  #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
+  #futurerate_adjust_import: False
+  #futurerate_adjust_export: True
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
