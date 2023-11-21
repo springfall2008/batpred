@@ -264,7 +264,7 @@ CONFIG_ITEMS = [
         'enable' : 'expert_mode',
         'default' : 10,
     },
-    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", 'default' : True},
     {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
     {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", 'default' : True},
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", 'default' : True},
@@ -6162,7 +6162,7 @@ class PredBat(hass.Hass):
 
             # Metric adjustment based on current charge limit, try to avoid
             # constant changes by weighting the base setting a little
-            if window_n == 0:
+            if not all_n and window_n == 0:
                 try_percent = self.calc_percent_limit(try_soc)
                 compare_with = max(self.current_charge_limit, self.reserve_current_percent)
 
@@ -6172,6 +6172,10 @@ class PredBat(hass.Hass):
             # Minor weighting against charge freeze to avoid supurious ones
             if self.set_charge_freeze and try_soc == self.reserve:
                 metric += 0.01
+
+            # Preference to 100%
+            if try_soc == self.soc_max:
+                metric -= 0.01
 
             self.debug_enable = was_debug
             if self.debug_enable:
@@ -6668,6 +6672,7 @@ class PredBat(hass.Hass):
                             "Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n])
                         )
                     elif soc_max < charge_limit_best[window_n]:
+                        # Clip down charge window to what can be achieved in the time
                         limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max_charge_scaled, charge_limit_best[window_n])
                         if self.best_soc_max > 0:
                             limit_soc = min(limit_soc, self.best_soc_max)
@@ -7537,6 +7542,7 @@ class PredBat(hass.Hass):
 
                 # Initial charge slot filter
                 if self.set_charge_window:
+                    record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
 
                 # Charge slot clipping
@@ -7652,7 +7658,7 @@ class PredBat(hass.Hass):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log(
-                        "Charge window will be: {} - {} - current soc {}.target {}".format(
+                        "Charge window will be: {} - {} - current soc {} target {}".format(
                             charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]
                         )
                     )
@@ -7869,6 +7875,45 @@ class PredBat(hass.Hass):
         self.set_charge_discharge_status(isCharging, isDischarging)
         return status, status_extra
 
+    def fetch_octopus_rates(self, entity_id, adjust_key=None):
+        data_all = []
+        rate_data = {}
+
+        if entity_id:                
+            # Previous rates
+            if 'current_rate' in entity_id:
+                # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
+                prev_rate_id = entity_id.replace('_current_rate', '_previous_rate')
+                data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
+                if data_import:
+                    data_all += data_import
+
+            # Current rates
+            data_import = self.get_state(entity_id=entity_id, attribute="all_rates")
+            if data_import:
+                data_all += data_import
+
+            # Next rates
+            if 'current_rate' in entity_id:
+                next_rate_id = entity_id.replace('_current_rate', '_next_rate')
+                data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
+                if data_import:
+                    data_all += data_import
+
+        if data_all:
+            rate_key = "rate"
+            from_key = "from"
+            to_key = "to"
+            if rate_key not in data_all[0]:
+                rate_key = "value_inc_vat"
+                from_key = "valid_from"
+                to_key = "valid_to"
+            rate_data = self.minute_data(
+                data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key
+            )
+
+        return rate_data
+
     def fetch_sensor_data(self):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -7955,31 +8000,10 @@ class PredBat(hass.Hass):
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
-            data_all = []
-
-            if entity_id:
-                data_import = self.get_state(entity_id=entity_id, attribute="rates")
-                if data_import:
-                    data_all += data_import
-                else:
-                    data_import = self.get_state(entity_id=entity_id, attribute="all_rates")
-                    if data_import:
-                        data_all += data_import
-
-            if data_all:
-                rate_key = "rate"
-                from_key = "from"
-                to_key = "to"
-                if rate_key not in data_all[0]:
-                    rate_key = "value_inc_vat"
-                    from_key = "valid_from"
-                    to_key = "valid_to"
-                self.rate_import = self.minute_data(
-                    data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key="is_intelligent_adjusted"
-                )
-            else:
-                self.log("Warning: metric_octopus_import is not set correctly, ignoring..")
-                self.record_status(message="Error - metric_octopus_import not set correctly", had_errors=True)
+            self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")             
+            if not self.rate_import:
+                self.log("Error: metric_octopus_import is not set correctly or no energy rates can be read")
+                self.record_status(message="Error - metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
         else:
             # Basic rates defined by user over time
@@ -8081,28 +8105,10 @@ class PredBat(hass.Hass):
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
-            data_all_export = []
-
-            data_export = self.get_state(entity_id=entity_id, attribute="rates")
-            if data_export:
-                data_all_export += data_export
-            else:
-                data_export = self.get_state(entity_id=entity_id, attribute="all_rates")
-                if data_export:
-                    data_all_export += data_export
-
-            if data_all_export:
-                rate_key = "rate"
-                from_key = "from"
-                to_key = "to"
-                if rate_key not in data_all_export[0]:
-                    rate_key = "value_inc_vat"
-                    from_key = "valid_from"
-                    to_key = "valid_to"
-                self.rate_export = self.minute_data(data_all_export, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key)
-            else:
-                self.log("Warning: metric_octopus_export is not set correctly, ignoring..")
-                self.record_status(message="Error - metric_octopus_export not set correctly", had_errors=True)
+            self.rate_export = self.fetch_octopus_rates(entity_id)             
+            if not self.rate_export:
+                self.log("Warning: metric_octopus_export is not set correctly or no energy rates can be read")
+                self.record_status(message="Error - metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "export")
