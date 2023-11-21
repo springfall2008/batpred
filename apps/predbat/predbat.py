@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.3"
+THIS_VERSION = "v7.13.4"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8864,7 +8864,7 @@ class PredBat(hass.Hass):
             
             # Default?
             if ha_value is None:
-                ha_value = item["default"]
+                ha_value = item.get("default", None)
 
             # Switch convert to text
             if type == "switch" and isinstance(ha_value, str):
