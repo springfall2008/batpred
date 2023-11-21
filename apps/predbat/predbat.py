@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.1"
+THIS_VERSION = "v7.13.2"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -7880,36 +7880,59 @@ class PredBat(hass.Hass):
         rate_data = {}
 
         if entity_id:                
+            # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
+            # and the sensor is replaced with an event - try to support the old settings and find the new events
+
             # Previous rates
-            if 'current_rate' in entity_id:
-                # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
-                prev_rate_id = entity_id.replace('_current_rate', '_previous_rate')
-                data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
+            if '_current_rate' in entity_id:
+                # Try as event
+                prev_rate_id = entity_id.replace('_current_rate', '_previous_day_rates').replace('sensor.', 'event.')
+                data_import = self.get_state(entity_id=prev_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
+                else:
+                    prev_rate_id = entity_id.replace('_current_rate', '_previous_rate')
+                    data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
+                    if data_import:
+                        data_all += data_import
 
             # Current rates
-            data_import = self.get_state(entity_id=entity_id, attribute="all_rates")
+            current_rate_id = entity_id.replace('_current_rate', '_current_day_rates').replace('sensor.', 'event.')
+            data_import = self.get_state(entity_id=current_rate_id, attribute="rates")
             if data_import:
                 data_all += data_import
-
-            # Next rates
-            if 'current_rate' in entity_id:
-                next_rate_id = entity_id.replace('_current_rate', '_next_rate')
-                data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
+            else:
+                data_import = self.get_state(entity_id=entity_id, attribute="all_rates")
                 if data_import:
                     data_all += data_import
+
+            # Next rates
+            if '_current_rate' in entity_id:
+                next_rate_id = entity_id.replace('_current_rate', '_next_day_rates').replace('sensor.', 'event.')
+                data_import = self.get_state(entity_id=next_rate_id, attribute="rates")
+                if data_import:
+                    data_all += data_import
+                else:
+                    next_rate_id = entity_id.replace('_current_rate', '_next_rate')
+                    data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
+                    if data_import:
+                        data_all += data_import
 
         if data_all:
             rate_key = "rate"
             from_key = "from"
             to_key = "to"
+            scale = 1.0
             if rate_key not in data_all[0]:
                 rate_key = "value_inc_vat"
                 from_key = "valid_from"
                 to_key = "valid_to"
+            if from_key not in data_all[0]:
+                from_key = "start"
+                to_key = "end"
+                scale = 100.0
             rate_data = self.minute_data(
-                data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key
+                data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale
             )
 
         return rate_data

@@ -98,8 +98,7 @@ you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable thi
 
 **best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot. A value of 0 disables this feature.
 
-**combine_charge_slots** (_expert mode_) controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning.
-Not recommended to set to False when best_soc_min set to True or all slots will be kept. The default is disabled (False)
+**combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before a saving session). The default is enable (True)
 
 **combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
 
