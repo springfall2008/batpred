@@ -7922,6 +7922,7 @@ class PredBat(hass.Hass):
             rate_key = "rate"
             from_key = "from"
             to_key = "to"
+            scale = 1.0
             if rate_key not in data_all[0]:
                 rate_key = "value_inc_vat"
                 from_key = "valid_from"
@@ -7929,8 +7930,9 @@ class PredBat(hass.Hass):
             if from_key not in data_all[0]:
                 from_key = "start"
                 to_key = "end"
+                scale = 100.0
             rate_data = self.minute_data(
-                data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key
+                data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale
             )
 
         return rate_data
