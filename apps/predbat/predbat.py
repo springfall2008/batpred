@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.4"
+THIS_VERSION = "v7.13.5"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -269,6 +269,7 @@ CONFIG_ITEMS = [
     {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", 'default' : True},
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", 'default' : True},
     {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", 'default' : False},
+    {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
     {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
     {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", 'default' : True},
     {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", 'default' : False},
@@ -6171,7 +6172,7 @@ class PredBat(hass.Hass):
 
             # Minor weighting against charge freeze to avoid supurious ones
             if self.set_charge_freeze and try_soc == self.reserve:
-                metric += 0.01
+                metric += 0.1
 
             # Preference to 100%
             if try_soc == self.soc_max:
@@ -8466,7 +8467,7 @@ class PredBat(hass.Hass):
         self.set_reserve_enable = True
         self.set_reserve_hold = True
         self.set_discharge_freeze = True
-        self.set_charge_freeze = True
+        self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.calculate_discharge_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")
