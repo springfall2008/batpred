@@ -131,11 +131,15 @@ If you set this too high you might not get any export slots. If it's too low you
 **set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates. Will also automatically disable charging if not required and re-enable it when required.
 If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on. Enabled by default.
 
+**set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. Enabled by default.
+
 **set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for solar exports but don't allow forced export (brown energy).
 
 If you have **inverter_hybrid** set to False then if **inverter_soc_reset** (_expert mode_) is set to True then the target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
 
 **set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the minimum and recommended to make use of the full battery
+
+**inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100% when a charge slot is not active, this can be used to workaround some firmware issues where the SOC target is used for solar charging as well as grid charging. When disabled the SOC % will not be changed after a charge slot. This is disabled by default.
 
 ## IBoost model options
 
