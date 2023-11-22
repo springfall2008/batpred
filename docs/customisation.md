@@ -131,6 +131,8 @@ If you set this too high you might not get any export slots. If it's too low you
 **set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates. Will also automatically disable charging if not required and re-enable it when required.
 If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on. Enabled by default.
 
+**set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
+
 **set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. Enabled by default.
 
 **set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for solar exports but don't allow forced export (brown energy).
