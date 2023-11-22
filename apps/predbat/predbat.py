@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.5"
+THIS_VERSION = "v7.13.6"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -270,6 +270,7 @@ CONFIG_ITEMS = [
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", 'default' : True},
     {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", 'default' : False},
     {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
+    {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
     {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
     {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", 'default' : True},
     {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", 'default' : False},
@@ -4854,6 +4855,7 @@ class PredBat(hass.Hass):
         found_rates = []
         lowest = 99
         highest = -99
+        upcoming_period = self.minutes_now + 4*60
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
@@ -4883,7 +4885,7 @@ class PredBat(hass.Hass):
             take_front = not find_high
             take_position = 0
             take_counter = 0
-            while these_items and total < self.calculate_max_windows:
+            while these_items:
                 remaining = len(these_items)
                 take_position = take_position % remaining
                 if take_front:
@@ -4895,11 +4897,12 @@ class PredBat(hass.Hass):
 
                 window_id = window_index[key]["id"]
                 window_price = found_rates[window_id]["average"]
+                window_start = found_rates[window_id]["start"]
 
                 # Only count those starting inside the window, those outside appear for 'free' as they won't be optimised
-                if found_rates[window_id]["start"] >= (self.minutes_now + self.forecast_minutes):
+                if window_start >= (self.minutes_now + self.forecast_minutes):
                     selected_rates.append(window_id)
-                elif take_enable:
+                elif take_enable or (window_start < upcoming_period):
                     if window_price < lowest:
                         lowest = window_price
                     if window_price > highest:
@@ -8464,7 +8467,7 @@ class PredBat(hass.Hass):
 
         # hard wired options, can be configured per inverter later on
         self.set_soc_enable = True
-        self.set_reserve_enable = True
+        self.set_reserve_enable = self.get_arg("set_reserve_enable")
         self.set_reserve_hold = True
         self.set_discharge_freeze = True
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
