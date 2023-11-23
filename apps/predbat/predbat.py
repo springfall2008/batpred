@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.7"
+THIS_VERSION = "v7.13.8"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3585,7 +3585,7 @@ class PredBat(hass.Hass):
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = self.dp3(battery_draw * (60 / step))
                 predict_battery_cycle[stamp] = self.dp3(battery_cycle)
-                predict_pv_power[stamp] = self.dp3(pv_now * (60 / step))
+                predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute+5] * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
 
@@ -3654,7 +3654,7 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
-                state=self.dp3(final_soc),
+                state=self.dp3(0),
                 attributes={
                     "results": predict_battery_power,
                     "friendly_name": "Predicted Battery Power",
@@ -3676,7 +3676,7 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".pv_power",
-                state=self.dp3(final_soc),
+                state=self.dp3(0),
                 attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kw", "icon": "mdi:battery"},
             )
             self.dashboard_item(
@@ -3855,7 +3855,7 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".pv_power_best",
-                state=self.dp3(final_soc),
+                state=self.dp3(0),
                 attributes={
                     "results": predict_pv_power,
                     "friendly_name": "Predicted PV Power Best",
@@ -3866,7 +3866,7 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".grid_power_best",
-                state=self.dp3(final_soc),
+                state=self.dp3(0),
                 attributes={
                     "results": predict_grid_power,
                     "friendly_name": "Predicted Grid Power Best",
@@ -4934,31 +4934,31 @@ class PredBat(hass.Hass):
         Set the high and low rate thresholds
         """
         if self.rate_low_threshold > 0:
-            self.rate_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
+            self.rate_import_cost_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
             if self.rate_max == self.rate_min:
-                self.rate_threshold = self.rate_max
+                self.rate_import_cost_threshold = self.rate_max
             else:
-                self.rate_threshold = self.rate_max - 0.5
+                self.rate_import_cost_threshold = self.rate_max - 0.5
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
+            self.rate_export_cost_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if self.rate_export_max == self.rate_export_min:
-                self.rate_export_threshold = self.rate_export_min
+                self.rate_export_cost_threshold = self.rate_export_min
             else:
-                self.rate_export_threshold = self.rate_export_min + 0.5
+                self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
         # Rule out exports if the import rate is already higher unless it's a variable export tariff
         if self.rate_export_max == self.rate_export_min:
-            self.rate_export_threshold = max(self.rate_export_threshold, self.dp2(self.rate_min))
+            self.rate_export_cost_threshold = max(self.rate_export_cost_threshold, self.dp2(self.rate_min))
 
         self.log(
             "Rate thresholds (for charge/discharge) are import {}p ({}) export {}p ({})".format(
-                self.rate_threshold, self.rate_low_threshold, self.rate_export_threshold, self.rate_high_threshold
+                self.rate_import_cost_threshold, self.rate_low_threshold, self.rate_export_cost_threshold, self.rate_high_threshold
             )
         )
 
@@ -5152,6 +5152,14 @@ class PredBat(hass.Hass):
             charge_window_n = -1
             discharge_window_n = -1
 
+            import_cost_threshold = self.rate_import_cost_threshold
+            export_cost_threshold = self.rate_export_cost_threshold
+
+            if self.rate_best_cost_threshold_charge:
+                import_cost_threshold = self.rate_best_cost_threshold_charge
+            if self.rate_best_cost_threshold_discharge:
+                export_cost_threshold = self.rate_best_cost_threshold_discharge
+
             show_limit = ""
 
             for try_minute in range(minute, minute + 30, 5):
@@ -5189,7 +5197,7 @@ class PredBat(hass.Hass):
             state_color = "#FFFFFF"
             pv_color = "#BCBCBC"
             load_color = "#FFFFFF"
-            rate_color_import = "#FFFFFF"
+            rate_color_import = "#FFFFAA"
             rate_color_export = "#FFFFFF"
             soc_color = "#3AEE85"
             pv_symbol = ""
@@ -5213,13 +5221,15 @@ class PredBat(hass.Hass):
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
-            if rate_value_import <= self.rate_threshold:
+            if rate_value_import <= import_cost_threshold:
                 rate_color_import = "#3AEE85"
-            elif rate_value_import > (self.rate_threshold * 1.2):
-                rate_color_import = "#FFAAAA"
+            elif rate_value_import > (import_cost_threshold * 1.5):
+                rate_color_import = "#F18261"
 
-            if rate_value_export >= self.rate_export_threshold:
-                rate_color_export = "#FFAAAA"
+            if rate_value_export >= (1.5 * export_cost_threshold):
+                rate_color_export = "#F18261"
+            elif rate_value_export >= export_cost_threshold:
+                rate_color_export = "#FFFFAA"
 
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
@@ -5322,7 +5332,7 @@ class PredBat(hass.Hass):
                         "min": self.dp2(self.rate_export_min),
                         "max": self.dp2(self.rate_export_max),
                         "average": self.dp2(self.rate_export_average),
-                        "threshold": self.dp2(self.rate_export_threshold),
+                        "threshold": self.dp2(self.rate_export_cost_threshold),
                         "results": rates_time,
                         "friendly_name": "Export rates",
                         "state_class": "measurement",
@@ -5338,7 +5348,7 @@ class PredBat(hass.Hass):
                         "min": self.dp2(self.rate_min),
                         "max": self.dp2(self.rate_max),
                         "average": self.dp2(self.rate_average),
-                        "threshold": self.dp2(self.rate_threshold),
+                        "threshold": self.dp2(self.rate_import_cost_threshold),
                         "results": rates_time,
                         "friendly_name": "Import rates",
                         "state_class": "measurement",
@@ -5775,8 +5785,10 @@ class PredBat(hass.Hass):
         self.rate_min_forward = {}
         self.rate_max = 0
         self.rate_max_minute = 0
-        self.rate_export_threshold = 99
-        self.rate_threshold = 99
+        self.rate_export_cost_threshold = 99
+        self.rate_import_cost_threshold = 99
+        self.rate_best_cost_threshold_charge = None
+        self.rate_best_cost_threshold_discharge = None
         self.rate_average = 0
         self.rate_export_min = 0
         self.rate_export_min_minute = 0
@@ -6811,6 +6823,9 @@ class PredBat(hass.Hass):
                 pv_forecast_minute10_step,
                 end_record=end_record,
             )
+
+        self.rate_best_cost_threshold_charge = best_price * self.inverter_loss * self.battery_loss
+        self.rate_best_cost_threshold_discharge = best_price / self.inverter_loss / self.battery_loss
 
         # Optimise individual windows in the price band for charge/discharge
         # First optimise those at or below threshold highest to lowest (to turn down values)
@@ -7958,6 +7973,8 @@ class PredBat(hass.Hass):
         self.rate_import_replicated = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
+        self.rate_best_cost_threshold_charge = None
+        self.rate_best_cost_threshold_discharge = None
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
@@ -8220,22 +8237,20 @@ class PredBat(hass.Hass):
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_threshold, True)
+            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True)
             # Update threshold automatically
             self.log("High export rate found rates in range {} to {}".format(lowest, highest))
             if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
-                self.rate_export_threshold = lowest
-            self.publish_rates(self.rate_export, True)
+                self.rate_export_cost_threshold = lowest
 
         # Find charging windows
         if self.rate_import:
             # Find charging window
-            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_threshold, False)
+            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False)
             self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
-                self.rate_threshold = highest
-            self.publish_rates(self.rate_import, False)
+                self.rate_import_cost_threshold = highest
 
         # Work out car plan?
         for car_n in range(0, self.num_cars):
@@ -8282,6 +8297,23 @@ class PredBat(hass.Hass):
         self.previous_days_modal_filter(self.load_minutes)
         self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
+    def publish_rate_and_threshold(self):
+        """
+        Publish energy rate data and thresholds
+        """
+        # Find discharging windows
+        if self.rate_export:
+            if self.rate_best_cost_threshold_discharge:
+                self.rate_export_cost_threshold = self.rate_best_cost_threshold_discharge
+                self.log("Export threshold used for optimisation was {}p".format(self.rate_export_cost_threshold))
+            self.publish_rates(self.rate_export, True)
+
+        # Find charging windows
+        if self.rate_import:
+            if self.rate_best_cost_threshold_charge:
+                self.rate_import_cost_threshold = self.rate_best_cost_threshold_charge
+                self.log("Import threshold used for optimisation was {}p".format(self.rate_import_cost_threshold))
+            self.publish_rates(self.rate_import, False)
 
     def fetch_inverter_data(self):
         """
@@ -8568,7 +8600,11 @@ class PredBat(hass.Hass):
             plan_age_minutes = plan_age.seconds / 60.0
             self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, plan_age_minutes))
 
+        # Calculate the new plan (or re-use existing)
         self.calculate_plan(recompute=recompute)
+
+        # Publish rate data
+        self.publish_rate_and_threshold()
 
         # Execute the plan
         status, status_extra = self.execute_plan()
