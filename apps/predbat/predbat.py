@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.8"
+THIS_VERSION = "v7.13.9"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3540,7 +3540,7 @@ class PredBat(hass.Hass):
                     grid_state = "~"
 
             # Store the number of minutes until the battery runs out
-            if record and soc <= reserve_expected:
+            if record and soc <= self.reserve:
                 minute_left = min(minute, minute_left)
 
             # Record final soc & metric
@@ -3585,7 +3585,7 @@ class PredBat(hass.Hass):
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = self.dp3(battery_draw * (60 / step))
                 predict_battery_cycle[stamp] = self.dp3(battery_cycle)
-                predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute+5] * (30 / step))
+                predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step] * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
 
