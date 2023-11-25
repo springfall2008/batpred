@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.12"
+THIS_VERSION = "v7.13.13"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2726,6 +2726,12 @@ class PredBat(hass.Hass):
         difference = now - yesterday_at_2359
         difference_minutes = int((difference.seconds + 59) / 60)
         return difference_minutes
+
+    def dp1(self, value):
+        """
+        Round to 2 decimal places
+        """
+        return round(value * 10) / 10
 
     def dp2(self, value):
         """
@@ -6445,7 +6451,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
+                window_links[sort_key]["average"] = self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
                 id += 1
 
         # Add discharge windows
@@ -6462,7 +6468,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = int(average + 0.5)  # Round to nearest penny to avoid too many bands
+                window_links[sort_key]["average"] =  self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
                 id += 1
 
         if window_sort:
@@ -6471,7 +6477,7 @@ class PredBat(hass.Hass):
         # Create price ordered links by set
         for key in window_sort:
             average = window_links[key]["average"]
-            if not price_set or price_set[-1] != average:
+            if average not in price_set:
                 price_set.append(average)
                 price_links[average] = []
             price_links[average].append(key)
@@ -6679,6 +6685,7 @@ class PredBat(hass.Hass):
                     soc_start = predict_soc[predict_minute_start]
                     soc_end = predict_soc[predict_minute_end]
                     soc_min = min(soc_start, soc_end)
+                    soc_min_percent = self.calc_percent_limit(soc_min)
                     soc_max = max(soc_start, soc_end)
 
                     if self.debug_enable:
@@ -6688,7 +6695,7 @@ class PredBat(hass.Hass):
                             )
                         )
 
-                    if (soc_min > (charge_limit_best[window_n] + self.battery_rate_max_charge_scaled)) and (charge_limit_best[window_n] != self.reserve):
+                    if (soc_min_percent > self.calc_percent_limit(charge_limit_best[window_n])) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
                         self.log(
                             "Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n])
