@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.11"
+THIS_VERSION = "v7.13.12"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3509,7 +3509,7 @@ class PredBat(hass.Hass):
                 diff = max(diff, -self.export_limit * step)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if (soc < self.best_soc_keep) and (battery_draw > 0):
+            if soc < self.best_soc_keep:
                 diff_keep = max(load_yesterday - (0 + pv_dc + pv_ac), 0)
                 # Don't apply keep in the next 4 hours to avoid high rate forced charging for no reason
                 # Scale keep costs by 50% to account for the chance or it being violated or not being violated
@@ -6688,7 +6688,7 @@ class PredBat(hass.Hass):
                             )
                         )
 
-                    if (soc_min > (charge_limit_best[window_n] + 5 * self.battery_rate_max_charge_scaled)) and (charge_limit_best[window_n] != self.reserve):
+                    if (soc_min > (charge_limit_best[window_n] + self.battery_rate_max_charge_scaled)) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
                         self.log(
                             "Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n])
