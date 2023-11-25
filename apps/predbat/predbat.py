@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.9"
+THIS_VERSION = "v7.13.10"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -6832,15 +6832,15 @@ class PredBat(hass.Hass):
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log("Starting second optimisation with charge limits {} based on".format(self.charge_limit_best))
+        charge_windows = []
+        discharge_windows = []
+        charge_socs = []
+        discharge_socs = []
         for start_at_low in [False, True]:
             if start_at_low:
                 price_set.reverse()
 
             for price in price_set:
-                charge_windows = []
-                charge_socs = []
-                discharge_windows = []
-                discharge_socs = []
                 links = price_links[price]
                 printed_set = False
 
