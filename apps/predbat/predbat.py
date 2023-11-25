@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.13"
+THIS_VERSION = "v7.13.14"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4255,8 +4255,8 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)):
-                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (self.dp2(rate) != self.dp2(rate_low_rate)):
-                        # Refuse mixed rates
+                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate)+0.5) != int(self.dp2(rate_low_rate)+0.5)):
+                        # Refuse mixed rates that are different by more than 0.5p
                         rate_low_end = minute
                         break
                     if find_high and (not self.combine_discharge_slots) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.discharge_slot_split):
@@ -5266,16 +5266,16 @@ class PredBat(hass.Hass):
 
             # Import and export rates -> to string
             if self.rate_import_replicated.get(minute, False):
-                rate_str_import = "<i>" + str(rate_value_import) + " ?</i>"
+                rate_str_import = "<i>%02.02f ?</i>" % (rate_value_import)
             else:
-                rate_str_import = str(rate_value_import)
+                rate_str_import = "%02.02f" % rate_value_import
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
             if self.rate_export_replicated.get(minute, False):
-                rate_str_export = "<i>" + str(rate_value_export) + " ?</i>"
+                rate_str_export = "<i>%02.02f ?</i>" % (rate_value_export)
             else:
-                rate_str_export = str(rate_value_export)
+                rate_str_export = "%2.02f" % (rate_value_export)
             if discharge_window_n >= 0:
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
@@ -5286,11 +5286,11 @@ class PredBat(hass.Hass):
                     for window in self.car_charging_slots[car_n]:
                         start = window["start"]
                         end = window["end"]
-                        kwh = (self.dp2(window["kwh"]) / (end - start)) * PREDICT_STEP
+                        kwh = (self.dp2(window["kwh"]) / (end - start))
                         for offset in range(0, 30, PREDICT_STEP):
                             minute_offset = minute + offset
-                            if minute_offset >= start and minute < end:
-                                car_charging_kwh += kwh
+                            if minute_offset >= start and minute_offset < end:
+                                car_charging_kwh += kwh * PREDICT_STEP
                 car_charging_kwh = self.dp2(car_charging_kwh)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
@@ -6034,7 +6034,7 @@ class PredBat(hass.Hass):
                         best_cost = cost
                         self.log(
                             "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(
-                                loop_price, best_price_charge, best_metric, self.dp2(best_cost), best_limits, best_discharge
+                                loop_price, best_price_charge, self.dp2(best_metric), self.dp2(best_cost), best_limits, best_discharge
                             )
                         )
         self.log(
