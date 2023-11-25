@@ -72,7 +72,7 @@ calculate_best_charge - True            # You want the tool to calculate chargin
 set_charge_window - True                # You want to have Predbat control the charge window
 calculate_best_discharge - True         # Enable discharge calculation
 set_discharge_window - True             # Allow the tool to control the discharge slots
-best_soc_keep - 0.0                     # Setting this to 0 is best cost wise
+best_soc_keep - 0.3                     # Use the full battery without going empty
 ```
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
@@ -93,4 +93,5 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 calculate_best_charge - True            # You want the tool to calculate charging
 set_charge_window - True                # You want to have Predbat control the charge window
 calculate_best_discharge - True        # Enable discharge calculation
+best_soc_keep - 0.3                     # Use the full battery without going empty
 ```
