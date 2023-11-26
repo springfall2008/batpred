@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.15"
+THIS_VERSION = "v7.13.16"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -7577,6 +7577,10 @@ class PredBat(hass.Hass):
         )
 
         # Try different battery SOCs to get the best result
+        if recompute:
+            self.rate_best_cost_threshold_charge = None
+            self.rate_best_cost_threshold_discharge = None
+
         if recompute and self.calculate_best:
             self.log_option_best()
             self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
@@ -7617,7 +7621,7 @@ class PredBat(hass.Hass):
                 self.log("Discharge windows filtered {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
             # Filter out any unused charge slots
-            if self.calculate_best_charge and self.charge_window_best:
+            if self.calculate_best and self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
                 best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
                     self.charge_limit_best,
@@ -8039,8 +8043,6 @@ class PredBat(hass.Hass):
         self.rate_import_replicated = {}
         self.rate_export = {}
         self.rate_export_replicated = {}
-        self.rate_best_cost_threshold_charge = None
-        self.rate_best_cost_threshold_discharge = None
         self.rate_slots = []
         self.io_adjusted = {}
         self.low_rates = []
