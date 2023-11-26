@@ -39,6 +39,8 @@ The current Predbat mode is reported in **predbat.status**
 
 * **Charge** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
 * **Charge Freeze** - The current battery level is held and the grid/solar covers any load. Solar power will also be used to charge the battery.
+* **Hold Charge** - A type of charge where the target % is the same as the current %, effectively the same as a charge freeze (but without being explicitly selected)
+* **No Charge** - A charge where the target % is lower than the current battery level so there will be no charging unless the usage is unexpectedly high.
   
 * **Discharge** - A force discharge slot where the battery is exported to the grid. The battery covers the load. Any solar generated will be exported.
 * **Discharge Freeze** - A slot where the battery covers the load but charging is disabled, thus any solar generated will be exported.
