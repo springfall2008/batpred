@@ -99,7 +99,7 @@ due to the way in which ports on your environment are shared.*
 
 ## Coding standards 
 
-### Expected standards
+### Expected standards 
 
 This section will be enhanced following discussions as we go.
 
