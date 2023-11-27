@@ -101,7 +101,7 @@ due to the way in which ports on your environment are shared.*
 
 ### Expected standards 
 
-This section will be enhanced following discussions as we go.
+This section will be enhanced following discussions as we go. 
 
 However, here's a starting point:
 
