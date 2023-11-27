@@ -5158,10 +5158,15 @@ class PredBat(hass.Hass):
             html += "<td><b>Car kWh</b></td>"
         html += "<td><b>SOC %</b></td>"
         html += "<td><b>Cost</b></td>"
+        html += "<td><b>Total</b></td>"
         html += "</tr>"
 
         minute_now_align = int(self.minutes_now / 30) * 30
-        for minute in range(minute_now_align, min(end_record, self.forecast_minutes) + minute_now_align, 30):
+        end_plan = min(end_record, self.forecast_minutes) + minute_now_align
+        rowspan = 0
+        in_span = False
+        start_span = False
+        for minute in range(minute_now_align, end_plan, 30):
             minute_relative = max(minute - self.minutes_now, 0)
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             rate_start = minute_timestamp
@@ -5185,6 +5190,20 @@ class PredBat(hass.Hass):
                 if charge_window_n >= 0:
                     break
 
+            start_span = False
+            if in_span:
+                rowspan = max(rowspan - 1, 0)
+                if rowspan == 0:
+                    in_span = False
+
+            if charge_window_n >= 0 and not in_span:
+                rowspan = int((self.charge_window_best[charge_window_n]["end"] - minute) / 30)
+                if rowspan > 1:
+                    in_span = True
+                    start_span = True
+                else:
+                    rowspan = 0
+
             for try_minute in range(minute, minute + 30, 5):
                 discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
                 if discharge_window_n >= 0:
@@ -5204,7 +5223,7 @@ class PredBat(hass.Hass):
             soc_percent_min = min(soc_percent, soc_percent_end)
             soc_change = self.predict_soc_best.get(minute_relative + 30, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative, 0.0)
-            metric_end = self.predict_metric_best.get(minute_relative + 30, 0.0)
+            metric_end = self.predict_metric_best.get(minute_relative + 30, metric_start)
             metric_change = metric_end - metric_start
 
             soc_sym = ""
@@ -5215,7 +5234,7 @@ class PredBat(hass.Hass):
             else:
                 soc_sym = "&searr;"
 
-            state = ""
+            state = soc_sym
             state_color = "#FFFFFF"
             pv_color = "#BCBCBC"
             load_color = "#FFFFFF"
@@ -5235,6 +5254,8 @@ class PredBat(hass.Hass):
             elif pv_forecast >= 0.1:
                 pv_color = "#FFFF00"
                 pv_symbol = "&#9728;"
+            elif pv_forecast == 0.0:
+                pv_forecast = ""
 
             if load_forecast >= 0.5:
                 load_color = "#F18261"
@@ -5309,15 +5330,21 @@ class PredBat(hass.Hass):
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
             # Cost
-            cost_str = "£%02.02f" % (metric_start / 100.0)
-            if metric_change >= 0.5:
+            total_str = "£%02.02f" % (metric_start / 100.0)
+            if metric_change >= 10.0:
+                cost_str = "+%d p " % int(metric_change)
                 cost_str += " &nearr;"
                 cost_color = '#F18261'
+            elif metric_change >= 0.5:
+                cost_str = "+%d p " % int(metric_change)
+                cost_str += " &nearr;"
+                cost_color = '#FFFF00'
             elif metric_change <= -0.5:
+                cost_str = "-%d p " % int(abs(metric_change))
                 cost_str += " &searr;"
                 cost_color = "#3AEE85"
             else:
-                cost_str += " &rarr;"
+                cost_str = " &rarr;"
                 cost_color = "#FFFFFF"
 
             # Car charging?
@@ -5345,7 +5372,10 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
             html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
-            html += "<td bgcolor=" + state_color + ">" + state + "</td>"
+            if start_span:
+                html += "<td rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
+            elif not in_span:
+                html += "<td bgcolor=" + state_color + ">" + state + "</td>"
             html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
@@ -5353,6 +5383,7 @@ class PredBat(hass.Hass):
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
+            html += "<td>" + str(total_str) + "</td>"
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
