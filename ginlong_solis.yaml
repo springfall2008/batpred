@@ -37,7 +37,7 @@ pred_bat:
     - sensor.solis_house_load_today
   import_today:
     - sensor.solis_grid_import_today
-  export_today: 
+  export_today:
     - sensor.solis_grid_export_today
   pv_today:
     - sensor.solis_power_generation_today

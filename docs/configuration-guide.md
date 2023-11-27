@@ -26,7 +26,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot 
+combine_charge_slots - True        # Use one big charge slot
 ```
 
 If you are using expert mode then these options maybe worth reviewing:
@@ -46,7 +46,7 @@ calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 calculate_best_discharge - True    # Enable discharge calculation
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot 
+combine_charge_slots - True        # Use one big charge slot
 ```
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:

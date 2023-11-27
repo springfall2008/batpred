@@ -97,11 +97,11 @@ possible if you are using Codespaces to run VS Code in the browser,
 but it is possible if you're using it via VS Code running locally,
 due to the way in which ports on your environment are shared.*
 
-## Coding standards 
+## Coding standards
 
-### Expected standards 
+### Expected standards
 
-This section will be enhanced following discussions as we go. 
+This section will be enhanced following discussions as we go.
 
 However, here's a starting point:
 
@@ -137,7 +137,7 @@ Some of the tools have their own related config files:
 Additional notes on some of the standards:
 
 * CSpell - if you have the spelling check failing due to a word which is valid
-but is not in the in-built dictionary, please add that word to the end 
+but is not in the in-built dictionary, please add that word to the end
 of `.cspell/custom-dictionary-workspace.txt` and stage those changes.
 The spell-check should then pass. Note, the dictionary file will get
 re-sorted alphabetically when you run `pre-commit`, so you'll need to

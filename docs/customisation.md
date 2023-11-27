@@ -111,10 +111,10 @@ You could even go to something like -0.1 to say you would charge less even if it
 **metric_min_improvement_discharge** (_expert mode_) Sets the minimum cost improvement it's worth discharging for. A value of 0.1 is the default which prevents any marginal discharges. If you increase this value then discharges will become less common and shorter.
 
 **rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overriden. When non zero it sets the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
-If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder. 
+If you set this too low you might not get enough charge slots. If it's too high you might get too many in the 24-hour period which makes optimisation harder.
 
 **rate_high_threshold** (_expert mode_) When 0 (default) this is automatic but can be overriden. When non zero it sets the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
-If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period. 
+If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
 **metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm. If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 

@@ -28,11 +28,13 @@ In the energy market it's possible to calculate the Octopus Agile rates from aro
 
 CAUTION: You may violate the terms and conditions of the Nordpool site if you use this data and as such the authors of Predbat accept no responsiblity for any violations:
 
-https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/
+<https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ``
+
 # Nordpool market energy rates
-futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
+
+futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
 futurerate_adjust_import: True
 futurerate_adjust_export: True
 futurerate_peak_start: "16:00:00"
