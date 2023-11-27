@@ -97,7 +97,7 @@ possible if you are using Codespaces to run VS Code in the browser,
 but it is possible if you're using it via VS Code running locally,
 due to the way in which ports on your environment are shared.*
 
-## Coding standards
+## Coding standards 
 
 ### Expected standards
 
