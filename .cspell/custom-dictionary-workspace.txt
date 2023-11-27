@@ -12,11 +12,14 @@ Batpred
 batteryb
 bierner
 Chrg
+citem
 Codespaces
 collapsable
 crosscharge
 customisation
 Customise
+cvalue
+Daeamon
 darray
 datap
 datapoints
@@ -31,11 +34,14 @@ dstamp
 dstart
 dwindow
 endt
+futurerate
 gekey
 geserial
 Ginlong
+GivEnergy
 givtcp
 HACS
+hadashboard
 hass
 hassapi
 homeassistant
@@ -62,6 +68,7 @@ Modbus
 myenergi
 nattribute
 nearr
+Nordpool
 Ohme
 oncharge
 pdata
@@ -76,6 +83,9 @@ pylint
 pyproject
 pytz
 rarr
+rname
+rowspan
+rstart
 rtype
 searr
 Selfuse

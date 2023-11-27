@@ -8,15 +8,16 @@
 ## AppDaemon install
 
 - Install AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-    - You will find the appdaemon.yaml file in addon_configs/a0d7b954_appadaemon
-        - Add to the appdaemon: setion **apps_dir** which should point to /homeassistant/appdaemon/apps
+    - You will find the appdaemon.yaml file in addon_configs/a0d7b954_appdaemon
+        - Add to the appdaemon: section **apps_dir** which should point to /homeassistant/appdaemon/apps
         - Set the **time_zone** correctly in appdaemon.yaml (e.g. Europe/London)
         - Add **thread_duration_warning_threshold: 120** to the appdaemon.yaml file in the appdaemon section
-        - It's recommended you set a new logfile location so that you can see the complete logs, I set mine to /homeassistant/appdaemon/appdaemon.log and increase the maximum size and number of generations to capture a few days worth
+        - It's recommended you set a new logfile location so that you can see the complete logs, I set mine
+        to /homeassistant/appdaemon/appdaemon.log and increase the maximum size and number of generations to capture a few days worth
 
 Example config:
 
-```
+```yaml
 ---
 appdaemon:
   latitude: 52.379189
@@ -44,8 +45,10 @@ CAUTION: Migration from an older Appdaemon to 0.15.2 or above:
 
 - Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
 Update AppDaemon to 0.15.2
-- Go into addon_configs/a0d7b954_appadaemon and edit appdaemon.yaml. You need to add app_dir (see above) to point to the old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml (most people don't use this file) or adjust it's path to the new location (/homeassistant/secrets.yaml).
-- Move the entire 'apps' directory from addon_configs/a0d7b954_appadaemon (new location) to config/appdaemon (the old location)
+- Go into addon_configs/a0d7b954_appdaemon and edit appdaemon.yaml. You need to add app_dir (see above) to point to the
+old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml
+(most people don't use this file) or adjust it's path to the new location (/homeassistant/secrets.yaml).
+- Move the entire 'apps' directory from addon_configs/a0d7b954_appdaemon (new location) to config/appdaemon (the old location)
 - Restart appdaemon
 - Check it has started and confirm Predbat is running correctly again.
 
@@ -71,7 +74,7 @@ Update AppDaemon to 0.15.2
 
 ## Predbat manual install
 
-**Not recommended if you have HACS**
+Note: **Not recommended if you have HACS**
 
 - Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant
 - Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant
@@ -87,7 +90,9 @@ If you don't have solar then comment out the Solar forecast part of the apps.yml
 
 - Make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>)
 
-- Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit) in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and just before your nightly charge slot).
+- Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit)
+in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and
+just before your nightly charge slot).
 
 - Example Solcast update script:
 

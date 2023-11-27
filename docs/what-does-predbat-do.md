@@ -1,6 +1,9 @@
 # What does Predbat do?
 
-Predbat runs every 5 minutes and will automatically update its prediction for the home battery levels for the next period, up to a maximum of 48 hours. It will automatically decide when to charge and discharge your battery to achieve the best cost metric within the parameters you have set. It uses the solar production forecast from Solcast combined with your historical energy use to make this prediction.
+Predbat runs every 5 minutes and will automatically update its prediction for the home battery levels for the next period,
+up to a maximum of 48 hours. It will automatically decide when to charge and discharge your battery to achieve the best cost
+metric within the parameters you have set. It uses the solar production forecast from Solcast combined with your historical
+energy use to make this prediction.
 
 - The output is a prediction of the battery levels, charging slots, discharging slots, costs and import and export amounts.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Plugin
@@ -8,7 +11,8 @@ Predbat runs every 5 minutes and will automatically update its prediction for th
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
 - The solar forecast used is the central scenario from Solcast (50%) with a weighting towards the more pessimistic (10%) scenario.
 - The charging and discharging controls are automatically programmed into the inverter.
-- Automatic planning of export slots is also supported, when enabled Batpred can start a forced discharge of the battery if the export rates are high and you have spare capacity.
+- Automatic planning of export slots is also supported, when enabled Batpred can start a forced discharge of the battery if
+the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
 - Predbat can be configured to manage the charging of your EV and take into account its load on the house during these periods.
 - Multiple inverter support depends on running all inverters in lockstep.
@@ -21,10 +25,11 @@ Predbat runs every 5 minutes and will automatically update its prediction for th
 - **Target SOC** - The target level that the battery is being charged to, e.g. we target 100% SOC means the battery is being charged to full
 - **Load** - The energy your home is using to power your equipment e.g. oven, lights or electric car charging
 - **Grid** - Your electric supply outside the house
-- **Import** - Electricy drawn from the grid to be used in the home or to charge the battery
-- **Export** - Electricy from your home from the battery or solar which is sent to the grid.
+- **Import** - Electricity drawn from the grid to be used in the home or to charge the battery
+- **Export** - Electricity from your home from the battery or solar which is sent to the grid.
 - **PV** - Solar power that is generated in your home
-- **Inverter** - The box that converts DC energy from solar or from your battery into AC power for your home and the grid. It also converts AC power from the grid into DC to charge a battery.
+- **Inverter** - The box that converts DC energy from solar or from your battery into AC power for your home and the grid. It also
+converts AC power from the grid into DC to charge a battery.
 - **Hybrid inverter** - An inverter that can charge a battery from solar directly using DC power as well as charging it from AC power from the grid.
 - **AC Coupled** - A battery that comes with it's own inverter and is always charge or discharged with AC (using an internal inverter)
 - **Slot** - A period of time where Predbat performs an action e.g. charging. In Predbat everything is a multiple of 5 minutes.
@@ -35,7 +40,8 @@ Predbat runs every 5 minutes and will automatically update its prediction for th
 
 The current Predbat mode is reported in **predbat.status**
 
-- **Idle** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be exported if the battery is full. This will be described as ECO Mode for Givenergy inverters but other inverters use different terminology.
+- **Idle** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be
+exported if the battery is full. This will be described as ECO Mode for Givenergy inverters but other inverters use different terminology.
 
 - **Charge** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
 - **Charge Freeze** - The current battery level is held and the grid/solar covers any load. Solar power will also be used to charge the battery.

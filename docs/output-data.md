@@ -2,9 +2,14 @@
 
 ## Displaying output data
 
-Each config item has an input_number or switch associated with it, you can find an auto generated dashboard for your configuration in your AppDaeamon configuration area under the filename **predbat_dashboard.yaml**
+Each config item has an input_number or switch associated with it, you can find an auto generated dashboard for your
+configuration in your AppDaeamon configuration area under the filename **predbat_dashboard.yaml**
 
-You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards)) and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities)) to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
+You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which
+groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
+([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
+and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
+to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
 
 ## Basic status
 
@@ -24,7 +29,8 @@ What your battery is expected to do with no changes made by Predbat:
 - predbat.import_energy - Predicted import energy in kWh
 - predbat.import_energy_battery - Predicted import energy to charge your home battery in kWh
 - predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate
-- predbat.soc_kw - Predicted state of charge (in kWh) at the end of the prediction, not very useful in itself, but holds all minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
+- predbat.soc_kw - Predicted state of charge (in kWh) at the end of the prediction, not very useful in itself, but holds all
+minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - The minimum battery level during the time period in kWh
 - predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
 - predbat.battery_power - Predicted battery power per minute, for charting
