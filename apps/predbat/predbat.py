@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.16"
+THIS_VERSION = "v7.13.17"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8275,6 +8275,9 @@ class PredBat(hass.Hass):
                     state = self.get_arg("octopus_saving_session", False)
 
                     joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                    if not joined_events:
+                        entity_event = entity_id.replace('binary_sensor.', 'event.').replace('_sessions', '_session_events')
+                        joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
                     if joined_events:
                         for event in joined_events:
                             start = event.get('start', None)
