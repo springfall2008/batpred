@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.16"
+THIS_VERSION = "v7.13.17"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -312,7 +312,7 @@ CONFIG_ITEMS = [
     {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 500},
     {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent", 'enable' : 'iboost_enable', 'default' : 0.0},
     {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end", 'default' : 0},
-    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 24},
+    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 96},
     {"name": "plan_debug", "friendly_name": "HTML Plan Debug", "type": "switch", 'default' : False},
 ]
 
@@ -5300,8 +5300,6 @@ class PredBat(hass.Hass):
                     state += "FreezeDis&rarr;"
                     state_color = "#AAAAAA"
                 elif limit < 100:
-                    if state == soc_sym:
-                        state = ""
                     if state:
                         state += "/"
                     state += "Discharge&searr;"
@@ -5385,7 +5383,7 @@ class PredBat(hass.Hass):
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
-            html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
+            html += "<td>" + str(total_str) + "</td>"
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
@@ -8277,6 +8275,9 @@ class PredBat(hass.Hass):
                     state = self.get_arg("octopus_saving_session", False)
 
                     joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                    if not joined_events:
+                        entity_event = entity_id.replace('binary_sensor.', 'event.').replace('_sessions', '_session_events')
+                        joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
                     if joined_events:
                         for event in joined_events:
                             start = event.get('start', None)
