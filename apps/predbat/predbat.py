@@ -312,7 +312,7 @@ CONFIG_ITEMS = [
     {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 500},
     {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent", 'enable' : 'iboost_enable', 'default' : 0.0},
     {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end", 'default' : 0},
-    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 96},
+    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 24},
     {"name": "plan_debug", "friendly_name": "HTML Plan Debug", "type": "switch", 'default' : False},
 ]
 
@@ -5295,11 +5295,15 @@ class PredBat(hass.Hass):
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
                 if limit < 100 and limit > soc_percent_max:
+                    if state == soc_sym:
+                        state = ""
                     if state:
                         state += "/"
                     state += "FreezeDis&rarr;"
                     state_color = "#AAAAAA"
                 elif limit < 100:
+                    if state == soc_sym:
+                        state = ""
                     if state:
                         state += "/"
                     state += "Discharge&searr;"
@@ -5383,7 +5387,7 @@ class PredBat(hass.Hass):
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
-            html += "<td>" + str(total_str) + "</td>"
+            html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
