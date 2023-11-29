@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.18"
+THIS_VERSION = "v7.13.19"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3329,6 +3329,7 @@ class PredBat(hass.Hass):
             self.predict_soc[minute] = self.dp3(soc)
             if save and save == "best":
                 self.predict_soc_best[minute] = self.dp3(soc)
+                self.predict_metric_best[minute] = self.dp2(metric)
 
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step[minute]
@@ -3597,9 +3598,6 @@ class PredBat(hass.Hass):
                 predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step] * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
-
-            if save and save == "best":
-                self.predict_metric_best[minute] = self.dp2(metric)
 
             minute += step
 
