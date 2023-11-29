@@ -64,7 +64,7 @@ Update AppDaemon to 0.15.2
 
 *After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update (If this happens you will get a template configuration error).*
 
-- Edit in HomeAssistant config/appdaemon/apps/predbat/config/apps.yml to configure
+- Edit in HomeAssistant config/appdaemon/apps/batpred/config/apps.yml to configure
     - You must delete the 'template: True' line in the configuration to enable Predbat once you are happy with your configuration
     - Note that future updates will not overwrite apps.yml, but you may need to copy settings for new features across manually
 

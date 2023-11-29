@@ -35,8 +35,6 @@ If you are using expert mode then these options maybe worth reviewing:
 forecast_plan_hours - 24           # If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow
 combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
 metric_min_improvement - 0         # Charge less if it's cost neutral
-rate_low_threshold - 0.8           # Consider a 20% reduction in rates or more as a low rate
-forecast_plan_hours - 24           # In apps.yml set this to 24 hours to match the repeating rates
 ```
 
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
@@ -72,7 +70,7 @@ calculate_best_charge - True            # You want the tool to calculate chargin
 set_charge_window - True                # You want to have Predbat control the charge window
 calculate_best_discharge - True         # Enable discharge calculation
 set_discharge_window - True             # Allow the tool to control the discharge slots
-best_soc_keep - 0.0                     # Setting this to 0 is best cost wise
+best_soc_keep - 0.5                     # Use the full battery without going empty
 ```
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
@@ -93,4 +91,5 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 calculate_best_charge - True            # You want the tool to calculate charging
 set_charge_window - True                # You want to have Predbat control the charge window
 calculate_best_discharge - True        # Enable discharge calculation
+best_soc_keep - 0.5                     # Use the full battery without going empty
 ```
