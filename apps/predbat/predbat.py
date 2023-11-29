@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.17"
+THIS_VERSION = "v7.13.18"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8275,25 +8275,25 @@ class PredBat(hass.Hass):
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
                 saving_rate = self.get_arg("metric_octopus_saving_rate")
-                if saving_rate > 0:
-                    state = self.get_arg("octopus_saving_session", False)
+                state = self.get_arg("octopus_saving_session", False)
 
-                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
-                    if not joined_events:
-                        entity_event = entity_id.replace('binary_sensor.', 'event.').replace('_sessions', '_session_events')
-                        joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
-                    if joined_events:
-                        for event in joined_events:
-                            start = event.get('start', None)
-                            end = event.get('end', None)
-                            if start and end:
-                                octopus_saving_slot = {}
-                                octopus_saving_slot["start"] = start
-                                octopus_saving_slot["end"] = end
-                                octopus_saving_slot["rate"] = saving_rate
-                                octopus_saving_slot["state"] = state
-                                octopus_saving_slots.append(octopus_saving_slot)
-                                self.log("Joined Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+                joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                if not joined_events:
+                    entity_event = entity_id.replace('binary_sensor.', 'event.').replace('_sessions', '_session_events')
+                    joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
+                if joined_events:
+                    for event in joined_events:
+                        start = event.get('start', None)
+                        end = event.get('end', None)
+                        saving_rate = event.get('octopoints_per_kwh', saving_rate * 8) / 8   # 8 Octopoints per pence
+                        if start and end and saving_rate > 0:
+                            octopus_saving_slot = {}
+                            octopus_saving_slot["start"] = start
+                            octopus_saving_slot["end"] = end
+                            octopus_saving_slot["rate"] = saving_rate
+                            octopus_saving_slot["state"] = state
+                            octopus_saving_slots.append(octopus_saving_slot)
+                            self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
 
                     # In saving session that's not reported, assumed 30-minutes
                     if state and not joined_events:
