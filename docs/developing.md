@@ -63,6 +63,15 @@ The local installation is better in a small number of
 scenarios e.g. if you need to connect from your browser to a specific port
 on the VM, such as if you're working on the documentation.
 
+Importantly, even if you do a local install of VS Code and use that
+to edit your code within GitHub, the terminal, the code you're editing
+any commands that you run, and any processes like `mkdocs` that you
+may browse to are all running in the Codespaces VM. Your local
+VS Code is connected to the VM through SSH. It will appear as if
+the code, the terminal etc. are local, but they are not. Running
+a local VS Code install connected to Codespaces will not install
+Python, Python packages or anything else on your local machine.
+
 Now, from your fork or branch, click on the Code button, and select the Codespaces tab.
 You can create multiple environments, or use a single environment and swap
 between branches in it.
