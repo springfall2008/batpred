@@ -22,25 +22,64 @@ There are at least a couple of ways of working on the code, outlined here.
 
 ### Using GitHub Codespaces
 
+#### What is GitHub Codespaces?
+
 Especially if you don't need to have a running Home Assistant system
 to make the changes you're interested in (e.g. for documentation,
 quick fixes etc.) a really easy way to work on the code is using
 GitHub Codespaces.
 
-This gives you an easy way to spin up an environment with the right
-dependencies, and an IDE to work in (Visual Studio Code).
+GitHub Codespaces gives you a full featured development environment.
+This includes:
 
-From your fork, click on the Code button, and select the Codespaces tab.
+- A full IDE (a code editor), Visual Studio Code, which can be:
+    - Run in the browser, requiring no additional software to
+    be installed
+    - Run in a virtual machine (VM) running in the cloud which
+    can connect to a copy of VS Code installed on your own
+    machine
+- A terminal where you can run commands against your codebase
+e.g. running `mkdocs`, linting files etc.
+- Software like `mkdocs` (and other software we may include)
+pre-installed in it
+
+The Codespaces environment is entirely separate from your HA
+installation, so does not require any modification to your HA
+setup to work with it.
+
+However, you are modifying code in an environment where you
+can't see HA running, so it's great for things like
+updating documentation, or writing automated tests, but not
+if you need to see your changes live within HA.
+
+#### Running GitHub Codespaces
+
+You may with to first install [VS Code](https://code.visualstudio.com/download)
+on your machine, which does offer some benefits compared to running
+Codespaces in the cloud, but this is certainly not essential, and
+you'll see the same code editor and terminal, and you'll have the
+same commands and Python packages available in the terminal.
+The local installation is better in a small number of
+scenarios e.g. if you need to connect from your browser to a specific port
+on the VM, such as if you're working on the documentation.
+
+Now, from your fork or branch, click on the Code button, and select the Codespaces tab.
 You can create multiple environments, or use a single environment and swap
 between branches in it.
 
-Also, you can choose between running the IDE in the browser, or having
-your local installation of VS Code connect to the environment that GitHub
-Codespaces has created for you. The local installation is better in some
-scenarios e.g. if you need to connect to a specific port, such as if you're
-working on the documentation.
+![codespaces-selection](images/codespaces-selection.png)
 
-The Codespaces will be already set up for Python, along with various
+Once you start your Codespaces environment, it'll take a minute to
+create a VM for you, and to install the software we've asked it to
+install in there. It will also clone your repository and chosen
+branch into it for you, and the VM will be authenticated with GitHub
+so you can commit and push straight back to GitHub.
+
+You can choose between running the IDE in the browser, or having
+your local installation of VS Code connect to the environment that GitHub
+Codespaces has created for you.
+
+The Codespaces will be already set up with Python, along with various
 Python packages (as defined in `requirements.txt`). The environment
 is configured through the config in `.devcontainer/devcontainer.json`.
 
@@ -56,7 +95,7 @@ The documentation site at [https://springfall2008.github.io/batpred/](https://sp
 is built from Markdown files in this repo.
 
 The Markdown files used to build the documentation are in the `docs/` folder,
-with additional config for building the documentation site in `./mkdocs.yml`.
+with additional config for building the documentation site in `mkdocs.yml`.
 
 If you're making minor changes to the documentation e.g. fixing a spelling,
 you can just edit the Markdown files directly, and it will be pushed to the
@@ -70,10 +109,16 @@ below, as this will give you a live preview of what the documentation
 will look like once it's build and published. This will avoid any
 unexpected results appearing in the main documentation site.
 
+If you are adding a new file, please ensure you add that file to
+`mkdocs.yml`, so it will be linked from the menu in the sidebar.
+
 ### The documentation build process
 
 The documentation for the site is built using `mkdocs`, which will
 already be installed if you're using a GitHub Codespaces environment.
+
+For a detailed explanation of `mkdocs` features, please read the
+`mkdocs` [documentation](https://www.mkdocs.org/user-guide/).
 
 As briefly covered above, `mkdocs.yml` contains the config for defining the documentation site,
 and the documentation is built by `mkdocs` reading the Markdown files in the `docs/` folder,
