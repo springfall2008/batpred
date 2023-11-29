@@ -2,7 +2,7 @@
 
 ## Displaying output data
 
-Each config item has an input_number or switch associated with it, see the example dashboard for their exact names ([https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml](https://github.com/springfall2008/batpred/blob/main/example_dashboard.yml))
+Each config item has an input_number or switch associated with it, you can find an auto generated dashboard for your configuration in your AppDaeamon configuration area under the filename **predbat_dashboard.yaml**
 
 You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards)) and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities)) to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
 

@@ -99,10 +99,22 @@ The following are entity names in Solcast, unlikely to need changing although a 
 The following are entity names in the Octopus Energy plugin.
 They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
 
-- **metric_octopus_import** - Import rates from the Octopus plugin
-- **metric_octopus_export** - Export rates from the Octopus plugin
+- **metric_octopus_import** - Import rates from the Octopus plugin, should point to the sensor
+- **metric_octopus_export** - Export rates from the Octopus plugin, should point to the sensor
+
+ **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following events which are disabled by the plugin by default:
+ ```
+         event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+         event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+         event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+
+         event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+         event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+         event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+ ```  
 - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin installed point to the 'slot' sensor
-- **octopus_saving_session** - Points to the sensor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_saving_sessions)
+- **octopus_saving_session** - Points to the sensor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_XXXXX_saving_sessions
+  
 - **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account for battery load and generating the slot information
 - **input_number.predbat_metric_octopus_saving_rate** - Set the assuming saving rate for an Octopus saving session (in pence)
 
