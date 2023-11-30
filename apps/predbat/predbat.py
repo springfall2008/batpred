@@ -2038,7 +2038,7 @@ class PredBat(hass.Hass):
             pdata = self.ge_url_cache[url]["data"]
             age = now_utc - stamp
             if age.seconds < (30 * 60):
-                self.log("Return cached GE data for {} age {} minutes".format(url, age.seconds / 60))
+                self.log("Return cached GE data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         self.log("Fetching {}".format(url))
@@ -2146,7 +2146,7 @@ class PredBat(hass.Hass):
             pdata = self.github_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (120 * 60):
-                self.log("Using cached GITHub data for {} age {} minutes".format(url, round(age.seconds / 60,1)))
+                self.log("Using cached GITHub data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         try:
@@ -2212,7 +2212,7 @@ class PredBat(hass.Hass):
             pdata = self.octopus_url_cache[url]["data"]
             age = now - stamp
             if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, round(age.seconds / 60,1)))
+                self.log("Return cached octopus data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes
@@ -2365,7 +2365,7 @@ class PredBat(hass.Hass):
                 needs_update = True
 
             if not needs_update:
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, round(age.seconds / 60,1)))
+                self.log("Return cached futurerate data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes
@@ -2730,7 +2730,7 @@ class PredBat(hass.Hass):
 
     def dp1(self, value):
         """
-        Round to 2 decimal places
+        Round to 1 decimal place
         """
         return round(value * 10) / 10
 
@@ -3150,7 +3150,7 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(round(pv_total,1), round(pv_total10,1), pv_factor))
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), pv_factor))
             return pv_factor
         else:
             return None
@@ -8706,7 +8706,7 @@ class PredBat(hass.Hass):
         else:
             plan_age = self.now_utc - self.plan_last_updated
             plan_age_minutes = plan_age.seconds / 60.0
-            self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, round(plan_age_minutes,1))
+            self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, self.dp1(plan_age_minutes)))
 
         # Calculate the new plan (or re-use existing)
         self.calculate_plan(recompute=recompute)
@@ -8725,13 +8725,13 @@ class PredBat(hass.Hass):
             if (plan_age_minutes + RUN_EVERY) > self.calculate_plan_every:
                 self.log(
                     "Will recompute the plan as it is now {} minutes old and will exceed the max age of {} minutes before the next run".format(
-                        round(plan_age_minutes, 1), self.calculate_plan_every
+                        self.dp1(plan_age_minutes), self.calculate_plan_every
                     )
                 )
                 self.calculate_plan(recompute=True)
                 status, status_extra = self.execute_plan()
             else:
-                self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(round(plan_age_minutes, 1), self.calculate_plan_every))
+                self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(self.dp1(plan_age_minutes), self.calculate_plan_every))
 
         # IBoost model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
