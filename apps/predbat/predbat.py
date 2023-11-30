@@ -53,10 +53,40 @@ CONFIG_ITEMS = [
         "release_url": "https://github.com/springfall2008/batpred/releases/tag/" + THIS_VERSION,
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
     },
-    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", 'default' : True},
-    {"name": "pv_metric10_weight", "friendly_name": "Metric 10 Weight", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:percent", 'default' : 0.15},
-    {"name": "pv_scaling", "friendly_name": "PV Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
-    {"name": "load_scaling", "friendly_name": "Load Scaling", "type": "input_number", "min": 0, "max": 2.0, "step": 0.01, "unit": "multiple", "icon": "mdi:multiplication", 'default' : 1.0},
+    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", "default": True},
+    {
+        "name": "pv_metric10_weight",
+        "friendly_name": "Metric 10 Weight",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "fraction",
+        "icon": "mdi:percent",
+        "default": 0.15,
+    },
+    {
+        "name": "pv_scaling",
+        "friendly_name": "PV Scaling",
+        "type": "input_number",
+        "min": 0,
+        "max": 2.0,
+        "step": 0.01,
+        "unit": "multiple",
+        "icon": "mdi:multiplication",
+        "default": 1.0,
+    },
+    {
+        "name": "load_scaling",
+        "friendly_name": "Load Scaling",
+        "type": "input_number",
+        "min": 0,
+        "max": 2.0,
+        "step": 0.01,
+        "unit": "multiple",
+        "icon": "mdi:multiplication",
+        "default": 1.0,
+    },
     {
         "name": "battery_rate_max_scaling",
         "friendly_name": "Battery rate max scaling",
@@ -66,9 +96,19 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "multiple",
         "icon": "mdi:multiplication",
-        'default' : 1.0,
+        "default": 1.0,
     },
-    {"name": "battery_loss", "friendly_name": "Battery loss charge ", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.03},
+    {
+        "name": "battery_loss",
+        "friendly_name": "Battery loss charge ",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "fraction",
+        "icon": "mdi:call-split",
+        "default": 0.03,
+    },
     {
         "name": "battery_loss_discharge",
         "friendly_name": "Battery loss discharge",
@@ -77,13 +117,23 @@ CONFIG_ITEMS = [
         "max": 1.0,
         "step": 0.01,
         "unit": "fraction",
-        "icon": "mdi:call-split", 
-        'default' : 0.03,
+        "icon": "mdi:call-split",
+        "default": 0.03,
     },
-    {"name": "inverter_loss", "friendly_name": "Inverter Loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.04},
-    {"name": "inverter_hybrid", "friendly_name": "Inverter Hybrid", "type": "switch", 'default' : True},
-    {"name": "inverter_soc_reset", "friendly_name": "Inverter SOC Reset", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
-    {"name": "battery_capacity_nominal", "friendly_name": "Use the Battery Capacity Nominal size", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
+    {
+        "name": "inverter_loss",
+        "friendly_name": "Inverter Loss",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "fraction",
+        "icon": "mdi:call-split",
+        "default": 0.04,
+    },
+    {"name": "inverter_hybrid", "friendly_name": "Inverter Hybrid", "type": "switch", "default": True},
+    {"name": "inverter_soc_reset", "friendly_name": "Inverter SOC Reset", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "battery_capacity_nominal", "friendly_name": "Use the Battery Capacity Nominal size", "type": "switch", "enable": "expert_mode", "default": False},
     {
         "name": "car_charging_energy_scale",
         "friendly_name": "Car charging energy scale",
@@ -93,7 +143,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "fraction",
         "icon": "mdi:multiplication",
-        'default' : 1.0,
+        "default": 1.0,
     },
     {
         "name": "car_charging_threshold",
@@ -104,13 +154,65 @@ CONFIG_ITEMS = [
         "step": 0.10,
         "unit": "kw",
         "icon": "mdi:ev-station",
-        'default' : 6.0,
+        "default": 6.0,
     },
-    {"name": "car_charging_rate", "friendly_name": "Car charging rate", "type": "input_number", "min": 1, "max": 8.5, "step": 0.10, "unit": "kw", "icon": "mdi:ev-station", 'default' : 7.4},
-    {"name": "car_charging_loss", "friendly_name": "Car charging loss", "type": "input_number", "min": 0, "max": 1.0, "step": 0.01, "unit": "fraction", "icon": "mdi:call-split", 'default' : 0.08},
-    {"name": "best_soc_min", "friendly_name": "Best SOC Min", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'enable' : 'expert_mode', 'default' : 0.0},
-    {"name": "best_soc_max", "friendly_name": "Best SOC Max", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'enable' : 'expert_mode', 'default' : 0.0},
-    {"name": "best_soc_keep", "friendly_name": "Best SOC Keep", "type": "input_number", "min": 0, "max": 30.0, "step": 0.10, "unit": "kwh", "icon": "mdi:battery-50", 'default' : 2.0},
+    {
+        "name": "car_charging_rate",
+        "friendly_name": "Car charging rate",
+        "type": "input_number",
+        "min": 1,
+        "max": 8.5,
+        "step": 0.10,
+        "unit": "kw",
+        "icon": "mdi:ev-station",
+        "default": 7.4,
+    },
+    {
+        "name": "car_charging_loss",
+        "friendly_name": "Car charging loss",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "fraction",
+        "icon": "mdi:call-split",
+        "default": 0.08,
+    },
+    {
+        "name": "best_soc_min",
+        "friendly_name": "Best SOC Min",
+        "type": "input_number",
+        "min": 0,
+        "max": 30.0,
+        "step": 0.10,
+        "unit": "kwh",
+        "icon": "mdi:battery-50",
+        "enable": "expert_mode",
+        "default": 0.0,
+    },
+    {
+        "name": "best_soc_max",
+        "friendly_name": "Best SOC Max",
+        "type": "input_number",
+        "min": 0,
+        "max": 30.0,
+        "step": 0.10,
+        "unit": "kwh",
+        "icon": "mdi:battery-50",
+        "enable": "expert_mode",
+        "default": 0.0,
+    },
+    {
+        "name": "best_soc_keep",
+        "friendly_name": "Best SOC Keep",
+        "type": "input_number",
+        "min": 0,
+        "max": 30.0,
+        "step": 0.10,
+        "unit": "kwh",
+        "icon": "mdi:battery-50",
+        "default": 2.0,
+    },
     {
         "name": "metric_min_improvement",
         "friendly_name": "Metric Min Improvement",
@@ -120,8 +222,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:currency-usd",
-        'enable' : 'expert_mode',
-        'default' : 0.0,
+        "enable": "expert_mode",
+        "default": 0.0,
     },
     {
         "name": "metric_min_improvement_discharge",
@@ -132,8 +234,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:currency-usd",
-        'enable' : 'expert_mode',
-        'default' : 0.1,
+        "enable": "expert_mode",
+        "default": 0.1,
     },
     {
         "name": "metric_battery_cycle",
@@ -144,8 +246,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
-        'enable' : 'expert_mode',
-        'default' : 2.0,
+        "enable": "expert_mode",
+        "default": 2.0,
     },
     {
         "name": "metric_battery_value_scaling",
@@ -156,8 +258,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "fraction",
         "icon": "mdi:multiplication",
-        'enable' : 'expert_mode',
-        'default' : 1.0,
+        "enable": "expert_mode",
+        "default": 1.0,
     },
     {
         "name": "metric_future_rate_offset_import",
@@ -168,8 +270,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
-        'enable' : 'expert_mode',
-        'default' : 0.0,
+        "enable": "expert_mode",
+        "default": 0.0,
     },
     {
         "name": "metric_future_rate_offset_export",
@@ -180,8 +282,8 @@ CONFIG_ITEMS = [
         "step": 0.1,
         "unit": "p/kwh",
         "icon": "mdi:currency-usd",
-        'enable' : 'expert_mode',
-        'default' : 0.0,
+        "enable": "expert_mode",
+        "default": 0.0,
     },
     {
         "name": "metric_inday_adjust_damping",
@@ -192,8 +294,8 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "fraction",
         "icon": "mdi:call-split",
-        'enable' : 'expert_mode',
-        'default' : 0.95,
+        "enable": "expert_mode",
+        "default": 0.95,
     },
     {
         "name": "metric_octopus_saving_rate",
@@ -204,20 +306,9 @@ CONFIG_ITEMS = [
         "step": 2,
         "unit": "fraction",
         "icon": "mdi:currency-usd",
-        'default' : 0.0,
+        "default": 0.0,
     },
-    {
-        "name": "set_reserve_min", 
-        "friendly_name": 
-        "Set Reserve Min", 
-        "type": "input_number", 
-        "min": 4, 
-        "max": 100, 
-        "step": 1, 
-        "unit": "%", 
-        "icon": "mdi:percent", 
-        'default' : 4.0
-    },
+    {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent", "default": 4.0},
     {
         "name": "rate_low_threshold",
         "friendly_name": "Rate Low Threshold",
@@ -227,8 +318,8 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "multiple",
         "icon": "mdi:multiplication",
-        'enable' : 'expert_mode',
-        'default' : 0.0,
+        "enable": "expert_mode",
+        "default": 0.0,
     },
     {
         "name": "rate_high_threshold",
@@ -239,19 +330,19 @@ CONFIG_ITEMS = [
         "step": 0.05,
         "unit": "multiple",
         "icon": "mdi:multiplication",
-        'enable' : 'expert_mode',
-        'default' : 0.0,
+        "enable": "expert_mode",
+        "default": 0.0,
     },
-    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", 'default' : True},
-    {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", 'default' : True},
-    {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", 'default' : False},
-    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", 'default' : False},
-    {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
-    {"name": "calculate_best_charge", "friendly_name": "Calculate Best Charge", "type": "switch", 'default' : True},
-    {"name": "calculate_best_discharge", "friendly_name": "Calculate Best Discharge", "type": "switch", 'default' : True},
-    {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
-    {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
-    {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
+    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True},
+    {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
+    {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
+    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
+    {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "calculate_best_charge", "friendly_name": "Calculate Best Charge", "type": "switch", "default": True},
+    {"name": "calculate_best_discharge", "friendly_name": "Calculate Best Discharge", "type": "switch", "default": True},
+    {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
         "friendly_name": "Calculate plan every N minutes",
@@ -261,23 +352,23 @@ CONFIG_ITEMS = [
         "step": 5,
         "unit": "kwh",
         "icon": "mdi:clock-end",
-        'enable' : 'expert_mode',
-        'default' : 10,
+        "enable": "expert_mode",
+        "default": 10,
     },
-    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", 'default' : True},
-    {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
-    {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", 'default' : True},
-    {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", 'default' : True},
-    {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", 'default' : False},
-    {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
-    {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
-    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", 'enable' : 'expert_mode', 'default' : False},
-    {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", 'default' : True},
-    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", 'default' : False},
-    {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch", 'default' : False},
-    {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
-    {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
-    {"name": "balance_inverters_crosscharge", "friendly_name": "Balance Inverters for cross-charging", "type": "switch", 'enable' : 'balance_inverters_enable', 'default' : True},
+    {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", "default": True},
+    {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", "default": True},
+    {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", "default": True},
+    {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", "default": False},
+    {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", "default": True},
+    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", "default": False},
+    {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch", "default": False},
+    {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch", "enable": "balance_inverters_enable", "default": True},
+    {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch", "enable": "balance_inverters_enable", "default": True},
+    {"name": "balance_inverters_crosscharge", "friendly_name": "Balance Inverters for cross-charging", "type": "switch", "enable": "balance_inverters_enable", "default": True},
     {
         "name": "balance_inverters_threshold_charge",
         "friendly_name": "Balance Inverters threshold charge",
@@ -287,8 +378,8 @@ CONFIG_ITEMS = [
         "step": 1,
         "unit": "%",
         "icon": "mdi:percent",
-        'enable' : 'balance_inverters_enable',
-        'default' : 1.0,
+        "enable": "balance_inverters_enable",
+        "default": 1.0,
     },
     {
         "name": "balance_inverters_threshold_discharge",
@@ -299,21 +390,90 @@ CONFIG_ITEMS = [
         "step": 1,
         "unit": "%",
         "icon": "mdi:percent",
-        'enable' : 'balance_inverters_enable',
-        'default' : 1.0,
+        "enable": "balance_inverters_enable",
+        "default": 1.0,
     },
-    {"name": "debug_enable", "friendly_name": "Debug Enable", "type": "switch", "icon": "mdi:bug-outline", 'default' : False},
-    {"name": "car_charging_plan_time", "friendly_name": "Car charging planned ready time", "type": "select", "options": OPTIONS_TIME, "icon": "mdi:clock-end", 'default' : "07:00:00"},
-    {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", 'enable' : 'expert_mode', 'default' : True},
-    {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", 'default' : False},
-    {"name": "iboost_max_energy", "friendly_name": "IBoost max energy", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", 'enable' : 'iboost_enable', 'default' : 3.0},
-    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", 'enable' : 'iboost_enable', 'default' : 0.0},
-    {"name": "iboost_max_power", "friendly_name": "IBoost max power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 2400},
-    {"name": "iboost_min_power", "friendly_name": "IBoost min power", "type": "input_number", "min": 0, "max": 3500, "step": 100, "unit": "w", 'enable' : 'iboost_enable', 'default' : 500},
-    {"name": "iboost_min_soc", "friendly_name": "IBoost min soc", "type": "input_number", "min": 0, "max": 100, "step": 5, "unit": "%", "icon": "mdi:percent", 'enable' : 'iboost_enable', 'default' : 0.0},
-    {"name": "holiday_days_left", "friendly_name": "Holiday days left", "type": "input_number", "min": 0, "max": 28, "step": 1, "unit": "days", "icon": "mdi:clock-end", 'default' : 0},
-    {"name": "forecast_plan_hours", "friendly_name": "Plan forecast hours", "type": "input_number", "min": 8, "max": 96, "step": 1, "unit": "hours", "icon": "mdi:clock-end", 'enable' : 'expert_mode', 'default' : 24},
-    {"name": "plan_debug", "friendly_name": "HTML Plan Debug", "type": "switch", 'default' : False},
+    {"name": "debug_enable", "friendly_name": "Debug Enable", "type": "switch", "icon": "mdi:bug-outline", "default": False},
+    {
+        "name": "car_charging_plan_time",
+        "friendly_name": "Car charging planned ready time",
+        "type": "select",
+        "options": OPTIONS_TIME,
+        "icon": "mdi:clock-end",
+        "default": "07:00:00",
+    },
+    {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
+    {
+        "name": "iboost_max_energy",
+        "friendly_name": "IBoost max energy",
+        "type": "input_number",
+        "min": 0,
+        "max": 5,
+        "step": 0.1,
+        "unit": "kwh",
+        "enable": "iboost_enable",
+        "default": 3.0,
+    },
+    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", "enable": "iboost_enable", "default": 0.0},
+    {
+        "name": "iboost_max_power",
+        "friendly_name": "IBoost max power",
+        "type": "input_number",
+        "min": 0,
+        "max": 3500,
+        "step": 100,
+        "unit": "w",
+        "enable": "iboost_enable",
+        "default": 2400,
+    },
+    {
+        "name": "iboost_min_power",
+        "friendly_name": "IBoost min power",
+        "type": "input_number",
+        "min": 0,
+        "max": 3500,
+        "step": 100,
+        "unit": "w",
+        "enable": "iboost_enable",
+        "default": 500,
+    },
+    {
+        "name": "iboost_min_soc",
+        "friendly_name": "IBoost min soc",
+        "type": "input_number",
+        "min": 0,
+        "max": 100,
+        "step": 5,
+        "unit": "%",
+        "icon": "mdi:percent",
+        "enable": "iboost_enable",
+        "default": 0.0,
+    },
+    {
+        "name": "holiday_days_left",
+        "friendly_name": "Holiday days left",
+        "type": "input_number",
+        "min": 0,
+        "max": 28,
+        "step": 1,
+        "unit": "days",
+        "icon": "mdi:clock-end",
+        "default": 0,
+    },
+    {
+        "name": "forecast_plan_hours",
+        "friendly_name": "Plan forecast hours",
+        "type": "input_number",
+        "min": 8,
+        "max": 96,
+        "step": 1,
+        "unit": "hours",
+        "icon": "mdi:clock-end",
+        "enable": "expert_mode",
+        "default": 24,
+    },
+    {"name": "plan_debug", "friendly_name": "HTML Plan Debug", "type": "switch", "default": False},
 ]
 
 """
@@ -1138,7 +1298,7 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
-        # Re-writtem to minimise writes
+        # Re-written to minimise writes
         domain = entity.domain
 
         current_state = entity.get_state()
@@ -1174,7 +1334,7 @@ class Inverter:
 
     def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
         # Modified to cope with sensor entities and writing strings
-        # Re-writtem to minimise writes
+        # Re-written to minimise writes
         domain = entity.domain
         current_state = entity.get_state()
 
@@ -1398,7 +1558,7 @@ class Inverter:
                     self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
 
         if (new_end != old_end) or (new_start != old_start):
-            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+            # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
                 entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
                 self.press_and_poll_button(entity_id)
@@ -1503,7 +1663,7 @@ class Inverter:
 
         if self.inverter_type == "GS":
             # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and dischaging
+            # Need to check the logic of how this is called if both charging and discharging
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
             entity = self.base.get_entity(entity_id)
@@ -1673,7 +1833,7 @@ class Inverter:
             if self.rest_api and not SIMULATE:
                 self.rest_setChargeSlot1(new_start, new_end)
 
-            # For Solis inveters we also have to press the update_charge_discharge button to send the times to the inverter
+            # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
                 entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
                 self.press_and_poll_button(entity_id)
@@ -2237,14 +2397,13 @@ class PredBat(hass.Hass):
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
 
-
     def futurerate_analysis(self):
         """
-        Analyise futurerate energy data
+        Analyse futurerate energy data
         """
 
         url = None
-        if 'futurerate_url' in self.args:
+        if "futurerate_url" in self.args:
             url = self.get_arg("futurerate_url", indirect=False)
         self.log("Fetching futurerate data from {}".format(url))
         if not url:
@@ -2258,40 +2417,40 @@ class PredBat(hass.Hass):
         array_values = []
         mdata = {}
 
-        peak_start = datetime.strptime(self.get_arg('futurerate_peak_start', "00:00:00"), "%H:%M:%S")
-        peak_end = datetime.strptime(self.get_arg('futurerate_peak_end', "00:00:00"), "%H:%M:%S")
+        peak_start = datetime.strptime(self.get_arg("futurerate_peak_start", "00:00:00"), "%H:%M:%S")
+        peak_end = datetime.strptime(self.get_arg("futurerate_peak_end", "00:00:00"), "%H:%M:%S")
         peak_start_minutes = peak_start.minute + peak_start.hour * 60
         peak_end_minutes = peak_end.minute + peak_end.hour * 60
         if peak_end_minutes < peak_start_minutes:
-            peak_end_minutes += 24*60
+            peak_end_minutes += 24 * 60
 
-        peak_premium_import = self.get_arg('futurerate_peak_premium_import', 0)
-        peak_premium_export = self.get_arg('futurerate_peak_premium_export', 0)
+        peak_premium_import = self.get_arg("futurerate_peak_premium_import", 0)
+        peak_premium_export = self.get_arg("futurerate_peak_premium_export", 0)
 
         self.log("Future rates - peak rate is {} - {} minutes premium import {} export {}".format(peak_start_minutes, peak_end_minutes, peak_premium_import, peak_premium_export))
 
         if pdata:
-            if 'Rows' in pdata:
-                for row in pdata['Rows']:
-                    if 'Name' in row:
+            if "Rows" in pdata:
+                for row in pdata["Rows"]:
+                    if "Name" in row:
                         rname = row.get("Name", "")
-                        rstart = row.get('StartTime', "") + now_offset
-                        rend = row.get('EndTime', "") + now_offset
-                    if 'Columns' in row:
-                        for column in row['Columns']:
+                        rstart = row.get("StartTime", "") + now_offset
+                        rend = row.get("EndTime", "") + now_offset
+                    if "Columns" in row:
+                        for column in row["Columns"]:
                             cname = column.get("Name", "")
-                            cvalue = column.get('Value', "")
-                            date_start, time_start = rstart.split('T')
-                            date_end, time_end = rend.split('T')
-                            if '-' in cname and ',' in cvalue and cname:
+                            cvalue = column.get("Value", "")
+                            date_start, time_start = rstart.split("T")
+                            date_end, time_end = rend.split("T")
+                            if "-" in cname and "," in cvalue and cname:
                                 date_start = cname
                                 date_end = cname
-                                cvalue = cvalue.replace(',', '.')
+                                cvalue = cvalue.replace(",", ".")
                                 cvalue = float(cvalue)
                                 rstart = date_start + "T" + time_start
                                 rend = date_end + "T" + time_end
                                 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-                                time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)                      
+                                time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
                                 time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
                                 delta_start = time_date_start - self.midnight_utc
                                 delta_end = time_date_end - self.midnight_utc
@@ -2299,28 +2458,28 @@ class PredBat(hass.Hass):
                                 minutes_start = delta_start.seconds / 60
                                 minutes_end = delta_end.seconds / 60
                                 if minutes_end < minutes_start:
-                                    minutes_end += 24*60
+                                    minutes_end += 24 * 60
 
-                                # Convert to pence with Agile formula, starts in pounds per Megawhat hour
+                                # Convert to pence with Agile formula, starts in pounds per Megawatt hour
                                 rate_import = (cvalue / 10) * 2.2
                                 rate_export = (cvalue / 10) * 0.95
                                 if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
                                     rate_import += peak_premium_import
                                     rate_export += peak_premium_export
-                                rate_import = min(rate_import, 95) # Cap
-                                rate_export = max(rate_export, 0) # Cap
-                                rate_import = rate_import * 1.05 # Vat only on import
+                                rate_import = min(rate_import, 95)  # Cap
+                                rate_export = max(rate_export, 0)  # Cap
+                                rate_import = rate_import * 1.05  # Vat only on import
 
                                 item = {}
-                                item['from'] = time_date_start.strftime(TIME_FORMAT)
-                                item['to'] = time_date_end.strftime(TIME_FORMAT)
-                                item['rate_import'] = self.dp2(rate_import)
-                                item['rate_export'] = self.dp2(rate_export)
+                                item["from"] = time_date_start.strftime(TIME_FORMAT)
+                                item["to"] = time_date_end.strftime(TIME_FORMAT)
+                                item["rate_import"] = self.dp2(rate_import)
+                                item["rate_export"] = self.dp2(rate_export)
                                 extracted_data[time_date_start] = item
 
                                 if time_date_start not in extracted_keys:
                                     extracted_keys.append(time_date_start)
-        
+
         if extracted_keys:
             extracted_keys.sort()
             for key in extracted_keys:
@@ -2330,7 +2489,7 @@ class PredBat(hass.Hass):
             mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
         future_data = []
-        for minute in range(self.minutes_now, self.forecast_plan_hours*60 + self.minutes_now, 60):
+        for minute in range(self.minutes_now, self.forecast_plan_hours * 60 + self.minutes_now, 60):
             if mdata_import.get(minute) or mdata_export.get(minute):
                 future_data.append("{} => {} / {}".format(minute, mdata_import.get(minute), mdata_export.get(minute)))
 
@@ -2358,10 +2517,10 @@ class PredBat(hass.Hass):
                 needs_update = True
 
             # data updates at 11am CET so update every 30 minutes during this period
-            if now_since_midnight.seconds > (9.5*60*60) and now_since_midnight.seconds < (11*60*60):
-                if age.seconds > (0.5*60*60):
+            if now_since_midnight.seconds > (9.5 * 60 * 60) and now_since_midnight.seconds < (11 * 60 * 60):
+                if age.seconds > (0.5 * 60 * 60):
                     needs_update = True
-            if age.seconds > (12*60*60):
+            if age.seconds > (12 * 60 * 60):
                 needs_update = True
 
             if not needs_update:
@@ -2933,7 +3092,9 @@ class PredBat(hass.Hass):
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
 
-        self.dashboard_item(self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug})
+        self.dashboard_item(
+            self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug}
+        )
         if had_errors:
             self.had_errors = True
 
@@ -3519,9 +3680,9 @@ class PredBat(hass.Hass):
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if soc < self.best_soc_keep:
                 diff_keep = max(load_yesterday - (0 + pv_dc + pv_ac), 0)
-                # Don't apply keep in the next 4 hours to avoid high rate forced charging for no reason
+                # Don't apply keep in the next 4 hours to avoid high rate forced charging for no reason
                 # Scale keep costs by 50% to account for the chance or it being violated or not being violated
-                if diff_keep > 0 and minute > 4*60:
+                if diff_keep > 0 and minute > 4 * 60:
                     metric_keep += self.rate_import[minute_absolute] * diff_keep * 0.5
 
             if diff > 0:
@@ -4216,10 +4377,20 @@ class PredBat(hass.Hass):
 
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
-                    if is_import and self.get_arg('futurerate_adjust_import', False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
+                    if (
+                        is_import
+                        and self.get_arg("futurerate_adjust_import", False)
+                        and (minute in self.future_energy_rates_import)
+                        and (minute_mod in self.future_energy_rates_import)
+                    ):
                         prev_rate = rate_offset
                         rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
-                    elif (not is_import) and self.get_arg('futurerate_adjust_export', False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
+                    elif (
+                        (not is_import)
+                        and self.get_arg("futurerate_adjust_export", False)
+                        and (minute in self.future_energy_rates_export)
+                        and (minute_mod in self.future_energy_rates_export)
+                    ):
                         prev_rate = rate_offset
                         rate_offset = rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute]
                     elif is_import:
@@ -4257,7 +4428,7 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)):
-                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate)+0.5) != int(self.dp2(rate_low_rate)+0.5)):
+                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate) + 0.5) != int(self.dp2(rate_low_rate) + 0.5)):
                         # Refuse mixed rates that are different by more than 0.5p
                         rate_low_end = minute
                         break
@@ -4869,7 +5040,7 @@ class PredBat(hass.Hass):
         found_rates = []
         lowest = 99
         highest = -99
-        upcoming_period = self.minutes_now + 4*60
+        upcoming_period = self.minutes_now + 4 * 60
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high)
@@ -5138,7 +5309,7 @@ class PredBat(hass.Hass):
         """
         Publish the current plan in HTML format
         """
-        plan_debug = self.get_arg('plan_debug')
+        plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
         html += "<td><b>Time</b></td>"
@@ -5336,11 +5507,11 @@ class PredBat(hass.Hass):
             if metric_change >= 10.0:
                 cost_str = "+%d p " % int(metric_change)
                 cost_str += " &nearr;"
-                cost_color = '#F18261'
+                cost_color = "#F18261"
             elif metric_change >= 0.5:
                 cost_str = "+%d p " % int(metric_change)
                 cost_str += " &nearr;"
-                cost_color = '#FFFF00'
+                cost_color = "#FFFF00"
             elif metric_change <= -0.5:
                 cost_str = "-%d p " % int(abs(metric_change))
                 cost_str += " &searr;"
@@ -5356,7 +5527,7 @@ class PredBat(hass.Hass):
                     for window in self.car_charging_slots[car_n]:
                         start = window["start"]
                         end = window["end"]
-                        kwh = (self.dp2(window["kwh"]) / (end - start))
+                        kwh = self.dp2(window["kwh"]) / (end - start)
                         for offset in range(0, 30, PREDICT_STEP):
                             minute_offset = minute + offset
                             if minute_offset >= start and minute_offset < end:
@@ -6001,7 +6172,7 @@ class PredBat(hass.Hass):
                 divide_count_d = 0
                 first_charge = True
                 first_discharge = True
-                
+
                 for price in price_set:
                     links = price_links[price]
                     if loop_price >= price:
@@ -6063,14 +6234,17 @@ class PredBat(hass.Hass):
                     try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
                     if try_hash in tried_list:
                         if self.debug_enable:
-                            self.log("Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(divide, all_n, all_d, discharge_enable))
+                            self.log(
+                                "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(
+                                    divide, all_n, all_d, discharge_enable
+                                )
+                            )
                         continue
                     tried_list[try_hash] = True
 
                     # Turn off debug for this sim
                     was_debug = self.debug_enable
                     self.debug_enable = False
-
 
                     # Simulate with medium PV
                     metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
@@ -6102,7 +6276,9 @@ class PredBat(hass.Hass):
                             )
                         else:
                             self.log(
-                                "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(loop_price, self.dp2(metric), self.dp2(soc_min), all_n)
+                                "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(
+                                    loop_price, self.dp2(metric), self.dp2(soc_min), all_n
+                                )
                             )
 
                     # For the first pass just pick the most cost effective threshold, consider soc keep later
@@ -6280,7 +6456,7 @@ class PredBat(hass.Hass):
                 if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            # Minor weighting against charge freeze to avoid supurious ones
+            # Minor weighting against charge freeze to avoid spurious ones
             if self.set_charge_freeze and try_soc == self.reserve:
                 metric += 0.1
 
@@ -6326,7 +6502,9 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        self.log("Try optimising charge window(s) {} price {} results {} selected {}".format(all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc))
+        self.log(
+            "Try optimising charge window(s) {} price {} results {} selected {}".format(all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc)
+        )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def optimise_discharge(
@@ -6551,7 +6729,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] =  self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average"] = self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
                 id += 1
 
         if window_sort:
@@ -7011,7 +7189,11 @@ class PredBat(hass.Hass):
                             average = self.discharge_window_best[window_n]["average"]
                             if price < best_price:
                                 if self.debug_enable:
-                                    self.log("Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(price, best_price, self.dp2(average)))
+                                    self.log(
+                                        "Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(
+                                            price, best_price, self.dp2(average)
+                                        )
+                                    )
                                 continue
 
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
@@ -8010,25 +8192,25 @@ class PredBat(hass.Hass):
         data_all = []
         rate_data = {}
 
-        if entity_id:                
+        if entity_id:
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
 
             # Previous rates
-            if '_current_rate' in entity_id:
+            if "_current_rate" in entity_id:
                 # Try as event
-                prev_rate_id = entity_id.replace('_current_rate', '_previous_day_rates').replace('sensor.', 'event.')
+                prev_rate_id = entity_id.replace("_current_rate", "_previous_day_rates").replace("sensor.", "event.")
                 data_import = self.get_state(entity_id=prev_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
                 else:
-                    prev_rate_id = entity_id.replace('_current_rate', '_previous_rate')
+                    prev_rate_id = entity_id.replace("_current_rate", "_previous_rate")
                     data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
 
             # Current rates
-            current_rate_id = entity_id.replace('_current_rate', '_current_day_rates').replace('sensor.', 'event.')
+            current_rate_id = entity_id.replace("_current_rate", "_current_day_rates").replace("sensor.", "event.")
             data_import = self.get_state(entity_id=current_rate_id, attribute="rates")
             if data_import:
                 data_all += data_import
@@ -8038,13 +8220,13 @@ class PredBat(hass.Hass):
                     data_all += data_import
 
             # Next rates
-            if '_current_rate' in entity_id:
-                next_rate_id = entity_id.replace('_current_rate', '_next_day_rates').replace('sensor.', 'event.')
+            if "_current_rate" in entity_id:
+                next_rate_id = entity_id.replace("_current_rate", "_next_day_rates").replace("sensor.", "event.")
                 data_import = self.get_state(entity_id=next_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
                 else:
-                    next_rate_id = entity_id.replace('_current_rate', '_next_rate')
+                    next_rate_id = entity_id.replace("_current_rate", "_next_rate")
                     data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
@@ -8154,7 +8336,7 @@ class PredBat(hass.Hass):
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
-            self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")             
+            self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
             if not self.rate_import:
                 self.log("Error: metric_octopus_import is not set correctly or no energy rates can be read")
                 self.record_status(message="Error - metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
@@ -8259,7 +8441,7 @@ class PredBat(hass.Hass):
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
-            self.rate_export = self.fetch_octopus_rates(entity_id)             
+            self.rate_export = self.fetch_octopus_rates(entity_id)
             if not self.rate_export:
                 self.log("Warning: metric_octopus_export is not set correctly or no energy rates can be read")
                 self.record_status(message="Error - metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
@@ -8277,13 +8459,13 @@ class PredBat(hass.Hass):
 
                 joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
                 if not joined_events:
-                    entity_event = entity_id.replace('binary_sensor.', 'event.').replace('_sessions', '_session_events')
+                    entity_event = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
                     joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
                 if joined_events:
                     for event in joined_events:
-                        start = event.get('start', None)
-                        end = event.get('end', None)
-                        saving_rate = event.get('octopoints_per_kwh', saving_rate * 8) / 8   # 8 Octopoints per pence
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * 8) / 8   # 8 Octopoints per pence
                         if start and end and saving_rate > 0:
                             octopus_saving_slot = {}
                             octopus_saving_slot["start"] = start
@@ -8521,8 +8703,7 @@ class PredBat(hass.Hass):
 
         self.log(
             "Inverter type {} forecast_hours {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(
-                self.inverter_type, forecast_hours, self.calculate_max_windows, self.num_cars, self.debug_enable, 
-                self.calculate_plan_every
+                self.inverter_type, forecast_hours, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every
             )
         )
 
@@ -8857,7 +9038,7 @@ class PredBat(hass.Hass):
             enabled = self.user_config_item_enabled(item)
             if not enabled:
                 self.log("Not updating HA config {} to {} as disabled".format(name, value))
-                item['value'] = None
+                item["value"] = None
             else:
                 entity = item.get("entity")
                 if entity and ((item.get("value") is None) or (value != item["value"])):
@@ -8904,17 +9085,17 @@ class PredBat(hass.Hass):
         """
         Check if user config item is enable
         """
-        enable = item.get('enable', None)
+        enable = item.get("enable", None)
         if enable:
             citem = self.config_index.get(enable, None)
             if citem:
-                enabled_value = citem.get('value', True)
+                enabled_value = citem.get("value", True)
                 if not enabled_value:
                     return False
                 else:
                     return True
             else:
-                self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item['name']))
+                self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item["name"]))
         return True
 
     def dashboard_item(self, entity, state, attributes):
@@ -8937,14 +9118,14 @@ class PredBat(hass.Hass):
         text += "entities:\n"
         enable_list = [None]
         for item in CONFIG_ITEMS:
-            enable = item.get('enable', None)
+            enable = item.get("enable", None)
             if enable and enable not in enable_list:
                 enable_list.append(enable)
 
         for try_enable in enable_list:
             for item in CONFIG_ITEMS:
                 entity = item["entity"]
-                enable = item.get('enable', None)
+                enable = item.get("enable", None)
 
                 if enable == try_enable and self.user_config_item_enabled(item):
                     text += "  - entity: " + entity + "\n"
@@ -8961,7 +9142,6 @@ class PredBat(hass.Hass):
         else:
             self.log("Failed to write predbat dashboard to {}".format(filename))
 
-
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -8970,7 +9150,7 @@ class PredBat(hass.Hass):
 
         # New install, used to set default of expert mode
         new_install = True
-        current_status = self.get_state('predbat.status')
+        current_status = self.get_state("predbat.status")
         if current_status:
             new_install = False
 
@@ -8980,7 +9160,7 @@ class PredBat(hass.Hass):
             self.config_index[name] = item
 
             # Set the default for expert mode to False for new installs only
-            if name == 'expert_mode':
+            if name == "expert_mode":
                 if new_install:
                     item["default"] = False
 
@@ -8997,7 +9177,7 @@ class PredBat(hass.Hass):
             if not enabled:
                 if not quiet:
                     self.log("Note: Disabled configuration item {}".format(name))
-                item['value'] = None
+                item["value"] = None
 
                 # Remove the state if the entity still exists
                 ha_value = self.get_state(entity)
@@ -9014,7 +9194,7 @@ class PredBat(hass.Hass):
                 if history:
                     history = history[0]
                     ha_value = history[-1]["state"]
-            
+
             # Default?
             if ha_value is None:
                 ha_value = item.get("default", None)

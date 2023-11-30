@@ -1,14 +1,25 @@
 # Configuration guide
 
-First get the basics set up, ensure you have the inverter controls configured, the historical load data and the solar forecast in place. Make sure your energy rates are configured correctly for import and export.
+First get the basics set up, ensure you have the inverter controls configured, the historical load data and the solar forecast
+in place. Make sure your energy rates are configured correctly for import and export.
 
-If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
+If you have an EV try to set up the car charging sensor correctly so the tool can tell what part of your historical load is EV
+charging. You might want to also set to the car charging plan so you can predict when your car is plugged in and how much it will charge.
 
-You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_discharge** to the correct % loss for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter. Also set **inverter_hybrid** to True or False depending on if you have a Hybrid or AC Coupled battery.
+You should try to tune **inverter_loss**, **battery_loss** and **battery_loss_discharge** to the correct % loss for your system
+in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter. Also set **inverter_hybrid** to
+True or False depending on if you have a Hybrid or AC Coupled battery.
 
-The setting **input_number.metric_battery_cycle** (_expert mode_) can be used to put a cost on using your battery for charging and discharging. In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each cycle is 19kWh and so the cost is £4000 / 19 / 6000 = 3.5p. If you configure this number higher then more expensive plans will be selected which avoid charging and discharging your battery as much. The default is 2p but can be set to 0 if you want to turn this off. Note that the cycle cost will not be included in the cost predictions, just taken into account in the planning stage. _Note: Setting this to a non-zero zero will increase your daily cost, but will reduce your home battery usage._
+The setting **input_number.metric_battery_cycle** (_expert mode_) can be used to put a cost on using your battery for charging
+and discharging. In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then
+each cycle is 19kWh and so the cost is £4000 / 19 / 6000 = 3.5p. If you configure this number higher then more expensive plans
+will be selected which avoid charging and discharging your battery as much. The default is 2p but can be set to 0 if you want
+to turn this off. Note that the cycle cost will not be included in the cost predictions, just taken into account in the planning
+stage. _Note: Setting this to a non-zero zero will increase your daily cost, but will reduce your home battery usage._
 
-Cloud coverage is modelled by using difference between PV and PV10 is used to work out a cloud factor, this modulates the PV output predictions up and down accordingly as if there was passing clouds. This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+Cloud coverage is modelled by using difference between PV and PV10 is used to work out a cloud factor, this modulates the PV
+output predictions up and down accordingly as if there was passing clouds. This can have an impact on planning, especially for
+things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
 
 Below is a guide to some of the tariff options, in theory most tariffs will work out of the box but still it's worth reviewing your settings.
 
@@ -26,7 +37,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot 
+combine_charge_slots - True        # Use one big charge slot
 ```
 
 If you are using expert mode then these options maybe worth reviewing:
@@ -46,7 +57,7 @@ calculate_best_charge - True       # You want the tool to calculate charging
 set_charge_window - True           # You want to have Predbat control the charge window
 calculate_best_discharge - True    # Enable discharge calculation
 best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot 
+combine_charge_slots - True        # Use one big charge slot
 ```
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:

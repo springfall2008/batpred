@@ -1,3 +1,4 @@
-pytz
 appdaemon
 mkdocs
+pre-commit
+pytz
