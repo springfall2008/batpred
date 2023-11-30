@@ -21,7 +21,7 @@ from the Octopus Energy add-in (v9.1.0 and above) or if not reported it can be s
 If you are using expert mode, for best results: **switch.predbat_combine_charge_slots** (_expert mode_) is turned off.
 Set **input_number.rate_low_threshold** (_expert mode_) and **input_number.rate_high_threshold** (_expert mode_) to 0 for automatic mode.
 
-For forced export you need to ensure that **switch.predbat_calculate_best_discharge** is enabled and that **switch.predbat_set_discharge_freeze_only** is disabled. 
+For forced export you need to ensure that **switch.predbat_calculate_best_discharge** is enabled and that **switch.predbat_set_discharge_freeze_only** is disabled.
 If you do not have an export tariff then forced export will not apply.
 
 ## Rate bands
