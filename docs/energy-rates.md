@@ -13,7 +13,7 @@ For Predbat to automatically manage saving sessions you will need to make sure t
 in apps.yaml to point to the saving session binary sensor supported by the Octopus Energy plugin (see template apps.yaml
 for the default name)
 
-When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken 
+When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken
 from the Octopus Energy add-in (v9.1.0 and above) or if not reported it can be set in Home Assistant with
 **input_number.predbat_metric_octopus_saving_rate** (default is 0 so must be set if used).
 

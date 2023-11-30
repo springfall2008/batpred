@@ -8465,7 +8465,7 @@ class PredBat(hass.Hass):
                     for event in joined_events:
                         start = event.get("start", None)
                         end = event.get("end", None)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * 8) / 8   # 8 Octopoints per pence
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * 8) / 8  # 8 Octopoints per pence
                         if start and end and saving_rate > 0:
                             octopus_saving_slot = {}
                             octopus_saving_slot["start"] = start
