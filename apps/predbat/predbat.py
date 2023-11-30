@@ -7718,8 +7718,8 @@ class PredBat(hass.Hass):
                 save="best",
                 end_record=self.end_record,
             )
-            # round charge_limit_best (kWh) to 1 decimal place and discharge_limits_best (percentage) to nearest whole number  gc
-            self.charge_limit_best = [ self.dp1(elem) for elem in self.charge_limit_best ]
+            # round charge_limit_best (kWh) to 2 decimal places and discharge_limits_best (percentage) to nearest whole number  gc
+            self.charge_limit_best = [ self.dp2(elem) for elem in self.charge_limit_best ]
             self.discharge_limits_best = [ self.dp0(elem) for elem in self.discharge_limits_best ]
             
             self.log(
