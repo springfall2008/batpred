@@ -13,13 +13,14 @@ For Predbat to automatically manage saving sessions you will need to make sure t
 in apps.yaml to point to the saving session binary sensor supported by the Octopus Energy plugin (see template apps.yaml
 for the default name)
 
-When a saving session is active the energy rates for import and export will be overridden with the assumed rate
-set in Home Assistant with **input_number.predbat_metric_octopus_saving_rate**, if this rate is 0 then the feature
-is disabled (default). You should set this to the saving rate published by Octopus for the session (currently
-there is no sensor for this rate).
+When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken 
+from the Octopus Energy add-in (v9.1.0 and above) or if not reported it can be set in Home Assistant with
+**input_number.predbat_metric_octopus_saving_rate** (default is 0 so must be set if used).
 
 If you are using expert mode, for best results: **switch.predbat_combine_charge_slots** (_expert mode_) is turned off.
 Set **input_number.rate_low_threshold** (_expert mode_) and **input_number.rate_high_threshold** (_expert mode_) to 0 for automatic mode.
+
+For forced export you need to ensure that **switch.predbat_calculate_best_discharge** is enabled and that **switch.predbat_set_discharge_freeze_only** is disabled. If you do not have an export tariff then forced export will not apply.
 
 ## Rate bands
 

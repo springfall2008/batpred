@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.16"
+THIS_VERSION = "v7.13.19"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -471,7 +471,7 @@ CONFIG_ITEMS = [
         "unit": "hours",
         "icon": "mdi:clock-end",
         "enable": "expert_mode",
-        "default": 96,
+        "default": 24,
     },
     {"name": "plan_debug", "friendly_name": "HTML Plan Debug", "type": "switch", "default": False},
 ]
@@ -3490,6 +3490,7 @@ class PredBat(hass.Hass):
             self.predict_soc[minute] = self.dp3(soc)
             if save and save == "best":
                 self.predict_soc_best[minute] = self.dp3(soc)
+                self.predict_metric_best[minute] = self.dp2(metric)
 
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step[minute]
@@ -3758,9 +3759,6 @@ class PredBat(hass.Hass):
                 predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step] * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
-
-            if save and save == "best":
-                self.predict_metric_best[minute] = self.dp2(metric)
 
             minute += step
 
@@ -5466,11 +5464,15 @@ class PredBat(hass.Hass):
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
                 if limit < 100 and limit > soc_percent_max:
+                    if state == soc_sym:
+                        state = ""
                     if state:
                         state += "/"
                     state += "FreezeDis&rarr;"
                     state_color = "#AAAAAA"
                 elif limit < 100:
+                    if state == soc_sym:
+                        state = ""
                     if state:
                         state += "/"
                     state += "Discharge&searr;"
@@ -5554,7 +5556,7 @@ class PredBat(hass.Hass):
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
-            html += "<td>" + str(total_str) + "</td>"
+            html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
@@ -8453,22 +8455,25 @@ class PredBat(hass.Hass):
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
                 saving_rate = self.get_arg("metric_octopus_saving_rate")
-                if saving_rate > 0:
-                    state = self.get_arg("octopus_saving_session", False)
+                state = self.get_arg("octopus_saving_session", False)
 
-                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
-                    if joined_events:
-                        for event in joined_events:
-                            start = event.get("start", None)
-                            end = event.get("end", None)
-                            if start and end:
-                                octopus_saving_slot = {}
-                                octopus_saving_slot["start"] = start
-                                octopus_saving_slot["end"] = end
-                                octopus_saving_slot["rate"] = saving_rate
-                                octopus_saving_slot["state"] = state
-                                octopus_saving_slots.append(octopus_saving_slot)
-                                self.log("Joined Octopus saving session: {} - {} at assumed rate {} state {}".format(start, end, saving_rate, state))
+                joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                if not joined_events:
+                    entity_event = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+                    joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
+                if joined_events:
+                    for event in joined_events:
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * 8) / 8   # 8 Octopoints per pence
+                        if start and end and saving_rate > 0:
+                            octopus_saving_slot = {}
+                            octopus_saving_slot["start"] = start
+                            octopus_saving_slot["end"] = end
+                            octopus_saving_slot["rate"] = saving_rate
+                            octopus_saving_slot["state"] = state
+                            octopus_saving_slots.append(octopus_saving_slot)
+                            self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
 
                     # In saving session that's not reported, assumed 30-minutes
                     if state and not joined_events:
