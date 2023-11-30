@@ -2728,6 +2728,12 @@ class PredBat(hass.Hass):
         difference_minutes = int((difference.seconds + 59) / 60)
         return difference_minutes
 
+    def dp0(self, value):
+        """
+        Round to 0 decimal places
+        """
+        return round(value)
+
     def dp1(self, value):
         """
         Round to 1 decimal place
@@ -7712,9 +7718,9 @@ class PredBat(hass.Hass):
                 save="best",
                 end_record=self.end_record,
             )
-            # round charge_limit_best and discharge_limits_best to nearest whole number as soc's are integer values
-            self.charge_limit_best = [ int(round(elem,0)) for elem in self.charge_limit_best ]
-            self.discharge_limits_best = [ round(elem, 0) for elem in self.discharge_limits_best ]
+            # round charge_limit_best (kWh) to 1 decimal place and discharge_limits_best (percentage) to nearest whole number  gc
+            self.charge_limit_best = [ self.dp1(elem) for elem in self.charge_limit_best ]
+            self.discharge_limits_best = [ self.dp0(elem) for elem in self.discharge_limits_best ]
             
             self.log(
                 "Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format(
