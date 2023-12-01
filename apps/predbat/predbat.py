@@ -7901,9 +7901,9 @@ class PredBat(hass.Hass):
                 end_record=self.end_record,
             )
             # round charge_limit_best (kWh) to 2 decimal places and discharge_limits_best (percentage) to nearest whole number  gc
-            self.charge_limit_best = [ self.dp2(elem) for elem in self.charge_limit_best ]
-            self.discharge_limits_best = [ self.dp0(elem) for elem in self.discharge_limits_best ]
-            
+            self.charge_limit_best = [self.dp2(elem) for elem in self.charge_limit_best]
+            self.discharge_limits_best = [self.dp0(elem) for elem in self.discharge_limits_best]
+
             self.log(
                 "Best charging limit socs {} export {} gives import battery {} house {} export {} metric {} metric10 {}".format(
                     self.charge_limit_best,
