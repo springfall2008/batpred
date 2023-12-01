@@ -1,5 +1,7 @@
 # Predbat
 
+![image](https://github.com/springfall2008/batpred/actions/workflows/linting.yml/badge.svg)
+
 ## Introduction
 
 Home battery prediction and automatic charging for Home Assistant with GivTCP
