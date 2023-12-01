@@ -68,6 +68,7 @@ Modbus
 myenergi
 nattribute
 nearr
+nord
 Nordpool
 octopoints
 Ohme
