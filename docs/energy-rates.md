@@ -2,7 +2,8 @@
 
 ## Octopus Energy Plugin
 
-- If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working ([https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/))
+- If you want to use real pricing data and have Octopus Energy then ensure you have the Octopus Energy plugin installed and working
+([https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy](https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/))
 - The Octopus Energy Plugin also provides support for Intelligent Octopus charging to support car charging
 - When **octopus_intelligent_charging** is True and you are on Intelligent Octopus import the car charging plan will be
 extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
@@ -13,14 +14,15 @@ For Predbat to automatically manage saving sessions you will need to make sure t
 in apps.yaml to point to the saving session binary sensor supported by the Octopus Energy plugin (see template apps.yaml
 for the default name)
 
-When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken 
+When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken
 from the Octopus Energy add-in (v9.1.0 and above) or if not reported it can be set in Home Assistant with
 **input_number.predbat_metric_octopus_saving_rate** (default is 0 so must be set if used).
 
 If you are using expert mode, for best results: **switch.predbat_combine_charge_slots** (_expert mode_) is turned off.
 Set **input_number.rate_low_threshold** (_expert mode_) and **input_number.rate_high_threshold** (_expert mode_) to 0 for automatic mode.
 
-For forced export you need to ensure that **switch.predbat_calculate_best_discharge** is enabled and that **switch.predbat_set_discharge_freeze_only** is disabled. If you do not have an export tariff then forced export will not apply.
+For forced export you need to ensure that **switch.predbat_calculate_best_discharge** is enabled and that **switch.predbat_set_discharge_freeze_only** is disabled.
+If you do not have an export tariff then forced export will not apply.
 
 ## Rate bands
 

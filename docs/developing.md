@@ -193,7 +193,7 @@ This section will be enhanced following discussions as we go.
 
 However, here's a starting point:
 
-* Variable names should be `lower_case_with_underscores` - this fits
+- Variable names should be `lower_case_with_underscores` - this fits
 with most existing variables, is a common standard for Python code,
 and also allows the spell checking to check individual words within
 the variable name.
@@ -218,13 +218,13 @@ it won't apply on your branch until you've merged in their changes.
 
 Some of the tools have their own related config files:
 
-* CSpell - `.cspell.json` and `.cspell/custom-dictionary-workspace.txt`
-* Black - `pyproject.toml`
-* Markdown Lint - `.markdownlint.jsonc`
+- CSpell - `.cspell.json` and `.cspell/custom-dictionary-workspace.txt`
+- Black - `pyproject.toml`
+- Markdown Lint - `.markdownlint.jsonc`
 
 Additional notes on some of the standards:
 
-* CSpell - if you have the spelling check failing due to a word which is valid
+- CSpell - if you have the spelling check failing due to a word which is valid
 but is not in the in-built dictionary, please add that word to the end
 of `.cspell/custom-dictionary-workspace.txt` and stage those changes.
 The spell-check should then pass. Note, the dictionary file will get
@@ -238,17 +238,17 @@ installed automatically. You can run it manually, or automatically.
 
 Running `pre-commit` manually:
 
-* Running `pre-commit` will run all the checks against any files that you
+- Running `pre-commit` will run all the checks against any files that you
 have modified and staged.
 
-* Alternatively, running `pre-commit run --all-files` will run all the checks
+- Alternatively, running `pre-commit run --all-files` will run all the checks
 against all files within the repository.
 
-* Note that if `pre-commit` makes any changes to any files when it runs,
+- Note that if `pre-commit` makes any changes to any files when it runs,
 those changes will not be staged. You will need to stage those changes too
 before committing.
 
-* You may notice `pre-commit` mentioning about stashing changes - this is
+- You may notice `pre-commit` mentioning about stashing changes - this is
 because when it runs, any changes that aren't stages are stashed (saved
 away temporarily) so it runs against only the staged changes;
 after it has run, it pulls back those stashed changes, so they appear
@@ -256,16 +256,16 @@ again (still unstaged).
 
 Running `pre-commit` automatically:
 
-* If you run `pre-commit install` it will install a pre-commit hook -
+- If you run `pre-commit install` it will install a pre-commit hook -
 this is a file which tells `git` to run some code each type you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).
 
-* Now, any time you perform a commit, `pre-commit` will run
+- Now, any time you perform a commit, `pre-commit` will run
 automatically on the staged files - this is a handy way of making sure
 that you don't accidentally commit code which will fail checks later.
 
-* You can still run it manually as outlined above, in addition to the
+- You can still run it manually as outlined above, in addition to the
 automated checks that it will do on commits.
 
 #### Running the checks from within GitHub

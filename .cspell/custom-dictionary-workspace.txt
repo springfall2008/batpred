@@ -69,6 +69,7 @@ myenergi
 nattribute
 nearr
 Nordpool
+octopoints
 Ohme
 oncharge
 pdata
