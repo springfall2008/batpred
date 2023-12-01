@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.19"
+THIS_VERSION = "v7.13.20"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -335,6 +335,7 @@ CONFIG_ITEMS = [
     },
     {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True},
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
+    {"name": "octopus_intelligent_ignore_unplugged", "friendly_name": "Ignore Intelligent slots when car is unplugged", "type": "switch", "default": False},
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch", "enable": "expert_mode", "default": True},
@@ -1769,16 +1770,15 @@ class Inverter:
         new_start_minutes = charge_start_time.hour * 60 + charge_start_time.minute
         new_end_minutes = charge_end_time.hour * 60 + charge_end_time.minute
 
-        self.base.log("Set window new start {} end {}".format(new_start_minutes, new_end_minutes))
-
         # If we are in the new window no need to disable
         if minutes_now >= new_start_minutes and minutes_now < new_end_minutes:
             in_new_window = True
 
         # Disable charging if required, for REST no need as we change start and end together anyhow
         if not in_new_window and not self.rest_api and ((new_start != old_start) or (new_end != old_end)):
-            self.disable_charge_window(notify=False)
-            have_disabled = True
+            if self.inv_has_charge_enable_time:
+                self.disable_charge_window(notify=False)
+                have_disabled = True
 
         # Program start slot
         if new_start != old_start:
@@ -8427,12 +8427,15 @@ class PredBat(hass.Hass):
                 # Use octopus slots for charging?
                 if self.octopus_intelligent_charging:
                     self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
-                    self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
-                self.log(
-                    "Car 0 using Octopus, charging limit {}, ready time {} - battery size {}".format(
-                        self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]
-                    )
-                )
+                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]:
+                        self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
+                        self.log(
+                            "Car 0 using Octopus Intelligent, charging limit {}, ready time {} - battery size {}".format(
+                                self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]
+                            )
+                        )
+                    else:
+                        self.log("Car 0 using Octopus Intelligent is unplugged")
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
@@ -8785,6 +8788,7 @@ class PredBat(hass.Hass):
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
+        self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
@@ -8971,7 +8975,6 @@ class PredBat(hass.Hass):
                 self.expose_config(item["name"], value)
                 self.update_pending = True
                 self.plan_valid = False
-                return
 
     def number_event(self, event, data, kwargs):
         """
@@ -8992,7 +8995,6 @@ class PredBat(hass.Hass):
                 self.expose_config(item["name"], value)
                 self.update_pending = True
                 self.plan_valid = False
-                return
 
     def switch_event(self, event, data, kwargs):
         """
@@ -9022,7 +9024,6 @@ class PredBat(hass.Hass):
                 self.expose_config(item["name"], value)
                 self.update_pending = True
                 self.plan_valid = False
-                return
 
     def get_ha_config(self, name, default):
         """
