@@ -103,6 +103,10 @@ when disabled all low rate slots will be used in time order.
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
 
+If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_intelligent_ignore_unplugged'**
+can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
+if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
+
 ## Calculation options
 
 **switch.predbat_calculate_best_charge** If set to False then charge windows will not be calculated and the
