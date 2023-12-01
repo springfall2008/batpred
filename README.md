@@ -1,6 +1,7 @@
 # Predbat
 
-![image](https://github.com/springfall2008/batpred/actions/workflows/linting.yml/badge.svg)
+![image](https://github.com/springfall2008/batpred/actions/workflows/code-quality.yml/badge.svg)
+![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
 
 ## Introduction
 
