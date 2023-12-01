@@ -1,4 +1,4 @@
-name: linting
+name: code-quality
 on:
   pull_request:
 jobs:
