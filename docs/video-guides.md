@@ -14,7 +14,7 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 
 ## AppDaemon
 
-- Fixing the new version so HACS still works: https://www.loom.com/share/d1f9e4432c2443eca1e236939b25bb99?sid=fe0627c7-85c1-4de4-a778-de50b58e4687
+- Fixing the new version so HACS still works: <https://www.loom.com/share/d1f9e4432c2443eca1e236939b25bb99?sid=fe0627c7-85c1-4de4-a778-de50b58e4687>
 - Log files: [https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
 
 ## Historical data
@@ -31,7 +31,7 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 ## Charts
 
 - Understand the charts: [https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038](https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038)
-- How to understand Predbat plans: https://www.loom.com/share/e55b578d08c7414788e88948325907fa?sid=279ff3e5-01a2-4f81-a316-b3d3b2697e8a
+- How to understand Predbat plans: <https://www.loom.com/share/e55b578d08c7414788e88948325907fa?sid=279ff3e5-01a2-4f81-a316-b3d3b2697e8a>
 
 ## Tariffs
 

@@ -1,0 +1,18 @@
+{
+    "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+    "version": "0.2",
+
+    "dictionaries": ["custom-dictionary-workspace"],
+
+    "dictionaryDefinitions": [
+        {
+            "name": "custom-dictionary-workspace",
+            "path": "./.cspell/custom-dictionary-workspace.txt",
+            "addWords": true
+        }
+    ],
+    "import": [
+        "@cspell/dict-en-gb/cspell-ext.json"
+    ],
+    "language": "en,en-GB"
+}
