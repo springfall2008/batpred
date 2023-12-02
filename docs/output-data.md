@@ -120,6 +120,137 @@ The calculated best results under PV 10% scenario:
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
-Example data out:
+## Sample predbat data out
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
+
+## Monitoring that predbat and GivTCP are running OK
+
+With GivTCP and predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
+you may find these automations useful to monitor that GivTCP and predbat are running OK, and if not, to raise an alert on your mobile device.
+
+### GivTCP activity monitor
+
+This automation will raise an alert if any of the following occur:
+
+- The inverter goes offline for more than 30 minutes
+- No last_updated_time received from the inverter for more than 30 minutes
+- The battery goes offline to the inverter for more than 30 minutes
+
+The script will need to be customised for your inverter id, battery id and mobile details, and can be extended for multiple inverters and batteries.
+
+```yaml
+alias: GivTCP activity monitor
+description: Alert when communications to GivTCP have ceased for 30 minutes
+trigger:
+  - platform: state
+    entity_id: sensor.givtcp_<inverter id>_last_updated_time
+    to: null
+    for:
+      minutes: 30
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
+  - platform: state
+    entity_id:
+      - sensor.givtcp_<inverter id>_status
+    from: online
+    for:
+      minutes: 30
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
+  - platform: state
+    entity_id:
+      - sensor.givtcp_<battery id>_battery_cells
+    to: unknown
+    for:
+      minutes: 30
+    id: battery-unavailable
+    variables:
+      batt_id: <batt size/id>
+action:
+  - condition: trigger
+    id:
+      - no-givtcp-update
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        No GivTCP update received from {{ inv_id }} for the past 30 minutes.
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+  - condition: trigger
+    id:
+      - battery-unavailable
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        Battery {{ batt_id }} offline to GivTCP for the past 30 minutes.
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+mode: single
+```
+
+### predbat error monitor
+
+This automation will raise an alert if predbat's status turns to *ERROR* for more than 10 minutes.
+
+The script will need to be customised for your mobile details.
+
+```yaml
+alias: predbat error monitor
+description: Alert when predbat has raised an exception
+trigger:
+  - platform: state
+    entity_id:
+      - predbat.status
+    to: "ERROR: Exception raised"
+    for:
+      minutes: 10
+  - platform: template
+    value_template: "{{ 'ERROR' in states('predbat.status') }}"
+    for:
+      minutes: 10
+action:
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: predbat status issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE: 
+        predbat status is {{ states('predbat.status') }}
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+mode: single
+```
+
+An error alert looks like this:
+
+![image](images/predbat-status-issue.png)
