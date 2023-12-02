@@ -21,7 +21,7 @@ is the suggested amount (to match energy rate cycles)
 The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
 
 - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
-- **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match:
+- **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
 
 ## Historical data
 
@@ -34,9 +34,22 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 - **export_today** - GivTCP Exported energy today in kWh (incrementing)
 - **pv_today**     - GivTCP PV energy today in kWh (incrementing)
 
+If you have multiple inverters then you may find that the load_today figures from GivTCP are incorrect as the inverters share the house load between them.
+In this circumstance one solution is to create a template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
+
+e.g.
+
+```yaml
+{{ states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
++ states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
+- states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) - <inverter 2>...
++ states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+- states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) }}
+```
+
 ### GivEnergy Cloud Data
 
-   If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes
+   If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
 
 - **ge_cloud_data**   - When True use the GE Cloud for data rather than load_today, import_today and export_today
 - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
@@ -71,7 +84,7 @@ to 99 to workaround some gen2 inverters which refuse to be set to 100.
 ### REST Interface inverter control
 
 - **givtcp_rest** - One per Inverter, sets the REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal one). When enabled the Control per inverter below isn't used and instead communication is directly via REST and
+is the normal one for the first inverter). When enabled the Control per inverter below isn't used and instead communication is directly via REST and
 thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
 
 To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
@@ -124,13 +137,13 @@ They are set to a regular expression and auto-discovered but you can comment out
  events which are disabled by the plugin by default:
 
  ```yaml
-         event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
-         event.octopus_energy_electricity_xxxxxxxx_current_day_rates
-         event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
 
-         event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
-         event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
-         event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
  ```  
 
 - **octopus_intelligent_slot** - If you have Intelligent Octopus and the Octopus Energy plugin installed point to the 'slot' sensor
@@ -147,10 +160,12 @@ Or you can override these by manually supplying an octopus pricing URL (expert f
 
 ## Standing charge
 
-Predbat also include the daily standing charge in cost predictions (optional)
+Predbat also includes the daily standing charge in cost predictions (optional)
 
 - **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that
 stores this information (e.g. Octopus Plugin).
+
+Delete this line from apps.yaml or set to zero if you don't want the standing charge (and only have consumption usage) to be included in predbat charts and output data.
 
 ## Manual energy rates
 
@@ -164,32 +179,36 @@ Or manually set your rates in a 24-hour period using these:
   rates_export:
     - start : "HH:MM:SS"
       end : "HH:MM:SS"
-      rate : p
+      rate : pence
 ```
 
 **start** and **end** are in time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
 rate is in pence e.g. 4.2
 
+## Manually Over-riding energy rates
+
 You can also override the energy rates (regardless of if they are set manually or via Octopus) using the override feature.
 The override is used to set times where rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two)
 
+```yaml
   rates_import_override:
     - start : "HH:MM:SS"
       end : "HH:MM:SS"
-      rate : p
+      rate : pence
       date : "YYYY-MM-DD"
   rates_export_override:
     - start : "HH:MM:SS"
       end : "HH:MM:SS"
-      rate : p
+      rate : pence
       date : "YYYY-MM-DD"
+```
 
 **date** is in date format of "YYYY-MM-DD" e.g. "2023-09-09"
 
 ## Car charging filtering
 
-You might want to remove your electric car charging data from the historical load as to not bias the calculations, otherwise you will get
-high charge levels when the car was charged previously (e.g. last week)
+You might want to remove your electric car charging data from the historical load so as to not bias the calculations, otherwise you will get
+high charge levels when the car was charged previously (e.g. last week).
 
 - **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either
 charge from the grid or you use the Octopus Energy plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
@@ -199,7 +218,7 @@ more accurate car charging data to filter out
 
 ## Planned car charging
 
-These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus set up you won't need to change
+These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus set up then you won't need to change
 these as it's done automatically via their app and the Octopus Energy plugin.
 
 - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account
@@ -208,7 +227,7 @@ for battery load and generating the slot information
 Only needed if you don't use Intelligent Octopus:
 
 - **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate
-slots, or False to disable or True to always enable
+slots, or False to disable, or True to always enable
 - **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge
 in the next low rate slot
 - **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw).
@@ -219,7 +238,7 @@ slot is used for charging regardless of the plan. If Octopus Intelligent Chargin
 the car/house, otherwise rates are taken from the normal rate data.
 - **car_charging_now_response** - Sets the range of positive responses for **car_charging_now**, useful if you have a sensor for your car that isn't binary.
 
-- **car_charging_plan_time** - When using Batpred led planning set this to the time you want the car to be charged by
+- **car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
 - **car_charging_plan_smart** - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
 
 Connect to your cars sensors for accurate data:
@@ -245,6 +264,8 @@ charging plan, e.g. you are using Intelligent Octopus or you use the car slots i
 ## Workarounds
 
 - **switch.predbat_set_read_only** - When set prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
+Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
+This is useful if you want to over-ride what predbat is planning to do, or whilst you are learning how predbat works prior to turning it on 'in anger'.
 - **battery_scaling** - Scales the battery reported SOC kWh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going
 to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
 - **import_export_scaling** - Scaling the import & export data from GivTCP - used for workarounds
@@ -256,7 +277,7 @@ reported size. If your battery size is reported wrongly maybe try turning this o
 - **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
 - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some
 gen2 inverters which refuse to be set to 100.
-- **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see Planned car charging
+- **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see [Planned car charging](#planned-car-charging)
 
 ## Balance Inverters
 
@@ -266,26 +287,29 @@ When enabled balance inverters tries to recover this situation by disabling eith
 The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your
 machine is fast enough, but the default is 60 seconds.
 
-Enable **switch.predbat_balance_inverters_enable** switch in Home Assistant to enable this feature.
+Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant to enable this feature.
 
-**switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
-**switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
-**switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
-**input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
-**input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
+- **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
+- **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
+- **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+- **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
+- **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
 
 ## Triggers
 
-The trigger figure is useful to help trigger your own automation based on having spare solar energy or battery that you would otherwise export
+The trigger feature is useful to help trigger your own automation based on predbat determining that you have spare solar energy or battery that you would otherwise export
 
 The triggers count export energy until the next active charge slot only.
 
-For each trigger give a name, the minutes of export needed and the energy required in that time
-Multiple triggers can be set at once so in total you could use too much energy if all run
-Each trigger create an entity called 'binary_sensor.predbat_export_trigger_[name]' which will be turned On when the condition is valid
-connect this to your automation to start whatever you want to trigger.
+For each trigger give a name, the minutes of export needed and the energy required in that time.
 
-Set the name for each trigger, the number of minutes of solar export you need and the amount of energy in kwH you will need available during that time period.
+Multiple triggers can be set at once so in total you could use too much energy if all run!
+
+Each trigger create an entity called 'binary_sensor.predbat_export_trigger_[name]' which will be turned On when the condition is valid.
+
+Connect your automation to this binary sensor to start whatever you want to trigger.
+
+Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kwH you will need available during that time period in apps.yaml:
 
 For example:
 
@@ -301,23 +325,23 @@ For example:
 
 If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors
 
-**binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
-This does include charge freeze slots where the discharge rate is set to zero without charging the battery.
-**binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include
+- **binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
+Note that this does include charge freeze slots where the discharge rate is set to zero without charging the battery.
+- **binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include
 discharge freeze slots where the charge rate is set to zero to export excess solar only.
 
 ## Holiday mode
 
-When you go away you are likely to use less electric and so the previous load data will be quite pessimistic. Using the
+When you go away you are likely to use less electricity and so the previous load data will be quite pessimistic. Using the
 configuration item **input_number.predbat_holiday_days_left** in Home assistant you can set the number of full days that
 you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When
-holiday days left is non-zero holiday mode is active.
+holiday days left are non-zero, the holiday mode is active.
 
 When holiday mode is active the historical load data will be taken from yesterdays data (1 day ago) rather than from the **days_previous**
 setting in apps.yaml. This means Predbat will adjust more quickly to the new usage pattern.
 
 If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going
-to take longer for the historical data to catch up, you could then enable holiday more for another 7 days after your return.
+to take longer for the historical data to catch up, you could then enable holiday mode for another 7 days after your return.
 
 In summary:
 
