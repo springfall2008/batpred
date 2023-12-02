@@ -165,7 +165,7 @@ Predbat also includes the daily standing charge in cost predictions (optional)
 - **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that
 stores this information (e.g. Octopus Plugin).
 
-Delete this line from apps.yaml or set to zero if you don't want the standing charge (and only have consumption usage) to be included in predbat charts and output data.
+Delete this line from apps.yaml or set it to zero if you don't want the standing charge (and only have consumption usage) to be included in predbat charts and output data.
 
 ## Manual energy rates
 
@@ -182,7 +182,7 @@ Or manually set your rates in a 24-hour period using these:
       rate : pence
 ```
 
-**start** and **end** are in time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
+**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
 rate is in pence e.g. 4.2
 
 ## Manually Over-riding energy rates
@@ -203,7 +203,7 @@ The override is used to set times where rates are different, e.g. an Octopus Pow
       date : "YYYY-MM-DD"
 ```
 
-**date** is in date format of "YYYY-MM-DD" e.g. "2023-09-09"
+**date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09"
 
 ## Car charging filtering
 
@@ -218,7 +218,7 @@ more accurate car charging data to filter out
 
 ## Planned car charging
 
-These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus set up then you won't need to change
+These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus setup then you won't need to change
 these as it's done automatically via their app and the Octopus Energy plugin.
 
 - **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account
@@ -230,8 +230,8 @@ Only needed if you don't use Intelligent Octopus:
 slots, or False to disable, or True to always enable
 - **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge
 in the next low rate slot
-- **car_charging_rate** - Set to the cars charging rate (normally 7.5 for 7.5kw).
-- **car_charging_battery_size** - Indicates the cars battery size in kWh, defaults to 100. It will be used to predict car charging stops.
+- **car_charging_rate** - Set to the car's charging rate (normally 7.5 for 7.5kw).
+- **car_charging_battery_size** - Indicates the car's battery size in kWh, defaults to 100. It will be used to predict car charging stops.
 
 - **car_charging_now** - When set links to a sensor that tells you that the car is currently charging. Predbat will then assume this 30 minute
 slot is used for charging regardless of the plan. If Octopus Intelligent Charging is enabled then it will also assume it's a low rate slot for
@@ -282,7 +282,7 @@ gen2 inverters which refuse to be set to 100.
 ## Balance Inverters
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
-When enabled balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
+When enabled, balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
 The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your
 machine is fast enough, but the default is 60 seconds.
@@ -337,7 +337,7 @@ configuration item **input_number.predbat_holiday_days_left** in Home assistant 
 you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero. When
 holiday days left are non-zero, the holiday mode is active.
 
-When holiday mode is active the historical load data will be taken from yesterdays data (1 day ago) rather than from the **days_previous**
+When holiday mode is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous**
 setting in apps.yaml. This means Predbat will adjust more quickly to the new usage pattern.
 
 If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going
