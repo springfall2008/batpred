@@ -2,10 +2,11 @@
 
 ## Displaying output data
 
-Each config item has an input_number or switch associated with it, you can find an auto generated dashboard for your
-configuration in your AppDaeamon configuration area under the filename **predbat_dashboard.yaml**
+Each predbat config item has an input_number or switch associated with it, you can find an auto-generated dashboard for your
+configuration in your AppDaemon configuration area under the filename **predbat_dashboard.yaml**.
+You will need to open that file in a Home Assistant file editor and copy the contents into a new dashboard page.
 
-You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which
+You can also create a dashboard page using [dynamic-entities-card.yaml](dynamic-entities-card.yaml) for a dynamically created list of all predbat entities which
 groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
 ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
@@ -13,13 +14,13 @@ to be installed via HACS as well as the stock vertical stack card. Credit @DJBen
 
 ## Basic status
 
-- predbat.status - Gives the current status & errors and logs any adjustments made to your inverter
+- predbat.status - Gives the current status & errors and logs any changes that predbat makes to your inverter
 
 ## Baseline data
 
 What your battery is expected to do with no changes made by Predbat:
 
-- predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
+- predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out (stops at the maximum prediction time)
 - predbat.charge_limit - The current charge limit used for the scenario in %
 - predbat.charge_limit_kw - The current charge limit used for the scenario in kwH
 - predbat.duration - The duration of the prediction maximum in hours
@@ -28,7 +29,7 @@ What your battery is expected to do with no changes made by Predbat:
 - predbat.export_energy - Predicted export energy in kWh
 - predbat.import_energy - Predicted import energy in kWh
 - predbat.import_energy_battery - Predicted import energy to charge your home battery in kWh
-- predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate
+- predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
 - predbat.soc_kw - Predicted state of charge (in kWh) at the end of the prediction, not very useful in itself, but holds all
 minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - The minimum battery level during the time period in kWh
@@ -64,7 +65,7 @@ When calculate_best is enabled a second set of entities are created for the simu
 - predbat_soc_kw_best - Predicted best final state of charge (in kWh), holds minute by minute prediction data (in attributes) to be charted
 - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
-- predbat.soc_kw_best_h12 - Single data point for hte predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
+- predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
 - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost in attributes.
 - predbat.best_charge_limit - Predicted best battery charge limit in percent
 - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH

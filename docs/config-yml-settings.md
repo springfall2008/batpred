@@ -1,4 +1,4 @@
-# config.yml settings
+# apps.yaml settings
 
 ## Basics
 
