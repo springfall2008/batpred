@@ -236,7 +236,7 @@ action:
     data:
       title: predbat status issue
       message: |
-        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE: 
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
         predbat status is {{ states('predbat.status') }}
       data:
         visibility: public
