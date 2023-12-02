@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.21"
+THIS_VERSION = "v7.13.22"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8040,6 +8040,15 @@ class PredBat(hass.Hass):
                         )
                     )
                     minutes_start = inverter.charge_start_time_minutes
+
+                # Avoid having too long a period to configure as registers only support 24-hours
+                if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24*60):
+                    self.log(
+                        "Move on window start time to avoid wrap - new start {}".format(
+                            self.time_abs_str(minutes_start)
+                        )
+                    )
+                    minutes_start = int(self.minutes_now / 30) * 30
 
                 # Check if end is within 24 hours of now and end is in the future
                 if (minutes_end - self.minutes_now) < 24 * 60 and minutes_end > self.minutes_now:
