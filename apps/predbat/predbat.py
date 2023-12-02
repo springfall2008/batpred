@@ -6509,7 +6509,9 @@ class PredBat(hass.Hass):
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
         self.log(
-            "Try optimising charge window(s) {} price {} results {} selected {} was {}".format(all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc, charge_limit[window_n])
+            "Try optimising charge window(s) {} price {} results {} selected {} was {}".format(
+                all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc, charge_limit[window_n]
+            )
         )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
@@ -7863,14 +7865,14 @@ class PredBat(hass.Hass):
         if recompute:
             self.rate_best_cost_threshold_charge = None
             self.rate_best_cost_threshold_discharge = None
-        
+
         if self.calculate_best:
             self.log_option_best()
 
             # Full plan
             if recompute:
                 self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
-            
+
             # Tweak plan
             self.tweak_plan(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
@@ -7945,7 +7947,7 @@ class PredBat(hass.Hass):
             self.plan_valid = True
             self.plan_last_updated = self.now_utc
             self.plan_last_updated_minutes = self.minutes_now
-    
+
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
             best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(
