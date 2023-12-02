@@ -7079,7 +7079,8 @@ class PredBat(hass.Hass):
         best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
-        best_price = 9999
+        best_price = 0
+        best_price_discharge = 0
 
         # Optimise all windows by picking a price threshold default
         if price_set and self.calculate_best_charge and self.charge_window_best:
@@ -7725,19 +7726,26 @@ class PredBat(hass.Hass):
             self.log("Force recompute due to start of day")
             recompute = True
 
-        # Recompute as charge window ran out
-        if self.charge_window_best:
+        # Shift onto next charge window if required
+        while self.charge_window_best and not recompute:
             window = self.charge_window_best[0]
             if window["end"] <= self.minutes_now:
-                self.log("Force recompute as current charge window has expired")
-                recompute = True
+                del self.charge_window_best[0]
+                del self.charge_limit_best[0]
+                del self.charge_limit_percent_best[0]
+                self.log("Current charge window has expired, removing it")
+            else:
+                break
 
-        # Recompute as discharge window ran out
-        if self.discharge_window_best:
+        # Shift onto next discharge window if required
+        while self.discharge_window_best and not recompute:
             window = self.discharge_window_best[0]
             if window["end"] <= self.minutes_now:
-                self.log("Force recompute as current discharge window has expired")
-                recompute = True
+                del self.discharge_window_best[0]
+                del self.discharge_limits_best[0]
+                self.log("Current discharge window has expired, removing it")
+            else:
+                break
 
         # Recompute?
         if recompute:
