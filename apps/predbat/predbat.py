@@ -8042,13 +8042,9 @@ class PredBat(hass.Hass):
                     minutes_start = inverter.charge_start_time_minutes
 
                 # Avoid having too long a period to configure as registers only support 24-hours
-                if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24*60):
+                if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
                     minutes_start = int(self.minutes_now / 30) * 30
-                    self.log(
-                        "Move on charge window start time to avoid wrap - new start {}".format(
-                            self.time_abs_str(minutes_start)
-                        )
-                    )
+                    self.log("Move on charge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 # Check if end is within 24 hours of now and end is in the future
                 if (minutes_end - self.minutes_now) < 24 * 60 and minutes_end > self.minutes_now:
@@ -8137,13 +8133,9 @@ class PredBat(hass.Hass):
                     minutes_start = inverter.discharge_start_time_minutes
 
                 # Avoid having too long a period to configure as registers only support 24-hours
-                if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24*60):
+                if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
                     minutes_start = int(self.minutes_now / 30) * 30
-                    self.log(
-                        "Move on discharge window start time to avoid wrap - new start {}".format(
-                            self.time_abs_str(minutes_start)
-                        )
-                    )
+                    self.log("Move on discharge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + 1))  # Add in 1 minute margin to allow Predbat to restore ECO mode
