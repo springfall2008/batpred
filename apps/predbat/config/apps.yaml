@@ -138,7 +138,8 @@ pred_bat:
   #  - 200
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
-  # inverter_reserve_max : 99
+  # Comment out if your inverter allows 100%
+  inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
