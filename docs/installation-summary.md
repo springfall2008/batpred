@@ -13,7 +13,7 @@ Please see the sections below for how to achieve each step. This is just a check
 6. If you use Octopus Energy then install the Octopus Energy plugin (if you haven't already)  - [Octopus Energy](install.md#octopus-energy)
     - CAUTION: You need to enable the events for previous, current and next rates for import and export in HA as the plugin leaves them disabled by default (see the above link for details)
 8. Go and edit apps.yml (in config/appdaemon/apps/predbat/config/apps.yml) to match your system - [config.yml settings](config-yml-settings.md)
-    - Inverter settings match the names in GivTCP -  should be automatic but if you have _2 names you will have to edit apps.yml)
+    - Inverter settings match the names in GivTCP -  should be automatic but if you have 2 names you will have to edit apps.yml)
         - You have set the right number of inverters (**num_inverters**)
         - Adjust your **inverter_limit** and **export_limit** as required
     - You have your energy rates set correctly either using Octopus Plugin or entered manually

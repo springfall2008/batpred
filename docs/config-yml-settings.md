@@ -165,7 +165,7 @@ Predbat also includes the daily standing charge in cost predictions (optional)
 - **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that
 stores this information (e.g. Octopus Plugin).
 
-Delete this line from apps.yaml or set it to zero if you don't want the standing charge (and only have consumption usage) to be included in predbat charts and output data.
+Delete this line from apps.yaml or set it to zero if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
 
 ## Manual energy rates
 
@@ -265,7 +265,7 @@ charging plan, e.g. you are using Intelligent Octopus or you use the car slots i
 
 - **switch.predbat_set_read_only** - When set prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
 Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
-This is useful if you want to over-ride what predbat is planning to do, or whilst you are learning how predbat works prior to turning it on 'in anger'.
+This is useful if you want to over-ride what predbat is planning to do, or whilst you are learning how Predbat works prior to turning it on 'in anger'.
 - **battery_scaling** - Scales the battery reported SOC kWh e.g. if you set 0.8 your battery is only 80% of reported capacity. If you are going
 to chart this you may want to use **predbat.soc_kw_h0** as your current status rather than the GivTCP entity so everything lines up
 - **import_export_scaling** - Scaling the import & export data from GivTCP - used for workarounds
@@ -297,7 +297,7 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 
 ## Triggers
 
-The trigger feature is useful to help trigger your own automation based on predbat determining that you have spare solar energy or battery that you would otherwise export
+The trigger feature is useful to help trigger your own automation based on Predbat determining that you have spare solar energy or battery that you would otherwise export
 
 The triggers count export energy until the next active charge slot only.
 

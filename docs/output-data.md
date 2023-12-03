@@ -2,11 +2,11 @@
 
 ## Displaying output data
 
-Each predbat config item has an input_number or switch associated with it, you can find an auto-generated dashboard for your
+Each Predbat config item has an input_number or switch associated with it, you can find an auto-generated dashboard for your
 configuration in your AppDaemon configuration area under the filename **predbat_dashboard.yaml**.
 You will need to open that file in a Home Assistant file editor and copy the contents into a new dashboard page.
 
-You can also create a dashboard page using [dynamic-entities-card.yaml](dynamic-entities-card.yaml) for a dynamically created list of all predbat entities which
+You can also create a dashboard page using [dynamic-entities-card.yaml](dynamic-entities-card.yaml) for a dynamically created list of all Predbat entities which
 groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
 ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
@@ -14,7 +14,7 @@ to be installed via HACS as well as the stock vertical stack card. Credit @DJBen
 
 ## Basic status
 
-- predbat.status - Gives the current status & errors and logs any changes that predbat makes to your inverter
+- predbat.status - Gives the current status & errors and logs any changes that Predbat makes to your inverter
 
 ## Baseline data
 
@@ -120,14 +120,14 @@ The calculated best results under PV 10% scenario:
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
-## Sample predbat data out
+## Sample Predbat data out
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
 
-## Monitoring that predbat and GivTCP are running OK
+## Monitoring that Predbat and GivTCP are running OK
 
-With GivTCP and predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
-you may find these automations useful to monitor that GivTCP and predbat are running OK, and if not, to raise an alert on your mobile device.
+With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
+you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device.
 
 ### GivTCP activity monitor
 
@@ -211,15 +211,15 @@ action:
 mode: single
 ```
 
-### predbat error monitor
+### Predbat error monitor
 
-This automation will raise an alert if predbat's status turns to *ERROR* for more than 10 minutes.
+This automation will raise an alert if Predbat's status turns to *ERROR* for more than 10 minutes.
 
 The script will need to be customised for your mobile details.
 
 ```yaml
 alias: predbat error monitor
-description: Alert when predbat has raised an exception
+description: Alert when Predbat has raised an exception
 trigger:
   - platform: state
     entity_id:
@@ -234,7 +234,7 @@ trigger:
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
-      title: predbat status issue
+      title: Predbat status issue
       message: |
         {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
         predbat status is {{ states('predbat.status') }}

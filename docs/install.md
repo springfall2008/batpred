@@ -69,14 +69,14 @@ Once installed you will get automatic updates from each release!
 *After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
 (If this happens you will get a template configuration error in the entity predbat.status).*
 
-Edit in HomeAssistant config/appdaemon/apps/batpred/config/apps.yaml to configure predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
+Edit in HomeAssistant config/appdaemon/apps/batpred/config/apps.yaml to configure Predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
 
 You must delete the 'template: True' line in the configuration to enable Predbat once you are happy with your configuration.
 
-You may initially want to set *switch.predbat_set_read_only* to True whilst you learn how predbat operates.
-Read-only mode prevents predbat from making any inverter changes but it will continue to predict and plan battery charging and discharging activity.
+You may initially want to set *switch.predbat_set_read_only* to True whilst you learn how Predbat operates.
+Read-only mode prevents Predbat from making any inverter changes but it will continue to predict and plan battery charging and discharging activity.
 
-Note that future updates to predbat will not overwrite apps.yaml, but you may need to copy settings for new features across manually
+Note that future updates to Predbat will not overwrite apps.yaml, but you may need to copy settings for new features across manually
 
 ## Predbat manual install
 
