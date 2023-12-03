@@ -258,7 +258,7 @@ again (still unstaged).
 
 Running `pre-commit` automatically:
 
-- If you run `pre-commit install` it will install a pre-commit hook -
+- If you run `pre-commit install` in a terminal window it will install a pre-commit hook -
 this is a file which tells `git` to run some code each type you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).
