@@ -7945,8 +7945,9 @@ class PredBat(hass.Hass):
 
             # Plan is now valid
             self.plan_valid = True
-            self.plan_last_updated = self.now_utc
-            self.plan_last_updated_minutes = self.minutes_now
+            if recompute:
+                self.plan_last_updated = self.now_utc
+                self.plan_last_updated_minutes = self.minutes_now
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
