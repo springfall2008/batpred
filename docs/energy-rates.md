@@ -14,9 +14,15 @@ For Predbat to automatically manage saving sessions you will need to make sure t
 in apps.yaml to point to the saving session binary sensor supported by the Octopus Energy plugin (see template apps.yaml
 for the default name)
 
-When a saving session is active the energy rates for import and export will be overridden with the assumed rate will be taken
-from the Octopus Energy add-in (v9.1.0 and above) or if not reported it can be set in Home Assistant with
-**input_number.predbat_metric_octopus_saving_rate** (default is 0 so must be set if used).
+When a saving session is available it will be automatically joined by Predbat and then should appear as a joined session
+within the next 30 minutes.
+
+When a saving session has been joined the energy rates for import and export will be overridden by adding the assumed saving rate
+to your normal rate. The assumed rate will be taken from the Octopus Energy add-in (v9.1.0 and above) and converted into pence
+using the **octopus_saving_session_octopoints_per_penny** configuration item in apps.yaml (default is 8).
+
+As the saving session import and export rates are very high compared to normal you would expect Predbat to export during the entire
+period if the battery is large amount, a pre-charge may happen at some point during the day to maintain the right level for the session.
 
 If you are using expert mode, for best results: **switch.predbat_combine_charge_slots** (_expert mode_) is turned off.
 Set **input_number.rate_low_threshold** (_expert mode_) and **input_number.rate_high_threshold** (_expert mode_) to 0 for automatic mode.
