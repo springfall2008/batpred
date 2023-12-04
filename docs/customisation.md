@@ -110,7 +110,7 @@ if **car_charging_planned** is set correctly in apps.yaml to detect your car bei
 ## Calculation options
 
 **switch.predbat_calculate_best_charge** If set to False then charge windows will not be calculated and the
-default inverter settings are used, when True predbat will decide the charge window automatically.
+default inverter settings are used, when True Predbat will decide the charge window automatically.
 
 **switch.predbat_calculate_best_discharge** If set to False then force discharge windows will not be calculated,
 when True they will be calculated. Default is True.
