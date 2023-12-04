@@ -38,9 +38,9 @@ converts AC power from the grid into DC to charge a battery.
 
 ### Predbat modes
 
-When you first install Predbat it will be in Monitor Only mode. 
+When you first install Predbat it will be in Monitor Only mode.
 
-Can you configure the mode of operation using the drop down menu in **select.predbat_mode**. 
+Can you configure the mode of operation using the drop down menu in **select.predbat_mode**.
 You will find a full description of the modes under: [Predbat Monitor Mode](customisation.md#predbat-monitor-mode)
 
 Once you are ready for Predbat to take control move this setting to one of the active control modes.

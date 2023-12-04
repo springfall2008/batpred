@@ -8929,10 +8929,10 @@ class PredBat(hass.Hass):
             self.calculate_best_discharge = False
             self.set_charge_window = False
             self.predbat_mode = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
-            self.expose_config('mode', self.predbat_mode)
-        
+            self.expose_config("mode", self.predbat_mode)
+
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
-        
+
         self.set_discharge_window = self.calculate_best_discharge
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge", True)
         self.calculate_second_pass = self.get_arg("calculate_second_pass", False)

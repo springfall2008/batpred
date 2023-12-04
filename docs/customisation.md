@@ -7,25 +7,25 @@ See [Displaying output data](output-data.md#displayng-output-data)
 for information on how to view and edit these entities within
 Home Assistant.
 
-
 ## Predbat mode
 
 The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop down menu as follows:
-   - Monitor
-   - Control SOC Only
-   - Control charge
-   - Control charge & discharge
+
+- Monitor
+- Control SOC Only
+- Control charge
+- Control charge & discharge
 
 If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
-Predbat operation while an automation takes over. 
+Predbat operation while an automation takes over.
 
-_CAUTION: If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to 
+_CAUTION: If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to
 the desired state yourself_
 
 ### Predbat Monitor mode
 
-In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show 
-just what is expected based on the current inverter configuration alone. 
+In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show
+just what is expected based on the current inverter configuration alone.
 
 ### Predbat Control SOC Only mode
 
