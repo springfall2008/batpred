@@ -7,6 +7,46 @@ See [Displaying output data](output-data.md#displayng-output-data)
 for information on how to view and edit these entities within
 Home Assistant.
 
+## Predbat mode
+
+The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop down menu as follows:
+
+- Monitor
+- Control SOC Only
+- Control charge
+- Control charge & discharge
+
+If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
+Predbat operation while an automation takes over.
+
+_CAUTION: If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to
+the desired state yourself_
+
+### Predbat Monitor mode
+
+In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show
+just what is expected based on the current inverter configuration alone.
+
+### Predbat Control SOC Only mode
+
+In **Control SOC Only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
+window will not be modified.  This can be useful if you just have one fixed
+charge slot per day and you only want Predbat to control the percentage.
+
+_CAUTION: If the charge window is disabled then no charging will take place._
+
+### Predbat Control Charge mode
+
+In **Control Charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
+disabled by Predbat.
+
+### Predbat Control Charge & Discharge mode
+
+In **Control Charge and Discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
+
+If you have set the **switch.predbat_set_discharge_freeze_only** to True then forced export won't occur but Predbat can force the export
+of solar power to the grid when desired.
+
 ## Expert mode
 
 Predbat has a toggle switch called **switch.predbat_expert_mode** which is off by default for new installs (on
@@ -109,17 +149,10 @@ if **car_charging_planned** is set correctly in apps.yaml to detect your car bei
 
 ## Calculation options
 
-**switch.predbat_calculate_best_charge** If set to False then charge windows will not be calculated and the
-default inverter settings are used, when True Predbat will decide the charge window automatically.
-
-**switch.predbat_calculate_best_discharge** If set to False then force discharge windows will not be calculated,
-when True they will be calculated. Default is True.
+See the Predbat mode setting as above for basic calculation options
 
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
-
-**switch.predbat_calculate_best** (_expert mode_) If you disable this toggle then Predbat will no longer
-work out it's own plan, it will only simulate the existing inverter settings (base).
 
 ## Battery margins and metrics options
 
@@ -180,10 +213,6 @@ in the charts template in Github).
 **set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
 
 **set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off). Off by default.
-
-**set_charge_window** When enabled the next charge window will be automatically configured based on the incoming rates.
-Will also automatically disable charging if not required and re-enable it when required.
-If you turn this off later check that 'GivTCP Enable Charge Schedule' is turned back on. Enabled by default.
 
 **set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
