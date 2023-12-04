@@ -400,7 +400,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
+        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR],
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
