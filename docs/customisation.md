@@ -19,8 +19,8 @@ The mode that Predbat operates in will change the operation, this can be configu
 If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
 Predbat operation while an automation takes over. 
 
-__CAUTION__ If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to 
-the desired state yourself.
+_CAUTION: If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to 
+the desired state yourself_
 
 ### Predbat Monitor mode
 
@@ -33,7 +33,7 @@ In **Control SOC Only** mode Predbat will adjust the target charge percentage (S
 window will not be modified.  This can be useful if you just have one fixed
 charge slot per day and you only want Predbat to control the percentage.
 
-__CAUTION: If the charge window is disabled then no charging will take place.__
+_CAUTION: If the charge window is disabled then no charging will take place._
 
 ### Predbat Control Charge mode
 
