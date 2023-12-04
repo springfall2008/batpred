@@ -23,6 +23,45 @@ things like freeze charging which could assume the PV will cover the house load 
 
 Below is a guide to some of the tariff options, in theory most tariffs will work out of the box but still it's worth reviewing your settings.
 
+## Predbat mode
+
+The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop down menu as follows:
+   - Monitor
+   - Control SOC Only
+   - Control charge
+   - Control charge & discharge
+
+If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
+Predbat operation while an automation takes over. 
+
+__CAUTION__ If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to 
+the desired state yourself.
+
+### Predbat Monitor mode
+
+In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show 
+just what is expected based on the current inverter configuration alone. 
+
+### Predbat Control SOC Only mode
+
+In **Control SOC Only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
+window will not be modified.  This can be useful if you just have one fixed
+charge slot per day and you only want Predbat to control the percentage.
+
+__CAUTION: If the charge window is disabled then no charging will take place.__
+
+### Predbat Control Charge mode
+
+In **Control Charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
+disabled by Predbat.
+
+### Predbat Control Charge & Discharge mode
+
+In **Control Charge and Discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
+
+If you have set the **switch.predbat_set_discharge_freeze_only** to True then forced export won't occur but Predbat can force the export
+of solar power to the grid when desired.
+
 ## Fixed daily rates
 
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
@@ -33,42 +72,40 @@ Below is a guide to some of the tariff options, in theory most tariffs will work
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-```yaml
-calculate_best_charge - True       # You want the tool to calculate charging
-set_charge_window - True           # You want to have Predbat control the charge window
-best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| select.predbat_mode      | Control Charge | You want the tool to calculate and control charging |
+| input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
+| switch.predbat_combine_charge_slots  | True   | Use one big charge slot |
 
 If you are using expert mode then these options maybe worth reviewing:
 
-```yaml
-forecast_plan_hours - 24           # If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow
-combine_charge_slots - True        # As you have just one overnight rate then one slot is fine
-metric_min_improvement - 0         # Charge less if it's cost neutral
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| input_number.predbat_forecast_plan_hours      | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
+| switch.predbat_combine_charge_slots | True  | As you have just one overnight rate then one slot is fine |
+| input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
 
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
 Follow the instructions from Cheap Night rate above, but also you will want to have automatic discharge when the export rates are profitable.
 
-```yaml
-calculate_best_charge - True       # You want the tool to calculate charging
-set_charge_window - True           # You want to have Predbat control the charge window
-calculate_best_discharge - True    # Enable discharge calculation
-best_soc_keep - 2.0                # Tweak this to control what battery level you want to keep as a backup in case you use more energy
-combine_charge_slots - True        # Use one big charge slot
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| select.predbat_mode      | Control Charge & Discharge | You want the tool to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep |  2.0  | Tweak this to control what battery level you want to keep as a backup in case you use more energy |
+| switch.predbat_combine_charge_slots  | True   | Use one big charge slot |
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
 
-```yaml
-predbat_metric_battery_cycle - ?        # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
-combine_charge_slots - True             # Keep one big charge slot
-metric_min_improvement - 0              # Charge less if it's cost neutral
-metric_min_improvement_discharge - 0.1  # Discharge even if cost neutral, as you often need many slots to see the improvement
-combine_charge_slots - ?                # If you set this to False then you can allow import in larger periods of day rates to fund extra export
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| input_number.predbat_forecast_plan_hours      | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
+| switch.predbat_combine_charge_slots | ? | Going to False will allow charging at more expensive day rates when it's worth it to export mode |
+| input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
+| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min |  ?  | Can be set non-zero if you want to force a minimum charge level |
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 
@@ -76,31 +113,39 @@ Follow the instructions from Cheap Night rate above, but also you will want to h
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-```yaml
-calculate_best_charge - True            # You want the tool to calculate charging
-set_charge_window - True                # You want to have Predbat control the charge window
-calculate_best_discharge - True         # Enable discharge calculation
-set_discharge_window - True             # Allow the tool to control the discharge slots
-best_soc_keep - 0.5                     # Use the full battery without going empty
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| select.predbat_mode      | Control Charge & Discharge | You want the tool to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep |  0.5  | Use the full battery without going empty |
+| switch.predbat_combine_charge_slots  | True   | Use one big charge slot |
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
 
-```yaml
-metric_battery_cycle - ?                # You can set this to maybe 2-5p if you want to avoid cycling the battery too much
-metric_min_improvement - 0              # Charge less if it's cost neutral
-metric_min_improvement_discharge - 0.1  # Make sure discharge only happens if it makes a profit
-combine_charge_slots - True             # Keep one big charge slot to speed things up
-best_soc_min - 0.0                      # Must be 0 or the charging will happen on all slots
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| input_number.predbat_forecast_plan_hours      | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
+| switch.predbat_combine_charge_slots | ? | Going to False will allow charging at more expensive day rates when it's worth it to export mode |
+| input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
+| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
 
 ## Half hourly variable rates (e.g. Octopus Agile)
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
-```yaml
-calculate_best_charge - True            # You want the tool to calculate charging
-set_charge_window - True                # You want to have Predbat control the charge window
-calculate_best_discharge - True        # Enable discharge calculation
-best_soc_keep - 0.5                     # Use the full battery without going empty
-```
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| select.predbat_mode      | Control Charge & Discharge | You want the tool to calculate and control charging and discharging |
+| input_number.predbat_best_soc_keep |  0.5  | Use the full battery without going empty |
+| switch.predbat_combine_charge_slots  | True   | Use one big charge slot |
+
+If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
+
+| Item |  Value  | Comment  |
+|---------|---------------|-------------|
+| input_number.predbat_forecast_plan_hours      | 24-48 | If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan |
+| input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
+| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
