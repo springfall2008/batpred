@@ -135,13 +135,13 @@ They are set to a regular expression and auto-discovered but you can comment out
 
 - **octopus_intelligent_slot** - If you have Octopus Intelligent GO and the Octopus Energy plugin installed point to the 'slot' sensor.
 
-This is used to find Intelligent Go slots and thus predict when your car will charge and report the additional low rate slots outside 
+This is used to find Intelligent Go slots and thus predict when your car will charge and report the additional low rate slots outside
 the normal low rate hours
 
 - **octopus_saving_session** - Points to the sensor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_XXXXX_saving_sessions).
 
 This is used to automatically join saving sessions and to determine the rate of the saving session. It's assumed the saving amount will
-be added to your import and export rates. This calculation assumes you normally consume zero during a saving session as you are a home 
+be added to your import and export rates. This calculation assumes you normally consume zero during a saving session as you are a home
 battery user.
 
 - **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence (currently 8)

@@ -4684,11 +4684,7 @@ class PredBat(hass.Hass):
                 end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
             if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
-                self.log(
-                    "Setting Octopus saving session in range {} - {} export {} rate {}".format(
-                        self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate
-                    )
-                )
+                self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
                         self.rate_export[minute] += rate
@@ -8538,8 +8534,8 @@ class PredBat(hass.Hass):
         # Octopus saving session
         octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
-            saving_rate = 200 # Default rate if not reported
-            octopoints_per_penny = self.get_arg('octopus_saving_session_octopoints_per_penny', 8) # Default 8 octopoints per found
+            saving_rate = 200  # Default rate if not reported
+            octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
 
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
