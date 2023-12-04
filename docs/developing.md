@@ -39,8 +39,8 @@ This includes:
     can connect to a copy of VS Code installed on your own
     machine
 - A terminal where you can run commands against your codebase
-e.g. running `mkdocs`, linting files etc.
-- Software like `mkdocs` (and other software we may include)
+e.g. running `pre-commit` to run the automatic code quality checks, linting files, etc.
+- Software like `mkdocs` to re-generate the documentation files (and other software we may include)
 pre-installed in it
 
 The Codespaces environment is entirely separate from your HA
@@ -82,7 +82,7 @@ Once you start your Codespaces environment, it'll take a minute to
 create a VM for you, and to install the software we've asked it to
 install in there. It will also clone your repository and chosen
 branch into it for you, and the VM will be authenticated with GitHub
-so you can commit and push straight back to GitHub.
+so you can commit and push straight back to your fork of Predbat on GitHub.
 
 You can choose between running the IDE in the browser, or having
 your local installation of VS Code connect to the environment that GitHub
@@ -168,7 +168,9 @@ as what works on GitHub READMEs, for example, does not
 necessarily work with the published documentation site
 (which follows a more strict Markdown standard).
 
-To run the live preview, run `mkdocs serve` - this will cause `mkdocs` to build a
+There are a number of terminal commands that you can use in the Codespaces environment. Open a terminal window in Codespaces by choosing menu > Terminal > New Terminal.
+
+To run the live preview, enter `mkdocs serve` in the terminal window - this will cause `mkdocs` to build a
 local temporary version of the documentation site,
 and to temporarily publish it on port 8000 - it will
 show the link where you can access the documentation.
@@ -238,7 +240,7 @@ installed automatically. You can run it manually, or automatically.
 
 Running `pre-commit` manually:
 
-- Running `pre-commit` will run all the checks against any files that you
+- In a terminal window, running `pre-commit` will run all the checks against any files that you
 have modified and staged.
 
 - Alternatively, running `pre-commit run --all-files` will run all the checks
@@ -249,14 +251,14 @@ those changes will not be staged. You will need to stage those changes too
 before committing.
 
 - You may notice `pre-commit` mentioning about stashing changes - this is
-because when it runs, any changes that aren't stages are stashed (saved
+because when it runs, any changes that aren't staged are stashed (saved
 away temporarily) so it runs against only the staged changes;
 after it has run, it pulls back those stashed changes, so they appear
 again (still unstaged).
 
 Running `pre-commit` automatically:
 
-- If you run `pre-commit install` it will install a pre-commit hook -
+- If you run `pre-commit install` in a terminal window it will install a pre-commit hook -
 this is a file which tells `git` to run some code each type you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).

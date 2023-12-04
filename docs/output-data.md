@@ -2,24 +2,29 @@
 
 ## Displaying output data
 
-Each config item has an input_number or switch associated with it, you can find an auto generated dashboard for your
-configuration in your AppDaeamon configuration area under the filename **predbat_dashboard.yaml**
+Each Predbat config item has an input_number or switch associated with it, you can find an auto-generated dashboard for your
+configuration in your AppDaemon configuration area under the filename **predbat_dashboard.yaml**.
+You will need to open that file in a Home Assistant file editor and copy the contents into a new dashboard page.
 
-You can also create a card using 'dynamic-entities-card.yaml' for a dynamically created list of entities for predbat which
-groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
+You can also create a dashboard page using [dynamic-entities-card.yaml](https://github.com/springfall2008/batpred/blob/main/dynamic-entities-card.yaml) for a
+dynamically created list of all Predbat entities which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
 ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
 to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
 
+The Predbat Plan card is very useful for seeing the plan that Predbat has created - [Create the Predbat Plan card](predbat-plan-card.md).
+
+A set of Apex Charts can also be created to see graphically what Predbat plans to do - [Creating the charts](creating-charts.md).
+
 ## Basic status
 
-- predbat.status - Gives the current status & errors and logs any adjustments made to your inverter
+- predbat.status - Gives the current status & errors and logs any changes that Predbat makes to your inverter
 
 ## Baseline data
 
 What your battery is expected to do with no changes made by Predbat:
 
-- predbat.battery_hours_left - The number of hours left until your home battery is predicated to run out (stops at the maximum prediction time)
+- predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out (stops at the maximum prediction time)
 - predbat.charge_limit - The current charge limit used for the scenario in %
 - predbat.charge_limit_kw - The current charge limit used for the scenario in kwH
 - predbat.duration - The duration of the prediction maximum in hours
@@ -28,7 +33,7 @@ What your battery is expected to do with no changes made by Predbat:
 - predbat.export_energy - Predicted export energy in kWh
 - predbat.import_energy - Predicted import energy in kWh
 - predbat.import_energy_battery - Predicted import energy to charge your home battery in kWh
-- predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate
+- predbat.import_energy_house - Predicted import energy not provided by your home battery (flat battery or above maximum discharge rate)
 - predbat.soc_kw - Predicted state of charge (in kWh) at the end of the prediction, not very useful in itself, but holds all
 minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - The minimum battery level during the time period in kWh
@@ -64,7 +69,7 @@ When calculate_best is enabled a second set of entities are created for the simu
 - predbat_soc_kw_best - Predicted best final state of charge (in kWh), holds minute by minute prediction data (in attributes) to be charted
 - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
-- predbat.soc_kw_best_h12 - Single data point for hte predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
+- predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
 - predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost in attributes.
 - predbat.best_charge_limit - Predicted best battery charge limit in percent
 - predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
@@ -119,6 +124,137 @@ The calculated best results under PV 10% scenario:
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
-Example data out:
+## Sample Predbat data out
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
+
+## Monitoring that Predbat and GivTCP are running OK
+
+With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
+you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device.
+
+### GivTCP activity monitor
+
+This automation will raise an alert if any of the following occur:
+
+- The inverter goes offline for more than 30 minutes
+- No last_updated_time received from the inverter for more than 30 minutes
+- The battery goes offline to the inverter for more than 30 minutes
+
+The script will need to be customised for your inverter id, battery id and mobile details, and can be extended for multiple inverters and batteries.
+
+```yaml
+alias: GivTCP activity monitor
+description: Alert when communications to GivTCP have ceased for 30 minutes
+trigger:
+  - platform: state
+    entity_id: sensor.givtcp_<inverter id>_last_updated_time
+    to: null
+    for:
+      minutes: 30
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
+  - platform: state
+    entity_id:
+      - sensor.givtcp_<inverter id>_status
+    from: online
+    for:
+      minutes: 30
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
+  - platform: state
+    entity_id:
+      - sensor.givtcp_<battery id>_battery_cells
+    to: unknown
+    for:
+      minutes: 30
+    id: battery-unavailable
+    variables:
+      batt_id: <batt size/id>
+action:
+  - condition: trigger
+    id:
+      - no-givtcp-update
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        No GivTCP update received from {{ inv_id }} for the past 30 minutes.
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+  - condition: trigger
+    id:
+      - battery-unavailable
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        Battery {{ batt_id }} offline to GivTCP for the past 30 minutes.
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+mode: single
+```
+
+### Predbat error monitor
+
+This automation will raise an alert if Predbat's status turns to *ERROR* for more than 10 minutes.
+
+The script will need to be customised for your mobile details.
+
+```yaml
+alias: predbat error monitor
+description: Alert when Predbat has raised an exception
+trigger:
+  - platform: state
+    entity_id:
+      - predbat.status
+    to: "ERROR: Exception raised"
+    for:
+      minutes: 10
+  - platform: template
+    value_template: "{{ 'ERROR' in states('predbat.status') }}"
+    for:
+      minutes: 10
+action:
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: Predbat status issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        predbat status is {{ states('predbat.status') }}
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+        sticky: true
+        color: red
+mode: single
+```
+
+An error alert looks like this:
+
+![image](images/predbat-status-issue.png)

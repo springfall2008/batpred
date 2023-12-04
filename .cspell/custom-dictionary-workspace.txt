@@ -112,6 +112,7 @@ timestr
 timezone
 Trefor
 treforsiphone
+unstaged
 Wallbox
 xaxis
 yaxis
