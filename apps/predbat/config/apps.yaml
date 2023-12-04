@@ -245,8 +245,9 @@ pred_bat:
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
-  # rate configured with input_number.predbat_metric_octopus_saving_rate in-side HA
+  # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
+  octopus_saving_session_octopoints_per_pound: 8
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
