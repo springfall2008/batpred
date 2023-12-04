@@ -70,6 +70,7 @@ nattribute
 nearr
 nord
 Nordpool
+octoplus
 octopoints
 Ohme
 oncharge
