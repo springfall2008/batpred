@@ -23,45 +23,6 @@ things like freeze charging which could assume the PV will cover the house load 
 
 Below is a guide to some of the tariff options, in theory most tariffs will work out of the box but still it's worth reviewing your settings.
 
-## Predbat mode
-
-The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop down menu as follows:
-   - Monitor
-   - Control SOC Only
-   - Control charge
-   - Control charge & discharge
-
-If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
-Predbat operation while an automation takes over. 
-
-__CAUTION__ If you use Read only mode while the inverter is in a particular state e.g. with discharge disable, you will need to return it to 
-the desired state yourself.
-
-### Predbat Monitor mode
-
-In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show 
-just what is expected based on the current inverter configuration alone. 
-
-### Predbat Control SOC Only mode
-
-In **Control SOC Only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
-window will not be modified.  This can be useful if you just have one fixed
-charge slot per day and you only want Predbat to control the percentage.
-
-__CAUTION: If the charge window is disabled then no charging will take place.__
-
-### Predbat Control Charge mode
-
-In **Control Charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
-disabled by Predbat.
-
-### Predbat Control Charge & Discharge mode
-
-In **Control Charge and Discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
-
-If you have set the **switch.predbat_set_discharge_freeze_only** to True then forced export won't occur but Predbat can force the export
-of solar power to the grid when desired.
-
 ## Fixed daily rates
 
 - In this case you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.
