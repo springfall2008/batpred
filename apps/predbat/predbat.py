@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.24"
+THIS_VERSION = "v7.14"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -42,6 +42,12 @@ for minute in range(0, 24 * 60, 5):
     OPTIONS_TIME.append(timestr)
 
 INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
+
+PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
+PREDBAT_MODE_MONITOR = 0
+PREDBAT_MODE_CONTROL_SOC = 1
+PREDBAT_MODE_CONTROL_CHARGE = 2
+PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
 CONFIG_ITEMS = [
     {
@@ -327,9 +333,6 @@ CONFIG_ITEMS = [
     {"name": "octopus_intelligent_ignore_unplugged", "friendly_name": "Ignore Intelligent slots when car is unplugged", "type": "switch", "default": False},
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
-    {"name": "calculate_best", "friendly_name": "Calculate Best", "type": "switch", "enable": "expert_mode", "default": True},
-    {"name": "calculate_best_charge", "friendly_name": "Calculate Best Charge", "type": "switch", "default": True},
-    {"name": "calculate_best_discharge", "friendly_name": "Calculate Best Discharge", "type": "switch", "default": True},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
@@ -347,7 +350,6 @@ CONFIG_ITEMS = [
     },
     {"name": "combine_charge_slots", "friendly_name": "Combine Charge Slots", "type": "switch", "default": True},
     {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", "enable": "expert_mode", "default": False},
-    {"name": "set_charge_window", "friendly_name": "Set Charge Window", "type": "switch", "default": True},
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", "default": True},
     {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", "default": False},
     {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", "enable": "expert_mode", "default": True},
@@ -391,6 +393,14 @@ CONFIG_ITEMS = [
         "options": OPTIONS_TIME,
         "icon": "mdi:clock-end",
         "default": "07:00:00",
+    },
+    {
+        "name": "mode",
+        "friendly_name": "Predbat mode",
+        "type": "select",
+        "options": PREDBAT_MODE_OPTIONS,
+        "icon": "mdi:state-machine",
+        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
@@ -7733,8 +7743,7 @@ class PredBat(hass.Hass):
         Log options
         """
         opts = ""
-        opts += "calculate_best_charge({}) ".format(self.calculate_best_charge)
-        opts += "calculate_best_discharge({}) ".format(self.calculate_best_discharge)
+        opts += "mode({}) ".format(self.predbat_mode)
         opts += "calculate_discharge_oncharge({}) ".format(self.calculate_discharge_oncharge)
         opts += "set_discharge_freeze_only({}) ".format(self.set_discharge_freeze_only)
         opts += "set_discharge_during_charge({}) ".format(self.set_discharge_during_charge)
@@ -8885,7 +8894,7 @@ class PredBat(hass.Hass):
         if self.inverter_type != "GE":
             self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
 
-        self.calculate_best = self.get_arg("calculate_best")
+        self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
 
         # hard wired options, can be configured per inverter later on
@@ -8900,9 +8909,30 @@ class PredBat(hass.Hass):
         self.set_inverter_notify = self.get_arg("set_inverter_notify")
         self.set_discharge_freeze_only = self.get_arg("set_discharge_freeze_only")
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
-        self.set_charge_window = self.get_arg("set_charge_window")
-        self.calculate_best_charge = self.get_arg("calculate_best_charge")
-        self.calculate_best_discharge = self.get_arg("calculate_best_discharge")
+
+        # Mode
+        self.predbat_mode = self.get_arg("mode")
+        if self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_SOC]:
+            self.calculate_best_charge = True
+            self.calculate_best_discharge = False
+            self.set_charge_window = False
+        elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGE]:
+            self.calculate_best_charge = True
+            self.calculate_best_discharge = False
+            self.set_charge_window = True
+        elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE]:
+            self.calculate_best_charge = True
+            self.calculate_best_discharge = True
+            self.set_charge_window = True
+        else:  # PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
+            self.calculate_best_charge = False
+            self.calculate_best_discharge = False
+            self.set_charge_window = False
+            self.predbat_mode = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
+            self.expose_config('mode', self.predbat_mode)
+        
+        self.log("Predbat mode is set to {}".format(self.predbat_mode))
+        
         self.set_discharge_window = self.calculate_best_discharge
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge", True)
         self.calculate_second_pass = self.get_arg("calculate_second_pass", False)
