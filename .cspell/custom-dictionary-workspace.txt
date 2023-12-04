@@ -11,8 +11,8 @@ autopep
 Batpred
 batteryb
 bierner
-Chrg
 chargedischarge
+Chrg
 citem
 Codespaces
 collapsable
