@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.13.23"
+THIS_VERSION = "v7.13.24"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -296,17 +296,6 @@ CONFIG_ITEMS = [
         "icon": "mdi:call-split",
         "enable": "expert_mode",
         "default": 0.95,
-    },
-    {
-        "name": "metric_octopus_saving_rate",
-        "friendly_name": "Octopus Saving session assumed rate",
-        "type": "input_number",
-        "min": 1,
-        "max": 500,
-        "step": 2,
-        "unit": "fraction",
-        "icon": "mdi:currency-usd",
-        "default": 0.0,
     },
     {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent", "default": 4.0},
     {
@@ -4696,7 +4685,7 @@ class PredBat(hass.Hass):
 
             if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
                 self.log(
-                    "Setting Octopus saving session in range {} - {} export {} assumed rate {}".format(
+                    "Setting Octopus saving session in range {} - {} export {} rate {}".format(
                         self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate
                     )
                 )
@@ -8549,20 +8538,34 @@ class PredBat(hass.Hass):
         # Octopus saving session
         octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
+            saving_rate = 200 # Default rate if not reported
+            octopoints_per_pound = self.get_arg('octopus_saving_session_octopoints_per_pound', 8) # Default 8 octopoints per found
+
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
-                saving_rate = self.get_arg("metric_octopus_saving_rate")
                 state = self.get_arg("octopus_saving_session", False)
 
                 joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
                 if not joined_events:
                     entity_event = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
                     joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
+
+                available_events = self.get_state(entity_id=entity_id, attribute="available_events")
+                if available_events:
+                    for event in available_events:
+                        code = event.get("code", None)
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_pound) / octopoints_per_pound  # Octopoints per pence
+                        if code:
+                            self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
+                            self.call_service("octopus_energy.join_octoplus_saving_session_event", event_code=code, target=entity_id)
+
                 if joined_events:
                     for event in joined_events:
                         start = event.get("start", None)
                         end = event.get("end", None)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * 8) / 8  # 8 Octopoints per pence
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_pound) / octopoints_per_pound  # Octopoints per pence
                         if start and end and saving_rate > 0:
                             octopus_saving_slot = {}
                             octopus_saving_slot["start"] = start
