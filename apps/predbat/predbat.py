@@ -8539,7 +8539,7 @@ class PredBat(hass.Hass):
         octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
             saving_rate = 200 # Default rate if not reported
-            octopoints_per_pound = self.get_arg('octopus_saving_session_octopoints_per_pound', 8) # Default 8 octopoints per found
+            octopoints_per_penny = self.get_arg('octopus_saving_session_octopoints_per_penny', 8) # Default 8 octopoints per found
 
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
@@ -8556,7 +8556,7 @@ class PredBat(hass.Hass):
                         code = event.get("code", None)
                         start = event.get("start", None)
                         end = event.get("end", None)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_pound) / octopoints_per_pound  # Octopoints per pence
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
                             self.call_service("octopus_energy.join_octoplus_saving_session_event", event_code=code, target=entity_id)
@@ -8565,7 +8565,7 @@ class PredBat(hass.Hass):
                     for event in joined_events:
                         start = event.get("start", None)
                         end = event.get("end", None)
-                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_pound) / octopoints_per_pound  # Octopoints per pence
+                        saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if start and end and saving_rate > 0:
                             octopus_saving_slot = {}
                             octopus_saving_slot["start"] = start
