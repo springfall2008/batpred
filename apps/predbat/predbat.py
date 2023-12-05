@@ -3100,7 +3100,9 @@ class PredBat(hass.Hass):
             self.call_notify("Predbat status change to: " + message + extra)
 
         self.dashboard_item(
-            self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version" : THIS_VERSION}
+            self.prefix + ".status",
+            state=message,
+            attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION},
         )
         if had_errors:
             self.had_errors = True
@@ -5762,7 +5764,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
-                        "rate" : discharge_average,
+                        "rate": discharge_average,
                         "friendly_name": "Predicted discharge limit best",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5810,7 +5812,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
-                        "rate" : discharge_average,
+                        "rate": discharge_average,
                         "friendly_name": "Predicted discharge limit",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5912,7 +5914,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
-                        "rate" : charge_average_first,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -5960,7 +5962,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
-                        "rate" : charge_average_first,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -8574,7 +8576,7 @@ class PredBat(hass.Hass):
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
-                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code = code, entity_id = entity_id)
+                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
 
                 if joined_events:
                     for event in joined_events:
