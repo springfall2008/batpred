@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14"
+THIS_VERSION = "v7.14.1"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -402,7 +402,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR],
+        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
@@ -5730,10 +5730,12 @@ class PredBat(hass.Hass):
             discharge_end_str = "undefined"
             discharge_start_date = None
             discharge_end_date = None
+            discharge_average = None
 
             if discharge_window and (discharge_window[0]["end"] < (24 * 60 + self.minutes_now)):
                 discharge_start_minutes = discharge_window[0]["start"]
                 discharge_end_minutes = discharge_window[0]["end"]
+                discharge_average = discharge_window[0].get("average", None)
 
                 time_format_time = "%H:%M:%S"
                 discharge_startt = self.midnight_utc + timedelta(minutes=discharge_start_minutes)
@@ -5760,6 +5762,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
+                        "rate" : discharge_average,
                         "friendly_name": "Predicted discharge limit best",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5807,6 +5810,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
+                        "rate" : discharge_average,
                         "friendly_name": "Predicted discharge limit",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5864,6 +5868,7 @@ class PredBat(hass.Hass):
         if not SIMULATE:
             charge_limit_first = 0
             charge_limit_percent_first = 0
+            charge_average_first = None
             charge_start_str = "undefined"
             charge_end_str = "undefined"
             charge_start_date = None
@@ -5876,6 +5881,7 @@ class PredBat(hass.Hass):
                     charge_limit_percent_first = charge_limit_percent[0]
                     charge_start_minutes = charge_window[0]["start"]
                     charge_end_minutes = charge_window[0]["end"]
+                    charge_average_first = charge_window[0].get("average", None)
 
                     time_format_time = "%H:%M:%S"
                     charge_startt = self.midnight_utc + timedelta(minutes=charge_start_minutes)
@@ -5906,6 +5912,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
+                        "rate" : charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -5953,6 +5960,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
+                        "rate" : charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -8554,8 +8562,8 @@ class PredBat(hass.Hass):
 
                 joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
                 if not joined_events:
-                    entity_event = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
-                    joined_events = self.get_state(entity_id=entity_event, attribute="joined_events")
+                    entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
 
                 available_events = self.get_state(entity_id=entity_id, attribute="available_events")
                 if available_events:
@@ -8566,7 +8574,7 @@ class PredBat(hass.Hass):
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
-                            self.call_service("octopus_energy.join_octoplus_saving_session_event", event_code=code, target=entity_id)
+                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code = code, entity_id = entity_id)
 
                 if joined_events:
                     for event in joined_events:
@@ -9289,6 +9297,9 @@ class PredBat(hass.Hass):
             if name == "expert_mode":
                 if new_install:
                     item["default"] = False
+            elif name == "mode":
+                if new_install:
+                    item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
         # Find values and monitor config
         for item in CONFIG_ITEMS:
