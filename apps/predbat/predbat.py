@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.1"
+THIS_VERSION = "v7.14.3"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3100,7 +3100,9 @@ class PredBat(hass.Hass):
             self.call_notify("Predbat status change to: " + message + extra)
 
         self.dashboard_item(
-            self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug}
+            self.prefix + ".status",
+            state=message,
+            attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION},
         )
         if had_errors:
             self.had_errors = True
@@ -5762,7 +5764,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
-                        "rate" : discharge_average,
+                        "rate": discharge_average,
                         "friendly_name": "Predicted discharge limit best",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5810,7 +5812,7 @@ class PredBat(hass.Hass):
                     state=discharge_limit_percent,
                     attributes={
                         "results": discharge_limit_time,
-                        "rate" : discharge_average,
+                        "rate": discharge_average,
                         "friendly_name": "Predicted discharge limit",
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
@@ -5912,7 +5914,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
-                        "rate" : charge_average_first,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -5960,7 +5962,7 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "%",
                         "icon": "mdi:battery-charging",
-                        "rate" : charge_average_first,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -8507,6 +8509,12 @@ class PredBat(hass.Hass):
                     octopus_ready_time = self.get_arg("octopus_ready_time", None)
                     octopus_limit = self.get_arg("octopus_charge_limit", None)
                     if octopus_limit:
+                        try:
+                            octopus_limit = float(octopus_limit)
+                        except ValueError:
+                            self.log("Warn: octopus_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
+                            octopus_limit = None
+                    if octopus_limit:
                         octopus_limit = self.dp2(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
                         self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                     if octopus_ready_time:
@@ -8574,7 +8582,7 @@ class PredBat(hass.Hass):
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
-                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code = code, entity_id = entity_id)
+                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
 
                 if joined_events:
                     for event in joined_events:
@@ -9246,7 +9254,7 @@ class PredBat(hass.Hass):
         """
 
         text = ""
-        text += "# Predbat Dashboard\n"
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"
