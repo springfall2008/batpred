@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.1"
+THIS_VERSION = "v7.14.2"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3100,7 +3100,7 @@ class PredBat(hass.Hass):
             self.call_notify("Predbat status change to: " + message + extra)
 
         self.dashboard_item(
-            self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug}
+            self.prefix + ".status", state=message, attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version" : THIS_VERSION}
         )
         if had_errors:
             self.had_errors = True
@@ -9246,7 +9246,7 @@ class PredBat(hass.Hass):
         """
 
         text = ""
-        text += "# Predbat Dashboard\n"
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"
