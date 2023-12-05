@@ -1,8 +1,10 @@
 type: vertical-stack
 title: Predbat 🦇
-cards:
-  - type: entity
-    entity: predbat.status
+  - type: entities
+    entities:
+    - entity: predbat.status
+    - entity: update.predbat_version
+    - entity: select.predbat_mode
   - type: custom:collapsable-cards
     title: 🔀 Control
     defaultOpen: false
