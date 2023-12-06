@@ -8245,7 +8245,7 @@ class PredBat(hass.Hass):
                     else:
                         inverter.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
-                    if not self.inv_has_target_soc:
+                    if not inverter.inv_has_target_soc:
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
                         inverter.mimic_target_soc(0)
                     elif not self.inverter_hybrid and self.inverter_soc_reset:
