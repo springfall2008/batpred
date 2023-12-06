@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.3"
+THIS_VERSION = "v7.14.4"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1012,10 +1012,6 @@ class Inverter:
         else:
             self.current_charge_limit = 0.0
 
-        # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
-        if not self.inv_has_target_soc:
-            self.mimic_target_soc()
-
         if not quiet:
             if self.charge_enable_time:
                 self.base.log(
@@ -1085,17 +1081,20 @@ class Inverter:
         if INVERTER_TEST:
             self.self_test(minutes_now)
 
-    def mimic_target_soc(self):
-        if self.soc_percent >= float(self.current_charge_limit):
+    def mimic_target_soc(self, current_charge_limit):
+        """
+        Function to turn on/off charging based on the current SOC and the set charge limit
+        """
+        if self.soc_percent >= float(current_charge_limit):
             # If current SOC is above Target SOC, turn Grid Charging off
             self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
-            self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {self.current_charge_limit}. Grid Charge disabled.")
+            self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
             self.set_current_from_power("charge", self.base.get_arg("charge_rate", index=self.id, default=2600.0))
             self.base.log(
-                f"Current SOC {self.soc_percent}% is less than Target SOC {self.current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
+                f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
             )
 
     def adjust_reserve(self, reserve):
@@ -1278,6 +1277,7 @@ class Inverter:
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge limit is {} % and new target is {} %".format(self.id, current_soc, soc))
+            self.current_charge_limit = soc
             if SIMULATE:
                 self.base.sim_soc = soc
             else:
@@ -1293,8 +1293,9 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
 
+        # Inverters that need on/off controls rather than target SOC
         if not self.inv_has_target_soc:
-            self.mimic_target_soc()
+            self.mimic_target_soc(soc)
 
     def write_and_poll_switch(self, name, entity, new_value):
         """
@@ -8244,7 +8245,10 @@ class PredBat(hass.Hass):
                     else:
                         inverter.adjust_battery_target(self.charge_limit_percent_best[0])
                 else:
-                    if not self.inverter_hybrid and self.inverter_soc_reset:
+                    if not self.inv_has_target_soc:
+                        # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
+                        inverter.mimic_target_soc(0)
+                    elif not self.inverter_hybrid and self.inverter_soc_reset:
                         if self.charge_limit_best and self.minutes_now >= inverter.charge_start_time_minutes and self.minutes_now < inverter.charge_end_time_minutes:
                             self.log(
                                 "Within the charge window, holding SOC setting {} (now {} target set_soc_minutes {} charge start time {})".format(
