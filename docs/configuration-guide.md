@@ -47,6 +47,8 @@ If you are using expert mode then these options maybe worth reviewing:
 | switch.predbat_combine_charge_slots | True  | As you have just one overnight rate then one slot is fine |
 | input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
 
+You should set **select.predbat_mode** to Control Charge
+
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
 Follow the instructions from the _Cheap Night rate_ above, but also you will also want to have automatic discharge occurring when the export rates are profitable.
@@ -67,6 +69,8 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
 | input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  ?  | Can be set non-zero if you want to force a minimum charge level |
+
+You should set **select.predbat_mode** to Control Charge & Discharge
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 
@@ -91,6 +95,8 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
 
+You should set **select.predbat_mode** to Control Charge & Discharge
+
 ## Half hourly variable rates (e.g. Octopus Agile)
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
@@ -110,3 +116,5 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
 | input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
+
+You should set **select.predbat_mode** to Control Charge & Discharge
