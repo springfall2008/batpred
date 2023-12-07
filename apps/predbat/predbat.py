@@ -6516,11 +6516,24 @@ class PredBat(hass.Hass):
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
-        self.log(
-            "Try optimising charge window(s) {} price {} results {} selected {} was {}".format(
-                all_n if all_n else window_n, charge_window[window_n]["average"], window_results, best_soc, charge_limit[window_n]
+        if not all_n:
+            self.log("Try optimising charge window(s)    {}: {} - {} price {} selected {} was {} results {}".format(
+                window_n, 
+                self.time_abs_str(window["start"]),
+                self.time_abs_str(window["end"]),                
+                charge_window[window_n]["average"], 
+                best_soc, 
+                charge_limit[window_n],
+                window_results)
             )
-        )
+        else:
+            self.log("Try optimising charge window(s)    {}: price {} selected {} was {} results {}".format(
+                all_n, 
+                charge_window[window_n]["average"], 
+                best_soc, 
+                charge_limit[window_n],
+                window_results)
+            )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def optimise_discharge(
@@ -6679,10 +6692,26 @@ class PredBat(hass.Hass):
                     best_size = window_size
                     best_keep = metric_keep
 
-        optimized = all_n
-        if not optimized:
-            optimized = window_n
-        self.log("Try optimising discharge window(s) {} price {} gives {} => selected {}% size {}".format(optimized, window["average"], window_results, best_discharge, best_size))
+        if not all_n:
+            self.log("Try optimising discharge window(s) {}: {} - {} price {} selected {}% size {} was {}% results {}".format(
+                window_n, 
+                self.time_abs_str(window["start"]),
+                self.time_abs_str(window["end"]),                
+                window["average"], 
+                best_discharge,
+                best_size,
+                discharge_limit[window_n],
+                window_results)
+            )
+        else:
+            self.log("Try optimising discharge window(s) {} price {} selected {}% size {} results {}".format(
+                all_n, 
+                window["average"], 
+                best_discharge,
+                best_size,
+                window_results)
+            )
+            
         return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def window_sort_func(self, window):
@@ -7882,7 +7911,7 @@ class PredBat(hass.Hass):
             # Full plan
             if recompute:
                 self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
-
+    
             # Tweak plan
             self.tweak_plan(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
