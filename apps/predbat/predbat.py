@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.4"
+THIS_VERSION = "v7.14.5"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -304,6 +304,13 @@ CONFIG_ITEMS = [
         "icon": "mdi:call-split",
         "enable": "expert_mode",
         "default": 0.95,
+    },
+    {
+        "name": "metric_cloud_enable", 
+        "friendly_name": "Enable Cloud Model", 
+        "type": "switch", 
+        "default": True,
+        "enable": "expert_mode",
     },
     {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent", "default": 4.0},
     {
@@ -6517,22 +6524,22 @@ class PredBat(hass.Hass):
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
 
         if not all_n:
-            self.log(
-                "Try optimising charge window(s)    {}: {} - {} price {} selected {} was {} results {}".format(
-                    window_n,
-                    self.time_abs_str(window["start"]),
-                    self.time_abs_str(window["end"]),
-                    charge_window[window_n]["average"],
-                    best_soc,
-                    charge_limit[window_n],
-                    window_results,
-                )
+            self.log("Try optimising charge window(s)    {}: {} - {} price {} selected {} was {} results {}".format(
+                window_n, 
+                self.time_abs_str(window["start"]),
+                self.time_abs_str(window["end"]),                
+                charge_window[window_n]["average"], 
+                best_soc, 
+                charge_limit[window_n],
+                window_results)
             )
         else:
-            self.log(
-                "Try optimising charge window(s)    {}: price {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], best_soc, charge_limit[window_n], window_results
-                )
+            self.log("Try optimising charge window(s)    {}: price {} selected {} was {} results {}".format(
+                all_n, 
+                charge_window[window_n]["average"], 
+                best_soc, 
+                charge_limit[window_n],
+                window_results)
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
@@ -6693,21 +6700,25 @@ class PredBat(hass.Hass):
                     best_keep = metric_keep
 
         if not all_n:
-            self.log(
-                "Try optimising discharge window(s) {}: {} - {} price {} selected {}% size {} was {}% results {}".format(
-                    window_n,
-                    self.time_abs_str(window["start"]),
-                    self.time_abs_str(window["end"]),
-                    window["average"],
-                    best_discharge,
-                    best_size,
-                    discharge_limit[window_n],
-                    window_results,
-                )
+            self.log("Try optimising discharge window(s) {}: {} - {} price {} selected {}% size {} was {}% results {}".format(
+                window_n, 
+                self.time_abs_str(window["start"]),
+                self.time_abs_str(window["end"]),                
+                window["average"], 
+                best_discharge,
+                best_size,
+                discharge_limit[window_n],
+                window_results)
             )
         else:
-            self.log("Try optimising discharge window(s) {} price {} selected {}% size {} results {}".format(all_n, window["average"], best_discharge, best_size, window_results))
-
+            self.log("Try optimising discharge window(s) {} price {} selected {}% size {} results {}".format(
+                all_n, 
+                window["average"], 
+                best_discharge,
+                best_size,
+                window_results)
+            )
+            
         return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
     def window_sort_func(self, window):
@@ -7907,7 +7918,7 @@ class PredBat(hass.Hass):
             # Full plan
             if recompute:
                 self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
-
+    
             # Tweak plan
             self.tweak_plan(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
@@ -8904,7 +8915,7 @@ class PredBat(hass.Hass):
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
 
         self.best_soc_step = 0.25
-        self.metric_cloud_enable = True
+        self.metric_cloud_enable = self.get_arg("metric_cloud_enable")
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
