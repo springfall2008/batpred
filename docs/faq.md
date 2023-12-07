@@ -60,6 +60,7 @@ to your configuration.yaml:
 logger:
   default: warning
   filters:
+    homeassistant.components.recorder.db_schema: 
       - "State attributes for predbat.plan_html exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
 ```
 
