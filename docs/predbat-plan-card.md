@@ -17,4 +17,4 @@ content: |
 
 You should see something like this:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/3c0a2a53-4d83-4b64-aa49-822a233f7554)
+![image](https://github.com/springfall2008/batpred/assets/48591903/6999eb09-1d62-4e12-8c9d-8642762f2a65)
