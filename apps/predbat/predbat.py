@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.4"
+THIS_VERSION = "v7.14.5"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -304,6 +304,13 @@ CONFIG_ITEMS = [
         "icon": "mdi:call-split",
         "enable": "expert_mode",
         "default": 0.95,
+    },
+    {
+        "name": "metric_cloud_enable",
+        "friendly_name": "Enable Cloud Model",
+        "type": "switch",
+        "default": True,
+        "enable": "expert_mode",
     },
     {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent", "default": 4.0},
     {
@@ -8904,7 +8911,7 @@ class PredBat(hass.Hass):
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
 
         self.best_soc_step = 0.25
-        self.metric_cloud_enable = True
+        self.metric_cloud_enable = self.get_arg("metric_cloud_enable")
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
