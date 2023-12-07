@@ -21,6 +21,7 @@ Please see the sections below for how to achieve each step. This is just a check
     - If you have a car charging sensor you might want to add that also to help make predictions more accurate
     - Then check the AppDaemon log file and make sure you have no errors or warnings that are unexpected
     - And check **predbat.status** in Home Assistant to check it's now Idle (errors are reported here too)
+    - Start with **select.predbat_mode** as Monitor but remember to change it later to enable Predbat to control your inverter
 9. Add the Predbat entities to your dashboard  - [Output data](output-data.md)
 10. Follow the configuration guide to tune things for your system  - [Configuration guide](configuration-guide.md)
 11. Set up the Apex Charts so you can check what Predbat is doing - [Creating the charts](creating-charts.md)
