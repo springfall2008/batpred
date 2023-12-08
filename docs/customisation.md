@@ -24,7 +24,7 @@ the desired state yourself_
 
 ### Predbat Monitor mode
 
-In **monitor** mode Predbat will no control charging or discharging, inverter balancing will take place if enabled, the plan will show
+In **monitor** mode Predbat will not control charging or discharging, inverter balancing will take place if enabled, the plan will show
 just what is expected based on the current inverter configuration alone.
 
 ### Predbat Control SOC Only mode
