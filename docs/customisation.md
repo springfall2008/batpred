@@ -154,6 +154,20 @@ See the Predbat mode setting as above for basic calculation options
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
 
+**switch.predbat_calculate_second_pass** (_expert mode_) When True causes Predbat to perform a second pass optimisation
+across all the charge and discharge windows in time order. 
+
+_NOTE: This feature is quite slow and so may need a higher performance machine_
+
+This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which 
+you want to discharge late.
+
+**switch.calculate_tweak_plan** (_expert mode_) When True causes Predbat to optimise the next 8 charge/discharge windows
+in time order as a second pass and after every 5 minutes even when the full plan is not re-calculated. 
+
+This can help to slightly improve the plan for tariffs like Agilebut can make it worse in some fixed rate tariffs 
+which you want to discharge late.
+
 ## Battery margins and metrics options
 
 **best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time,
