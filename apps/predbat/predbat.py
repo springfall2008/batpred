@@ -510,6 +510,7 @@ INVERTER_DEF = {
         "clock_time_format": "%H:%M:%S",
         "write_and_poll_sleep": 10,
         "has_time_window": True,
+        "support_discharge_freeze": True,
     },
     "GS": {
         "has_rest_api": False,
@@ -527,6 +528,7 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": True,
+        "support_discharge_freeze": False,
     },
     "SX4": {
         "has_rest_api": False,
@@ -544,6 +546,7 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,
+        "support_discharge_freeze": False,
     },
 }
 
@@ -631,6 +634,7 @@ class Inverter:
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
         self.inv_soc_units = INVERTER_DEF[self.inverter_type]["soc_units"]
         self.inv_time_button_press = INVERTER_DEF[self.inverter_type]["time_button_press"]
+        self.inv_support_discharge_freeze = INVERTER_DEF[self.inverter_type]["support_discharge_freeze"]
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]["has_ge_inverter_mode"]
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
@@ -8804,6 +8808,11 @@ class PredBat(hass.Hass):
                 self.charge_window = inverter.charge_window
                 self.discharge_window = inverter.discharge_window
                 self.discharge_limits = inverter.discharge_limits
+                if not inverter.inv_support_discharge_freeze:
+                    # Force off unsupported feature
+                    self.log("Note: Inverter does not support discharge freeze - disabled")
+                    self.set_discharge_freeze = False
+                    self.set_discharge_freeze_only = False
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
