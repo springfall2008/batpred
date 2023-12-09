@@ -136,7 +136,7 @@ They are set to a regular expression and auto-discovered but you can comment out
  **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
  events which are disabled by the plugin by default in some versions:
 
-```
+```yaml
     event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
     event.octopus_energy_electricity_xxxxxxxx_current_day_rates
     event.octopus_energy_electricity_xxxxxxxx_next_day_rates
