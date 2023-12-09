@@ -10,6 +10,19 @@ The Octopus Energy Plugin also provides support for Intelligent Octopus charging
 When **octopus_intelligent_charging** is True and you are on Intelligent Octopus import the car charging plan will be
 extracted from Octopus and used for Predbat to plan, and it may charge the home battery using these slots also.
 
+ **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
+ events which are disabled by the plugin by default in some versions:
+
+```
+    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+
+    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+```  
+
 ### Octopus Saving sessions
 
 For Predbat to automatically manage saving sessions you will need to make sure that **octopus_saving_session** is set
