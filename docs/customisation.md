@@ -157,7 +157,7 @@ disable or move charge slots, allowing them to intermix. When False discharge sl
 **switch.predbat_calculate_second_pass** (_expert mode_) When True causes Predbat to perform a second pass optimisation
 across all the charge and discharge windows in time order.
 
-_NOTE: This feature is quite slow and so may need a higher performance machine_
+NOTE: This feature is quite slow and so may need a higher performance machine
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which
 you want to discharge late.
