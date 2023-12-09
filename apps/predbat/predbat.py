@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.6"
+THIS_VERSION = "v7.14.7"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3117,6 +3117,7 @@ class PredBat(hass.Hass):
             state=message,
             attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION},
         )
+        self.previous_status = message
         if had_errors:
             self.had_errors = True
 
@@ -8317,8 +8318,12 @@ class PredBat(hass.Hass):
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
                 # In the window then set it, otherwise put it back
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (self.minutes_now >= inverter.charge_start_time_minutes):
-                    self.log("Adjust reserve to target charge % (set_reserve_enable is true)".format(self.charge_limit_percent_best[0]))
-                    inverter.adjust_reserve(self.charge_limit_percent_best[0])
+                    if inverter.soc_percent >= self.charge_limit_percent_best[0]:
+                        self.log("Adjust reserve to hold target charge {} % (set_reserve_enable is true)".format(self.charge_limit_percent_best[0]))
+                        inverter.adjust_reserve(min(self.charge_limit_percent_best[0] + 1, 100))
+                    else:
+                        self.log("Adjust reserve to target charge {} % (set_reserve_enable is true)".format(self.charge_limit_percent_best[0]))
+                        inverter.adjust_reserve(self.charge_limit_percent_best[0])
                     resetReserve = False
                 else:
                     self.log("Adjust reserve to default (as set_reserve_enable is true)")
