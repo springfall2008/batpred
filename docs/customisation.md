@@ -165,7 +165,7 @@ you want to discharge late.
 **switch.calculate_tweak_plan** (_expert mode_) When True causes Predbat to optimise the next 8 charge/discharge windows
 in time order as a second pass and after every 5 minutes even when the full plan is not re-calculated.
 
-This can help to slightly improve the plan for tariffs like Agilebut can make it worse in some fixed rate tariffs
+This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs
 which you want to discharge late.
 
 ## Battery margins and metrics options
