@@ -30,7 +30,7 @@ is the suggested amount (to match energy rate cycles)
 
 ## Inverter information
 
-The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered. 
+The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered.
 For other brands of inverter see [Other Inverters](other-inverters.md)
 
 - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
