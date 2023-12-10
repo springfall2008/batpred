@@ -18,7 +18,8 @@ is the suggested amount (to match energy rate cycles)
 
 ## Inverter information
 
-The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered. For other brands of inverter see [Other Inverters](other-inverters.md)
+The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered. 
+For other brands of inverter see [Other Inverters](other-inverters.md)
 
 - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
 - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
@@ -313,7 +314,7 @@ The triggers count export energy until the next active charge slot only.
 
 For each trigger give a name, the minutes of export needed and the energy required in that time
 Multiple triggers can be set at once so in total you could use too much energy if all run
-Each trigger create an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
+Each trigger create an entity called 'binary_sensor.predbat_export_trigger_*name*' which will be turned on when the condition is valid
 connect this to your automation to start whatever you want to trigger.
 
 Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kwH you will need available during that time period in apps.yaml:
