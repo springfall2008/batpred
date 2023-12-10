@@ -8131,8 +8131,7 @@ class PredBat(hass.Hass):
                         and self.set_reserve_enable
                         and self.set_reserve_hold
                         and (status == "Charging")
-                        and (not self.set_charge_freeze)
-                        or (self.charge_limit_best[0] > self.reserve)
+                        and ((not self.set_charge_freeze) or (self.charge_limit_best[0] > self.reserve))
                         and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
                     ):
                         status = "Hold charging"
