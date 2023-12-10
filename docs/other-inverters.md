@@ -6,7 +6,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 - Solax Gen4 inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode
 - SolarEdge inverters - **Work in progress, please contribute**
 
-Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github. 
+Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 Please also ensure you have set up enhanced logging in AppDaemon as described here.
 
 ## Solis Inverters
