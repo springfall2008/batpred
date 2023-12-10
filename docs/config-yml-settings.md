@@ -1,5 +1,17 @@
 # apps.yaml settings
 
+## Templates
+
+You can find template configurations in the following locations:
+
+| Template | Link |
+| ---------- | ----------------------------------------- |
+| GivEnergy | [apps.yaml](apps/predbat/config/apps.yaml) |
+| SolisX | [apps.yaml](templates/ginlong_solis.yaml) |
+| SolarEdge | [apps.yaml](templates/solaredge.yaml) |
+
+The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template and modify from there.
+
 ## Basics
 
 Basic configuration items
