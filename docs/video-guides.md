@@ -12,9 +12,10 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 - [https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862](https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862)
 - [https://www.loom.com/share/a245dcf30b744e3dbfab3ed874f52855?sid=6bd07f2f-b507-4575-877f-840c4b6cc8c7](https://www.loom.com/share/a245dcf30b744e3dbfab3ed874f52855?sid=6bd07f2f-b507-4575-877f-840c4b6cc8c7)
 
-## AppDaemon log files
+## AppDaemon
 
-- [https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
+- Fixing the new version so HACS still works: <https://www.loom.com/share/d1f9e4432c2443eca1e236939b25bb99?sid=fe0627c7-85c1-4de4-a778-de50b58e4687>
+- Log files: [https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
 
 ## Historical data
 
@@ -25,10 +26,12 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 - Configuration of apps.yml: [https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5](https://www.loom.com/share/fa0db1b1fce34db09bb4af76b2e7edef?sid=6456019a-62e3-4e59-95f9-092474a8a5e5)
 - Configuration inside HA: [https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36](https://www.loom.com/share/78e4b4f91fdb45068665e769334a934b?sid=0388e0c3-5cf1-42ee-8dd3-3992683c4c36)
 - Multiple cars: [https://www.loom.com/share/c8858d80ea334b2a885f09121dc72650?sid=f37aadc3-d804-4c4f-8c60-a3d0bc43298b](https://www.loom.com/share/c8858d80ea334b2a885f09121dc72650?sid=f37aadc3-d804-4c4f-8c60-a3d0bc43298b)
+- Octopus Energy plugin >v9.0.0: [https://www.loom.com/share/f11e36eaa4784c6980c5a8a68ee4f674](https://www.loom.com/share/f11e36eaa4784c6980c5a8a68ee4f674?sid=195fc492-3c0a-4acf-9ed6-b6b8c5757ebe)
 
 ## Charts
 
-- [https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038](https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038)
+- Understand the charts: [https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038](https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038)
+- How to understand Predbat plans: <https://www.loom.com/share/e55b578d08c7414788e88948325907fa?sid=279ff3e5-01a2-4f81-a316-b3d3b2697e8a>
 
 ## Tariffs
 

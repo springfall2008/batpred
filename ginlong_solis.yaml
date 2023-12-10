@@ -35,7 +35,7 @@ pred_bat:
     - sensor.solis_house_load_today
   import_today:
     - sensor.solis_grid_import_today
-  export_today: 
+  export_today:
     - sensor.solis_grid_export_today
   pv_today:
     - sensor.solis_power_generation_today
@@ -64,6 +64,9 @@ pred_bat:
 
   reserve:
     - number.solis_backup_mode_soc
+
+  battery_min_soc:
+    - sensor.solis_battery_minimum_soc
 
   # With the Solax integration we need to press a button to send the time to
   charge_discharge_update_button:
@@ -94,6 +97,8 @@ pred_bat:
     - number.solis_timed_discharge_end_minutes
 
 
+  energy_control_switch:
+    - select.solis_energy_storage_control_switch
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together

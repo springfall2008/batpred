@@ -3,7 +3,7 @@
 Predbat can create its own plan card which can be added to your HA dashboard.
 
 * First install html-template-card in HACS (from the Frontend list), it will already be available to add, but for reference the repository can be found here:
-  * https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card
+    * <https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card>
 
 Next create a new card as follows:
 
@@ -17,4 +17,4 @@ content: |
 
 You should see something like this:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/3c0a2a53-4d83-4b64-aa49-822a233f7554)
+![image](https://github.com/springfall2008/batpred/assets/48591903/6999eb09-1d62-4e12-8c9d-8642762f2a65)

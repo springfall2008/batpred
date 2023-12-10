@@ -1,5 +1,9 @@
 # Predbat
 
+![image](https://github.com/springfall2008/batpred/actions/workflows/code-quality.yml/badge.svg)
+![image](https://github.com/springfall2008/batpred/actions/workflows/publish-docs.yml/badge.svg)
+![image](https://github.com/springfall2008/batpred/actions/workflows/pages/pages-build-deployment/badge.svg)
+
 ## Introduction
 
 Home battery prediction and automatic charging for Home Assistant
