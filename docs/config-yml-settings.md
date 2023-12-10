@@ -266,10 +266,10 @@ charging plan, e.g. you are using Intelligent Octopus or you use the car slots i
     - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
 
 - Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
-  - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
-  - If you have Intelligent Octopus then Car 0 will be managed by Octopus Energy plugin if enabled
-  - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
-  - Each car will have it's own SOC planning sensor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+    - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
+    - If you have Intelligent Octopus then Car 0 will be managed by Octopus Energy plugin if enabled
+    - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
+    - Each car will have it's own SOC planning sensor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ## Workarounds
 

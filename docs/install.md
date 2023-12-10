@@ -7,7 +7,7 @@ The Integration that communicates with your inverter will be dependen on the bra
 | Brand     | Integration  | Github Link                                                                      |
 | :-------- | :----------- | :------------------------------------------------------------------------------- |
 | GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
-| Solis     | SolaX ModBus | https://github.com/wills106/homeassistant-solax-modbus                           |
+| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                           |
 
 - You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 
@@ -97,7 +97,7 @@ Note: **Not recommended if you have HACS**
 
 Predbat needs a solar forecast in order to predict battery levels.
 
-If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv*forecast*\* **
+If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv*forecast*\***
 
 Make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>).
 
