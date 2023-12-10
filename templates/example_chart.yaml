@@ -2,6 +2,7 @@
 # There are multiple charts in this file, please copy each section into a different chart (starts with a comment)
 ####################################################################################################################
 ---
+# yamllint disable-file
 ###############################################
 # Battery prediction chart
 ###############################################
