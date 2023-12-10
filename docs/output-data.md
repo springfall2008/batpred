@@ -6,7 +6,7 @@ Each Predbat config item has an input_number or switch associated with it, you c
 configuration in your AppDaemon configuration area under the filename **predbat_dashboard.yaml**.
 You will need to open that file in a Home Assistant file editor and copy the contents into a new dashboard page.
 
-You can also create a dashboard page using [dynamic-entities-card.yaml](https://github.com/springfall2008/batpred/blob/main/dynamic-entities-card.yaml) for a
+You can also create a dashboard page using [dynamic-entities-card.yaml](/templates/dynamic-entities-card.yaml) for a
 dynamically created list of all Predbat entities which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
 ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
 and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
