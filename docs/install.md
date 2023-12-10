@@ -1,10 +1,15 @@
 # Install
 
-## GivTCP install
+## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
-You must have GivTCP installed and running first ([https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp))
+The Integration that communicates with your inverter will be depend on the brand:
 
-You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you can configure this back to 1 day if you need to).
+| Brand     | Integration  | Github Link                                                                      |
+| :-------- | :----------- | :------------------------------------------------------------------------------- |
+| GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
+| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                           |
+
+- You will need at least 24 hours history in HA for this to work correctly, the default is 7 days (but you configure this back 1 day if you need to)
 
 ## AppDaemon install
 
@@ -92,9 +97,16 @@ Note: **Not recommended if you have HACS**
 
 Predbat needs a solar forecast in order to predict battery levels.
 
-If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv_forecast_* **
+If you don't have solar then comment out the Solar forecast part of the apps.yml:
 
-Make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>).
+```yaml
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+```
+
+Or make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>).
 
 Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit)
 in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and

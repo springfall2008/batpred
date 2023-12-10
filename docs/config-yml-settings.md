@@ -18,7 +18,8 @@ is the suggested amount (to match energy rate cycles)
 
 ## Inverter information
 
-The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered
+The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered. 
+For other brands of inverter see [Other Inverters](other-inverters.md)
 
 - **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
 - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
@@ -27,12 +28,12 @@ The following are entity names in HA for GivTCP, assuming you only have one inve
 
 ### Data from GivTCP
 
-  It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
+It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
 
-- **load_today**   - GivTCP Entity name for the house load in kWh today (must be incrementing)
+- **load_today** - GivTCP Entity name for the house load in kWh today (must be incrementing)
 - **import_today** - GivTCP Imported energy today in kWh (incrementing)
 - **export_today** - GivTCP Exported energy today in kWh (incrementing)
-- **pv_today**     - GivTCP PV energy today in kWh (incrementing)
+- **pv_today** - GivTCP PV energy today in kWh (incrementing)
 
 If you have multiple inverters then you may find that the load_today figures from GivTCP are incorrect as the inverters share the house load between them.
 In this circumstance one solution is to create a template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
@@ -49,11 +50,11 @@ e.g.
 
 ### GivEnergy Cloud Data
 
-   If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
+If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes
 
-- **ge_cloud_data**   - When True use the GE Cloud for data rather than load_today, import_today and export_today
+- **ge_cloud_data** - When True use the GE Cloud for data rather than load_today, import_today and export_today
 - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
-- **ge_cloud_key**    - Set to your API Key for GE Cloud (long string)
+- **ge_cloud_key** - Set to your API Key for GE Cloud (long string)
 
 ## Inverter control
 
@@ -182,14 +183,14 @@ Delete this line from apps.yaml or set it to zero if you don't want the standing
 Or manually set your rates in a 24-hour period using these:
 
 ```yaml
-  rates_import:
-    - start : "HH:MM:SS"
-      end : "HH:MM:SS"
-      rate : pence
-  rates_export:
-    - start : "HH:MM:SS"
-      end : "HH:MM:SS"
-      rate : pence
+rates_import:
+  - start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
+rates_export:
+  - start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
@@ -201,16 +202,16 @@ You can also override the energy rates (regardless of if they are set manually o
 The override is used to set times where rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two)
 
 ```yaml
-  rates_import_override:
-    - start : "HH:MM:SS"
-      end : "HH:MM:SS"
-      rate : pence
-      date : "YYYY-MM-DD"
-  rates_export_override:
-    - start : "HH:MM:SS"
-      end : "HH:MM:SS"
-      rate : pence
-      date : "YYYY-MM-DD"
+rates_import_override:
+  - start : "HH:MM:SS"
+    end : "HH:MM:SS"
+    rate : pence
+    date : "YYYY-MM-DD"
+rates_export_override:
+  - start : "HH:MM:SS"
+    end : "HH:MM:SS"
+    rate : pence
+    date : "YYYY-MM-DD"
 ```
 
 **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09"
@@ -311,26 +312,23 @@ The trigger feature is useful to help trigger your own automation based on Predb
 
 The triggers count export energy until the next active charge slot only.
 
-For each trigger give a name, the minutes of export needed and the energy required in that time.
-
-Multiple triggers can be set at once so in total you could use too much energy if all run!
-
-Each trigger create an entity called 'binary_sensor.predbat_export_trigger_[name]' which will be turned On when the condition is valid.
-
-Connect your automation to this binary sensor to start whatever you want to trigger.
+For each trigger give a name, the minutes of export needed and the energy required in that time
+Multiple triggers can be set at once so in total you could use too much energy if all run
+Each trigger create an entity called 'binary_sensor.predbat_export_trigger_*name*' which will be turned on when the condition is valid
+connect this to your automation to start whatever you want to trigger.
 
 Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kwH you will need available during that time period in apps.yaml:
 
 For example:
 
 ```yaml
- export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+export_triggers:
+  - name: "large"
+    minutes: 60
+    energy: 1.0
+  - name: "small"
+    minutes: 15
+    energy: 0.25
 ```
 
 If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors
