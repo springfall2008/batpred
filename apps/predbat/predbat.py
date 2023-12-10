@@ -344,7 +344,6 @@ CONFIG_ITEMS = [
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
-    {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak plan (faster second pass)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
@@ -7591,14 +7590,14 @@ class PredBat(hass.Hass):
         # Work out data scale factor so it adds up (New Solcast is in kw but old was kWH)
         factor = 1.0
         if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
-            factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor)
+            factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor + 0.005)
         # We want to divide the data into single minute slots
         divide_by = self.dp2(30 * factor)
 
         if factor != 1.0 and factor != 2.0:
             self.log(
-                "WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} KWh, this is unexpected and hence data maybe misleading".format(
-                    pv_forecast_total_data, pv_forecast_total_sensor
+                "WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} KWh, this is unexpected and hence data maybe misleading (factor {})".format(
+                    pv_forecast_total_data, pv_forecast_total_sensor, factor
                 )
             )
 
@@ -8132,6 +8131,7 @@ class PredBat(hass.Hass):
                         and self.set_reserve_enable
                         and self.set_reserve_hold
                         and (status == "Charging")
+                        and (not self.set_charge_freeze) or (self.charge_limit_best[0] > self.reserve)
                         and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
                     ):
                         status = "Hold charging"
@@ -8283,6 +8283,7 @@ class PredBat(hass.Hass):
                 ):
                     if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                         # In charge freeze hold the target SOC at the current value
+                        self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                         inverter.adjust_battery_target(inverter.soc_percent)
                     else:
                         inverter.adjust_battery_target(self.charge_limit_percent_best[0])
@@ -8318,7 +8319,10 @@ class PredBat(hass.Hass):
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
                 # In the window then set it, otherwise put it back
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (self.minutes_now >= inverter.charge_start_time_minutes):
-                    if inverter.soc_percent >= self.charge_limit_percent_best[0]:
+                    if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
+                        self.log("Adjust reserve to hold current soc {} % (set_reserve_enable is true)".format(inverter.soc_percent))
+                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                    elif inverter.soc_percent >= self.charge_limit_percent_best[0]:
                         self.log("Adjust reserve to hold target charge {} % (set_reserve_enable is true)".format(self.charge_limit_percent_best[0]))
                         inverter.adjust_reserve(min(self.charge_limit_percent_best[0] + 1, 100))
                     else:
@@ -8346,6 +8350,9 @@ class PredBat(hass.Hass):
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
 
+            if self.debug_enable:
+                self.log("Info: Fetch Octopus rates from {}".format(entity_id))
+
             # Previous rates
             if "_current_rate" in entity_id:
                 # Try as event
@@ -8358,16 +8365,24 @@ class PredBat(hass.Hass):
                     data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
+                    else:
+                        self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
 
             # Current rates
-            current_rate_id = entity_id.replace("_current_rate", "_current_day_rates").replace("sensor.", "event.")
+            if "_current_rate" in entity_id:
+                current_rate_id = entity_id.replace("_current_rate", "_current_day_rates").replace("sensor.", "event.")
+            else:
+                current_rate_id = entity_id
+
             data_import = self.get_state(entity_id=current_rate_id, attribute="rates")
             if data_import:
                 data_all += data_import
             else:
-                data_import = self.get_state(entity_id=entity_id, attribute="all_rates")
+                data_import = self.get_state(entity_id=current_rate_id, attribute="all_rates")
                 if data_import:
                     data_all += data_import
+                else:
+                    self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
@@ -8380,6 +8395,8 @@ class PredBat(hass.Hass):
                     data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
+                    else:
+                        self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(next_rate_id))
 
         if data_all:
             rate_key = "rate"
@@ -9010,7 +9027,7 @@ class PredBat(hass.Hass):
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
-        self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
+        self.calculate_tweak_plan = False
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
