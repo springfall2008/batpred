@@ -2,7 +2,7 @@
 
 ## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
-The Integration that communicates with your inverter will be dependen on the brand:
+The Integration that communicates with your inverter will be depend on the brand:
 
 | Brand     | Integration  | Github Link                                                                      |
 | :-------- | :----------- | :------------------------------------------------------------------------------- |
@@ -97,9 +97,16 @@ Note: **Not recommended if you have HACS**
 
 Predbat needs a solar forecast in order to predict battery levels.
 
-If you don't have solar then comment out the Solar forecast part of the apps.yml: **pv*forecast*\***
+If you don't have solar then comment out the Solar forecast part of the apps.yml:
 
-Make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>).
+```yaml
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+```
+
+Or make sure Solcast is installed and working (<https://github.com/oziee/ha-solcast-solar>).
 
 Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit)
 in the Solcast plugin and instead have your own automation that updates the forecast a few times a day (e.g. dawn, dusk and
