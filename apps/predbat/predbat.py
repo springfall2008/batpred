@@ -343,7 +343,8 @@ CONFIG_ITEMS = [
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
-    {"name": "calculate_second_pass", "friendly_name": "Calculate second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass (faster)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
@@ -9027,7 +9028,7 @@ class PredBat(hass.Hass):
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
-        self.calculate_tweak_plan = False
+        self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
