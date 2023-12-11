@@ -5470,7 +5470,7 @@ class PredBat(hass.Hass):
                     if self.set_charge_freeze and (limit == self.reserve):
                         state = "FreezeChrg&rarr;"
                         state_color = "#EEEEEE"
-                        limit = soc_percent
+                        limit_percent = soc_percent
                     elif limit_percent == soc_percent_min:
                         state = "HoldChrg&rarr;"
                         state_color = "#34dbeb"
