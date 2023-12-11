@@ -154,6 +154,12 @@ See the Predbat mode setting as above for basic calculation options
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
 
+**switch.predbat_calculate_tweak_plan** (_expert mode_) When True causes Predbat to perform a second pass optimisation
+across the next 8 charge and discharge windows in time order.
+
+This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which
+you want to discharge late.
+
 **switch.predbat_calculate_second_pass** (_expert mode_) When True causes Predbat to perform a second pass optimisation
 across all the charge and discharge windows in time order.
 
