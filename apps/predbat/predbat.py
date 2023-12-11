@@ -16,7 +16,7 @@ import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
 
-THIS_VERSION = "v7.14.7"
+THIS_VERSION = "v7.14.8"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -343,8 +343,9 @@ CONFIG_ITEMS = [
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "calculate_fast_plan", "friendly_name": "Calculate plan faster (less accurate)", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
-    {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass (faster)", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
@@ -5469,6 +5470,7 @@ class PredBat(hass.Hass):
                     if self.set_charge_freeze and (limit == self.reserve):
                         state = "FreezeChrg&rarr;"
                         state_color = "#EEEEEE"
+                        limit_percent = soc_percent
                     elif limit_percent == soc_percent_min:
                         state = "HoldChrg&rarr;"
                         state_color = "#34dbeb"
@@ -5568,7 +5570,10 @@ class PredBat(hass.Hass):
                 html += "<td rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
             elif not in_span:
                 html += "<td bgcolor=" + state_color + ">" + state + "</td>"
-            html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
+            if start_span:
+                html += "<td  rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
+            elif not in_span:
+                html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
@@ -8891,8 +8896,13 @@ class PredBat(hass.Hass):
         self.debug_enable = self.get_arg("debug_enable")
         self.previous_status = self.get_state(self.prefix + ".status")
         forecast_hours = self.get_arg("forecast_hours", 48)
+        self.calculate_fast_plan = self.get_arg("calculate_fast_plan")
 
-        self.calculate_max_windows = max(int(forecast_hours), 24)
+        if self.calculate_fast_plan:
+            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
+        else:
+            self.calculate_max_windows = max(int(forecast_hours), 12)
+
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)

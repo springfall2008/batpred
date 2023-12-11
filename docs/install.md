@@ -14,7 +14,8 @@ The Integration that communicates with your inverter will be depend on the brand
 ## AppDaemon install
 
 - Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-- You will find the appdaemon.yaml file in addon_configs/a0d7b954_appdaemon
+- You will find the appdaemon.yaml file in addon_configs/a0d7b954_appdaemon ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
+    - If using the File Editor remember to turn off **enforce base path** to allow access: ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 - Add to the appdaemon: section **apps_dir** which should point to /homeassistant/appdaemon/apps
 - Set the **time_zone** correctly in appdaemon.yaml (e.g. Europe/London)
 - Add **thread_duration_warning_threshold: 120** to the appdaemon.yaml file in the appdaemon section
