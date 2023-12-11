@@ -1,0 +1,20 @@
+---
+appdaemon:
+  latitude: 52.379189
+  longitude: 4.899431
+  elevation: 2
+  time_zone: Europe/London
+  thread_duration_warning_threshold: 120
+  plugins:
+    HASS:
+      type: hass
+  app_dir: /homeassistant/appdaemon/apps
+http:
+  url: http://homeassistant.local:5050
+admin:
+api:
+hadashboard:
+logs:
+  main_log: 
+    filename: /homeassistant/appdaemon/appdaemon.log
+    log_size: 10000000
