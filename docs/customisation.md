@@ -65,7 +65,7 @@ keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 min
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's
 quite CPU intensive and provides very little improvement for most systems.
 
-If you have performance problems leave **switch.predbat_calculate_fast_plan** (_expert mode_) turned On to help 
+If you have performance problems leave **switch.predbat_calculate_fast_plan** (_expert mode_) turned On to help
 reduce your CPU load.
 
 ## Battery loss options
@@ -155,7 +155,7 @@ if **car_charging_planned** is set correctly in apps.yaml to detect your car bei
 See the Predbat mode setting as above for basic calculation options
 
 **switch.predbat_calculate_fast_plan** (_expert mode_) When True (default) the plan is calculated with a limited number of
-windows to make calculations faster. When False all windows are considered but planning will take a little longer but be 
+windows to make calculations faster. When False all windows are considered but planning will take a little longer but be
 more accurate. The end result is unlikely to change in fast mode as the next windows are always considered but the longer
 term plan will be last accurate.
 

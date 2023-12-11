@@ -15,6 +15,6 @@ admin:
 api:
 hadashboard:
 logs:
-  main_log: 
+  main_log:
     filename: /homeassistant/appdaemon/appdaemon.log
     log_size: 10000000
