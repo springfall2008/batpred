@@ -7923,7 +7923,7 @@ class PredBat(hass.Hass):
             self.rate_best_cost_threshold_discharge = None
 
         if self.calculate_best and recompute:
-            # Recompuging the plan
+            # Recomputing the plan
             self.log_option_best()
 
             # Full plan
@@ -8726,7 +8726,7 @@ class PredBat(hass.Hass):
         if self.rate_import:
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False)
-            self.log("Low Import rate found rates in range {} to {} - {}".format(lowest, highest, self.low_rates))
+            self.log("Low Import rate found rates in range {} to {}".format(lowest, highest))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
                 self.rate_import_cost_threshold = highest
