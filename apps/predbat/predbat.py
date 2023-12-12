@@ -7923,7 +7923,7 @@ class PredBat(hass.Hass):
             self.rate_best_cost_threshold_discharge = None
 
         if self.calculate_best and recompute:
-            # Recompuging the plan
+            # Recomputing the plan
             self.log_option_best()
 
             # Full plan
