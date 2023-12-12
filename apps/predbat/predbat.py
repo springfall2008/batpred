@@ -41,7 +41,7 @@ for minute in range(0, 24 * 60, 5):
     timestr = timeobj.strftime("%H:%M:%S")
     OPTIONS_TIME.append(timestr)
 
-INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)"}
+INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF" :"Sofar HYD"}
 
 # Inverter modes
 PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
@@ -497,6 +497,7 @@ code can be used with minimal modification.
 INVERTER_DEF = {
     "GE": {
         "has_rest_api": True,
+        "has_mqtt_api": False,
         "output_charge_control": "power",
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
@@ -515,6 +516,7 @@ INVERTER_DEF = {
     },
     "GS": {
         "has_rest_api": False,
+        "has_mqtt_api": False,
         "output_charge_control": "current",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
@@ -533,6 +535,7 @@ INVERTER_DEF = {
     },
     "SX4": {
         "has_rest_api": False,
+        "has_mqtt_api": False,
         "output_charge_control": "power",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
@@ -544,6 +547,25 @@ INVERTER_DEF = {
         "num_load_entities": 1,
         "has_ge_inverter_mode": False,
         "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_discharge_freeze": False,
+    },
+    "SF": {
+        "has_rest_api": False,
+        "has_mqtt_api": True,
+        "output_charge_control": "power",
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "has_reserve_soc": False,
+        "charge_time_format": "S",
+        "charge_time_entity_is_option": False,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,
@@ -625,6 +647,8 @@ class Inverter:
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
         self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
+        self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
+        self.inv_mqtt_topic = self.base.get_arg('mqtt_topic', 'Sofar2mqtt')
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
         self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
@@ -1105,7 +1129,7 @@ class Inverter:
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
-            self.set_current_from_power("charge", self.base.get_arg("charge_rate", index=self.id, default=2600.0))
+            self.set_current_from_power("charge", self.battery_rate_max_charge)
             self.base.log(
                 f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
             )
@@ -1157,6 +1181,7 @@ class Inverter:
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
                 self.base.record_status("Inverter {} set reserve to {}".format(self.id, reserve))
+            self.mqtt_message(topic='set/reserve', payload=reserve)
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
 
@@ -1209,6 +1234,7 @@ class Inverter:
                     self.base.call_notify("Predbat: Inverter {} charge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
             if notify:
                 self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
+            self.mqtt_message(topic='set/charge_rate', payload=new_rate)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -1257,6 +1283,7 @@ class Inverter:
                     self.base.call_notify("Predbat: Inverter {} discharge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
             if notify:
                 self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
+            self.mqtt_message(topic='set/discharge_rate', payload=new_rate)
 
     def adjust_battery_target(self, soc):
         """
@@ -1303,6 +1330,7 @@ class Inverter:
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {} % at {}".format(self.id, soc, self.base.time_now_str()))
             self.base.record_status("Inverter {} set soc to {}".format(self.id, soc))
+            self.mqtt_message(topic='set/target_soc', payload=soc)
         else:
             self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
 
@@ -1706,6 +1734,21 @@ class Inverter:
             else:
                 self.base.log(f"WARN: Unable to read current value of Solis Mode switch {entity_id}. Unable to {str_enable} {str_type} charging")
                 return False
+
+        # MQTT
+        if direction == 'charge' and enable:
+            self.mqtt_message('set/charge', payload=self.battery_rate_max_charge)
+        elif direction == 'discharge' and enable:
+            self.mqtt_message('set/discharge', payload=self.battery_rate_max_discharge)
+        else:
+            self.mqtt_message('set/auto', payload=True)
+
+    def mqtt_message(self, topic, payload):
+        """
+        Send an MQTT message via service
+        """
+        if self.inv_has_mqtt_api:
+            self.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + '/' + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
         # To enable we set the current based on the required power
