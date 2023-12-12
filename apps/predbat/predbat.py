@@ -7596,7 +7596,7 @@ class PredBat(hass.Hass):
         # Work out data scale factor so it adds up (New Solcast is in kw but old was kWH)
         factor = 1.0
         if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
-            factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor + 0.005)
+            factor = round((pv_forecast_total_data / pv_forecast_total_sensor), 1)
         # We want to divide the data into single minute slots
         divide_by = self.dp2(30 * factor)
 
@@ -7922,12 +7922,12 @@ class PredBat(hass.Hass):
             self.rate_best_cost_threshold_charge = None
             self.rate_best_cost_threshold_discharge = None
 
-        if self.calculate_best:
+        if self.calculate_best and recompute:
+            # Recomputing the plan
             self.log_option_best()
 
             # Full plan
-            if recompute:
-                self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+            self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
             # Tweak plan
             if self.calculate_tweak_plan:
@@ -7969,7 +7969,7 @@ class PredBat(hass.Hass):
                 self.log("Discharge windows filtered {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
             # Filter out any unused charge slots
-            if self.calculate_best and self.calculate_best_charge and self.charge_window_best:
+            if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
                 best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
                     self.charge_limit_best,
@@ -8002,9 +8002,8 @@ class PredBat(hass.Hass):
 
             # Plan is now valid
             self.plan_valid = True
-            if recompute:
-                self.plan_last_updated = self.now_utc
-                self.plan_last_updated_minutes = self.minutes_now
+            self.plan_last_updated = self.now_utc
+            self.plan_last_updated_minutes = self.minutes_now
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
@@ -8049,8 +8048,8 @@ class PredBat(hass.Hass):
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
-        # HTML data
-        self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
+            # HTML data
+            self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
     def execute_plan(self):
         status_extra = ""
@@ -8401,8 +8400,6 @@ class PredBat(hass.Hass):
                     data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
-                    else:
-                        self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(next_rate_id))
 
         if data_all:
             rate_key = "rate"
