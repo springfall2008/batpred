@@ -156,8 +156,8 @@ See the Predbat mode setting as above for basic calculation options
 
 **switch.predbat_calculate_fast_plan** (_expert mode_) When True (default) the plan is calculated with a limited number of
 windows to make calculations faster. When False all windows are considered but planning will take a little longer but be
-more accurate. The end result is unlikely to change in fast mode as the next windows are always considered but the longer
-term plan will be last accurate.
+more accurate. The end result is unlikely to change in fast mode as the next 8 windows are always considered in the plan,
+but the longer term plan will be less accurate.
 
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
