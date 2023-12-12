@@ -5138,7 +5138,7 @@ class PredBat(hass.Hass):
             self.rate_import_cost_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if self.rate_max == self.rate_min:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max):
                 self.rate_import_cost_threshold = self.rate_max
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
@@ -5148,7 +5148,7 @@ class PredBat(hass.Hass):
             self.rate_export_cost_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if self.rate_export_max == self.rate_export_min:
+            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min):
                 self.rate_export_cost_threshold = self.rate_export_min
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
@@ -8896,9 +8896,9 @@ class PredBat(hass.Hass):
         self.calculate_fast_plan = self.get_arg("calculate_fast_plan")
 
         if self.calculate_fast_plan:
-            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
-        else:
             self.calculate_max_windows = max(int(forecast_hours), 12)
+        else:
+            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
