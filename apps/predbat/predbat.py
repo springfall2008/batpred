@@ -8650,7 +8650,7 @@ class PredBat(hass.Hass):
                         start = event.get("start", None)
                         end = event.get("end", None)
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                        if code: # Join the new Octopus saving event and send an alert
+                        if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
                             self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             self.base.call_notify("Predbat: Joined Octopus saving event: start {}, end {}, price per kWh {}".format(start, end, saving_rate))
