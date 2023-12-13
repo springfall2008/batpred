@@ -555,7 +555,7 @@ INVERTER_DEF = {
     "SF": {
         "has_rest_api": False,
         "has_mqtt_api": True,
-        "output_charge_control": "power",
+        "output_charge_control": "none",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": False,
