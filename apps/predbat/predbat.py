@@ -5890,7 +5890,7 @@ class PredBat(hass.Hass):
             else:
                 soc_perc = 0
                 soc_kw = 0
-            
+
             # Convert % of charge freeze to current SOC number
             if self.set_charge_freeze and (soc_perc == self.reserve_percent):
                 offset = int((minute - self.minutes_now) / 5) * 5
@@ -6545,7 +6545,7 @@ class PredBat(hass.Hass):
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
-            
+
             # Default on metric
             if on_metric == 9999999:
                 on_metric = metric
@@ -9636,7 +9636,7 @@ class PredBat(hass.Hass):
                     self.log("ERROR: Unable to read {} file correctly!".format(filename))
                     passed = False
                 if data:
-                    if 'pred_bat' in data:
+                    if "pred_bat" in data:
                         self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
                         validPred += 1
         if not validPred:
@@ -9656,10 +9656,10 @@ class PredBat(hass.Hass):
         else:
             filename = predbat_py[0]
             foundVersion = False
-            with open(filename, 'r') as han:
+            with open(filename, "r") as han:
                 for line in han:
-                    if 'THIS_VERSION' in line:
-                        res = re.search("THIS_VERSION\s+=\s+\"([0-9.v]+)\"", line)
+                    if "THIS_VERSION" in line:
+                        res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
                         if res:
                             version = res.group(1)
                             if version != THIS_VERSION:
@@ -9671,14 +9671,14 @@ class PredBat(hass.Hass):
             if not foundVersion:
                 self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
                 passed = False
-        
+
         if passed:
             self.log("Sanity check has passed")
         else:
             self.log("Sanity check FAILED!")
             self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
         return passed
-        
+
     def initialize(self):
         """
         Setup the app, called once each time the app starts
