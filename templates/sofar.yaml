@@ -82,6 +82,10 @@ pred_bat:
   inverter_limit:
    - 5000
 
+  # Set the maximum charge/discharge rate of the battery
+  battery_rate_max:
+   - 3000
+
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
