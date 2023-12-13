@@ -1748,7 +1748,7 @@ class Inverter:
         Send an MQTT message via service
         """
         if self.inv_has_mqtt_api:
-            self.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + '/' + topic), payload=payload)
+            self.base.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + '/' + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
         # To enable we set the current based on the required power
