@@ -46,10 +46,6 @@ pred_bat:
   #
   # If not using REST then instead set the Control here (one for each inverter)
   # - you can delete this section if using REST
-  charge_rate:
-    - 3000
-  discharge_rate:
-    - 3000
   battery_power:
     - sensor.sofar_inverter_battery_power
   pv_power:
