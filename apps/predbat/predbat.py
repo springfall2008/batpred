@@ -945,7 +945,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage{}".format(
+                "Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage {}".format(
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
@@ -5872,7 +5872,7 @@ class PredBat(hass.Hass):
                     },
                 )
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
         Create entity to chart charge limit
         """
@@ -5890,6 +5890,12 @@ class PredBat(hass.Hass):
             else:
                 soc_perc = 0
                 soc_kw = 0
+            
+            # Convert % of charge freeze to current SOC number
+            if self.set_charge_freeze and (soc_perc == self.reserve_percent):
+                offset = int((minute - self.minutes_now) / 5) * 5
+                soc_kw = soc.get(offset, soc_kw)
+
             if prev_perc != soc_perc:
                 charge_limit_time[stamp] = soc_perc
                 charge_limit_time_kw[stamp] = soc_kw
@@ -6369,6 +6375,7 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_metric = 9999999
+        on_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
@@ -6495,7 +6502,7 @@ class PredBat(hass.Hass):
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
                 try_percent = self.calc_percent_limit(try_soc)
-                compare_with = max(self.current_charge_limit, self.reserve_current_percent)
+                compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
@@ -6531,13 +6538,17 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if (metric + self.metric_min_improvement) <= best_metric:
+            if ((metric + self.metric_min_improvement) <= on_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
+            
+            # Default on metric
+            if on_metric == 9999999:
+                on_metric = metric
 
             prev_soc = try_soc
             prev_metric = metric
@@ -6585,6 +6596,7 @@ class PredBat(hass.Hass):
         """
         best_discharge = False
         best_metric = 9999999
+        off_metric = 9999999
         best_cost = 0
         best_soc_min = 0
         best_soc_min_minute = 0
@@ -6680,8 +6692,6 @@ class PredBat(hass.Hass):
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
                         if (self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]):
-                            if self.debug_enable:
-                                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                             metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
@@ -6706,13 +6716,12 @@ class PredBat(hass.Hass):
                         )
                     )
 
-                window_size = window["end"] - start
+                window_size = try_discharge_window[window_n]["end"] - start
                 window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
                 window_results[window_key] = self.dp2(metric)
 
-                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
-                # and it doesn't fall below the soc_keep threshold
-                if (metric + self.metric_min_improvement_discharge) <= best_metric:
+                # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
+                if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
                     best_metric = metric
                     best_discharge = this_discharge_limit
                     best_cost = cost
@@ -6721,6 +6730,10 @@ class PredBat(hass.Hass):
                     best_start = start
                     best_size = window_size
                     best_keep = metric_keep
+
+                # Store the metric for discharge off
+                if off_metric == 9999999:
+                    off_metric = metric
 
         if not all_n:
             self.log(
@@ -8054,7 +8067,7 @@ class PredBat(hass.Hass):
 
             # Publish charge and discharge window best
             self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
-            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
+            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
             # HTML data
@@ -8820,6 +8833,7 @@ class PredBat(hass.Hass):
         self.soc_kw = 0.0
         self.soc_max = 0.0
         self.reserve = 0.0
+        self.reserve_percent = 0.0
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
         self.battery_rate_max_charge = 0.0
@@ -8866,6 +8880,8 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
+        self.reserve = self.dp2(self.reserve)
+        self.reserve_percent = int(self.reserve / self.soc_max * 100.0 + 0.5)
         self.reserve_current = self.dp2(self.reserve_current)
         self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
 
@@ -9620,7 +9636,7 @@ class PredBat(hass.Hass):
                     self.log("ERROR: Unable to read {} file correctly!".format(filename))
                     passed = False
                 if data:
-                    if "pred_bat" in data:
+                    if 'pred_bat' in data:
                         self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
                         validPred += 1
         if not validPred:
@@ -9640,10 +9656,10 @@ class PredBat(hass.Hass):
         else:
             filename = predbat_py[0]
             foundVersion = False
-            with open(filename, "r") as han:
+            with open(filename, 'r') as han:
                 for line in han:
-                    if "THIS_VERSION" in line:
-                        res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
+                    if 'THIS_VERSION' in line:
+                        res = re.search("THIS_VERSION\s+=\s+\"([0-9.v]+)\"", line)
                         if res:
                             version = res.group(1)
                             if version != THIS_VERSION:
@@ -9655,14 +9671,14 @@ class PredBat(hass.Hass):
             if not foundVersion:
                 self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
                 passed = False
-
+        
         if passed:
             self.log("Sanity check has passed")
         else:
             self.log("Sanity check FAILED!")
             self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
         return passed
-
+        
     def initialize(self):
         """
         Setup the app, called once each time the app starts
