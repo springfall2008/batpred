@@ -84,6 +84,10 @@ the correct mode of operation for your system.
 
 Note that future updates to Predbat will not overwrite apps.yaml, but you may need to copy settings for new features across manually
 
+When Predbat starts up initially it will perform a sanity check of the appDaemon configuration itself and confirm the right files are present.
+You will see this check in the log, should it fail a warning will be issued and predbat.status will also reflect the warning.
+While the above warning might not prevent Predbat from startup you should fix the issue ASAP as it may cause future problems.
+
 ## Predbat manual install
 
 Note: **Not recommended if you have HACS**

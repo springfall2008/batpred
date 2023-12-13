@@ -15,8 +15,10 @@ import requests
 import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
+import os
+import yaml
 
-THIS_VERSION = "v7.14.8"
+THIS_VERSION = "v7.14.9"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -943,7 +945,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SOC: {} kW {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage{}".format(
+                "Inverter {} SOC: {} kW {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage {}".format(
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
@@ -1922,11 +1924,15 @@ class Inverter:
             self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
             return None
 
-    def rest_runAll(self):
+    def rest_runAll(self, old_data=None):
         """
         Updated and get inverter status
         """
-        return self.rest_readData(api="runAll")
+        new_data = self.rest_readData(api="runAll")
+        if new_data:
+            return new_data
+        else:
+            return old_data
 
     def rest_setChargeTarget(self, target):
         """
@@ -1938,7 +1944,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
@@ -1957,7 +1963,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -1977,7 +1983,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Discharge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -1999,7 +2005,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
@@ -2019,7 +2025,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
@@ -2039,7 +2045,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
                 if new_value.lower() in ["enable", "on", "true"]:
@@ -2064,7 +2070,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
@@ -2083,7 +2089,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
@@ -2172,6 +2178,9 @@ class PredBat(hass.Hass):
 
         # Resolve locally if no HA config
         if value is None:
+            if (arg not in self.args) and default and (index is not None):
+                # Allow default to apply to all indices if there is not config item set
+                index = None
             value = self.args.get(arg, default)
             value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
 
@@ -5863,7 +5872,7 @@ class PredBat(hass.Hass):
                     },
                 )
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
         Create entity to chart charge limit
         """
@@ -5881,6 +5890,12 @@ class PredBat(hass.Hass):
             else:
                 soc_perc = 0
                 soc_kw = 0
+
+            # Convert % of charge freeze to current SOC number
+            if self.set_charge_freeze and (soc_perc == self.reserve_percent):
+                offset = int((minute - self.minutes_now) / 5) * 5
+                soc_kw = soc.get(offset, soc_kw)
+
             if prev_perc != soc_perc:
                 charge_limit_time[stamp] = soc_perc
                 charge_limit_time_kw[stamp] = soc_kw
@@ -6360,6 +6375,7 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_metric = 9999999
+        on_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
@@ -6486,7 +6502,7 @@ class PredBat(hass.Hass):
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
                 try_percent = self.calc_percent_limit(try_soc)
-                compare_with = max(self.current_charge_limit, self.reserve_current_percent)
+                compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
@@ -6522,13 +6538,17 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if (metric + self.metric_min_improvement) <= best_metric:
+            if ((metric + self.metric_min_improvement) <= on_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
+
+            # Default on metric
+            if on_metric == 9999999:
+                on_metric = metric
 
             prev_soc = try_soc
             prev_metric = metric
@@ -6576,6 +6596,7 @@ class PredBat(hass.Hass):
         """
         best_discharge = False
         best_metric = 9999999
+        off_metric = 9999999
         best_cost = 0
         best_soc_min = 0
         best_soc_min_minute = 0
@@ -6671,8 +6692,6 @@ class PredBat(hass.Hass):
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
                         if (self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]):
-                            if self.debug_enable:
-                                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                             metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
@@ -6697,13 +6716,12 @@ class PredBat(hass.Hass):
                         )
                     )
 
-                window_size = window["end"] - start
+                window_size = try_discharge_window[window_n]["end"] - start
                 window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
                 window_results[window_key] = self.dp2(metric)
 
-                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
-                # and it doesn't fall below the soc_keep threshold
-                if (metric + self.metric_min_improvement_discharge) <= best_metric:
+                # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
+                if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
                     best_metric = metric
                     best_discharge = this_discharge_limit
                     best_cost = cost
@@ -6712,6 +6730,10 @@ class PredBat(hass.Hass):
                     best_start = start
                     best_size = window_size
                     best_keep = metric_keep
+
+                # Store the metric for discharge off
+                if off_metric == 9999999:
+                    off_metric = metric
 
         if not all_n:
             self.log(
@@ -8045,7 +8067,7 @@ class PredBat(hass.Hass):
 
             # Publish charge and discharge window best
             self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
-            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
+            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
             # HTML data
@@ -8124,11 +8146,12 @@ class PredBat(hass.Hass):
 
                         if self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
                             status = "Freeze charging"
+                            status_extra = " target {}%".format(inverter.soc_percent)
                         else:
                             status = "Charging"
+                            status_extra = " target {}%".format(self.charge_limit_percent_best[0])
 
                         isCharging = True
-                        status_extra = " target {}%".format(self.charge_limit_percent_best[0])
 
                     # Hold charge mode when enabled
                     if (
@@ -8811,6 +8834,7 @@ class PredBat(hass.Hass):
         self.soc_kw = 0.0
         self.soc_max = 0.0
         self.reserve = 0.0
+        self.reserve_percent = 0.0
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
         self.battery_rate_max_charge = 0.0
@@ -8857,6 +8881,8 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
+        self.reserve = self.dp2(self.reserve)
+        self.reserve_percent = int(self.reserve / self.soc_max * 100.0 + 0.5)
         self.reserve_current = self.dp2(self.reserve_current)
         self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
 
@@ -9357,14 +9383,27 @@ class PredBat(hass.Hass):
         for entity in self.dashboard_index:
             text += "  - entity: " + entity + "\n"
 
-        filename = "/config/predbat_dashboard.yaml"
-        han = open(filename, "w")
-        if han:
-            self.log("Creating predbat dashboard at {}".format(filename))
-            han.write(text)
-            han.close()
+        # Find path
+        basename = "/predbat_dashboard.yaml"
+        filename = None
+        if os.path.exists("/homeassistant"):
+            filename = "/homeassistant" + basename
+        elif os.path.exists("/config"):
+            filename = "/config" + basename
+        elif os.path.exists("/conf"):
+            filename = "/conf" + basename
+
+        # Write
+        if filename:
+            han = open(filename, "w")
+            if han:
+                self.log("Creating predbat dashboard at {}".format(filename))
+                han.write(text)
+                han.close()
+            else:
+                self.log("Failed to write predbat dashboard to {}".format(filename))
         else:
-            self.log("Failed to write predbat dashboard to {}".format(filename))
+            self.log("Failed to write predbat dashboard as can not find /config or /conf")
 
     def load_user_config(self, quiet=True, register=False):
         """
@@ -9537,6 +9576,110 @@ class PredBat(hass.Hass):
         for key in disabled:
             del self.args[key]
 
+    def sanity(self):
+        """
+        Sanity check appdaemon setup
+        """
+        self.log("Sanity check:")
+        self.log("Sanity files in '/config'        {}".format(os.listdir("/config")))
+        app_dirs = ["/config"]
+        passed = True
+
+        if os.path.exists("/config/appdaemon.yaml"):
+            with open("/config/appdaemon.yaml", "r") as han:
+                data = None
+
+                try:
+                    data = yaml.safe_load(han)
+                except yaml.YAMLError as exc:
+                    self.log("ERROR: Unable to read /config/appdaemon.yaml file correctly!")
+                    passed = False
+
+                if data and ("appdaemon" in data):
+                    sub_data = data["appdaemon"]
+                    if "app_dir" in sub_data:
+                        app_dir = sub_data["app_dir"]
+                        app_dirs.append(app_dir)
+                        self.log("Sanity: Got app_dir {}".format(app_dir))
+                    else:
+                        self.log("WARN: app_dir is not set in appdaemon.yaml")
+                        passed = False
+                elif data:
+                    self.log("WARN: appdaemon section is missing from appdaemon.yaml")
+                    passed = False
+
+        self.log("Sanity: Scanning app_dirs {}".format(app_dirs))
+        apps_yaml = []
+        predbat_py = []
+        for dir in app_dirs:
+            for root, dirs, files in os.walk(dir):
+                for name in files:
+                    filepath = os.path.join(root, name)
+                    if name == "apps.yaml":
+                        self.log("Sanity: Got apps.yaml in location {}".format(filepath))
+                        apps_yaml.append(filepath)
+                    elif name == "predbat.py":
+                        self.log("Sanity: Got predbat.py in location {}".format(filepath))
+                        predbat_py.append(filepath)
+
+        if not apps_yaml:
+            self.log("WARN: Unable to find any apps.yaml files, please check your configuration")
+            passed = False
+
+        # Check apps.yaml to find predbat configuration
+        validPred = 0
+        for filename in apps_yaml:
+            with open(filename, "r") as han:
+                data = None
+                try:
+                    data = yaml.safe_load(han)
+                except yaml.YAMLError as exc:
+                    self.log("ERROR: Unable to read {} file correctly!".format(filename))
+                    passed = False
+                if data:
+                    if "pred_bat" in data:
+                        self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
+                        validPred += 1
+        if not validPred:
+            self.log("WARN: Unable to find any valid Predbat configurations")
+            passed = False
+        if validPred > 1:
+            self.log("WARN: You have multiple valid Predbat configurations")
+            passed = False
+
+        # Check predbat.py
+        if not predbat_py:
+            self.log("WARN: Unable to find predbat.py, please check your configuration")
+            passed = False
+        elif len(predbat_py) > 1:
+            self.log("WARN: Found multiple predbat.py files, please check your configuration")
+            passed = False
+        else:
+            filename = predbat_py[0]
+            foundVersion = False
+            with open(filename, "r") as han:
+                for line in han:
+                    if "THIS_VERSION" in line:
+                        res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
+                        if res:
+                            version = res.group(1)
+                            if version != THIS_VERSION:
+                                self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
+                                passed = False
+                            else:
+                                self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))
+                                foundVersion = True
+            if not foundVersion:
+                self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
+                passed = False
+
+        if passed:
+            self.log("Sanity check has passed")
+        else:
+            self.log("Sanity check FAILED!")
+            self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
+        return passed
+
     def initialize(self):
         """
         Setup the app, called once each time the app starts
@@ -9546,6 +9689,7 @@ class PredBat(hass.Hass):
 
         try:
             self.reset()
+            self.sanity()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
         except Exception as e:
