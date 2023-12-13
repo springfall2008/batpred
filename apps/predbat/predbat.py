@@ -9560,7 +9560,7 @@ class PredBat(hass.Hass):
 
     def sanity(self):
         """
-        Sanity check appdeamon setup
+        Sanity check appdaemon setup
         """
         self.log("Sanity check:")
         self.log("Sanity files in '/config'        {}".format(os.listdir("/config")))
@@ -9578,16 +9578,16 @@ class PredBat(hass.Hass):
                     passed = False
 
                 if data and ("appdaemon" in data):
-                    appd = data["appdaemon"]
-                    if "app_dir" in appd:
-                        app_dir = appd["app_dir"]
+                    sub_data = data["appdaemon"]
+                    if "app_dir" in sub_data:
+                        app_dir = sub_data["app_dir"]
                         app_dirs.append(app_dir)
                         self.log("Sanity: Got app_dir {}".format(app_dir))
                     else:
                         self.log("WARN: app_dir is not set in appdaemon.yaml")
                         passed = False
                 elif data:
-                    self.log("WARN: appdeamon section is missing from appdaemon.yaml")
+                    self.log("WARN: appdaemon section is missing from appdaemon.yaml")
                     passed = False
 
         self.log("Sanity: Scanning app_dirs {}".format(app_dirs))
@@ -9610,17 +9610,17 @@ class PredBat(hass.Hass):
 
         # Check apps.yaml to find predbat configuration
         validPred = 0
-        for cfile in apps_yaml:
-            with open(cfile, "r") as han:
+        for filename in apps_yaml:
+            with open(filename, "r") as han:
                 data = None
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError as exc:
-                    self.log("ERROR: Unable to read {} file correctly!".format(cfile))
+                    self.log("ERROR: Unable to read {} file correctly!".format(filename))
                     passed = False
                 if data:
-                    if "pred_bat" in data:
-                        self.log("Sanity: {} is a valid pred_bat configuration".format(cfile))
+                    if 'pred_bat' in data:
+                        self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
                         validPred += 1
         if not validPred:
             self.log("WARN: Unable to find any valid Predbat configurations")
@@ -9639,14 +9639,14 @@ class PredBat(hass.Hass):
         else:
             filename = predbat_py[0]
             foundVersion = False
-            with open(filename, "r") as han:
+            with open(filename, 'r') as han:
                 for line in han:
-                    if "THIS_VERSION" in line:
-                        res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
+                    if 'THIS_VERSION' in line:
+                        res = re.search("THIS_VERSION\s+=\s+\"([0-9.v]+)\"", line)
                         if res:
                             version = res.group(1)
                             if version != THIS_VERSION:
-                                self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdeamon".format(version, THIS_VERSION))
+                                self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
                                 passed = False
                             else:
                                 self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))
@@ -9654,14 +9654,14 @@ class PredBat(hass.Hass):
             if not foundVersion:
                 self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, pleaes check your setup")
                 passed = False
-
+        
         if passed:
             self.log("Sanity check has passed")
         else:
             self.log("Sanity check FAILED!")
             self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
         return passed
-
+        
     def initialize(self):
         """
         Setup the app, called once each time the app starts
