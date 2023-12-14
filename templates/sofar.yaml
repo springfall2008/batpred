@@ -309,14 +309,14 @@ pred_bat:
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
   # It's assumed to be in Kwh but scaling can be applied if need be
-  iboost_energy_today: 'sensor.tasmota_energy_today'
-  iboost_energy_scaling: 1.0
+  #iboost_energy_today: 'sensor.tasmota_energy_today'
+  #iboost_energy_scaling: 1.0
 
   # Nordpool market energy rates
-  futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
-  futurerate_adjust_import: False
-  futurerate_adjust_export: True
-  futurerate_peak_start: "16:00:00"
-  futurerate_peak_end: "19:00:00"
-  futurerate_peak_premium_import: 14
-  futurerate_peak_premium_export: 6.5
+  #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
+  #futurerate_adjust_import: False
+  #futurerate_adjust_export: True
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
