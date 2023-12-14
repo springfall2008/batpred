@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.9"
+THIS_VERSION = "v7.14.10"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1501,6 +1501,11 @@ class Inverter:
             else:
                 self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
+        # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
+        if not self.inv_has_discharge_enable_time and not new_start_time:
+            new_start_time = self.midnight_utc
+            new_end_time = self.midnight_utc
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -1710,10 +1715,13 @@ class Inverter:
                 return False
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
+        """
+        Enable or disable timed charge/discharge
+        """
         # To enable we set the current based on the required power
         if enable:
             power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
-            self.set_current_from_power("charge", power)
+            self.set_current_from_power(direction, power)
         else:
             # To disable we set both times to 00:00
             for x in ["start", "end"]:
@@ -1723,6 +1731,9 @@ class Inverter:
                     self.write_and_poll_value(name, entity, 0)
 
     def set_current_from_power(self, direction, power):
+        """
+        Set the timed charge/discharge current setting by converting power to current
+        """
         new_current = round(power / self.battery_voltage, 1)
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
