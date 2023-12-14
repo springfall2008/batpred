@@ -66,8 +66,8 @@ minmax
 minuteb
 mkdocs
 Modbus
-myenergi
 mqtt
+myenergi
 nattribute
 nearr
 nord
