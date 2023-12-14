@@ -3112,13 +3112,17 @@ class PredBat(hass.Hass):
                 # If we have some gaps
                 if num_gaps > 0:
                     average_day = sum_days_id[days]
-                    if (average_day == 0) or (num_gaps >= 24*60):
+                    if (average_day == 0) or (num_gaps >= 24 * 60):
                         self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!")
                         average_day = 24.0
                     else:
-                        real_data_percent = ((24*60) - num_gaps) / (24*60)
+                        real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                         average_day /= real_data_percent
-                        self.log("WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)))
+                        self.log(
+                            "WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
+                                days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)
+                            )
+                        )
 
                     # Do the filling
                     per_minute_increment = average_day / (24 * 60)
@@ -3127,7 +3131,6 @@ class PredBat(hass.Hass):
                         if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
                             for offset in range(minute_previous, 0, -1):
                                 data[offset] += per_minute_increment * gap_size
-
 
     def get_historical(self, data, minute):
         """
@@ -6625,7 +6628,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if ((metric + self.metric_min_improvement) <= best_metric):
+            if (metric + self.metric_min_improvement) <= best_metric:
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
