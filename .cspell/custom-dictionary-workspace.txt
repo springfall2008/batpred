@@ -67,6 +67,7 @@ minmax
 minuteb
 mkdocs
 Modbus
+mqtt
 myenergi
 nattribute
 nearr
@@ -104,6 +105,7 @@ Southwell
 springfall
 startt
 stepline
+tasmota
 tdata
 tdiff
 timea
