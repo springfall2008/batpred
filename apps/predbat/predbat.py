@@ -3098,20 +3098,36 @@ class PredBat(hass.Hass):
             del self.days_previous_weight[min_sum_day_idx]
 
         # Gap filling
+        gap_size = 15
         for days in self.days_previous:
             use_days = min(days, self.load_minutes_age)
-            sum_day = 0
             num_gaps = 0
-            average_day = sum_days_id[days]
             if use_days > 0:
                 full_days = 24 * 60 * (use_days - 1)
                 for minute in range(0, 24 * 60):
                     minute_previous = 24 * 60 - minute + full_days
-                    if data.get(minute_previous, 0) == 0:
-                        data[minute_previous] = average_day / (24 * 60)
-                        num_gaps += 1
-            if num_gaps > 0:
-                self.log("WARN: Historical day {} has {} gaps in the data, filled with average {} kWh/day".format(days, num_gaps, self.dp2(average_day)))        
+                    if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
+                        num_gaps += gap_size
+
+                # If we have some gaps
+                if num_gaps > 0:
+                    average_day = sum_days_id[days]
+                    if (average_day == 0) or (num_gaps >= 24*60):
+                        self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!")
+                        average_day = 24.0
+                    else:
+                        real_data_percent = ((24*60) - num_gaps) / (24*60)
+                        average_day /= real_data_percent
+                        self.log("WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {})".format(days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), real_data_percent))
+
+                    # Do the filling
+                    per_minute_increment = average_day / (24 * 60)
+                    for minute in range(0, 24 * 60):
+                        minute_previous = 24 * 60 - minute + full_days
+                        if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
+                            for offset in range(minute_previous, 0, -1):
+                                data[offset] += per_minute_increment * gap_size
+
 
     def get_historical(self, data, minute):
         """
