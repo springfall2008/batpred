@@ -27,4 +27,5 @@ xxxx
 If applicable, add screenshots to help explain your problem. The most useful ones can be your battery chart, the Predbat HTML plan and your current settings in HA.
 
 **Log file**
-Can you capture a log file from the time of the issue, debug mode is not normally required. If you are not keeping the full logs then please enable this in appdaemon.yaml (see the installation instruction in the Predbat docs area for details on how to do this)
+Can you capture a log file from the time of the issue, debug mode is not normally required.
+If you are not keeping the full logs then please enable this in appdaemon.yaml (see the installation instruction in the Predbat docs area for details on how to do this)
