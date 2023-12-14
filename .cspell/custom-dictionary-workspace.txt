@@ -43,6 +43,7 @@ GivEnergy
 givtcp
 HACS
 hadashboard
+HAOS
 hass
 hassapi
 homeassistant
@@ -101,6 +102,7 @@ Solax
 Solcast
 solisx
 Southwell
+springfall
 startt
 stepline
 tasmota

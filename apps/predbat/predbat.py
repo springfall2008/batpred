@@ -15,8 +15,10 @@ import requests
 import copy
 import appdaemon.plugins.hass.hassapi as hass
 import adbase as ad
+import os
+import yaml
 
-THIS_VERSION = "v7.14.8"
+THIS_VERSION = "v7.14.10"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -24,7 +26,7 @@ TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
 
-# 240v x 100 amps x 3 phases / 1000 to kw / 60 minutes in an hour is the maximum kWh in a 1 minute period
+# 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 
 SIMULATE = False  # Debug option, when set don't write to entities but simulate each 30 min period
@@ -160,7 +162,7 @@ CONFIG_ITEMS = [
         "min": 4,
         "max": 8.5,
         "step": 0.10,
-        "unit": "kw",
+        "unit": "kW",
         "icon": "mdi:ev-station",
         "default": 6.0,
     },
@@ -171,7 +173,7 @@ CONFIG_ITEMS = [
         "min": 1,
         "max": 8.5,
         "step": 0.10,
-        "unit": "kw",
+        "unit": "kW",
         "icon": "mdi:ev-station",
         "default": 7.4,
     },
@@ -193,7 +195,7 @@ CONFIG_ITEMS = [
         "min": 0,
         "max": 30.0,
         "step": 0.10,
-        "unit": "kwh",
+        "unit": "kWh",
         "icon": "mdi:battery-50",
         "enable": "expert_mode",
         "default": 0.0,
@@ -205,7 +207,7 @@ CONFIG_ITEMS = [
         "min": 0,
         "max": 30.0,
         "step": 0.10,
-        "unit": "kwh",
+        "unit": "kWh",
         "icon": "mdi:battery-50",
         "enable": "expert_mode",
         "default": 0.0,
@@ -217,7 +219,7 @@ CONFIG_ITEMS = [
         "min": 0,
         "max": 30.0,
         "step": 0.10,
-        "unit": "kwh",
+        "unit": "kWh",
         "icon": "mdi:battery-50",
         "default": 2.0,
     },
@@ -252,7 +254,7 @@ CONFIG_ITEMS = [
         "min": -50,
         "max": 50.0,
         "step": 0.1,
-        "unit": "p/kwh",
+        "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
         "default": 2.0,
@@ -276,7 +278,7 @@ CONFIG_ITEMS = [
         "min": -50,
         "max": 50.0,
         "step": 0.1,
-        "unit": "p/kwh",
+        "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
         "default": 0.0,
@@ -288,7 +290,7 @@ CONFIG_ITEMS = [
         "min": -50,
         "max": 50.0,
         "step": 0.1,
-        "unit": "p/kwh",
+        "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
         "default": 0.0,
@@ -354,7 +356,7 @@ CONFIG_ITEMS = [
         "min": 5,
         "max": 60,
         "step": 5,
-        "unit": "kwh",
+        "unit": "kWh",
         "icon": "mdi:clock-end",
         "enable": "expert_mode",
         "default": 10,
@@ -422,11 +424,11 @@ CONFIG_ITEMS = [
         "min": 0,
         "max": 5,
         "step": 0.1,
-        "unit": "kwh",
+        "unit": "kWh",
         "enable": "iboost_enable",
         "default": 3.0,
     },
-    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kwh", "enable": "iboost_enable", "default": 0.0},
+    {"name": "iboost_today", "friendly_name": "IBoost today", "type": "input_number", "min": 0, "max": 5, "step": 0.1, "unit": "kWh", "enable": "iboost_enable", "default": 0.0},
     {
         "name": "iboost_max_power",
         "friendly_name": "IBoost max power",
@@ -689,7 +691,7 @@ class Inverter:
                 if self.base.battery_capacity_nominal:
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
-                        self.base.log("WARN: REST data reports Battery Capacity Kwh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                        self.base.log("WARN: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
             self.soc_max *= self.base.battery_scaling
 
@@ -804,7 +806,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} kw export limit {} kw reserve {} % current_reserve {} %".format(
+                "New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
                     self.id,
                     self.base.dp2(self.soc_max),
                     self.base.dp2(self.nominal_capacity),
@@ -967,7 +969,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SOC: {} kw {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage{}".format(
+                "Inverter {} SOC: {} kW {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage {}".format(
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
@@ -1052,7 +1054,7 @@ class Inverter:
         if not quiet:
             if self.charge_enable_time:
                 self.base.log(
-                    "Inverter {} Charge settings: {}-{} limit {} power {} kw".format(
+                    "Inverter {} Charge settings: {}-{} limit {} power {} kW".format(
                         self.id,
                         self.base.time_abs_str(self.charge_start_time_minutes),
                         self.base.time_abs_str(self.charge_end_time_minutes),
@@ -1061,7 +1063,7 @@ class Inverter:
                     )
                 )
             else:
-                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kw".format(self.id, self.charge_rate_now * 60.0))
+                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kW".format(self.id, self.charge_rate_now * 60.0))
 
         # Construct discharge window from GivTCP settings
         self.discharge_window = []
@@ -1527,6 +1529,11 @@ class Inverter:
             else:
                 self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
 
+        # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
+        if not self.inv_has_discharge_enable_time and not new_start_time:
+            new_start_time = self.midnight_utc
+            new_end_time = self.midnight_utc
+
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -1751,10 +1758,13 @@ class Inverter:
             self.base.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
+        """
+        Enable or disable timed charge/discharge
+        """
         # To enable we set the current based on the required power
         if enable:
             power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
-            self.set_current_from_power("charge", power)
+            self.set_current_from_power(direction, power)
         else:
             # To disable we set both times to 00:00
             for x in ["start", "end"]:
@@ -1764,6 +1774,9 @@ class Inverter:
                     self.write_and_poll_value(name, entity, 0)
 
     def set_current_from_power(self, direction, power):
+        """
+        Set the timed charge/discharge current setting by converting power to current
+        """
         new_current = round(power / self.battery_voltage, 1)
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
@@ -1965,11 +1978,15 @@ class Inverter:
             self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
             return None
 
-    def rest_runAll(self):
+    def rest_runAll(self, old_data=None):
         """
         Updated and get inverter status
         """
-        return self.rest_readData(api="runAll")
+        new_data = self.rest_readData(api="runAll")
+        if new_data:
+            return new_data
+        else:
+            return old_data
 
     def rest_setChargeTarget(self, target):
         """
@@ -1981,7 +1998,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
@@ -2000,7 +2017,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -2020,7 +2037,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Discharge_Rate"]
             if abs(new - rate) < 100:
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
@@ -2042,7 +2059,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
@@ -2062,7 +2079,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
@@ -2082,7 +2099,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
                 if new_value.lower() in ["enable", "on", "true"]:
@@ -2107,7 +2124,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
@@ -2126,7 +2143,7 @@ class Inverter:
         for retry in range(0, 5):
             r = requests.post(url, json=data)
             # time.sleep(10)
-            self.rest_data = self.rest_runAll()
+            self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
@@ -2215,6 +2232,9 @@ class PredBat(hass.Hass):
 
         # Resolve locally if no HA config
         if value is None:
+            if (arg not in self.args) and default and (index is not None):
+                # Allow default to apply to all indices if there is not config item set
+                index = None
             value = self.args.get(arg, default)
             value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
 
@@ -3106,7 +3126,7 @@ class PredBat(hass.Hass):
 
     def get_from_incrementing(self, data, index, backwards=True):
         """
-        Get a single value from an incrementing series e.g. kwh today -> kwh this minute
+        Get a single value from an incrementing series e.g. kWh today -> kWh this minute
         """
         while index < 0:
             index += 24 * 60
@@ -3288,7 +3308,7 @@ class PredBat(hass.Hass):
             difference_cap = min(difference_cap, 2.0)
 
         self.log(
-            "Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored and {} forecast extra, Actual so far {} KWh with {} kWh car excluded and {} kWh import ignored".format(
+            "Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored and {} forecast extra, Actual so far {} kWh with {} kWh car excluded and {} kWh import ignored".format(
                 self.dp2(difference * 100.0),
                 self.dp2(difference_cap * 100.0),
                 self.metric_inday_adjust_damping,
@@ -3760,7 +3780,7 @@ class PredBat(hass.Hass):
                     # If the battery is on charge anyhow then imports are at battery charging rate
                     import_kwh_battery += diff
                 else:
-                    # self.log("importing to minute %s amount %s kw total %s kwh total draw %s" % (minute, energy, import_kwh_house, diff))
+                    # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
                 if minute_absolute in self.rate_import:
@@ -3833,7 +3853,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable or save:
             self.log(
-                "predict {} end_record {} final soc {} kwh metric {} p metric_keep {} min_soc {} @ {} kwh load {} pv {}".format(
+                "predict {} end_record {} final soc {} kWh metric {} p metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
                     save,
                     self.time_abs_str(end_record + self.minutes_now),
                     self.dp2(final_soc),
@@ -3883,12 +3903,12 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".soc_kw_h0",
                 state=self.dp3(self.predict_soc[0]),
-                attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
+                attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
-                attributes={"results": predict_soc_time, "friendly_name": "Predicted SOC kwh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
+                attributes={"results": predict_soc_time, "friendly_name": "Predicted SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
@@ -3897,7 +3917,7 @@ class PredBat(hass.Hass):
                     "results": predict_battery_power,
                     "friendly_name": "Predicted Battery Power",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -3908,14 +3928,14 @@ class PredBat(hass.Hass):
                     "results": predict_battery_cycle,
                     "friendly_name": "Predicted Battery Cycle",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".pv_power",
                 state=self.dp3(0),
-                attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kw", "icon": "mdi:battery"},
+                attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".grid_power",
@@ -3924,7 +3944,7 @@ class PredBat(hass.Hass):
                     "results": predict_grid_power,
                     "friendly_name": "Predicted Grid Power",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -3935,7 +3955,7 @@ class PredBat(hass.Hass):
                     "results": predict_load_power,
                     "friendly_name": "Predicted Load Power",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -3946,7 +3966,7 @@ class PredBat(hass.Hass):
                     "time": self.time_abs_str(soc_min_minute),
                     "friendly_name": "Predicted minimum SOC best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-arrow-down-outline",
                 },
             )
@@ -3958,14 +3978,14 @@ class PredBat(hass.Hass):
                     "export_until_charge_kwh": export_to_first_charge,
                     "friendly_name": "Predicted exports",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-export",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".export_energy_h0",
                 state=self.dp3(export_kwh_h0),
-                attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-export"},
+                attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-export"},
             )
             self.dashboard_item(
                 self.prefix + ".load_energy",
@@ -3974,24 +3994,24 @@ class PredBat(hass.Hass):
                     "results": load_kwh_time,
                     "friendly_name": "Predicted load",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:home-lightning-bolt",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".load_energy_h0",
                 state=self.dp3(load_kwh_h0),
-                attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
+                attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
             )
             self.dashboard_item(
                 self.prefix + ".pv_energy",
                 state=self.dp3(final_pv_kwh),
-                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
+                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
             )
             self.dashboard_item(
                 self.prefix + ".pv_energy_h0",
                 state=self.dp3(pv_kwh_h0),
-                attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
+                attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
             )
             self.dashboard_item(
                 self.prefix + ".import_energy",
@@ -4000,24 +4020,24 @@ class PredBat(hass.Hass):
                     "results": import_kwh_time,
                     "friendly_name": "Predicted imports",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-import",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".import_energy_h0",
                 state=self.dp3(import_kwh_h0),
-                attributes={"friendly_name": "Current import kWh", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
+                attributes={"friendly_name": "Current import kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
             )
             self.dashboard_item(
                 self.prefix + ".import_energy_battery",
                 state=self.dp3(final_import_kwh_battery),
-                attributes={"friendly_name": "Predicted import to battery", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
+                attributes={"friendly_name": "Predicted import to battery", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
             )
             self.dashboard_item(
                 self.prefix + ".import_energy_house",
                 state=self.dp3(final_import_kwh_house),
-                attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
+                attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
             )
             self.log("Battery has {} hours left - now at {}".format(self.dp2(hours_left), self.dp2(self.soc_kw)))
             self.dashboard_item(
@@ -4063,9 +4083,9 @@ class PredBat(hass.Hass):
                 state=self.dp3(final_soc),
                 attributes={
                     "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kwh best",
+                    "friendly_name": "Battery SOC kWh best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery",
                 },
             )
@@ -4076,7 +4096,7 @@ class PredBat(hass.Hass):
                     "results": predict_battery_power,
                     "friendly_name": "Predicted Battery Power Best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4087,7 +4107,7 @@ class PredBat(hass.Hass):
                     "results": predict_battery_cycle,
                     "friendly_name": "Predicted Battery Cycle Best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery",
                 },
             )
@@ -4098,7 +4118,7 @@ class PredBat(hass.Hass):
                     "results": predict_pv_power,
                     "friendly_name": "Predicted PV Power Best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4109,7 +4129,7 @@ class PredBat(hass.Hass):
                     "results": predict_grid_power,
                     "friendly_name": "Predicted Grid Power Best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4120,24 +4140,24 @@ class PredBat(hass.Hass):
                     "results": predict_load_power,
                     "friendly_name": "Predicted Load Power Best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".soc_kw_best_h1",
                 state=self.dp3(self.predict_soc[60]),
-                attributes={"friendly_name": "Predicted SOC kwh best + 1h", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
+                attributes={"friendly_name": "Predicted SOC kWh best + 1h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".soc_kw_best_h8",
                 state=self.dp3(self.predict_soc[60 * 8]),
-                attributes={"friendly_name": "Predicted SOC kwh best + 8h", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:battery"},
+                attributes={"friendly_name": "Predicted SOC kWh best + 8h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".soc_kw_best_h12",
                 state=self.dp3(self.predict_soc[60 * 12]),
-                attributes={"friendly_name": "Predicted SOC kwh best + 12h", "state_class": "measurement", "unit _of_measurement": "kwh", "icon": "mdi:battery"},
+                attributes={"friendly_name": "Predicted SOC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".best_soc_min_kwh",
@@ -4146,7 +4166,7 @@ class PredBat(hass.Hass):
                     "time": self.time_abs_str(soc_min_minute),
                     "friendly_name": "Predicted minimum SOC best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-arrow-down-outline",
                 },
             )
@@ -4158,7 +4178,7 @@ class PredBat(hass.Hass):
                     "export_until_charge_kwh": export_to_first_charge,
                     "friendly_name": "Predicted exports best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-export",
                 },
             )
@@ -4169,14 +4189,14 @@ class PredBat(hass.Hass):
                     "results": load_kwh_time,
                     "friendly_name": "Predicted load best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:home-lightning-bolt",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".best_pv_energy",
                 state=self.dp3(final_pv_kwh),
-                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV best", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:solar-power"},
+                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
             )
             self.dashboard_item(
                 self.prefix + ".best_import_energy",
@@ -4185,7 +4205,7 @@ class PredBat(hass.Hass):
                     "results": import_kwh_time,
                     "friendly_name": "Predicted imports best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-import",
                 },
             )
@@ -4195,14 +4215,14 @@ class PredBat(hass.Hass):
                 attributes={
                     "friendly_name": "Predicted import to battery best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-import",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".best_import_energy_house",
                 state=self.dp3(final_import_kwh_house),
-                attributes={"friendly_name": "Predicted import to house best", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:transmission-tower-import"},
+                attributes={"friendly_name": "Predicted import to house best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
             )
             self.dashboard_item(
                 self.prefix + ".best_metric",
@@ -4223,7 +4243,7 @@ class PredBat(hass.Hass):
                     "results": predict_iboost,
                     "friendly_name": "Predicted IBoost energy best",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:water-boiler",
                 },
             )
@@ -4237,7 +4257,7 @@ class PredBat(hass.Hass):
                     "results": predict_pv_power,
                     "friendly_name": "Predicted PV Power Debug",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4248,7 +4268,7 @@ class PredBat(hass.Hass):
                     "results": predict_grid_power,
                     "friendly_name": "Predicted Grid Power Debug",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4259,7 +4279,7 @@ class PredBat(hass.Hass):
                     "results": predict_load_power,
                     "friendly_name": "Predicted Load Power Debug",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4270,7 +4290,7 @@ class PredBat(hass.Hass):
                     "results": predict_battery_power,
                     "friendly_name": "Predicted Battery Power Debug",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kw",
+                    "unit_of_measurement": "kW",
                     "icon": "mdi:battery",
                 },
             )
@@ -4281,9 +4301,9 @@ class PredBat(hass.Hass):
                 state=self.dp3(final_soc),
                 attributes={
                     "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kwh best 10%",
+                    "friendly_name": "Battery SOC kWh best 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery",
                 },
             )
@@ -4294,7 +4314,7 @@ class PredBat(hass.Hass):
                     "results": pv_kwh_time,
                     "friendly_name": "Predicted PV best 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:solar-power",
                 },
             )
@@ -4317,14 +4337,14 @@ class PredBat(hass.Hass):
                     "export_until_charge_kwh": export_to_first_charge,
                     "friendly_name": "Predicted exports best 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-export",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".best10_load_energy",
                 state=self.dp3(final_load_kwh),
-                attributes={"friendly_name": "Predicted load best 10%", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
+                attributes={"friendly_name": "Predicted load best 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
             )
             self.dashboard_item(
                 self.prefix + ".best10_import_energy",
@@ -4333,7 +4353,7 @@ class PredBat(hass.Hass):
                     "results": import_kwh_time,
                     "friendly_name": "Predicted imports best 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-import",
                 },
             )
@@ -4344,9 +4364,9 @@ class PredBat(hass.Hass):
                 state=self.dp3(final_soc),
                 attributes={
                     "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kwh base 10%",
+                    "friendly_name": "Battery SOC kWh base 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:battery",
                 },
             )
@@ -4357,7 +4377,7 @@ class PredBat(hass.Hass):
                     "results": pv_kwh_time,
                     "friendly_name": "Predicted PV base 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:solar-power",
                 },
             )
@@ -4380,14 +4400,14 @@ class PredBat(hass.Hass):
                     "export_until_charge_kwh": export_to_first_charge,
                     "friendly_name": "Predicted exports base 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-export",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".base10_load_energy",
                 state=self.dp3(final_load_kwh),
-                attributes={"friendly_name": "Predicted load base 10%", "state_class": "measurement", "unit_of_measurement": "kwh", "icon": "mdi:home-lightning-bolt"},
+                attributes={"friendly_name": "Predicted load base 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
             )
             self.dashboard_item(
                 self.prefix + ".base10_import_energy",
@@ -4396,7 +4416,7 @@ class PredBat(hass.Hass):
                     "results": import_kwh_time,
                     "friendly_name": "Predicted imports base 10%",
                     "state_class": "measurement",
-                    "unit_of_measurement": "kwh",
+                    "unit_of_measurement": "kWh",
                     "icon": "mdi:transmission-tower-import",
                 },
             )
@@ -4845,7 +4865,7 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
-                    attributes={"planned": plan, "cost": None, "kwh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
+                    attributes={"planned": plan, "cost": None, "kWh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
@@ -5181,7 +5201,7 @@ class PredBat(hass.Hass):
             self.rate_import_cost_threshold = self.dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if self.rate_max == self.rate_min:
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max):
                 self.rate_import_cost_threshold = self.rate_max
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
@@ -5191,7 +5211,7 @@ class PredBat(hass.Hass):
             self.rate_export_cost_threshold = self.dp2(self.rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if self.rate_export_max == self.rate_export_min:
+            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min):
                 self.rate_export_cost_threshold = self.rate_export_min
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
@@ -5752,7 +5772,7 @@ class PredBat(hass.Hass):
                 },
             )
         self.log(
-            "Todays energy import {} kwh export {} kwh cost {} p import {} p export {} p".format(
+            "Todays energy import {} kWh export {} kWh cost {} p import {} p export {} p".format(
                 self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.dp2(day_cost_import), self.dp2(day_cost_export)
             )
         )
@@ -5815,9 +5835,9 @@ class PredBat(hass.Hass):
                     state=self.dp2(discharge_limit_soc),
                     attributes={
                         "results": discharge_limit_time_kw,
-                        "friendly_name": "Predicted discharge limit kwh best",
+                        "friendly_name": "Predicted discharge limit kWh best",
                         "state_class": "measurement",
-                        "unit_of_measurement": "kwh",
+                        "unit_of_measurement": "kWh",
                         "icon": "mdi:battery-charging",
                     },
                 )
@@ -5863,9 +5883,9 @@ class PredBat(hass.Hass):
                     state=self.dp2(discharge_limit_soc),
                     attributes={
                         "results": discharge_limit_time_kw,
-                        "friendly_name": "Predicted discharge limit kwh",
+                        "friendly_name": "Predicted discharge limit kWh",
                         "state_class": "measurement",
-                        "unit_of_measurement": "kwh",
+                        "unit_of_measurement": "kWh",
                         "icon": "mdi:battery-charging",
                     },
                 )
@@ -5906,7 +5926,7 @@ class PredBat(hass.Hass):
                     },
                 )
 
-    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best):
+    def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
         Create entity to chart charge limit
         """
@@ -5924,6 +5944,12 @@ class PredBat(hass.Hass):
             else:
                 soc_perc = 0
                 soc_kw = 0
+
+            # Convert % of charge freeze to current SOC number
+            if self.set_charge_freeze and (soc_perc == self.reserve_percent):
+                offset = int((minute - self.minutes_now) / 5) * 5
+                soc_kw = soc.get(offset, soc_kw)
+
             if prev_perc != soc_perc:
                 charge_limit_time[stamp] = soc_perc
                 charge_limit_time_kw[stamp] = soc_kw
@@ -5961,9 +5987,9 @@ class PredBat(hass.Hass):
                     state=self.dp2(charge_limit_first),
                     attributes={
                         "results": charge_limit_time_kw,
-                        "friendly_name": "Predicted charge limit kwh best",
+                        "friendly_name": "Predicted charge limit kWh best",
                         "state_class": "measurement",
-                        "unit_of_measurement": "kwh",
+                        "unit_of_measurement": "kWh",
                         "icon": "mdi:battery-charging",
                     },
                 )
@@ -6009,9 +6035,9 @@ class PredBat(hass.Hass):
                     state=self.dp2(charge_limit_first),
                     attributes={
                         "results": charge_limit_time_kw,
-                        "friendly_name": "Predicted charge limit kwh",
+                        "friendly_name": "Predicted charge limit kWh",
                         "state_class": "measurement",
-                        "unit_of_measurement": "kwh",
+                        "unit_of_measurement": "kWh",
                         "icon": "mdi:battery-charging",
                     },
                 )
@@ -6403,6 +6429,7 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_metric = 9999999
+        on_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
@@ -6529,7 +6556,7 @@ class PredBat(hass.Hass):
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
                 try_percent = self.calc_percent_limit(try_soc)
-                compare_with = max(self.current_charge_limit, self.reserve_current_percent)
+                compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
                     metric -= max(0.5, self.metric_min_improvement)
@@ -6565,13 +6592,17 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if (metric + self.metric_min_improvement) <= best_metric:
+            if ((metric + self.metric_min_improvement) <= on_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
+
+            # Default on metric
+            if on_metric == 9999999:
+                on_metric = metric
 
             prev_soc = try_soc
             prev_metric = metric
@@ -6619,6 +6650,7 @@ class PredBat(hass.Hass):
         """
         best_discharge = False
         best_metric = 9999999
+        off_metric = 9999999
         best_cost = 0
         best_soc_min = 0
         best_soc_min_minute = 0
@@ -6714,8 +6746,6 @@ class PredBat(hass.Hass):
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
                         if (self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]):
-                            if self.debug_enable:
-                                self.log("Sim: Discharge window {} - weighting as it falls within currently configured discharge slot (or continues from one)".format(window_n))
                             metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
@@ -6740,13 +6770,12 @@ class PredBat(hass.Hass):
                         )
                     )
 
-                window_size = window["end"] - start
+                window_size = try_discharge_window[window_n]["end"] - start
                 window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
                 window_results[window_key] = self.dp2(metric)
 
-                # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
-                # and it doesn't fall below the soc_keep threshold
-                if (metric + self.metric_min_improvement_discharge) <= best_metric:
+                # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
+                if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
                     best_metric = metric
                     best_discharge = this_discharge_limit
                     best_cost = cost
@@ -6755,6 +6784,10 @@ class PredBat(hass.Hass):
                     best_start = start
                     best_size = window_size
                     best_keep = metric_keep
+
+                # Store the metric for discharge off
+                if off_metric == 9999999:
+                    off_metric = metric
 
         if not all_n:
             self.log(
@@ -7636,16 +7669,16 @@ class PredBat(hass.Hass):
                 pv_forecast_total_data += total_data
                 pv_forecast_total_sensor += total_sensor
 
-        # Work out data scale factor so it adds up (New Solcast is in kw but old was kWH)
+        # Work out data scale factor so it adds up (New Solcast is in kW but old was kWH)
         factor = 1.0
         if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
-            factor = self.dp2(pv_forecast_total_data / pv_forecast_total_sensor + 0.005)
+            factor = round((pv_forecast_total_data / pv_forecast_total_sensor), 1)
         # We want to divide the data into single minute slots
         divide_by = self.dp2(30 * factor)
 
         if factor != 1.0 and factor != 2.0:
             self.log(
-                "WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} KWh, this is unexpected and hence data maybe misleading (factor {})".format(
+                "WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(
                     pv_forecast_total_data, pv_forecast_total_sensor, factor
                 )
             )
@@ -7965,12 +7998,12 @@ class PredBat(hass.Hass):
             self.rate_best_cost_threshold_charge = None
             self.rate_best_cost_threshold_discharge = None
 
-        if self.calculate_best:
+        if self.calculate_best and recompute:
+            # Recomputing the plan
             self.log_option_best()
 
             # Full plan
-            if recompute:
-                self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+            self.optimise_all_windows(self.end_record, load_minutes_step, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
 
             # Tweak plan
             if self.calculate_tweak_plan:
@@ -8012,7 +8045,7 @@ class PredBat(hass.Hass):
                 self.log("Discharge windows filtered {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
             # Filter out any unused charge slots
-            if self.calculate_best and self.calculate_best_charge and self.charge_window_best:
+            if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
                 best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
                     self.charge_limit_best,
@@ -8045,9 +8078,8 @@ class PredBat(hass.Hass):
 
             # Plan is now valid
             self.plan_valid = True
-            if recompute:
-                self.plan_last_updated = self.now_utc
-                self.plan_last_updated_minutes = self.minutes_now
+            self.plan_last_updated = self.now_utc
+            self.plan_last_updated_minutes = self.minutes_now
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
@@ -8089,11 +8121,11 @@ class PredBat(hass.Hass):
 
             # Publish charge and discharge window best
             self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
-            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True)
+            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
-        # HTML data
-        self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
+            # HTML data
+            self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
     def execute_plan(self):
         status_extra = ""
@@ -8168,11 +8200,12 @@ class PredBat(hass.Hass):
 
                         if self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
                             status = "Freeze charging"
+                            status_extra = " target {}%".format(inverter.soc_percent)
                         else:
                             status = "Charging"
+                            status_extra = " target {}%".format(self.charge_limit_percent_best[0])
 
                         isCharging = True
-                        status_extra = " target {}%".format(self.charge_limit_percent_best[0])
 
                     # Hold charge mode when enabled
                     if (
@@ -8444,8 +8477,6 @@ class PredBat(hass.Hass):
                     data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
-                    else:
-                        self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(next_rate_id))
 
         if data_all:
             rate_key = "rate"
@@ -8495,7 +8526,7 @@ class PredBat(hass.Hass):
                 self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", 1)
                 if iboost_energy_age >= 1:
                     self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
-                    self.log("IBoost energy today from sensor reads {} kwh".format(self.iboost_today))
+                    self.log("IBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -8657,7 +8688,7 @@ class PredBat(hass.Hass):
         for car_n in range(0, self.num_cars):
             self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
-            self.log("Current Car SOC kwh: {}".format(self.car_charging_soc))
+            self.log("Current Car SOC kWh: {}".format(self.car_charging_soc))
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -8696,9 +8727,10 @@ class PredBat(hass.Hass):
                         start = event.get("start", None)
                         end = event.get("end", None)
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
-                        if code:
+                        if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
                             self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                            self.base.call_notify("Predbat: Joined Octopus saving event: start {}, end {}, price per kWh {}".format(start, end, saving_rate))
 
                 if joined_events:
                     for event in joined_events:
@@ -8856,6 +8888,7 @@ class PredBat(hass.Hass):
         self.soc_kw = 0.0
         self.soc_max = 0.0
         self.reserve = 0.0
+        self.reserve_percent = 0.0
         self.reserve_current = 0.0
         self.reserve_current_percent = 0.0
         self.battery_rate_max_charge = 0.0
@@ -8902,11 +8935,13 @@ class PredBat(hass.Hass):
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
+        self.reserve = self.dp2(self.reserve)
+        self.reserve_percent = int(self.reserve / self.soc_max * 100.0 + 0.5)
         self.reserve_current = self.dp2(self.reserve_current)
         self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
 
         self.log(
-            "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kw discharge rate {} kw battery_rate_min {} w ac limit {} export limit {} kw loss charge {} % loss discharge {} % inverter loss {} %".format(
+            "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} export limit {} kW loss charge {} % loss discharge {} % inverter loss {} %".format(
                 len(self.inverters),
                 self.reserve,
                 self.reserve_current,
@@ -8942,9 +8977,9 @@ class PredBat(hass.Hass):
         self.calculate_fast_plan = self.get_arg("calculate_fast_plan")
 
         if self.calculate_fast_plan:
-            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
-        else:
             self.calculate_max_windows = max(int(forecast_hours), 12)
+        else:
+            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
@@ -9402,14 +9437,27 @@ class PredBat(hass.Hass):
         for entity in self.dashboard_index:
             text += "  - entity: " + entity + "\n"
 
-        filename = "/config/predbat_dashboard.yaml"
-        han = open(filename, "w")
-        if han:
-            self.log("Creating predbat dashboard at {}".format(filename))
-            han.write(text)
-            han.close()
+        # Find path
+        basename = "/predbat_dashboard.yaml"
+        filename = None
+        if os.path.exists("/homeassistant"):
+            filename = "/homeassistant" + basename
+        elif os.path.exists("/config"):
+            filename = "/config" + basename
+        elif os.path.exists("/conf"):
+            filename = "/conf" + basename
+
+        # Write
+        if filename:
+            han = open(filename, "w")
+            if han:
+                self.log("Creating predbat dashboard at {}".format(filename))
+                han.write(text)
+                han.close()
+            else:
+                self.log("Failed to write predbat dashboard to {}".format(filename))
         else:
-            self.log("Failed to write predbat dashboard to {}".format(filename))
+            self.log("Failed to write predbat dashboard as can not find /config or /conf")
 
     def load_user_config(self, quiet=True, register=False):
         """
@@ -9582,6 +9630,110 @@ class PredBat(hass.Hass):
         for key in disabled:
             del self.args[key]
 
+    def sanity(self):
+        """
+        Sanity check appdaemon setup
+        """
+        self.log("Sanity check:")
+        self.log("Sanity files in '/config'        {}".format(os.listdir("/config")))
+        app_dirs = ["/config"]
+        passed = True
+
+        if os.path.exists("/config/appdaemon.yaml"):
+            with open("/config/appdaemon.yaml", "r") as han:
+                data = None
+
+                try:
+                    data = yaml.safe_load(han)
+                except yaml.YAMLError as exc:
+                    self.log("ERROR: Unable to read /config/appdaemon.yaml file correctly!")
+                    passed = False
+
+                if data and ("appdaemon" in data):
+                    sub_data = data["appdaemon"]
+                    if "app_dir" in sub_data:
+                        app_dir = sub_data["app_dir"]
+                        app_dirs.append(app_dir)
+                        self.log("Sanity: Got app_dir {}".format(app_dir))
+                    else:
+                        self.log("WARN: app_dir is not set in appdaemon.yaml")
+                        passed = False
+                elif data:
+                    self.log("WARN: appdaemon section is missing from appdaemon.yaml")
+                    passed = False
+
+        self.log("Sanity: Scanning app_dirs {}".format(app_dirs))
+        apps_yaml = []
+        predbat_py = []
+        for dir in app_dirs:
+            for root, dirs, files in os.walk(dir):
+                for name in files:
+                    filepath = os.path.join(root, name)
+                    if name == "apps.yaml":
+                        self.log("Sanity: Got apps.yaml in location {}".format(filepath))
+                        apps_yaml.append(filepath)
+                    elif name == "predbat.py":
+                        self.log("Sanity: Got predbat.py in location {}".format(filepath))
+                        predbat_py.append(filepath)
+
+        if not apps_yaml:
+            self.log("WARN: Unable to find any apps.yaml files, please check your configuration")
+            passed = False
+
+        # Check apps.yaml to find predbat configuration
+        validPred = 0
+        for filename in apps_yaml:
+            with open(filename, "r") as han:
+                data = None
+                try:
+                    data = yaml.safe_load(han)
+                except yaml.YAMLError as exc:
+                    self.log("ERROR: Unable to read {} file correctly!".format(filename))
+                    passed = False
+                if data:
+                    if "pred_bat" in data:
+                        self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
+                        validPred += 1
+        if not validPred:
+            self.log("WARN: Unable to find any valid Predbat configurations")
+            passed = False
+        if validPred > 1:
+            self.log("WARN: You have multiple valid Predbat configurations")
+            passed = False
+
+        # Check predbat.py
+        if not predbat_py:
+            self.log("WARN: Unable to find predbat.py, please check your configuration")
+            passed = False
+        elif len(predbat_py) > 1:
+            self.log("WARN: Found multiple predbat.py files, please check your configuration")
+            passed = False
+        else:
+            filename = predbat_py[0]
+            foundVersion = False
+            with open(filename, "r") as han:
+                for line in han:
+                    if "THIS_VERSION" in line:
+                        res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
+                        if res:
+                            version = res.group(1)
+                            if version != THIS_VERSION:
+                                self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
+                                passed = False
+                            else:
+                                self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))
+                                foundVersion = True
+            if not foundVersion:
+                self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
+                passed = False
+
+        if passed:
+            self.log("Sanity check has passed")
+        else:
+            self.log("Sanity check FAILED!")
+            self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
+        return passed
+
     def initialize(self):
         """
         Setup the app, called once each time the app starts
@@ -9591,6 +9743,7 @@ class PredBat(hass.Hass):
 
         try:
             self.reset()
+            self.sanity()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
         except Exception as e:
