@@ -1668,7 +1668,7 @@ class Inverter:
                     entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
                     self.write_and_poll_switch("scheduled_charge_enable", entity, False)
                     # If there's no charge enable switch then we can enable using start and end time
-                    if not self.inv_has_charge_enable_time:
+                    if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                         self.enable_charge_discharge_with_time_current("charge", False)
                 if self.base.set_inverter_notify and notify:
                     self.base.call_notify("Predbat: Inverter {} Disabled scheduled charging at {}".format(self.id, self.base.time_now_str()))
@@ -1909,7 +1909,7 @@ class Inverter:
                 elif "scheduled_charge_enable" in self.base.args:
                     entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
                     self.write_and_poll_switch("scheduled_charge_enable", entity, True)
-                    if not self.inv_has_charge_enable_time:
+                    if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                         self.enable_charge_discharge_with_time_current("charge", True)
                 else:
                     self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
