@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.10"
+THIS_VERSION = "v7.14.11"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3069,6 +3069,7 @@ class PredBat(hass.Hass):
 
         total_points = len(self.days_previous)
         sum_days = []
+        sum_days_id = {}
         min_sum = 99999999
         min_sum_day = 0
 
@@ -3083,6 +3084,7 @@ class PredBat(hass.Hass):
                     load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
                     sum_day += load_yesterday
             sum_days.append(self.dp2(sum_day))
+            sum_days_id[days] = sum_day
             if sum_day < min_sum:
                 min_sum_day = days
                 min_sum_day_idx = idx
@@ -3094,6 +3096,41 @@ class PredBat(hass.Hass):
             self.log("Model filter enabled - Discarding day {} as it is the lowest of the {} datapoints".format(min_sum_day, len(self.days_previous)))
             del self.days_previous[min_sum_day_idx]
             del self.days_previous_weight[min_sum_day_idx]
+
+        # Gap filling
+        gap_size = 15
+        for days in self.days_previous:
+            use_days = min(days, self.load_minutes_age)
+            num_gaps = 0
+            if use_days > 0:
+                full_days = 24 * 60 * (use_days - 1)
+                for minute in range(0, 24 * 60):
+                    minute_previous = 24 * 60 - minute + full_days
+                    if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
+                        num_gaps += gap_size
+
+                # If we have some gaps
+                if num_gaps > 0:
+                    average_day = sum_days_id[days]
+                    if (average_day == 0) or (num_gaps >= 24 * 60):
+                        self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!")
+                        average_day = 24.0
+                    else:
+                        real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
+                        average_day /= real_data_percent
+                        self.log(
+                            "WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
+                                days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)
+                            )
+                        )
+
+                    # Do the filling
+                    per_minute_increment = average_day / (24 * 60)
+                    for minute in range(0, 24 * 60):
+                        minute_previous = 24 * 60 - minute + full_days
+                        if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
+                            for offset in range(minute_previous, 0, -1):
+                                data[offset] += per_minute_increment * gap_size
 
     def get_historical(self, data, minute):
         """
@@ -6429,7 +6466,6 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_metric = 9999999
-        on_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
@@ -6592,17 +6628,13 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if ((metric + self.metric_min_improvement) <= on_metric) and (metric <= best_metric):
+            if (metric + self.metric_min_improvement) <= best_metric:
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
-
-            # Default on metric
-            if on_metric == 9999999:
-                on_metric = metric
 
             prev_soc = try_soc
             prev_metric = metric
