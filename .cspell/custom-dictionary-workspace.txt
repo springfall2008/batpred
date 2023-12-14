@@ -67,6 +67,7 @@ minuteb
 mkdocs
 Modbus
 myenergi
+mqtt
 nattribute
 nearr
 nord
@@ -102,6 +103,7 @@ solisx
 Southwell
 startt
 stepline
+tasmota
 tdata
 tdiff
 timea
