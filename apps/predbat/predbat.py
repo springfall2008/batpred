@@ -1500,7 +1500,7 @@ class Inverter:
                 old_end = self.base.get_arg("discharge_end_time", index=self.id)
             else:
                 self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
-    
+
         # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
         if not self.inv_has_discharge_enable_time and not new_start_time:
             new_start_time = self.midnight_utc
@@ -1733,7 +1733,7 @@ class Inverter:
     def set_current_from_power(self, direction, power):
         """
         Set the timed charge/discharge current setting by converting power to current
-        """        
+        """
         new_current = round(power / self.battery_voltage, 1)
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
