@@ -18,13 +18,14 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.11"
+THIS_VERSION = "v7.14.12"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
+CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -8309,7 +8310,7 @@ class PredBat(hass.Hass):
                 discharge_soc = (self.discharge_limits_best[0] * self.soc_max) / 100.0
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
-                    if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) > discharge_soc):
+                    if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
@@ -9472,12 +9473,9 @@ class PredBat(hass.Hass):
         # Find path
         basename = "/predbat_dashboard.yaml"
         filename = None
-        if os.path.exists("/homeassistant"):
-            filename = "/homeassistant" + basename
-        elif os.path.exists("/config"):
-            filename = "/config" + basename
-        elif os.path.exists("/conf"):
-            filename = "/conf" + basename
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                filename = root + basename
 
         # Write
         if filename:
@@ -9489,7 +9487,7 @@ class PredBat(hass.Hass):
             else:
                 self.log("Failed to write predbat dashboard to {}".format(filename))
         else:
-            self.log("Failed to write predbat dashboard as can not find /config or /conf")
+            self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
 
     def load_user_config(self, quiet=True, register=False):
         """
@@ -9667,14 +9665,26 @@ class PredBat(hass.Hass):
         Sanity check appdaemon setup
         """
         self.log("Sanity check:")
-        self.log("Sanity files in '/config'        {}".format(os.listdir("/config")))
-        app_dirs = ["/config"]
+        config_dir = ""
         passed = True
+        app_dirs = []
 
-        if os.path.exists("/config/appdaemon.yaml"):
-            with open("/config/appdaemon.yaml", "r") as han:
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                config_dir = root
+                self.log("Sanity scan files in '{}' : {}".format(config_dir, os.listdir(config_dir)))
+                break
+
+        if not config_dir:
+            self.log("WARN: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
+            passed = False
+        else:
+            app_dirs.append(config_dir)
+
+        appdaemon_config = config_dir + "/appdaemon.yaml"
+        if config_dir and os.path.exists(appdaemon_config):
+            with open(appdaemon_config, "r") as han:
                 data = None
-
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError as exc:
@@ -9693,8 +9703,11 @@ class PredBat(hass.Hass):
                 elif data:
                     self.log("WARN: appdaemon section is missing from appdaemon.yaml")
                     passed = False
+        else:
+            self.log("WARN: unable to find {}".format(appdaemon_config))
+            passed = False
 
-        self.log("Sanity: Scanning app_dirs {}".format(app_dirs))
+        self.log("Sanity: Scanning app_dirs: {}".format(app_dirs))
         apps_yaml = []
         predbat_py = []
         for dir in app_dirs:
