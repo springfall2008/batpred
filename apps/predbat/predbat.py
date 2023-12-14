@@ -8730,7 +8730,7 @@ class PredBat(hass.Hass):
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
                             self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            self.base.call_notify("Predbat: Joined Octopus saving event: start {}, end {}, price per kWh {}".format(start, end, saving_rate))
+                            self.call_notify("Predbat: Joined Octopus saving event: start {}, end {}, price per kWh {}".format(start, end, saving_rate))
 
                 if joined_events:
                     for event in joined_events:
