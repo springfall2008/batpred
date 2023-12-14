@@ -3118,7 +3118,7 @@ class PredBat(hass.Hass):
                     else:
                         real_data_percent = ((24*60) - num_gaps) / (24*60)
                         average_day /= real_data_percent
-                        self.log("WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {})".format(days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), real_data_percent))
+                        self.log("WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)))
 
                     # Do the filling
                     per_minute_increment = average_day / (24 * 60)
@@ -6463,7 +6463,6 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_metric = 9999999
-        on_metric = 9999999
         best_cost = 0
         prev_soc = self.soc_max + 1
         prev_metric = 9999999
@@ -6626,17 +6625,13 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if ((metric + self.metric_min_improvement) <= on_metric) and (metric <= best_metric):
+            if ((metric + self.metric_min_improvement) <= best_metric):
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
-
-            # Default on metric
-            if on_metric == 9999999:
-                on_metric = metric
 
             prev_soc = try_soc
             prev_metric = metric
