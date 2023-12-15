@@ -3611,7 +3611,7 @@ class PredBat(hass.Hass):
                     # Charge freeze via reserve
                     charge_limit_n = soc
                 if self.set_reserve_enable:
-                    reserve_expected = charge_limit_n
+                    reserve_expected = max(charge_limit_n, self.reserve)
 
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
@@ -3738,7 +3738,7 @@ class PredBat(hass.Hass):
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
-                reserve_expected = (self.soc_max * discharge_limits[discharge_window_n]) / 100.0
+                reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
                 battery_draw = discharge_rate_now * step
                 if (soc - reserve_expected) < battery_draw:
                     battery_draw = max(soc - reserve_expected, 0)
