@@ -1549,8 +1549,8 @@ class Inverter:
 
         # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
         if not self.inv_has_discharge_enable_time and not new_start_time:
-            new_start_time = self.midnight_utc
-            new_end_time = self.midnight_utc
+            new_start_time = self.base.midnight_utc
+            new_end_time = self.base.midnight_utc
 
         # Start time to correct format
         if new_start_time:
