@@ -68,6 +68,14 @@ If you have an issue with the GivTCP data you can get this historical data from 
 - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
 - **ge_cloud_key** - Set to your API Key for GE Cloud (long string)
 
+### Load filtering
+
+By default if Predbat sees a gap in the historical load data it will fill it with average data. This is to help in the cases of small amounts of lost data.
+For entire lost days you should change **days_previous** to point to different days(s) or include 3 or more days and the modal filter will discard the 
+lowest one.
+
+- **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap, the default is 30.
+
 ## Inverter control
 
 - **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will
