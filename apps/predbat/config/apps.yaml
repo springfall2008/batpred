@@ -23,7 +23,7 @@ pred_bat:
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
   load_filter_threshold: 30
-  
+
   #
   # Sensors, more than one can be specified and they will be summed up automatically
   #

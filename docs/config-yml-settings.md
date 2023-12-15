@@ -71,7 +71,7 @@ If you have an issue with the GivTCP data you can get this historical data from 
 ### Load filtering
 
 By default if Predbat sees a gap in the historical load data it will fill it with average data. This is to help in the cases of small amounts of lost data.
-For entire lost days you should change **days_previous** to point to different days(s) or include 3 or more days and the modal filter will discard the 
+For entire lost days you should change **days_previous** to point to different days(s) or include 3 or more days and the modal filter will discard the
 lowest one.
 
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap, the default is 30.
