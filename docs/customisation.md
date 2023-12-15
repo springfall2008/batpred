@@ -97,6 +97,10 @@ e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported b
 **input_number.load_scaling** is a Scaling factor applied to historical load, tune up if you want to be more pessimistic on future consumption
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
+**input_number.load_scaling10** is a Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling).
+This can  be used to make the 10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
+scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+
 **input_number.pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
 
@@ -146,7 +150,7 @@ when disabled all low rate slots will be used in time order.
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
 
-If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_intelligent_ignore_unplugged'**
+If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_intelligent_ignore_unplugged'** (_expert mode_)
 can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
 if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
 
@@ -280,3 +284,5 @@ apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sen
 ## Debug
 
 **debug_enable** when on prints lots of debug, leave off by default
+
+**plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan
