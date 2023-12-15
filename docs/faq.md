@@ -36,7 +36,7 @@ a script that changes the reserve %, this will cause problems - please disable o
 ## I changed a config item but it made no difference?
 
 - You might have to wait a few minutes until the next update cycle
-  
+
 ## It's all running but I'm not getting very good results
 
 - You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
