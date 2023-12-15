@@ -119,7 +119,6 @@ CONFIG_ITEMS = [
         "unit": "multiple",
         "icon": "mdi:multiplication",
         "default": 1.0,
-        "enable": "expert_mode",
     },
     {
         "name": "battery_loss",
@@ -167,7 +166,6 @@ CONFIG_ITEMS = [
         "unit": "fraction",
         "icon": "mdi:multiplication",
         "default": 1.0,
-        "enable": "expert_mode",
     },
     {
         "name": "car_charging_threshold",
