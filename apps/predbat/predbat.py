@@ -3121,7 +3121,7 @@ class PredBat(hass.Hass):
             del self.days_previous_weight[min_sum_day_idx]
 
         # Gap filling
-        gap_size = 15
+        gap_size = self.get_arg('load_filter_threshold', 30)
         for days in self.days_previous:
             use_days = min(days, self.load_minutes_age)
             num_gaps = 0
