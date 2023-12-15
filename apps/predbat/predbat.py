@@ -3121,7 +3121,7 @@ class PredBat(hass.Hass):
             del self.days_previous_weight[min_sum_day_idx]
 
         # Gap filling
-        gap_size = 15
+        gap_size = max(self.get_arg("load_filter_threshold", 30), 5)
         for days in self.days_previous:
             use_days = min(days, self.load_minutes_age)
             num_gaps = 0
@@ -3153,7 +3153,10 @@ class PredBat(hass.Hass):
                         minute_previous = 24 * 60 - minute + full_days
                         if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
                             for offset in range(minute_previous, 0, -1):
-                                data[offset] += per_minute_increment * gap_size
+                                if offset in data:
+                                    data[offset] += per_minute_increment * gap_size
+                                else:
+                                    data[offset] = per_minute_increment * gap_size
 
     def get_historical(self, data, minute):
         """
