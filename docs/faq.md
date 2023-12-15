@@ -2,12 +2,13 @@
 
 ## I've installed Predbat but I don't see the correct entities
 
-- First look at AppDaemon.log (can be found in the list of log files in the System/Log area of the GUI).
+- First look at predbat.status in HA and the AppDaemon.log (can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
 check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions).
 The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names
 (some people don't have the solcast_ bit in their names)
+- Did you configure AppDaemon apps_dir correctly in appdaemon.yaml?
 
 ## Why is my predicted charge % higher or lower than I might expect?
 
@@ -17,14 +18,15 @@ it's better to charge more and not risk getting stung importing.
 - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm.
 If you do something like have export>import then Predbat will try to export as much as possible.
 - Have you tuned Solcast to match your output accurately?
-- Have you tuned the **metric_min_improvement**, **best_soc_min** and **best_soc_keep settings**?
+- Have you tuned **best_soc_keep settings**
 - Do you have predicted car charging during the time period?
 - You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
 - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
 
 ## Why didn't the slot actually get configured?
 
-- make sure **set_charge_window** and **set_soc_enable** is turned on
+- Are you in read-only mode?
+- Do you have the predbat_mode set to Control Charge (or Charge & Discharge)?
 
 ## The charge limit keeps increasing/decreasing in the charge window or is unstable
 
@@ -33,7 +35,7 @@ a script that changes the reserve %, this will cause problems - please disable o
 
 ## I changed a config item but it made no difference?
 
-- If **user_config_enable** is True then many config items are now inside Home Assistant, in which case change it there instead.
+- You might have to wait a few minutes until the next update cycle
 
 ## It's all running but I'm not getting very good results
 
@@ -66,5 +68,4 @@ logger:
 
 ## My question isn't covered here
 
-If you are still having trouble feel free to raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support,
-or post on the [GivTCP Facebook group](https://www.facebook.com/groups/615579009972782).
+If you are still having trouble feel free to raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support
