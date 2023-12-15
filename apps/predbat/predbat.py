@@ -2510,7 +2510,7 @@ class PredBat(hass.Hass):
             pdata = self.download_futurerate_data(url)
         except ValueError:
             return {}, {}
-        
+
         nord_tz = pytz.timezone("Europe/Oslo")
         now_offset = datetime.now(nord_tz).strftime("%z")
         extracted_data = {}
@@ -3202,7 +3202,7 @@ class PredBat(hass.Hass):
         next_charge_start = self.forecast_minutes + self.minutes_now
         if charge_window:
             for window_n in range(0, len(charge_window)):
-                if charge_limit[window_n] > 0 and charge_window[window_n]['average'] <= best_price:
+                if charge_limit[window_n] > 0 and charge_window[window_n]["average"] <= best_price:
                     next_charge_start = charge_window[window_n]["start"]
                     if next_charge_start < self.minutes_now:
                         next_charge_start = charge_window[window_n]["end"]
@@ -3523,9 +3523,7 @@ class PredBat(hass.Hass):
             else:
                 return min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
 
-    def run_prediction(
-        self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP
-    ):
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -7416,12 +7414,12 @@ class PredBat(hass.Hass):
                             if 0:
                                 # Find all adjacent windows in price range
                                 all_n = [window_n]
-                                end_n = self.charge_window_best[window_n]['end']
+                                end_n = self.charge_window_best[window_n]["end"]
                                 loop_n = window_n + 1
                                 while (loop_n < len(self.charge_limit_best)) and (len(all_n) < 4):
-                                    if end_n == self.charge_window_best[loop_n]['start'] and (abs(self.charge_window_best[loop_n]['average'] - average) <= 1.0):
+                                    if end_n == self.charge_window_best[loop_n]["start"] and (abs(self.charge_window_best[loop_n]["average"] - average) <= 1.0):
                                         all_n.append(loop_n)
-                                        end_n = self.charge_window_best[loop_n]['end']
+                                        end_n = self.charge_window_best[loop_n]["end"]
                                     else:
                                         break
                                     loop_n += 1
