@@ -353,13 +353,7 @@ CONFIG_ITEMS = [
     },
     {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True},
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
-    {
-        "name": "octopus_intelligent_ignore_unplugged",
-        "friendly_name": "Ignore Intelligent slots when car is unplugged",
-        "type": "switch",
-        "default": False,
-        "enable": "expert_mode",
-    },
+    {"name": "octopus_intelligent_ignore_unplugged", "friendly_name": "Ignore Intelligent slots when car is unplugged", "type": "switch", "default": False, "enable": "expert_mode"},
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
     {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
@@ -1549,8 +1543,8 @@ class Inverter:
 
         # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
         if not self.inv_has_discharge_enable_time and not new_start_time:
-            new_start_time = self.midnight_utc
-            new_end_time = self.midnight_utc
+            new_start_time = self.base.midnight_utc
+            new_end_time = self.base.midnight_utc
 
         # Start time to correct format
         if new_start_time:
@@ -6288,7 +6282,7 @@ class PredBat(hass.Hass):
         discharge_window,
         discharge_limits,
         load_minutes_step,
-        load_minutes_step10,
+        load_minutes_step10, 
         pv_forecast_minute_step,
         pv_forecast_minute10_step,
         end_record=None,
@@ -8151,7 +8145,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step10,
+                load_minutes_step10, 
                 pv_forecast_minute10_step,
                 save="best10",
                 end_record=self.end_record,
@@ -8263,13 +8257,18 @@ class PredBat(hass.Hass):
                             resetDischarge = False
 
                         if self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
+                            if (self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]):
+                            if (
+                                self.set_soc_enable and 
+                                self.set_reserve_enable and 
+                                self.set_reserve_hold and 
+                                ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
+                            ):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
@@ -8281,8 +8280,11 @@ class PredBat(hass.Hass):
 
                     if not disabled_charge_window:
                         # Configure the charge window start/end times if in the time window to set them
-                        if (self.minutes_now < minutes_end) and (
-                            (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
+                        if ((self.minutes_now < minutes_end) and 
+                            (
+                                (minutes_start - self.minutes_now) <= self.set_window_minutes or 
+                                (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
+                            )
                         ):
                             # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
                             self.log(
