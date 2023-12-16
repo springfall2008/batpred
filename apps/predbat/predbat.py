@@ -6468,14 +6468,7 @@ class PredBat(hass.Hass):
                             )
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price),
-                self.dp2(best_price_charge),
-                self.dp2(best_metric),
-                self.dp2(best_keep),
-                self.dp2(best_cost),
-                self.dp2(best_soc_min),
-                best_limits,
-                best_discharge,
+                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_keep), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge
@@ -6700,7 +6693,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    all_n, 
+                    charge_window[window_n]["average"], 
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
+                    best_soc, 
+                    charge_limit[window_n], 
+                    window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -9045,6 +9044,10 @@ class PredBat(hass.Hass):
                     self.log("Note: Inverter does not support discharge freeze - disabled")
                     self.set_discharge_freeze = False
                     self.set_discharge_freeze_only = False
+                if not inverter.inv_has_reserve_soc:
+                    self.log("Note: Inverter does not support reserve - disabled")
+                    self.set_reserve_enable = False
+                    self.set_reserve_hold = False
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
@@ -9553,20 +9556,20 @@ class PredBat(hass.Hass):
                 filename = root + basename
         if filename:
             debug = {}
-            debug["TIME"] = self.time_now_str()
-            debug["THIS_VERSION"] = THIS_VERSION
-            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-            debug["args"] = self.args
-            debug["charge_window_best"] = self.charge_window_best
-            debug["charge_limit_best"] = self.charge_limit_best
-            debug["discharge_window_best"] = self.discharge_window_best
-            debug["discharge_limits_best"] = self.discharge_limits_best
-            debug["low_rates"] = self.low_rates
-            debug["high_export_rates"] = self.high_export_rates
-            with open(filename, "w") as file:
+            debug['TIME'] = self.time_now_str()
+            debug['THIS_VERSION'] = THIS_VERSION
+            debug['CONFIG_ITEMS'] = CONFIG_ITEMS
+            debug['args'] = self.args
+            debug['charge_window_best'] = self.charge_window_best
+            debug['charge_limit_best'] = self.charge_limit_best
+            debug['discharge_window_best'] = self.discharge_window_best
+            debug['discharge_limits_best'] = self.discharge_limits_best
+            debug['low_rates'] = self.low_rates
+            debug['high_export_rates'] = self.high_export_rates
+            with open(filename, 'w') as file:
                 yaml.dump(debug, file)
             self.log("Wrote debug yaml to {}".format(filename))
-
+     
     def create_entity_list(self):
         """
         Create the standard entity list
