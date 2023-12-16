@@ -6701,14 +6701,7 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, 
-                    charge_window[window_n]["average"], 
-                    self.dp2(best_cost),
-                    self.dp2(best_metric), 
-                    self.dp2(best_keep), 
-                    best_soc, 
-                    charge_limit[window_n], 
-                    window_results
+                    all_n, charge_window[window_n]["average"], self.dp2(best_cost), self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -6891,13 +6884,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising discharge window(s) {} price {} selected {}% size {} cost {} metric {} keep {} results {}".format(
-                    all_n, 
-                    window["average"], 
+                    all_n,
+                    window["average"],
                     self.dp2(best_cost),
                     self.dp2(best_metric),
                     self.dp2(best_keep),
-                    best_discharge, 
-                    best_size, 
+                    best_discharge,
+                    best_size,
                     window_results,
                 )
             )
