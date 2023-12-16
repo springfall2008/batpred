@@ -6469,14 +6469,7 @@ class PredBat(hass.Hass):
                             )
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price),
-                self.dp2(best_price_charge),
-                self.dp2(best_metric),
-                self.dp2(best_keep),
-                self.dp2(best_cost),
-                self.dp2(best_soc_min),
-                best_limits,
-                best_discharge,
+                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_keep), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge
@@ -6646,7 +6639,7 @@ class PredBat(hass.Hass):
                 metric -= 0.01
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable and 0:
                 self.log(
                     "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
                         try_soc,
@@ -6701,7 +6694,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    all_n, 
+                    charge_window[window_n]["average"], 
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
+                    best_soc, 
+                    charge_limit[window_n], 
+                    window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -7490,10 +7489,6 @@ class PredBat(hass.Hass):
                             continue
 
                         if self.calculate_best_discharge:
-                            if not printed_set:
-                                self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
-                                printed_set = True
-
                             if not self.calculate_discharge_oncharge:
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
@@ -7503,13 +7498,17 @@ class PredBat(hass.Hass):
 
                             average = self.discharge_window_best[window_n]["average"]
                             if price < best_price:
-                                if self.debug_enable:
+                                if self.debug_enable and 0:
                                     self.log(
                                         "Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(
                                             price, best_price, self.dp2(average)
                                         )
                                     )
                                 continue
+
+                            if not printed_set:
+                                self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
+                                printed_set = True
 
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                                 window_n,
@@ -9554,20 +9553,20 @@ class PredBat(hass.Hass):
                 filename = root + basename
         if filename:
             debug = {}
-            debug["TIME"] = self.time_now_str()
-            debug["THIS_VERSION"] = THIS_VERSION
-            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-            debug["args"] = self.args
-            debug["charge_window_best"] = self.charge_window_best
-            debug["charge_limit_best"] = self.charge_limit_best
-            debug["discharge_window_best"] = self.discharge_window_best
-            debug["discharge_limits_best"] = self.discharge_limits_best
-            debug["low_rates"] = self.low_rates
-            debug["high_export_rates"] = self.high_export_rates
-            with open(filename, "w") as file:
+            debug['TIME'] = self.time_now_str()
+            debug['THIS_VERSION'] = THIS_VERSION
+            debug['CONFIG_ITEMS'] = CONFIG_ITEMS
+            debug['args'] = self.args
+            debug['charge_window_best'] = self.charge_window_best
+            debug['charge_limit_best'] = self.charge_limit_best
+            debug['discharge_window_best'] = self.discharge_window_best
+            debug['discharge_limits_best'] = self.discharge_limits_best
+            debug['low_rates'] = self.low_rates
+            debug['high_export_rates'] = self.high_export_rates
+            with open(filename, 'w') as file:
                 yaml.dump(debug, file)
             self.log("Wrote debug yaml to {}".format(filename))
-
+     
     def create_entity_list(self):
         """
         Create the standard entity list
