@@ -9045,6 +9045,10 @@ class PredBat(hass.Hass):
                     self.log("Note: Inverter does not support discharge freeze - disabled")
                     self.set_discharge_freeze = False
                     self.set_discharge_freeze_only = False
+                if not inverter.inv_has_reserve_soc:
+                    self.log("Note: Inverter does not support reserve - disabled")
+                    self.set_reserve_enable = False
+                    self.set_reserve_hold = False
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
