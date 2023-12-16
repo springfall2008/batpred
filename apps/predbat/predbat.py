@@ -3829,7 +3829,7 @@ class PredBat(hass.Hass):
                 diff = max(diff, -self.export_limit * step)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep and soc > reserve_expected:
+            if (soc < self.best_soc_keep) and (soc > self.reserve):
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 8 hour period
                 if battery_draw > 0:
                     minute_scaling = min((minute / (8 * 60)), 1.0)
@@ -6685,11 +6685,12 @@ class PredBat(hass.Hass):
 
         if not all_n:
             self.log(
-                "Try optimising charge window(s)    {}: {} - {} price {} metric {} keep {} selected {} was {} results {}".format(
+                "Try optimising charge window(s)    {}: {} - {} price {} cost {} metric {} keep {} selected {} was {} results {}".format(
                     window_n,
                     self.time_abs_str(window["start"]),
                     self.time_abs_str(window["end"]),
                     charge_window[window_n]["average"],
+                    self.dp2(best_cost),
                     self.dp2(best_metric),
                     self.dp2(best_keep),
                     best_soc,
@@ -6699,8 +6700,8 @@ class PredBat(hass.Hass):
             )
         else:
             self.log(
-                "Try optimising charge window(s)    {}: price {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} selected {} was {} results {}".format(
+                    all_n, charge_window[window_n]["average"], self.dp2(best_cost), self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -6866,11 +6867,14 @@ class PredBat(hass.Hass):
 
         if not all_n:
             self.log(
-                "Try optimising discharge window(s) {}: {} - {} price {} selected {}% size {} was {}% results {}".format(
+                "Try optimising discharge window(s) {}: {} - {} price {} metric {} cost {} keep {} selected {}% size {} was {}% results {}".format(
                     window_n,
                     self.time_abs_str(window["start"]),
                     self.time_abs_str(window["end"]),
                     window["average"],
+                    self.dp2(best_cost),
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
                     best_discharge,
                     best_size,
                     discharge_limit[window_n],
@@ -6878,7 +6882,18 @@ class PredBat(hass.Hass):
                 )
             )
         else:
-            self.log("Try optimising discharge window(s) {} price {} selected {}% size {} results {}".format(all_n, window["average"], best_discharge, best_size, window_results))
+            self.log(
+                "Try optimising discharge window(s) {} price {} selected {}% size {} cost {} metric {} keep {} results {}".format(
+                    all_n,
+                    window["average"],
+                    self.dp2(best_cost),
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
+                    best_discharge,
+                    best_size,
+                    window_results,
+                )
+            )
 
         return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
