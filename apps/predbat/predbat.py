@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.13"
+THIS_VERSION = "v7.14.14"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3830,11 +3830,10 @@ class PredBat(hass.Hass):
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if soc < self.best_soc_keep:
-                diff_keep = max(load_yesterday - (0 + pv_dc + pv_ac), 0)
-                # Don't apply keep in the next 4 hours to avoid high rate forced charging for no reason
-                # Scale keep costs by 50% to account for the chance or it being violated or not being violated
-                if diff_keep > 0 and minute > 4 * 60:
-                    metric_keep += self.rate_import[minute_absolute] * diff_keep * 0.5
+                # Apply keep as a percentage of the time in the future so it gets stronger over an 8 hour period
+                if battery_draw > 0:
+                    minute_scaling = min((minute / (8 * 60)), 1.0)
+                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
 
             if diff > 0:
                 # Import
@@ -6308,6 +6307,7 @@ class PredBat(hass.Hass):
         loop_price = price_set[-1]
         best_price = loop_price
         best_metric = 9999999
+        best_keep = 0
         try_discharge = discharge_limits.copy()
         best_limits = try_charge_limit.copy()
         best_discharge = try_discharge.copy()
@@ -6324,7 +6324,7 @@ class PredBat(hass.Hass):
             discharge_enable_options = [False]
 
         # Most expensive first
-        all_prices = price_set[::] + [price_set[-1] - 1]
+        all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
         self.log("All prices {}".format(all_prices))
         window_prices = {}
         window_prices_discharge = {}
@@ -6436,23 +6436,24 @@ class PredBat(hass.Hass):
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
                         # Optimise
-                        if self.debug_enable:
+                        if self.debug_enable and 0:
                             if discharge_enable:
                                 self.log(
-                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} soc_min {} windows {} discharge on {}".format(
-                                        loop_price, divide, modulo, self.dp2(metric), self.dp2(soc_min), all_n, all_d
+                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {}".format(
+                                        loop_price, divide, modulo, self.dp2(metric), self.dp2(metric_keep), self.dp2(soc_min), all_n, all_d
                                     )
                                 )
                             else:
                                 self.log(
-                                    "Optimise all for buy/sell price band <= {} metric {} soc_min {} windows {} discharge off".format(
-                                        loop_price, divide, modulo, self.dp2(metric), self.dp2(soc_min), all_n
+                                    "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} windows {} discharge off".format(
+                                        loop_price, divide, modulo, self.dp2(metric), self.dp2(metric_keep), self.dp2(soc_min), all_n
                                     )
                                 )
 
                         # For the first pass just pick the most cost effective threshold, consider soc keep later
                         if metric < best_metric:
                             best_metric = metric
+                            best_keep = metric_keep
                             best_price = loop_price
                             best_price_charge = highest_price_charge
                             best_price_discharge = lowest_price_discharge
@@ -6461,13 +6462,20 @@ class PredBat(hass.Hass):
                             best_soc_min = soc_min
                             best_cost = cost
                             self.log(
-                                "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} cost {} limits {} discharge {}".format(
-                                    loop_price, best_price_charge, self.dp2(best_metric), self.dp2(best_cost), best_limits, best_discharge
+                                "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} keep {} cost {} limits {} discharge {}".format(
+                                    loop_price, best_price_charge, self.dp2(best_metric), self.dp2(best_keep), self.dp2(best_cost), best_limits, best_discharge
                                 )
                             )
         self.log(
-            "Optimise all charge for all bands best price threshold {} charges at {} at metric {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
+            "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
+                self.dp2(best_price),
+                self.dp2(best_price_charge),
+                self.dp2(best_metric),
+                self.dp2(best_keep),
+                self.dp2(best_cost),
+                self.dp2(best_soc_min),
+                best_limits,
+                best_discharge,
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge
@@ -6542,11 +6550,13 @@ class PredBat(hass.Hass):
             if not first_window and not all_n:
                 # If the SOC is already saturated then those values greater than what was achieved but not 100% won't do anything
                 if try_soc > (max_soc + loop_step):
-                    if self.debug_enable:
+                    self.debug_enable = was_debug
+                    if self.debug_enable and 0:
                         self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, min_soc, max_soc))
                     continue
                 if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (min_soc - loop_step)):
-                    if self.debug_enable:
+                    self.debug_enable = was_debug
+                    if self.debug_enable and 0:
                         self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, max_soc, min_soc))
                     continue
 
@@ -6635,9 +6645,9 @@ class PredBat(hass.Hass):
                 metric -= 0.01
 
             self.debug_enable = was_debug
-            if self.debug_enable:
+            if self.debug_enable and 0:
                 self.log(
-                    "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {}".format(
+                    "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
                         try_soc,
                         window_n,
                         self.dp2(import_kwh_battery),
@@ -6648,6 +6658,7 @@ class PredBat(hass.Hass):
                         self.dp2(soc),
                         self.dp2(cost),
                         self.dp2(metric),
+                        self.dp2(metric_keep),
                         self.dp2(metricmid),
                         self.dp2(metric10),
                     )
@@ -6674,11 +6685,13 @@ class PredBat(hass.Hass):
 
         if not all_n:
             self.log(
-                "Try optimising charge window(s)    {}: {} - {} price {} selected {} was {} results {}".format(
+                "Try optimising charge window(s)    {}: {} - {} price {} metric {} keep {} selected {} was {} results {}".format(
                     window_n,
                     self.time_abs_str(window["start"]),
                     self.time_abs_str(window["end"]),
                     charge_window[window_n]["average"],
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
                     best_soc,
                     charge_limit[window_n],
                     window_results,
@@ -6686,8 +6699,8 @@ class PredBat(hass.Hass):
             )
         else:
             self.log(
-                "Try optimising charge window(s)    {}: price {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], best_soc, charge_limit[window_n], window_results
+                "Try optimising charge window(s)    {}: price {} metric {} keep {} selected {} was {} results {}".format(
+                    all_n, charge_window[window_n]["average"], self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -7476,10 +7489,6 @@ class PredBat(hass.Hass):
                             continue
 
                         if self.calculate_best_discharge:
-                            if not printed_set:
-                                self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
-                                printed_set = True
-
                             if not self.calculate_discharge_oncharge:
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
@@ -7489,13 +7498,17 @@ class PredBat(hass.Hass):
 
                             average = self.discharge_window_best[window_n]["average"]
                             if price < best_price:
-                                if self.debug_enable:
+                                if self.debug_enable and 0:
                                     self.log(
                                         "Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(
                                             price, best_price, self.dp2(average)
                                         )
                                     )
                                 continue
+
+                            if not printed_set:
+                                self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
+                                printed_set = True
 
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                                 window_n,
@@ -9352,6 +9365,9 @@ class PredBat(hass.Hass):
                 self.expose_config("holiday_days_left", self.holiday_days_left)
                 self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
+        if self.debug_enable:
+            self.create_debug_yaml()
+
         if self.had_errors:
             self.log("Completed run status {} with Errors reported (check log)".format(status))
         else:
@@ -9525,6 +9541,31 @@ class PredBat(hass.Hass):
         self.set_state(entity_id=entity, state=state, attributes=attributes)
         if entity not in self.dashboard_index:
             self.dashboard_index.append(entity)
+
+    def create_debug_yaml(self):
+        """
+        Write out a debug info yaml
+        """
+        basename = "/predbat_debug.yaml"
+        filename = None
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                filename = root + basename
+        if filename:
+            debug = {}
+            debug["TIME"] = self.time_now_str()
+            debug["THIS_VERSION"] = THIS_VERSION
+            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
+            debug["args"] = self.args
+            debug["charge_window_best"] = self.charge_window_best
+            debug["charge_limit_best"] = self.charge_limit_best
+            debug["discharge_window_best"] = self.discharge_window_best
+            debug["discharge_limits_best"] = self.discharge_limits_best
+            debug["low_rates"] = self.low_rates
+            debug["high_export_rates"] = self.high_export_rates
+            with open(filename, "w") as file:
+                yaml.dump(debug, file)
+            self.log("Wrote debug yaml to {}".format(filename))
 
     def create_entity_list(self):
         """
@@ -9778,7 +9819,8 @@ class PredBat(hass.Hass):
                     sub_data = data["appdaemon"]
                     if "app_dir" in sub_data:
                         app_dir = sub_data["app_dir"]
-                        app_dirs.append(app_dir)
+                        if app_dir not in app_dirs:
+                            app_dirs.append(app_dir)
                         self.log("Sanity: Got app_dir {}".format(app_dir))
                     else:
                         self.log("WARN: app_dir is not set in appdaemon.yaml")
