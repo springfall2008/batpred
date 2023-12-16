@@ -3839,9 +3839,9 @@ class PredBat(hass.Hass):
                 # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
                 # and end up forcing it all to zero
                 minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
-                kdiff = load_yesterday - (0 + pv_dc + pv_ac)
-                if kdiff > 0:
-                    metric_keep += self.rate_import[minute_absolute] * kdiff * minute_scaling
+                keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
+                if keep_diff > 0:
+                    metric_keep += self.rate_import[minute_absolute] * keep_diff * minute_scaling
 
             if diff > 0:
                 # Import
@@ -6708,7 +6708,14 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_cost), self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    all_n, 
+                    charge_window[window_n]["average"], 
+                    self.dp2(best_cost),
+                    self.dp2(best_metric), 
+                    self.dp2(best_keep), 
+                    best_soc, 
+                    charge_limit[window_n], 
+                    window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -6891,13 +6898,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising discharge window(s) {} price {} selected {}% size {} cost {} metric {} keep {} results {}".format(
-                    all_n,
-                    window["average"],
+                    all_n, 
+                    window["average"], 
                     self.dp2(best_cost),
                     self.dp2(best_metric),
                     self.dp2(best_keep),
-                    best_discharge,
-                    best_size,
+                    best_discharge, 
+                    best_size, 
                     window_results,
                 )
             )
