@@ -3829,11 +3829,11 @@ class PredBat(hass.Hass):
                 diff = max(diff, -self.export_limit * step)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep:
+            if soc < self.best_soc_keep and soc > reserve_expected:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 8 hour period
                 if battery_draw > 0:
                     minute_scaling = min((minute / (8 * 60)), 1.0)
-                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
+                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling * self.battery_loss_discharge * self.inverter_loss
 
             if diff > 0:
                 # Import
