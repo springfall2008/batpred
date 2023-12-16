@@ -3830,10 +3830,18 @@ class PredBat(hass.Hass):
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if (soc < self.best_soc_keep) and (soc > self.reserve):
-                # Apply keep as a percentage of the time in the future so it gets stronger over an 8 hour period
+                # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
+                # Weight to 50% chance of the scenario
                 if battery_draw > 0:
-                    minute_scaling = min((minute / (8 * 60)), 1.0)
-                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling * self.battery_loss_discharge * self.inverter_loss
+                    minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
+            elif soc < self.best_soc_keep:
+                # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
+                # and end up forcing it all to zero
+                minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+                kdiff = load_yesterday - (0 + pv_dc + pv_ac)
+                if kdiff > 0:
+                    metric_keep += self.rate_import[minute_absolute] * kdiff * minute_scaling
 
             if diff > 0:
                 # Import
@@ -3846,8 +3854,7 @@ class PredBat(hass.Hass):
                     # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
-                if minute_absolute in self.rate_import:
-                    metric += self.rate_import[minute_absolute] * diff
+                metric += self.rate_import[minute_absolute] * diff
                 grid_state = "<"
             else:
                 # Export
@@ -6701,7 +6708,14 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_cost), self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    all_n, 
+                    charge_window[window_n]["average"], 
+                    self.dp2(best_cost),
+                    self.dp2(best_metric), 
+                    self.dp2(best_keep), 
+                    best_soc, 
+                    charge_limit[window_n], 
+                    window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -6867,7 +6881,7 @@ class PredBat(hass.Hass):
 
         if not all_n:
             self.log(
-                "Try optimising discharge window(s) {}: {} - {} price {} metric {} cost {} keep {} selected {}% size {} was {}% results {}".format(
+                "Try optimising discharge window(s) {}: {} - {} price {} cost {} metric {} keep {} selected {}% size {} was {}% results {}".format(
                     window_n,
                     self.time_abs_str(window["start"]),
                     self.time_abs_str(window["end"]),
@@ -6884,13 +6898,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising discharge window(s) {} price {} selected {}% size {} cost {} metric {} keep {} results {}".format(
-                    all_n,
-                    window["average"],
+                    all_n, 
+                    window["average"], 
                     self.dp2(best_cost),
                     self.dp2(best_metric),
                     self.dp2(best_keep),
-                    best_discharge,
-                    best_size,
+                    best_discharge, 
+                    best_size, 
                     window_results,
                 )
             )
