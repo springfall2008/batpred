@@ -3829,12 +3829,11 @@ class PredBat(hass.Hass):
                 diff = max(diff, -self.export_limit * step)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep and soc > reserve_expected:
-                diff_keep = max(load_yesterday - (0 + pv_dc + pv_ac), 0)
+            if soc < self.best_soc_keep:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 8 hour period
-                if diff_keep > 0:
+                if battery_draw > 0:
                     minute_scaling = min((minute / (8 * 60)), 1.0)
-                    metric_keep += self.rate_import[minute_absolute] * diff_keep * minute_scaling
+                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
 
             if diff > 0:
                 # Import
@@ -6469,14 +6468,7 @@ class PredBat(hass.Hass):
                             )
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price),
-                self.dp2(best_price_charge),
-                self.dp2(best_metric),
-                self.dp2(best_keep),
-                self.dp2(best_cost),
-                self.dp2(best_soc_min),
-                best_limits,
-                best_discharge,
+                self.dp2(best_price), self.dp2(best_price_charge), self.dp2(best_metric), self.dp2(best_keep), self.dp2(best_cost), self.dp2(best_soc_min), best_limits, best_discharge
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge
@@ -6701,7 +6693,13 @@ class PredBat(hass.Hass):
         else:
             self.log(
                 "Try optimising charge window(s)    {}: price {} metric {} keep {} selected {} was {} results {}".format(
-                    all_n, charge_window[window_n]["average"], self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    all_n, 
+                    charge_window[window_n]["average"], 
+                    self.dp2(best_metric),
+                    self.dp2(best_keep),
+                    best_soc, 
+                    charge_limit[window_n], 
+                    window_results
                 )
             )
         return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
@@ -9554,20 +9552,20 @@ class PredBat(hass.Hass):
                 filename = root + basename
         if filename:
             debug = {}
-            debug["TIME"] = self.time_now_str()
-            debug["THIS_VERSION"] = THIS_VERSION
-            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-            debug["args"] = self.args
-            debug["charge_window_best"] = self.charge_window_best
-            debug["charge_limit_best"] = self.charge_limit_best
-            debug["discharge_window_best"] = self.discharge_window_best
-            debug["discharge_limits_best"] = self.discharge_limits_best
-            debug["low_rates"] = self.low_rates
-            debug["high_export_rates"] = self.high_export_rates
-            with open(filename, "w") as file:
+            debug['TIME'] = self.time_now_str()
+            debug['THIS_VERSION'] = THIS_VERSION
+            debug['CONFIG_ITEMS'] = CONFIG_ITEMS
+            debug['args'] = self.args
+            debug['charge_window_best'] = self.charge_window_best
+            debug['charge_limit_best'] = self.charge_limit_best
+            debug['discharge_window_best'] = self.discharge_window_best
+            debug['discharge_limits_best'] = self.discharge_limits_best
+            debug['low_rates'] = self.low_rates
+            debug['high_export_rates'] = self.high_export_rates
+            with open(filename, 'w') as file:
                 yaml.dump(debug, file)
             self.log("Wrote debug yaml to {}".format(filename))
-
+     
     def create_entity_list(self):
         """
         Create the standard entity list
