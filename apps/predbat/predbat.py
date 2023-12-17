@@ -1150,7 +1150,7 @@ class Inverter:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
             if self.inv_output_charge_control == "current":
-                self.set_current_from_power("charge", self.battery_rate_max_charge)
+                self.set_current_from_power("charge", self.battery_rate_max_charge * 60 * 1000)
             self.base.log(
                 f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
             )
