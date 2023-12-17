@@ -159,9 +159,9 @@ if **car_charging_planned** is set correctly in apps.yaml to detect your car bei
 See the Predbat mode setting as above for basic calculation options
 
 **switch.predbat_calculate_fast_plan** (_expert mode_) When True the plan is calculated with a limited number of
-windows to make calculations faster. When False (default) all windows are considered but planning will take a little 
-longer but be more accurate. 
-The end result is unlikely to change in fast mode as the next 8 windows are always considered in the plan, but the 
+windows to make calculations faster. When False (default) all windows are considered but planning will take a little
+longer but be more accurate.
+The end result is unlikely to change in fast mode as the next 8 windows are always considered in the plan, but the
 longer term plan will be less accurate.
 
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
