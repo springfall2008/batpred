@@ -116,5 +116,6 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
 | input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
+| switch.calculate_fast_plan | False | The fast plan feature reduces accuracy of planning |
 
 You should set **select.predbat_mode** to Control Charge & Discharge
