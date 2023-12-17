@@ -3894,7 +3894,7 @@ class PredBat(hass.Hass):
                         export_to_first_charge += energy
                 else:
                     predict_export[minute] = 0
-                
+
                 # Soc at next charge start
                 if minute < first_charge:
                     first_charge_soc = soc
@@ -3984,12 +3984,13 @@ class PredBat(hass.Hass):
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
                 attributes={
-                    "results": predict_soc_time, 
-                    "friendly_name": "Predicted SOC kWh", 
-                    "state_class": "measurement", 
-                    "unit_of_measurement": "kWh", 
+                    "results": predict_soc_time,
+                    "friendly_name": "Predicted SOC kWh",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
                     "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery"},
+                    "icon": "mdi:battery",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
