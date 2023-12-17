@@ -3573,6 +3573,7 @@ class PredBat(hass.Hass):
         final_metric_keep = metric_keep
         metric = self.cost_today_sofar
         final_soc = soc
+        first_charge_soc = soc
         final_metric = metric
         metric_time = {}
         load_kwh_time = {}
@@ -3894,6 +3895,10 @@ class PredBat(hass.Hass):
                 else:
                     predict_export[minute] = 0
 
+                # Soc at next charge start
+                if minute < first_charge:
+                    first_charge_soc = soc
+
             # Have we past the charging or discharging time?
             if charge_window_n >= 0:
                 charge_has_started = True
@@ -3978,7 +3983,14 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
-                attributes={"results": predict_soc_time, "friendly_name": "Predicted SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                attributes={
+                    "results": predict_soc_time,
+                    "friendly_name": "Predicted SOC kWh",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "first_charge_kwh": first_charge_soc,
+                    "icon": "mdi:battery",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
@@ -4156,6 +4168,7 @@ class PredBat(hass.Hass):
                     "friendly_name": "Battery SOC kWh best",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
+                    "first_charge_kwh": first_charge_soc,
                     "icon": "mdi:battery",
                 },
             )
@@ -4374,6 +4387,7 @@ class PredBat(hass.Hass):
                     "friendly_name": "Battery SOC kWh best 10%",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
+                    "first_charge_kwh": first_charge_soc,
                     "icon": "mdi:battery",
                 },
             )
