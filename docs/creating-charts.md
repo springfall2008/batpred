@@ -4,7 +4,7 @@ To create the fancy charts:
 
 - Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card)
 - There are multiple charts, for each section of the
-[example chart yaml file](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/example_dashboard.yml),
+[example chart yaml file](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/example_chart.yml),
 create a new apexcharts card and copy the YAML into it.
 - Customise as you like
 
