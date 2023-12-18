@@ -3894,7 +3894,7 @@ class PredBat(hass.Hass):
                         export_to_first_charge += energy
                 else:
                     predict_export[minute] = 0
-
+                
                 # Soc at next charge start
                 if minute < first_charge:
                     first_charge_soc = soc
@@ -3984,13 +3984,12 @@ class PredBat(hass.Hass):
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
                 attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Predicted SOC kWh",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
+                    "results": predict_soc_time, 
+                    "friendly_name": "Predicted SOC kWh", 
+                    "state_class": "measurement", 
+                    "unit_of_measurement": "kWh", 
                     "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
+                    "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
@@ -8360,7 +8359,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60 * 1000)
 
                         # Do we disable discharge during charge?
-                        if not self.set_discharge_during_charge and (inverter.soc_percent < self.charge_limit_percent_best[0]):
+                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
