@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.15"
+THIS_VERSION = "v7.14.16"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3136,7 +3136,7 @@ class PredBat(hass.Hass):
                 if num_gaps > 0:
                     average_day = sum_days_id[days]
                     if (average_day == 0) or (num_gaps >= 24 * 60):
-                        self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!")
+                        self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
                         average_day = 24.0
                     else:
                         real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
@@ -3894,7 +3894,7 @@ class PredBat(hass.Hass):
                         export_to_first_charge += energy
                 else:
                     predict_export[minute] = 0
-
+                
                 # Soc at next charge start
                 if minute < first_charge:
                     first_charge_soc = soc
@@ -3984,13 +3984,12 @@ class PredBat(hass.Hass):
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
                 attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Predicted SOC kWh",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
+                    "results": predict_soc_time, 
+                    "friendly_name": "Predicted SOC kWh", 
+                    "state_class": "measurement", 
+                    "unit_of_measurement": "kWh", 
                     "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
+                    "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
@@ -8360,7 +8359,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60 * 1000)
 
                         # Do we disable discharge during charge?
-                        if not self.set_discharge_during_charge:
+                        if not self.set_discharge_during_charge and (inverter.soc_percent < self.charge_limit_percent_best[0]):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
@@ -8506,7 +8505,9 @@ class PredBat(hass.Hass):
                             "Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"]))
                         )
                         if self.minutes_now >= window["start"] and self.minutes_now < window["end"]:
-                            if status not in ["Discharging"]:
+                            # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
+                            # from draining the battery
+                            if status not in ["Discharging", "Charging"]:
                                 inverter.adjust_discharge_rate(0)
                                 resetDischarge = False
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
