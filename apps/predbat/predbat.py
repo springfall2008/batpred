@@ -3651,7 +3651,7 @@ class PredBat(hass.Hass):
             pv_now = pv_forecast_minute_step[minute]
             load_yesterday = load_minutes_step[minute]
 
-            # Count PV kwh
+            # Count PV kWh
             pv_kwh += pv_now
             if record:
                 final_pv_kwh = pv_kwh
