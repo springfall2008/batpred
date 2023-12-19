@@ -3608,11 +3608,14 @@ class PredBat(hass.Hass):
             reserve_expected = self.reserve
             if charge_window_n >= 0:
                 charge_limit_n = charge_limit[charge_window_n]
-                if self.set_charge_freeze and (charge_limit_n == self.reserve):
-                    # Charge freeze via reserve
-                    charge_limit_n = soc
-                if self.set_reserve_enable:
-                    reserve_expected = max(charge_limit_n, self.reserve)
+                if charge_limit_n == 0:
+                    charge_window_n = -1
+                else:
+                    if self.set_charge_freeze and (charge_limit_n == self.reserve):
+                        # Charge freeze via reserve
+                        charge_limit_n = soc
+                    if self.set_reserve_enable:
+                        reserve_expected = max(charge_limit_n, self.reserve)
 
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
@@ -7107,10 +7110,13 @@ class PredBat(hass.Hass):
             if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
-                    self.log("Combine charge slot {} with previous - target soc {} kWh slot {}".format(window_n, new_limit_best[-1], new_window_best[-1]))
+                    self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif (limit > 0) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
                 new_limit_best.append(limit)
                 new_window_best.append(window)
+            else:
+                if self.debug_enable:
+                    self.log("Clip off charge slot {} limit {}".format(window, limit))
         return new_limit_best, new_window_best
 
     def find_spare_energy(self, predict_soc, predict_export, step, first_charge):
@@ -7441,7 +7447,8 @@ class PredBat(hass.Hass):
                         self.charge_window_best[window_n]["set"] = price
 
                         # Skip those outside threshold
-                        if not start_at_low and price > best_price:
+                        if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
+                            self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
                             continue
                         if start_at_low and price <= best_price:
                             continue
@@ -8211,8 +8218,8 @@ class PredBat(hass.Hass):
                     load_minutes_step,
                     pv_forecast_minute_step,
                     end_record=self.end_record,
+                    save='debug'
                 )
-
                 # Initial charge slot filter
                 if self.set_charge_window:
                     record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
