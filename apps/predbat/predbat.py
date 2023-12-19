@@ -8927,7 +8927,11 @@ class PredBat(hass.Hass):
                                 end_time = self.str2time(end)
                                 diff_time = start_time - self.now_utc
                                 if abs(diff_time.days) <= 3:
-                                    self.log("Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
+                                    self.log(
+                                        "Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(
+                                            start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state
+                                        )
+                                    )
 
                                     # Save the slot
                                     octopus_saving_slot = {}
@@ -8937,7 +8941,11 @@ class PredBat(hass.Hass):
                                     octopus_saving_slot["state"] = state
                                     octopus_saving_slots.append(octopus_saving_slot)
                             except ValueError:
-                                self.log("Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state))
+                                self.log(
+                                    "Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(
+                                        start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state
+                                    )
+                                )
 
                     # In saving session that's not reported, assumed 30-minutes
                     if state and not joined_events:
