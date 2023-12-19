@@ -7110,7 +7110,11 @@ class PredBat(hass.Hass):
             if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
-                    self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
+                    self.log(
+                        "Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(
+                            window_n, new_limit_best[-1], new_window_best[-1], start, end, limit
+                        )
+                    )
             elif (limit > 0) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
                 new_limit_best.append(limit)
                 new_window_best.append(window)
@@ -8218,7 +8222,7 @@ class PredBat(hass.Hass):
                     load_minutes_step,
                     pv_forecast_minute_step,
                     end_record=self.end_record,
-                    save='debug'
+                    save="debug",
                 )
                 # Initial charge slot filter
                 if self.set_charge_window:
