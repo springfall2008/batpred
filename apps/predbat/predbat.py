@@ -3466,7 +3466,7 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), pv_factor))
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), seld.dp1(pv_factor)))
             return pv_factor
         else:
             return None
