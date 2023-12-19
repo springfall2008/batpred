@@ -3466,7 +3466,7 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), seld.dp1(pv_factor)))
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), self.dp1(pv_factor)))
             return pv_factor
         else:
             return None
@@ -8459,7 +8459,7 @@ class PredBat(hass.Hass):
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
-                        self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
+                        self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         resetDischarge = False
