@@ -8910,13 +8910,22 @@ class PredBat(hass.Hass):
                         end = event.get("end", None)
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if start and end and saving_rate > 0:
-                            octopus_saving_slot = {}
-                            octopus_saving_slot["start"] = start
-                            octopus_saving_slot["end"] = end
-                            octopus_saving_slot["rate"] = saving_rate
-                            octopus_saving_slot["state"] = state
-                            octopus_saving_slots.append(octopus_saving_slot)
-                            self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
+                            # Save the saving slot?
+                            try:
+                                start_time = self.str2time(start)
+                                diff_time = start_time - self.now_utc
+                                if abs(diff_time.days) <= 3:
+                                    self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
+
+                                    # Save the slot
+                                    octopus_saving_slot = {}
+                                    octopus_saving_slot["start"] = start
+                                    octopus_saving_slot["end"] = end
+                                    octopus_saving_slot["rate"] = saving_rate
+                                    octopus_saving_slot["state"] = state
+                                    octopus_saving_slots.append(octopus_saving_slot)
+                            except ValueError:
+                                self.log("Warn: Bad start time for joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
 
                     # In saving session that's not reported, assumed 30-minutes
                     if state and not joined_events:
