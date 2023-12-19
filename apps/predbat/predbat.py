@@ -8914,7 +8914,7 @@ class PredBat(hass.Hass):
                             try:
                                 start_time = self.str2time(start)
                                 diff_time = start_time - self.now_utc
-                                if abs(diff_time.days) < 2:
+                                if abs(diff_time.days) <= 3:
                                     self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
                                 
                                     # Save the slot
