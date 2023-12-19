@@ -3764,11 +3764,9 @@ class PredBat(hass.Hass):
                 battery_state = "f-"
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
-                if save in ["best", "best10"]:
+                if save in ['best', 'best10']:
                     # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = (
-                        self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
-                    )
+                    charge_rate_now = self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n,  self.battery_rate_max_charge) * self.battery_rate_max_scaling
                 else:
                     charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
                 charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
@@ -8061,17 +8059,17 @@ class PredBat(hass.Hass):
         """
         margin = 20
         if self.set_charge_low_power:
-            minutes_left = window["end"] - minutes_now - margin
+            minutes_left = window['end'] - minutes_now - margin
 
             # If we don't have enough minutes left go to max
             if minutes_left < 0:
                 return max_rate
-
+            
             # If we already have reached target go back to max
             if soc >= target_soc:
                 return max_rate
-
-            # Work out the charge left in kw
+            
+            # Work out the charge left in kw
             charge_left = target_soc - soc
 
             # If we can never hit the target then go to max
@@ -8089,7 +8087,7 @@ class PredBat(hass.Hass):
                 if rate >= min_rate:
                     charge_now = soc
                     minute = 0
-                    for minute in range(0, minutes_left, PREDICT_STEP):
+                    for minute in range (0, minutes_left, PREDICT_STEP):
                         charge_now_percent = self.calc_percent_limit(charge_now)
                         rate_scale = self.battery_charge_power_curve.get(charge_now_percent, 1.0) * self.battery_rate_max_scaling
                         charge_amount = rate * rate_scale * PREDICT_STEP * self.battery_loss * self.inverter_loss
@@ -8098,11 +8096,10 @@ class PredBat(hass.Hass):
                             best_rate = rate
                             break
                 rate_w -= 200.0
-            # self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
+            #self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
             return best_rate
         else:
             return max_rate
-
     def log_option_best(self):
         """
         Log options
@@ -8430,7 +8427,7 @@ class PredBat(hass.Hass):
 
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        charge_rate = self.find_charge_rate(self.minutes_now, inverter.soc_kw, window, self.charge_limit_best[0], inverter.battery_rate_max_charge)
+                        charge_rate = self.find_charge_rate(self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge)
                         inverter.adjust_charge_rate(int(charge_rate * 60.0 * 1000.0))
 
                         # Do we disable discharge during charge?
