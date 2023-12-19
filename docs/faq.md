@@ -2,7 +2,7 @@
 
 ## I've installed Predbat but I don't see the correct entities
 
-- First look at predbat.status in HA and the AppDaemon.log (can be found in the list of log files in the System/Log area of the GUI).
+- First look at predbat.status in Home Assistant and the AppDaemon.log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
 check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions).
@@ -66,6 +66,14 @@ logger:
       - "State attributes for predbat.plan_html exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored"
 ```
 
-## My question isn't covered here
+## Error - metric_octopus_import not set correctly or no energy rates can be read
+
+- Check that the Octopus integration is working and that **event.octopus_energy_<meter_number>_current_day_rates**
+and **sensor.octopus_energy_<meter_number>_current_rate** are both populated by the integration.
+Ensure that you have followed the [Octopus Integration Installation instructions](install.md#octopus-energy), including enabling the Octopus Integration events.
+- If your sensors are named **sensor.electricity_<meter_number>_current_rate** (i.e. no 'octopus_energy_' prefix) then uninstall the Octopus integration, reboot Home Assistant,
+delete the old Octopus sensors, and re-install the  Octopus integration as predbat will not be able to find the event names if the sensor names don't match what's expected.
+
+## I have another problem not listed above
 
 If you are still having trouble feel free to raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support
