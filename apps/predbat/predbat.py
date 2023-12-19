@@ -3719,7 +3719,7 @@ class PredBat(hass.Hass):
 
             # Set discharge during charge?
             if not self.set_discharge_during_charge:
-                if charge_window_n >= 0:
+                if (charge_window_n) >= 0 and (soc >= charge_limit_n):
                     discharge_rate_now = self.battery_rate_min  # 0
                 elif not car_freeze:
                     # Reset discharge rate
@@ -3894,7 +3894,7 @@ class PredBat(hass.Hass):
                         export_to_first_charge += energy
                 else:
                     predict_export[minute] = 0
-
+                
                 # Soc at next charge start
                 if minute < first_charge:
                     first_charge_soc = soc
@@ -3984,13 +3984,12 @@ class PredBat(hass.Hass):
                 self.prefix + ".soc_kw",
                 state=self.dp3(final_soc),
                 attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Predicted SOC kWh",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
+                    "results": predict_soc_time, 
+                    "friendly_name": "Predicted SOC kWh", 
+                    "state_class": "measurement", 
+                    "unit_of_measurement": "kWh", 
                     "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
+                    "icon": "mdi:battery"},
             )
             self.dashboard_item(
                 self.prefix + ".battery_power",
@@ -7404,7 +7403,13 @@ class PredBat(hass.Hass):
                 end_record=self.end_record,
             )
 
+        # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+        record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+        record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
+        window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
+            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows]
+        )
 
         self.rate_best_cost_threshold_charge = best_price
         self.rate_best_cost_threshold_discharge = best_price_discharge
