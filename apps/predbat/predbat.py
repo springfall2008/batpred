@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.16"
+THIS_VERSION = "v7.14.17"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -384,6 +384,7 @@ CONFIG_ITEMS = [
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", "default": True},
     {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", "default": False},
     {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", "enable": "expert_mode", "default": True},
+    {"name": "set_charge_low_power", "friendly_name": "Set Charge Low Power Mode", "type": "switch", "default": False},
     {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", "default": True},
@@ -3763,7 +3764,11 @@ class PredBat(hass.Hass):
                 battery_state = "f-"
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
-                charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
+                if save in ['best', 'best10']:
+                    # Only tune charge rate on final plan not every simulation
+                    charge_rate_now = self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n,  self.battery_rate_max_charge) * self.battery_rate_max_scaling
+                else:
+                    charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
                 charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
                 battery_state = "f+"
@@ -7452,7 +7457,8 @@ class PredBat(hass.Hass):
 
                         # Skip those outside threshold
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
-                            self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
+                            if self.debug_enable:
+                                self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
                             continue
                         if start_at_low and price <= best_price:
                             continue
@@ -8047,6 +8053,53 @@ class PredBat(hass.Hass):
 
         self.log("BALANCE: Completed this run")
 
+    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate):
+        """
+        Find the lowest charge rate that fits the charge slow
+        """
+        margin = 20
+        if self.set_charge_low_power:
+            minutes_left = window['end'] - minutes_now - margin
+
+            # If we don't have enough minutes left go to max
+            if minutes_left < 0:
+                return max_rate
+            
+            # If we already have reached target go back to max
+            if soc >= target_soc:
+                return max_rate
+            
+            # Work out the charge left in kw
+            charge_left = target_soc - soc
+
+            # If we can never hit the target then go to max
+            if max_rate * minutes_left < charge_left:
+                return max_rate
+
+            # What's the lowest we could go?
+            min_rate = charge_left / minutes_left
+
+            # Apply the curve at each rate to pick one that works
+            rate_w = max_rate * 60.0 * 1000.0
+            best_rate = max_rate
+            while rate_w >= 400:
+                rate = rate_w / 60.0 / 1000.0
+                if rate >= min_rate:
+                    charge_now = soc
+                    minute = 0
+                    for minute in range (0, minutes_left, PREDICT_STEP):
+                        charge_now_percent = self.calc_percent_limit(charge_now)
+                        rate_scale = self.battery_charge_power_curve.get(charge_now_percent, 1.0) * self.battery_rate_max_scaling
+                        charge_amount = rate * rate_scale * PREDICT_STEP * self.battery_loss * self.inverter_loss
+                        charge_now += charge_amount
+                        if charge_now >= target_soc:
+                            best_rate = rate
+                            break
+                rate_w -= 200.0
+            #self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
+            return best_rate
+        else:
+            return max_rate
     def log_option_best(self):
         """
         Log options
@@ -8374,7 +8427,8 @@ class PredBat(hass.Hass):
 
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60 * 1000)
+                        charge_rate = self.find_charge_rate(self.minutes_now, inverter.soc_kw, window, self.charge_limit_best[0], inverter.battery_rate_max_charge)
+                        inverter.adjust_charge_rate(int(charge_rate * 60.0 * 1000.0))
 
                         # Do we disable discharge during charge?
                         if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
@@ -9279,6 +9333,7 @@ class PredBat(hass.Hass):
         self.set_reserve_hold = True
         self.set_discharge_freeze = True
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
+        self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.calculate_discharge_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")
