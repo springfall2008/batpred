@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.18"
+THIS_VERSION = "v7.14.19"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4734,6 +4734,8 @@ class PredBat(hass.Hass):
                 for minute in range(start_minutes, end_minutes):
                     if (not date) or (minute >= 0 and minute < max_minute):
                         rates[minute % max_minute] = rate
+                        if not date and not prev:
+                            rates[(minute % max_minute) + max_minute] = rate
 
         return rates
 
@@ -6953,7 +6955,7 @@ class PredBat(hass.Hass):
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
-    def sort_window_by_price_combined(self, charge_windows, discharge_windows, stand_alone=False):
+    def sort_window_by_price_combined(self, charge_windows, discharge_windows, stand_alone=False, secondary_order=False):
         """
         Sort windows into price sets
         """
@@ -6971,7 +6973,11 @@ class PredBat(hass.Hass):
                     average = self.dp2(window["average"])
                 else:
                     average = self.dp2(window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle)
-                sort_key = "%04.2f_%03d_c%02d" % (5000 - average, 999 - id, id)
+                if secondary_order:
+                    average_export = (self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"], 0) - 5) / 2
+                else:
+                    average_export = 0
+                sort_key = "%04.2f_%04.2f_%03d_c%02d" % (5000 - average, 5000 - average_export, 999 - id, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
@@ -6985,7 +6991,11 @@ class PredBat(hass.Hass):
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
-                sort_key = "%04.2f_%03d_d%02d" % (5000 - average, 999 - id, id)
+                if secondary_order:
+                    average_import = (self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"], 0) - 5) / 2
+                else:
+                    average_import = 0
+                sort_key = "%04.2f_%04.2f_%03d_d%02d" % (5000 - average, 5000 - average_import, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
@@ -7409,7 +7419,7 @@ class PredBat(hass.Hass):
         # Optimise all windows by picking a price threshold default
         if price_set and self.calculate_best_charge and self.charge_window_best:
             self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
-            self.optimise_charge_windows_reset(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step)
+            self.optimise_charge_windows_reset(reset_all=True)
             self.charge_limit_best, ignore_discharge_limits, best_price, best_price_discharge = self.optimise_charge_limit_price(
                 price_set,
                 price_links,
@@ -7428,10 +7438,11 @@ class PredBat(hass.Hass):
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+        self.optimise_charge_windows_reset(reset_all=False)
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows]
+            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows], secondary_order = True
         )
 
         self.rate_best_cost_threshold_charge = best_price
@@ -7674,7 +7685,7 @@ class PredBat(hass.Hass):
                 count += 1
             self.log("Second pass optimisation finished metric {} cost {} metric_keep {}".format(best_metric, self.dp2(best_cost), self.dp2(best_keep)))
 
-    def optimise_charge_windows_reset(self, load_minutes, load_minutes10, pv_forecast_minute_step, pv_forecast_minute10_step):
+    def optimise_charge_windows_reset(self, reset_all):
         """
         Reset the charge windows to min
         """
@@ -7682,7 +7693,8 @@ class PredBat(hass.Hass):
             # Set all to max
             for window_n in range(0, len(self.charge_window_best)):
                 if self.charge_window_best[window_n]["start"] < self.end_record:
-                    self.charge_limit_best[window_n] = 0.0
+                    if reset_all:
+                        self.charge_limit_best[window_n] = 0.0
                 else:
                     self.charge_limit_best[window_n] = self.soc_max
 
