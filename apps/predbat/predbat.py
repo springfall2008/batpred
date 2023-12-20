@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.17"
+THIS_VERSION = "v7.14.18"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3128,10 +3128,10 @@ class PredBat(hass.Hass):
             num_gaps = 0
             if use_days > 0:
                 full_days = 24 * 60 * (use_days - 1)
-                for minute in range(0, 24 * 60):
+                for minute in range(0, 24 * 60, PREDICT_STEP):
                     minute_previous = 24 * 60 - minute + full_days
                     if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                        num_gaps += gap_size
+                        num_gaps += PREDICT_STEP
 
                 # If we have some gaps
                 if num_gaps > 0:
@@ -3150,14 +3150,14 @@ class PredBat(hass.Hass):
 
                     # Do the filling
                     per_minute_increment = average_day / (24 * 60)
-                    for minute in range(0, 24 * 60):
+                    for minute in range(0, 24 * 60, PREDICT_STEP):
                         minute_previous = 24 * 60 - minute + full_days
                         if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
                             for offset in range(minute_previous, 0, -1):
                                 if offset in data:
-                                    data[offset] += per_minute_increment * gap_size
+                                    data[offset] += per_minute_increment * PREDICT_STEP
                                 else:
-                                    data[offset] = per_minute_increment * gap_size
+                                    data[offset] = per_minute_increment * PREDICT_STEP
 
     def get_historical(self, data, minute):
         """
@@ -9102,13 +9102,13 @@ class PredBat(hass.Hass):
         # Fetch extra load forecast
         self.load_forecast = self.fetch_extra_load_forecast(self.now_utc)
 
-        # Load today vs actual
-        if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
-
         # Apply modal filter to historical data
         self.previous_days_modal_filter(self.load_minutes)
         self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+
+        # Load today vs actual
+        if self.load_minutes:
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
 
     def publish_rate_and_threshold(self):
         """
