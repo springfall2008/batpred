@@ -3771,7 +3771,12 @@ class PredBat(hass.Hass):
                     )
                 else:
                     charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
+
+                # Apply the charging curve
                 charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
+
+                # Remove inverter loss as it will be added back in again when calculating the SOC change
+                charge_rate_now_curve /= self.inverter_loss                      
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
@@ -8092,7 +8097,7 @@ class PredBat(hass.Hass):
                     for minute in range(0, minutes_left, PREDICT_STEP):
                         charge_now_percent = self.calc_percent_limit(charge_now)
                         rate_scale = self.battery_charge_power_curve.get(charge_now_percent, 1.0) * self.battery_rate_max_scaling
-                        charge_amount = rate * rate_scale * PREDICT_STEP * self.battery_loss * self.inverter_loss
+                        charge_amount = rate * rate_scale * PREDICT_STEP * self.battery_loss
                         charge_now += charge_amount
                         if charge_now >= target_soc:
                             best_rate = rate
