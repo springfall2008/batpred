@@ -7442,7 +7442,7 @@ class PredBat(hass.Hass):
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows], secondary_order = True
+            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows], secondary_order=True
         )
 
         self.rate_best_cost_threshold_charge = best_price
