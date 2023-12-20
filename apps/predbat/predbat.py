@@ -1346,7 +1346,7 @@ class Inverter:
                 if self.rest_api:
                     self.rest_setChargeTarget(soc)
                 else:
-                    entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id, default=100.0))
+                    entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id))
                     self.write_and_poll_value("charge_limit", entity_soc, soc)
 
                 if self.base.set_inverter_notify:
