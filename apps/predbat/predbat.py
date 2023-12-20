@@ -1066,7 +1066,7 @@ class Inverter:
             if self.rest_data:
                 self.current_charge_limit = float(self.rest_data["Control"]["Target_SOC"])
             else:
-                self.current_charge_limit = self.base.get_arg("charge_limit", index=self.id, default=100.0)
+                self.current_charge_limit = float(self.base.get_arg("charge_limit", index=self.id, default=100.0))
         else:
             self.current_charge_limit = 0.0
 
@@ -1333,9 +1333,9 @@ class Inverter:
             current_soc = self.base.sim_soc
         else:
             if self.rest_data:
-                current_soc = float(self.rest_data["Control"]["Target_SOC"])
+                current_soc = int(float(self.rest_data["Control"]["Target_SOC"]))
             else:
-                current_soc = int(self.base.get_arg("charge_limit", index=self.id))
+                current_soc = int(float(self.base.get_arg("charge_limit", index=self.id, default=100.0)))
 
         if current_soc != soc:
             self.base.log("Inverter {} Current charge limit is {} % and new target is {} %".format(self.id, current_soc, soc))
@@ -1346,7 +1346,7 @@ class Inverter:
                 if self.rest_api:
                     self.rest_setChargeTarget(soc)
                 else:
-                    entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id))
+                    entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id, default=100.0))
                     self.write_and_poll_value("charge_limit", entity_soc, soc)
 
                 if self.base.set_inverter_notify:
