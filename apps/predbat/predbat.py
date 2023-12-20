@@ -3467,7 +3467,7 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), pv_factor))
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), self.dp1(pv_factor)))
             return pv_factor
         else:
             return None
@@ -3652,7 +3652,7 @@ class PredBat(hass.Hass):
             pv_now = pv_forecast_minute_step[minute]
             load_yesterday = load_minutes_step[minute]
 
-            # Count PV kwh
+            # Count PV kWh
             pv_kwh += pv_now
             if record:
                 final_pv_kwh = pv_kwh
@@ -8523,7 +8523,7 @@ class PredBat(hass.Hass):
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
-                        self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
+                        self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         resetDischarge = False
@@ -8988,9 +8988,14 @@ class PredBat(hass.Hass):
                             # Save the saving slot?
                             try:
                                 start_time = self.str2time(start)
+                                end_time = self.str2time(end)
                                 diff_time = start_time - self.now_utc
                                 if abs(diff_time.days) <= 3:
-                                    self.log("Joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
+                                    self.log(
+                                        "Joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(
+                                            start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state
+                                        )
+                                    )
 
                                     # Save the slot
                                     octopus_saving_slot = {}
@@ -9000,7 +9005,11 @@ class PredBat(hass.Hass):
                                     octopus_saving_slot["state"] = state
                                     octopus_saving_slots.append(octopus_saving_slot)
                             except ValueError:
-                                self.log("Warn: Bad start time for joined Octopus saving session: {} - {} at rate {} state {}".format(start, end, saving_rate, state))
+                                self.log(
+                                    "Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(
+                                        start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state
+                                    )
+                                )
 
                     # In saving session that's not reported, assumed 30-minutes
                     if state and not joined_events:
