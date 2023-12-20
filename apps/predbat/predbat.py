@@ -1768,7 +1768,7 @@ class Inverter:
         elif direction == "discharge" and enable:
             self.mqtt_message("set/discharge", payload=int(self.battery_rate_max_discharge * 60 * 1000))
         else:
-            self.mqtt_message("set/auto", payload=True)
+            self.mqtt_message("set/auto", payload="true")
 
     def mqtt_message(self, topic, payload):
         """
@@ -3776,7 +3776,7 @@ class PredBat(hass.Hass):
                 charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
-                charge_rate_now_curve /= self.inverter_loss                      
+                charge_rate_now_curve /= self.inverter_loss
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
