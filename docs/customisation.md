@@ -239,7 +239,12 @@ in the charts template in Github).
 
 **set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
 
-**set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off). Off by default.
+**set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off). 
+Off by default.
+
+**switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be limited to the 
+lowest possible to meet the charge target. Only really effective for charge windows >30 minutes.
+Off by default.
 
 **set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
