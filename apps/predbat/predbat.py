@@ -8569,7 +8569,7 @@ class PredBat(hass.Hass):
                 self.log("Setting ECO mode as no discharge window planned")
                 inverter.adjust_force_discharge(False)
                 resetReserve = True
-                if self.set_discharge_freeze:
+                if self.set_discharge_freeze and not isCharging:
                     # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60 * 1000)
 
