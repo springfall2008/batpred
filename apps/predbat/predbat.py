@@ -1768,7 +1768,7 @@ class Inverter:
         elif direction == "discharge" and enable:
             self.mqtt_message("set/discharge", payload=int(self.battery_rate_max_discharge * 60 * 1000))
         else:
-            self.mqtt_message("set/auto", payload=True)
+            self.mqtt_message("set/auto", payload='true')
 
     def mqtt_message(self, topic, payload):
         """
