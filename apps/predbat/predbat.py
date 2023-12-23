@@ -327,14 +327,17 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
-        "name": "set_reserve_min",
-        "friendly_name": "Set Reserve Min",
-        "type": "input_number",
-        "min": 4,
-        "max": 100,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
+        "name": 
+        "set_reserve_min", 
+        "friendly_name": 
+        "Set Reserve Min", 
+        "type": 
+        "input_number", 
+        "min": 4, 
+        "max": 100, 
+        "step": 1, 
+        "unit": "%", 
+        "icon": "mdi:percent", 
         "default": 4.0,
         "reset_inverter": True,
     },
@@ -8447,7 +8450,7 @@ class PredBat(hass.Hass):
 
     def reset_inverter(self):
         """
-        Reset invertert to safe mode
+        Reset inverter to safe mode
         """
         for inverter in self.inverters:
             self.log("Reset inverter settings to safe mode")
@@ -9722,7 +9725,7 @@ class PredBat(hass.Hass):
             else:
                 entity = item.get("entity")
                 if entity and ((item.get("value") is None) or (value != item["value"])):
-                    if item.get("reset_inverter", False):
+                    if item.get('reset_inverter', False):
                         self.inverter_needs_reset = True
                     item["value"] = value
                     if not quiet:
