@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.20"
+THIS_VERSION = "v7.14.21"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -448,6 +448,21 @@ CONFIG_ITEMS = [
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
+    {"name": "iboost_solar", "friendly_name": "IBoost on solar power", "type": "switch", "default": True},
+    {"name": "iboost_gas", "friendly_name": "IBoost when cheaper than gas", "type": "switch", "default": False},
+    {"name": "iboost_charging", "friendly_name": "IBoost when battery charging", "type": "switch", "default": False},
+    {
+        "name": "iboost_gas_scale",
+        "friendly_name": "IBoost gas price scaling",
+        "type": "input_number",
+        "min": 0,
+        "max": 2.0,
+        "step": 0.1,
+        "unit": "multiple",
+        "icon": "mdi:multiplication",
+        "enable": "iboost_enable",
+        "default": 1.0,
+    },
     {
         "name": "iboost_max_energy",
         "friendly_name": "IBoost max energy",
@@ -3484,7 +3499,10 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), self.dp1(pv_factor)))
+            pv_factor_round = pv_factor
+            if pv_factor_round:
+                pv_factor_round = self.dp1(pv_factor_round)
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), pv_factor_round))
             return pv_factor
         else:
             return None
@@ -3668,6 +3686,7 @@ class PredBat(hass.Hass):
             if save and save == "best":
                 self.predict_soc_best[minute] = self.dp3(soc)
                 self.predict_metric_best[minute] = self.dp2(metric)
+                self.predict_iboost_best[minute] = iboost_today_kwh
 
             # Get load and pv forecast, total up for all values in the step
             pv_now = pv_forecast_minute_step[minute]
@@ -3699,6 +3718,23 @@ class PredBat(hass.Hass):
             if not self.car_charging_from_battery and not car_freeze:
                 discharge_rate_now = self.battery_rate_max_discharge_scaled
 
+            # IBoost on load
+            if self.iboost_enable:
+                iboost_amount = 0
+                if iboost_today_kwh < self.iboost_max_energy:
+                    if self.iboost_gas:
+                        if self.rate_gas:
+                            # Iboost on cheap electric rates
+                            gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                            electric_rate = self.rate_import.get(minute_absolute, 0)
+                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
+                                iboost_amount = self.iboost_max_power * step
+                                load_yesterday += iboost_amount
+                    elif self.iboost_charging:
+                        if charge_window_n >= 0:
+                            iboost_amount = self.iboost_max_power * step
+                            load_yesterday += iboost_amount
+
             # Count load
             load_kwh += load_yesterday
             if record:
@@ -3716,9 +3752,9 @@ class PredBat(hass.Hass):
 
             # IBoost model
             if self.iboost_enable:
-                iboost_amount = 0
                 if iboost_today_kwh < self.iboost_max_energy:
-                    if pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc):
+                    if self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc):
+                        # Iboost on solar import
                         iboost_amount = min(pv_dc, self.iboost_max_power * step)
                         pv_dc -= iboost_amount
 
@@ -3733,7 +3769,15 @@ class PredBat(hass.Hass):
                 if minute == 0 and save == "best":
                     scaled_boost = (iboost_amount / step) * RUN_EVERY
                     self.iboost_next = self.dp3(self.iboost_today + scaled_boost)
-                    self.log("IBoost model predicts usage {} in this run period taking total to {}".format(self.dp2(scaled_boost), self.iboost_next))
+                    if iboost_amount > 0:
+                        self.iboost_running = True
+                    else:
+                        self.iboost_running = False
+                    self.log(
+                        "IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(
+                            self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging
+                        )
+                    )
 
             # discharge freeze?
             if self.set_discharge_freeze:
@@ -4366,6 +4410,11 @@ class PredBat(hass.Hass):
                     "icon": "mdi:water-boiler",
                 },
             )
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_iboost_active" + postfix,
+                state=self.iboost_running,
+                attributes={"friendly_name": "IBoost active", "icon": "mdi:water-boiler"},
+            )
             self.find_spare_energy(predict_soc, predict_export, step, first_charge)
 
         if save and save == "debug" and not SIMULATE:
@@ -4555,7 +4604,7 @@ class PredBat(hass.Hass):
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
-    def rate_replicate(self, rates, rate_io={}, is_import=True):
+    def rate_replicate(self, rates, rate_io={}, is_import=True, is_gas=False):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
@@ -4594,6 +4643,7 @@ class PredBat(hass.Hass):
                         rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
                     elif (
                         (not is_import)
+                        and (not is_gas)
                         and self.get_arg("futurerate_adjust_export", False)
                         and (minute in self.future_energy_rates_export)
                         and (minute_mod in self.future_energy_rates_export)
@@ -4602,7 +4652,7 @@ class PredBat(hass.Hass):
                         rate_offset = rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute]
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
-                    else:
+                    elif (not is_import) and (not is_gas):
                         rate_offset = max(rate_offset + self.metric_future_rate_offset_export, 0)
 
                     adjusted_rates[minute] = True
@@ -5541,6 +5591,8 @@ class PredBat(hass.Hass):
         html += "<td><b>Load kWh</b></td>"
         if self.num_cars > 0:
             html += "<td><b>Car kWh</b></td>"
+        if self.iboost_enable:
+            html += "<td><b>IBoost kWh</b></td>"
         html += "<td><b>SOC %</b></td>"
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
@@ -5757,6 +5809,17 @@ class PredBat(hass.Hass):
                     car_charging_str = ""
                     car_color = "#FFFFFF"
 
+            # IBoost
+            iboost_amount_str = ""
+            iboost_color = "#FFFFFF"
+            if self.iboost_enable:
+                iboost_amount = self.predict_iboost_best.get(minute_relative, 0)
+                iboost_change = self.predict_iboost_best.get(minute_relative + 30, 0) - iboost_amount
+                iboost_amount_str = str(self.dp2(iboost_amount))
+                if iboost_change > 0:
+                    iboost_color = "#FFFF00"
+                    iboost_amount_str += " &nearr;"
+
             # Table row
             html += '<tr style="color:black">'
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
@@ -5774,6 +5837,8 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
+            if self.iboost_enable:
+                html += "<td bgcolor=" + iboost_color + ">" + iboost_amount_str + " </td>"
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
@@ -6243,6 +6308,7 @@ class PredBat(hass.Hass):
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}
         self.predict_soc_best = {}
+        self.predict_iboost_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_discharge = 0.0
@@ -8943,6 +9009,7 @@ class PredBat(hass.Hass):
                 self.log("Error: metric_octopus_gas is not set correctly or no energy rates can be read")
                 self.record_status(message="Error - rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
+            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
 
         # Work out current car SOC and limit
@@ -9510,6 +9577,10 @@ class PredBat(hass.Hass):
 
         # Iboost model
         self.iboost_enable = self.get_arg("iboost_enable")
+        self.iboost_solar = self.get_arg("iboost_solar")
+        self.iboost_gas = self.get_arg("iboost_gas")
+        self.iboost_charging = self.get_arg("iboost_charging")
+        self.iboost_gas_scale = self.get_arg("iboost_gas_scale")
 
         self.iboost_max_energy = self.get_arg("iboost_max_energy")
         self.iboost_max_power = self.get_arg("iboost_max_power") / 1000 / 60.0
@@ -9517,6 +9588,7 @@ class PredBat(hass.Hass):
         self.iboost_min_soc = self.get_arg("iboost_min_soc")
         self.iboost_today = self.get_arg("iboost_today")
         self.iboost_next = self.iboost_today
+        self.iboost_running = False
         self.iboost_energy_today = {}
 
         # Car options
