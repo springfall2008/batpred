@@ -3499,7 +3499,10 @@ class PredBat(hass.Hass):
             pv_factor = pv_factor - 1.0
 
         if self.metric_cloud_enable:
-            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), self.dp1(pv_factor)))
+            pv_factor_round = pv_factor
+            if pv_factor_round:
+                pv_factor_round = self.dp1(pv_factor_round)
+            self.log("PV Forecast {} kWh and 10% Forecast {} kWh pv cloud factor {}".format(self.dp1(pv_total), self.dp1(pv_total10), pv_factor_round))
             return pv_factor
         else:
             return None
@@ -3723,8 +3726,8 @@ class PredBat(hass.Hass):
                         if self.rate_gas:
                             # Iboost on cheap electric rates
                             gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                            elec_rate = self.rate_import.get(minute_absolute, 0)
-                            if elec_rate < gas_rate and (charge_window_n >= 0 or not self.iboost_charging):
+                            electric_rate = self.rate_import.get(minute_absolute, 0)
+                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
                                 iboost_amount = self.iboost_max_power * step
                                 load_yesterday += iboost_amount
                     elif self.iboost_charging:
@@ -3770,11 +3773,7 @@ class PredBat(hass.Hass):
                         self.iboost_running = True
                     else:
                         self.iboost_running = False
-                    self.log(
-                        "IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(
-                            self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging
-                        )
-                    )
+                    self.log("IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging))
 
             # discharge freeze?
             if self.set_discharge_freeze:
