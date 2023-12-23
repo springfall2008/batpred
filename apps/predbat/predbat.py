@@ -7117,7 +7117,6 @@ class PredBat(hass.Hass):
 
                     # Overlapping window with enabled discharge?
                     if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-
                         if dstart <= start:
                             if start != dend:
                                 start = dend
@@ -7139,7 +7138,7 @@ class PredBat(hass.Hass):
                             clipped = True
                             if (end - start) >= 5:
                                 clip_again = True
-                        
+
                 if not clipped or ((end - start) >= 5):
                     new_window = {}
                     new_window["start"] = start
@@ -7147,7 +7146,7 @@ class PredBat(hass.Hass):
                     new_window["average"] = average
                     new_window_best.append(new_window)
                     new_limit_best.append(limit)
-                
+
             if clip_again:
                 charge_window_best = new_window_best.copy()
                 charge_limit_best = new_limit_best.copy()
@@ -7937,13 +7936,13 @@ class PredBat(hass.Hass):
                 spreading=30,
             )
             pv_forecast_minute10 = self.minute_data(
-                pv_forecast_data, 
-                self.forecast_days + 1, 
-                self.midnight_utc, 
-                "pv_estimate10", 
-                "period_start", 
-                backwards=False, 
-                divide_by=divide_by, 
+                pv_forecast_data,
+                self.forecast_days + 1,
+                self.midnight_utc,
+                "pv_estimate10",
+                "period_start",
+                backwards=False,
+                divide_by=divide_by,
                 scale=self.pv_scaling,
                 spreading=30,
             )
@@ -8911,7 +8910,7 @@ class PredBat(hass.Hass):
                 self.record_status(message="Error - rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
-            
+
         # Work out current car SOC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
