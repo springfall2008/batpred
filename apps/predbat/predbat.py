@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.19"
+THIS_VERSION = "v7.14.20"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2816,6 +2816,7 @@ class PredBat(hass.Hass):
         scale=1.0,
         accumulate=[],
         adjust_key=None,
+        spreading=None,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -2945,7 +2946,11 @@ class PredBat(hass.Hass):
                                 adata[minute] = True
                             minute += 1
             else:
-                mdata[minutes] = state
+                if spreading:
+                    for minute in range(minutes, minutes + spreading):
+                        mdata[minute] = state
+                else:
+                    mdata[minutes] = state
 
             # Store previous time & state
             if to_time and not backwards:
@@ -3477,6 +3482,7 @@ class PredBat(hass.Hass):
         Create cached step data for historical array
         """
         values = {}
+        cloud_diff = 0
         for minute in range(0, self.forecast_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
@@ -3506,9 +3512,12 @@ class PredBat(hass.Hass):
             if cloud_factor and cloud_factor > 0:
                 cloud_on = (minute / PREDICT_STEP) % 2
                 if cloud_on > 0:
-                    values[minute] = values[minute] + values[minute] * cloud_factor
+                    cloud_diff += values[minute] * cloud_factor
+                    values[minute] += cloud_diff
                 else:
-                    values[minute] = values[minute] - values[minute] * cloud_factor
+                    cloud_sub = min(cloud_diff, values[minute])
+                    values[minute] -= cloud_sub
+                    cloud_diff -= cloud_sub
 
         return values
 
@@ -5367,6 +5376,17 @@ class PredBat(hass.Hass):
 
         return rates
 
+    def rate_scan_gas(self, rates, print=True):
+        """
+        Scan the gas rates and work out min/max
+        """
+        rate_gas_min, rate_gas_max, rate_gas_average, rate_gas_min_minute, rate_gas_max_minute = self.rate_minmax(rates)
+
+        if print:
+            self.log("Gas rates min {} max {} average {}".format(rate_gas_min, rate_gas_max, rate_gas_average))
+
+        return rates
+
     def publish_rates_import(self):
         """
         Publish the import rates
@@ -7073,42 +7093,63 @@ class PredBat(hass.Hass):
         """
         Filters and removes intersecting charge windows
         """
-        new_limit_best = []
-        new_window_best = []
+        clip_again = True
 
         # For each charge window
-        for window_n in range(0, len(charge_limit_best)):
-            window = charge_window_best[window_n]
-            start = window["start"]
-            end = window["end"]
-            average = window["average"]
-            limit = charge_limit_best[window_n]
-            clipped = False
+        while clip_again:
+            clip_again = False
+            new_limit_best = []
+            new_window_best = []
+            for window_n in range(0, len(charge_limit_best)):
+                window = charge_window_best[window_n]
+                start = window["start"]
+                end = window["end"]
+                average = window["average"]
+                limit = charge_limit_best[window_n]
+                clipped = False
 
-            # For each discharge window
-            for dwindow_n in range(0, len(discharge_limit_best)):
-                dwindow = discharge_window_best[dwindow_n]
-                dlimit = discharge_limit_best[dwindow_n]
-                dstart = dwindow["start"]
-                dend = dwindow["end"]
+                # For each discharge window
+                for dwindow_n in range(0, len(discharge_limit_best)):
+                    dwindow = discharge_window_best[dwindow_n]
+                    dlimit = discharge_limit_best[dwindow_n]
+                    dstart = dwindow["start"]
+                    dend = dwindow["end"]
 
-                # Overlapping window with enabled discharge?
-                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-                    # Adjust the charge window to avoid the discharge
-                    if dstart > start:
-                        end = dstart
-                        clipped = True
-                    else:
-                        start = dend
-                        clipped = True
+                    # Overlapping window with enabled discharge?
+                    if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+                        if dstart <= start:
+                            if start != dend:
+                                start = dend
+                                clipped = True
+                        elif dend >= end:
+                            if end != dstart:
+                                end = dstart
+                                clipped = True
+                        else:
+                            # Two segments
+                            if (dstart - start) >= 5:
+                                new_window = {}
+                                new_window["start"] = start
+                                new_window["end"] = dstart
+                                new_window["average"] = average
+                                new_window_best.append(new_window)
+                                new_limit_best.append(limit)
+                            start = dend
+                            clipped = True
+                            if (end - start) >= 5:
+                                clip_again = True
 
-            if (not clipped) or ((end - start) >= 5):
-                new_window = {}
-                new_window["start"] = start
-                new_window["end"] = end
-                new_window["average"] = average
-                new_window_best.append(new_window)
-                new_limit_best.append(limit)
+                if not clipped or ((end - start) >= 5):
+                    new_window = {}
+                    new_window["start"] = start
+                    new_window["end"] = end
+                    new_window["average"] = average
+                    new_window_best.append(new_window)
+                    new_limit_best.append(limit)
+
+            if clip_again:
+                charge_window_best = new_window_best.copy()
+                charge_limit_best = new_limit_best.copy()
 
         return new_limit_best, new_window_best
 
@@ -7892,9 +7933,18 @@ class PredBat(hass.Hass):
                 backwards=False,
                 divide_by=divide_by,
                 scale=self.pv_scaling,
+                spreading=30,
             )
             pv_forecast_minute10 = self.minute_data(
-                pv_forecast_data, self.forecast_days + 1, self.midnight_utc, "pv_estimate10", "period_start", backwards=False, divide_by=divide_by, scale=self.pv_scaling
+                pv_forecast_data,
+                self.forecast_days + 1,
+                self.midnight_utc,
+                "pv_estimate10",
+                "period_start",
+                backwards=False,
+                divide_by=divide_by,
+                scale=self.pv_scaling,
+                spreading=30,
             )
         else:
             self.log("WARN: No solar data has been configured.")
@@ -8851,6 +8901,16 @@ class PredBat(hass.Hass):
             # Basic rates defined by user over time
             self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "import")
 
+        # Gas rates if set
+        if "metric_octopus_gas" in self.args:
+            entity_id = self.get_arg("metric_octopus_gas", None, indirect=False)
+            self.rate_gas = self.fetch_octopus_rates(entity_id)
+            if not self.rate_gas:
+                self.log("Error: metric_octopus_gas is not set correctly or no energy rates can be read")
+                self.record_status(message="Error - rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
+                raise ValueError
+            self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
+
         # Work out current car SOC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
@@ -9348,8 +9408,8 @@ class PredBat(hass.Hass):
         self.combine_mixed_rates = False
         self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
-        self.discharge_slot_split = 60
         self.charge_slot_split = 60
+        self.discharge_slot_split = 60 if self.calculate_fast_plan else 30
 
         # Enables
         if self.inverter_type != "GE":
