@@ -274,15 +274,26 @@ hot water (or similar). The predicted output from the IBoost model is returned i
 
 The following entities are only available when you turn on iboost enable:
 
+**iboost_solar** When enabled assumes IBoost will use solar power to boost.
+
+**iboost_min_soc** sets the minimum home battery soc % to enable iboost solar on, default 0
+
+**iboost_gas** When enabled assumes IBoost will operate when electric rates are lower than gas rates.
+Note: Gas rates have to be configured in apps.yaml with **metric_octopus_gas**
+
+**iboost_gas_scale** Sets the scaling of the gas rates used before comparing with electric rates, to account for losses
+
+**iboost_charging** Assume IBoost operates when the battery is charging (can be combined with iboost_gas or not)
+
 **iboost_max_energy** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kWh
 
 **iboost_max_power** Sets the maximum power in watts to consume - default 2400
 
 **iboost_min_power** Sets the minimum power in watts to consume - default 500
 
-**iboost_min_soc** sets the minimum home battery soc % to enable iboost on, default 0
-
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
+
+The **binary_sensor.iboost_active** entity will be enabled when IBoost should be active, can be used for automations to trigger boost
 
 If you have an incrementing Sensor that tracks IBoost energy usage then you should set **iboost_energy_today** sensor in
 apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sensor isn't in kWh.
