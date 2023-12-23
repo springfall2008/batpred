@@ -326,7 +326,21 @@ CONFIG_ITEMS = [
         "default": True,
         "enable": "expert_mode",
     },
-    {"name": "set_reserve_min", "friendly_name": "Set Reserve Min", "type": "input_number", "min": 4, "max": 100, "step": 1, "unit": "%", "icon": "mdi:percent", "default": 4.0},
+    {
+        "name": 
+        "set_reserve_min", 
+        "friendly_name": 
+        "Set Reserve Min", 
+        "type": 
+        "input_number", 
+        "min": 4, 
+        "max": 100, 
+        "step": 1, 
+        "unit": "%", 
+        "icon": "mdi:percent", 
+        "default": 4.0,
+        "reset_inverter": True,
+    },
     {
         "name": "rate_low_threshold",
         "friendly_name": "Rate Low Threshold",
@@ -351,7 +365,7 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
         "default": 0.0,
     },
-    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True},
+    {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True, "reset_inverter": True},
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
     {
         "name": "octopus_intelligent_ignore_unplugged",
@@ -361,7 +375,7 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {"name": "car_charging_plan_smart", "friendly_name": "Car Charging Plan Smart", "type": "switch", "default": False},
-    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False},
+    {"name": "car_charging_from_battery", "friendly_name": "Allow car to charge from battery", "type": "switch", "default": False, "reset_inverter": True},
     {"name": "calculate_discharge_oncharge", "friendly_name": "Calculate Discharge on charge slots", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_fast_plan", "friendly_name": "Calculate plan faster (less accurate)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
@@ -383,12 +397,12 @@ CONFIG_ITEMS = [
     {"name": "combine_discharge_slots", "friendly_name": "Combine Discharge Slots", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "set_status_notify", "friendly_name": "Set Status Notify", "type": "switch", "default": True},
     {"name": "set_inverter_notify", "friendly_name": "Set Inverter Notify", "type": "switch", "default": False},
-    {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", "enable": "expert_mode", "default": True},
-    {"name": "set_charge_low_power", "friendly_name": "Set Charge Low Power Mode", "type": "switch", "default": False},
-    {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", "enable": "expert_mode", "default": True},
-    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "set_charge_freeze", "friendly_name": "Set Charge Freeze", "type": "switch", "enable": "expert_mode", "default": True, "reset_inverter": True},
+    {"name": "set_charge_low_power", "friendly_name": "Set Charge Low Power Mode", "type": "switch", "default": False, "reset_inverter": True},
+    {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", "enable": "expert_mode", "default": True, "reset_inverter": True},
+    {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", "enable": "expert_mode", "default": False, "reset_inverter": True},
     {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", "default": True},
-    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", "default": False},
+    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", "default": False, "reset_inverter": True},
     {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch", "default": False},
     {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch", "enable": "balance_inverters_enable", "default": True},
     {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch", "enable": "balance_inverters_enable", "default": True},
@@ -433,6 +447,7 @@ CONFIG_ITEMS = [
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
         "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
+        "reset_inverter": True,
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
@@ -6203,6 +6218,7 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.inverter_needs_reset = False
         self.config_index = {}
         self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
@@ -8432,6 +8448,20 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
+    def reset_inverter(self):
+        """
+        Reset invertert to safe mode
+        """
+        for inverter in self.inverters:
+            self.log("Reset inverter settings to safe mode")
+            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
+            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
+            inverter.adjust_force_discharge(False)
+            inverter.adjust_reserve(0)
+            inverter.adjust_battery_target(100.0)
+            inverter.disable_charge_window()
+        self.inverter_needs_reset = False
+
     def execute_plan(self):
         status_extra = ""
 
@@ -8439,6 +8469,9 @@ class PredBat(hass.Hass):
             status = "Idle (Holiday)"
         else:
             status = "Idle"
+
+        if self.inverter_needs_reset:
+            self.reset_inverter()
 
         isCharging = False
         isDischarging = False
@@ -9692,9 +9725,11 @@ class PredBat(hass.Hass):
             else:
                 entity = item.get("entity")
                 if entity and ((item.get("value") is None) or (value != item["value"])):
+                    if item.get('reset_inverter', False):
+                        self.inverter_needs_reset = True
                     item["value"] = value
                     if not quiet:
-                        self.log("Updating HA config {} to {}".format(name, value))
+                        self.log("Updating HA config {} to {} inverter_needs_reset {}".format(name, value, self.inverter_needs_reset))
                     if item["type"] == "input_number":
                         icon = item.get("icon", "mdi:numeric")
                         self.set_state(
