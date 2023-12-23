@@ -20,7 +20,7 @@ If **switch.predbat_set_read_only** is True then the plan will be updated but th
 Predbat operation while an automation takes over.
 
 _NOTE: Changing the Predbat mode or the read only switch will cause Predbat to reset the inverter settings to default, this will disable
-both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default settng_
+both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
 
 ### Predbat Monitor mode
 
