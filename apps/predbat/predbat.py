@@ -3770,7 +3770,11 @@ class PredBat(hass.Hass):
                         self.iboost_running = True
                     else:
                         self.iboost_running = False
-                    self.log("IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging))
+                    self.log(
+                        "IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(
+                            self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging
+                        )
+                    )
 
             # discharge freeze?
             if self.set_discharge_freeze:
