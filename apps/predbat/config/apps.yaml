@@ -361,6 +361,8 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
+  # Gas rates for comparison
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
 
   # Nordpool market energy rates
   #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
