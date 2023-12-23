@@ -153,6 +153,7 @@ They are set to a regular expression and auto-discovered but you can comment out
 
 - **metric_octopus_import** - Import rates from the Octopus plugin, should point to the sensor
 - **metric_octopus_export** - Export rates from the Octopus plugin, should point to the sensor
+- **metric_octopus_gas** - Gas rates from the Octopus plugin, only used by IBoost model when enabled
 
  **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
  events which are disabled by the plugin by default in some versions:
@@ -165,6 +166,11 @@ They are set to a regular expression and auto-discovered but you can comment out
     event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
     event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
     event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+
+    event.octopus_energy_gas_xxxxxxxx_previous_day_rates
+    event.octopus_energy_gas_xxxxxxxx_current_day_rates
+    event.octopus_energy_gas_xxxxxxxx_next_day_rates
+
 ```  
 
 - **octopus_intelligent_slot** - If you have Octopus Intelligent GO and the Octopus Energy plugin installed point to the 'slot' sensor.
