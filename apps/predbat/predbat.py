@@ -3773,11 +3773,7 @@ class PredBat(hass.Hass):
                         self.iboost_running = True
                     else:
                         self.iboost_running = False
-                    self.log(
-                        "IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(
-                            self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging
-                        )
-                    )
+                    self.log("IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging))
 
             # discharge freeze?
             if self.set_discharge_freeze:
@@ -4590,7 +4586,7 @@ class PredBat(hass.Hass):
                 },
             )
 
-        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep
+        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
 
     def time_now_str(self):
         """
@@ -6554,7 +6550,7 @@ class PredBat(hass.Hass):
                         self.debug_enable = False
 
                         # Simulate with medium PV
-                        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                             try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
                         )
 
@@ -6568,7 +6564,7 @@ class PredBat(hass.Hass):
                         # Balancing payment to account for battery left over
                         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                         rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-                        metric -= soc * max(rate_min, 1.0)
+                        metric -= (soc + final_iboost) * max(rate_min, 1.0)
 
                         # Adjustment for battery cycles metric
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
@@ -6701,11 +6697,11 @@ class PredBat(hass.Hass):
             # Get data for 'off' also
             if first_window and not all_n:
                 try_charge_limit[window_n] = 0
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                     try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
                 )
                 predict_soc_nom = self.predict_soc.copy()
-                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(
+                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
                     try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record
                 )
 
@@ -6725,13 +6721,13 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                 try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
             )
             predict_soc_nom = self.predict_soc.copy()
 
             # Simulate with 10% PV
-            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(
+            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
                 try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record
             )
 
@@ -6752,8 +6748,8 @@ class PredBat(hass.Hass):
             # Balancing payment to account for battery left over
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
             rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-            metric -= soc * max(rate_min, 1.0)
-            metric10 -= soc10 * max(rate_min, 1.0)
+            metric -= (soc + final_iboost) * max(rate_min, 1.0)
+            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0)
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
@@ -6921,12 +6917,12 @@ class PredBat(hass.Hass):
                 self.debug_enable = False
 
                 # Simulate with medium PV
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                     try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
                 )
 
                 # Simulate with 10% PV
-                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(
+                metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
                     try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record
                 )
 
@@ -6940,8 +6936,8 @@ class PredBat(hass.Hass):
                 # Balancing payment to account for battery left over
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                 rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-                metric -= soc * max(rate_min, 1.0)
-                metric10 -= soc10 * max(rate_min, 1.0)
+                metric -= (soc + final_iboost) * max(rate_min, 1.0)
+                metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0)
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -8359,7 +8355,7 @@ class PredBat(hass.Hass):
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Simulate current settings to get initial data
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
             self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=self.end_record
         )
 
@@ -8392,7 +8388,7 @@ class PredBat(hass.Hass):
                 # Clipping windows
                 if self.discharge_window_best:
                     # Re-run prediction to get data for clipping
-                    best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                    best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                         self.charge_limit_best,
                         self.charge_window_best,
                         self.discharge_window_best,
@@ -8417,7 +8413,7 @@ class PredBat(hass.Hass):
             # Filter out any unused charge slots
             if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
-                best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+                best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                     self.charge_limit_best,
                     self.charge_window_best,
                     self.discharge_window_best,
@@ -8452,10 +8448,10 @@ class PredBat(hass.Hass):
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
             self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save="base", end_record=self.end_record
         )
-        metricb10, import_kwh_batteryb10, import_kwh_houseb10, export_kwhb10, soc_minb10, socb10, soc_min_minuteb10, battery_cycle10, metric_keep10 = self.run_prediction(
+        metricb10, import_kwh_batteryb10, import_kwh_houseb10, export_kwhb10, soc_minb10, socb10, soc_min_minuteb10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
             self.charge_limit,
             self.charge_window,
             self.discharge_window,
@@ -8468,7 +8464,7 @@ class PredBat(hass.Hass):
 
         if self.calculate_best:
             # Final simulation of best, do 10% and normal scenario
-            best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10 = self.run_prediction(
+            best_metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.discharge_window_best,
@@ -8478,7 +8474,7 @@ class PredBat(hass.Hass):
                 save="best10",
                 end_record=self.end_record,
             )
-            best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep = self.run_prediction(
+            best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.discharge_window_best,
