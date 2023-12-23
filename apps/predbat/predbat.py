@@ -5585,7 +5585,7 @@ class PredBat(hass.Hass):
         else:
             html += "<td><b>Import p</b></td>"
             html += "<td><b>Export p</b></td>"
-        html += "<td><b>State</b></td><td></td>" # state can potentially be two cells for charging and discharging in the same slot
+        html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
         html += "<td><b>PV kWh</b></td>"
         html += "<td><b>Load kWh</b></td>"
@@ -5702,7 +5702,7 @@ class PredBat(hass.Hass):
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
-            if rate_value_import <= 0: # colour the import rate, blue for negative, then green, yellow and red
+            if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
                 rate_color_import = "#74C1FF"
             elif rate_value_import <= import_cost_threshold:
                 rate_color_import = "#3AEE85"
@@ -5739,7 +5739,7 @@ class PredBat(hass.Hass):
                     if state == soc_sym:
                         state = ""
                     if state:
-                        state += "</td><td bgcolor=#AAAAAA>" #charging and freeze discharging in same slot, split the state into two
+                        state += "</td><td bgcolor=#AAAAAA>"  # charging and freeze discharging in same slot, split the state into two
                         split = True
                     else:
                         state_color = "#AAAAAA"
@@ -5748,7 +5748,7 @@ class PredBat(hass.Hass):
                     if state == soc_sym:
                         state = ""
                     if state:
-                        state += "</td><td bgcolor=#FFFF00>" #charging and discharging in the same slot
+                        state += "</td><td bgcolor=#FFFF00>"  # charging and discharging in the same slot
                         split = True
                     else:
                         state_color = "#FFFF00"
@@ -5833,9 +5833,9 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
-                if split: # for slots that are both charging and discharging, just output the (split cell) state
+                if split:  # for slots that are both charging and discharging, just output the (split cell) state
                     html += "<td "
-                else: # otherwise (non-split slots), display the state spanning over two cells
+                else:  # otherwise (non-split slots), display the state spanning over two cells
                     html += "<td colspan=2 "
                 html += "rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
