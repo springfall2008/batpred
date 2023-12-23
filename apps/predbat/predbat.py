@@ -327,14 +327,17 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
-        "name": "set_reserve_min",
-        "friendly_name": "Set Reserve Min",
-        "type": "input_number",
-        "min": 4,
-        "max": 100,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
+        "name": 
+        "set_reserve_min", 
+        "friendly_name": 
+        "Set Reserve Min", 
+        "type": 
+        "input_number", 
+        "min": 4, 
+        "max": 100, 
+        "step": 1, 
+        "unit": "%", 
+        "icon": "mdi:percent", 
         "default": 4.0,
         "reset_inverter": True,
     },
@@ -399,7 +402,7 @@ CONFIG_ITEMS = [
     {"name": "set_reserve_enable", "friendly_name": "Set Reserve Enable", "type": "switch", "enable": "expert_mode", "default": True, "reset_inverter": True},
     {"name": "set_discharge_freeze_only", "friendly_name": "Set Discharge Freeze Only", "type": "switch", "enable": "expert_mode", "default": False, "reset_inverter": True},
     {"name": "set_discharge_during_charge", "friendly_name": "Set Discharge During Charge", "type": "switch", "default": True},
-    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", "default": False, "reset_inverter": True},
+    {"name": "set_read_only", "friendly_name": "Read Only mode", "type": "switch", "default": False, "reset_inverter_force": True},
     {"name": "balance_inverters_enable", "friendly_name": "Balance Inverters Enable (Beta)", "type": "switch", "default": False},
     {"name": "balance_inverters_charge", "friendly_name": "Balance Inverters for charging", "type": "switch", "enable": "balance_inverters_enable", "default": True},
     {"name": "balance_inverters_discharge", "friendly_name": "Balance Inverters for discharge", "type": "switch", "enable": "balance_inverters_enable", "default": True},
@@ -6216,6 +6219,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         self.inverter_needs_reset = False
+        self.inverter_needs_reset_force = False
         self.config_index = {}
         self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
@@ -8449,15 +8453,18 @@ class PredBat(hass.Hass):
         """
         Reset inverter to safe mode
         """
-        for inverter in self.inverters:
-            self.log("Reset inverter settings to safe mode")
-            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
-            inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
-            inverter.adjust_force_discharge(False)
-            inverter.adjust_reserve(0)
-            inverter.adjust_battery_target(100.0)
-            inverter.disable_charge_window()
+        if not self.set_read_only or self.inverter_needs_reset_force:
+            # Don't reset in read only mode unless forced
+            for inverter in self.inverters:
+                self.log("Reset inverter settings to safe mode")
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
+                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
+                inverter.adjust_force_discharge(False)
+                inverter.adjust_reserve(0)
+                inverter.adjust_battery_target(100.0)
+                inverter.disable_charge_window()
         self.inverter_needs_reset = False
+        self.inverter_needs_reset_force = False
 
     def execute_plan(self):
         status_extra = ""
@@ -9641,7 +9648,7 @@ class PredBat(hass.Hass):
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("select_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -9661,7 +9668,7 @@ class PredBat(hass.Hass):
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("number_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -9690,7 +9697,7 @@ class PredBat(hass.Hass):
                     value = not value
 
                 self.log("switch_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value)
+                self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -9709,7 +9716,7 @@ class PredBat(hass.Hass):
                 return value, default
         return None, default
 
-    def expose_config(self, name, value, quiet=True):
+    def expose_config(self, name, value, quiet=True, event=False):
         """
         Share the config with HA
         """
@@ -9722,11 +9729,15 @@ class PredBat(hass.Hass):
             else:
                 entity = item.get("entity")
                 if entity and ((item.get("value") is None) or (value != item["value"])):
-                    if item.get("reset_inverter", False):
+                    if item.get('reset_inverter', False):
                         self.inverter_needs_reset = True
+                    if item.get('reset_inverter_force', False):
+                        self.inverter_needs_reset = True
+                        if event:
+                            self.inverter_needs_reset_force = True
                     item["value"] = value
                     if not quiet:
-                        self.log("Updating HA config {} to {} inverter_needs_reset {}".format(name, value, self.inverter_needs_reset))
+                        self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
                         icon = item.get("icon", "mdi:numeric")
                         self.set_state(
