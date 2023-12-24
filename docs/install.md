@@ -89,8 +89,8 @@ While the above warning might not prevent Predbat from startup you should fix th
 
 Note: **Not recommended if you are using HACS**
 
-- Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant (or whereever you set appdaemon apps_dir to)
-- Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant (or whereever you set appdaemon apps_dir to)
+- Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant (or wherever you set appdaemon apps_dir to)
+- Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant (or wherever you set appdaemon apps_dir to)
 - Edit in HomeAssistant config/appdaemon/apps/apps.yml to configure
 
 - If you later install with HACS then you must move the apps.yml into config/appdaemon/apps/predbat/config
@@ -100,7 +100,7 @@ Note: **Not recommended if you are using HACS**
 ## HACS Update
 
 Note that HACS only checks for updates once a day by default, you can however force it to check again or download a specific version
-by using the redownload option on the custom repository.
+by using the re-download option on the custom repository.
 
 *After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
 (If this happens you will get a template configuration error in the entity predbat.status).*
