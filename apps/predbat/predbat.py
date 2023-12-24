@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.21"
+THIS_VERSION = "v7.14.22"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -52,6 +52,9 @@ PREDBAT_MODE_MONITOR = 0
 PREDBAT_MODE_CONTROL_SOC = 1
 PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+
+# Predbat update options
+PREDBAT_UPDATE_OPTIONS = []
 
 # Configuration options inside HA
 CONFIG_ITEMS = [
@@ -446,6 +449,16 @@ CONFIG_ITEMS = [
         "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
         "reset_inverter": True,
     },
+    {
+        "name": "update",
+        "friendly_name": "Predbat update",
+        "type": "select",
+        "options": PREDBAT_UPDATE_OPTIONS,
+        "icon": "mdi:state-machine",
+        "default": "Unknown",
+        "reset_inverter": True,
+    },
+    {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
     {"name": "iboost_solar", "friendly_name": "IBoost on solar power", "type": "switch", "default": True},
@@ -2457,15 +2470,18 @@ class PredBat(hass.Hass):
         """
         Download release data
         """
+        auto_update = self.get_arg("auto_update")
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
         self.releases = {}
         if data and isinstance(data, list):
             found_latest = False
+            found_latest_beta = False
 
             release = data[0]
             self.releases["this"] = THIS_VERSION
             self.releases["latest"] = "Unknown"
+            self.releases["latest_beta"] = "Unknown"
 
             for release in data:
                 if release.get("tag_name", "Unknown") == THIS_VERSION:
@@ -2478,7 +2494,62 @@ class PredBat(hass.Hass):
                     self.releases["latest_body"] = release.get("body", "Unknown")
                     found_latest = True
 
-            self.log("Predbat version {} currently running, latest version is {}".format(self.releases["this"], self.releases["latest"]))
+                if not found_latest_beta:
+                    self.releases["latest_beta"] = release.get("tag_name", "Unknown")
+                    self.releases["latest_beta_name"] = release.get("name", "Unknown")
+                    self.releases["latest_beta_body"] = release.get("body", "Unknown")
+                    found_latest_beta = True
+
+            self.log(
+                "Predbat {} version {} currently running, latest version is {} latest beta {}".format(
+                    __file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]
+                )
+            )
+            PREDBAT_UPDATE_OPTIONS = []
+            this_tag = THIS_VERSION
+
+            # Find all versions for the dropdown menu
+            for release in data:
+                prerelease = release.get("prerelease", True)
+                tag = release.get("tag_name", None)
+                if tag:
+                    if prerelease:
+                        full_name = tag + " (beta) " + release.get("name", "")
+                    else:
+                        full_name = tag + " " + release.get("name", "")
+                    PREDBAT_UPDATE_OPTIONS.append(full_name)
+                    if this_tag == tag:
+                        this_tag = full_name
+                if len(PREDBAT_UPDATE_OPTIONS) >= 10:
+                    break
+
+            # Update the drop down menu
+            item = self.config_index.get("update", None)
+            if item:
+                item["options"] = PREDBAT_UPDATE_OPTIONS
+                item["value"] = None
+
+            # See what version we are on and auto-update
+            if this_tag not in PREDBAT_UPDATE_OPTIONS:
+                this_tag = this_tag + " (?)"
+                PREDBAT_UPDATE_OPTIONS.append(this_tag)
+                self.log("Autoupdate: Currently on unknown version {}".format(this_tag))
+            else:
+                if self.releases["this"] == self.releases["latest"]:
+                    self.log("Autoupdate: Currently up to date")
+                elif self.releases["this"] == self.releases["latest_beta"]:
+                    self.log("Autoupdate: Currently on latest beta")
+                else:
+                    latest_version = self.releases["latest"] + " " + self.releases["latest_name"]
+                    if auto_update:
+                        self.log("Autoupdate: There is an update pending {} - auto update triggered!".format(latest_version))
+                        self.download_predbat_version(latest_version)
+                    else:
+                        self.log("Autoupdate: There is an update pending {} - auto update is off".format(latest_version))
+
+            # Refresh the list
+            self.expose_config("update", this_tag)
+
         else:
             self.log("WARN: Unable to download Predbat version information from github, return code: {}".format(data))
 
@@ -3614,6 +3685,7 @@ class PredBat(hass.Hass):
         metric = self.cost_today_sofar
         final_soc = soc
         first_charge_soc = soc
+        prev_soc = soc
         final_metric = metric
         metric_time = {}
         load_kwh_time = {}
@@ -3644,6 +3716,7 @@ class PredBat(hass.Hass):
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
             charge_window_n = self.in_charge_window(charge_window, minute_absolute)
             charge_limit_n = 0
+            prev_soc = soc
 
             reserve_expected = self.reserve
             if charge_window_n >= 0:
@@ -3977,7 +4050,7 @@ class PredBat(hass.Hass):
 
                 # Soc at next charge start
                 if minute < first_charge:
-                    first_charge_soc = soc
+                    first_charge_soc = prev_soc
 
             # Have we past the charging or discharging time?
             if charge_window_n >= 0:
@@ -9750,6 +9823,42 @@ class PredBat(hass.Hass):
                 extra=status_extra,
             )
 
+    def update_event(self, event, data, kwargs):
+        """
+        Update event
+        """
+        self.log("Update event {} {} {}".format(event, data, kwargs))
+
+    def download_predbat_version(self, version):
+        """
+        Download a version of Predbat
+        """
+        tag_split = version.split(" ")
+        self.log("Split returns {}".format(tag_split))
+        if tag_split:
+            tag = tag_split[0]
+            url = "https://raw.githubusercontent.com/springfall2008/batpred/" + tag + "/apps/predbat/predbat.py"
+            self.log("Downloading Predbat version {} from {}".format(tag, url))
+            r = requests.get(url, headers={})
+            if r.ok:
+                data = r.text
+                new_filename = __file__ + "." + tag
+                size = len(data)
+                if size >= 10000:
+                    self.log("Write new version {} bytes to {}".format(len(data), new_filename))
+                    with open(new_filename, "w") as han:
+                        han.write(data)
+                    self.call_notify("Predbat: update to: {}".format(version))
+                    self.log("Perform the update.....")
+                    os.system("mv -f {} {}".format(new_filename, __file__))
+                    return True
+                else:
+                    self.log("File is too small, update failed")
+                    return False
+            else:
+                self.log("WARN: Downloading Predbat failed, URL {}".format(url))
+                return False
+
     def select_event(self, event, data, kwargs):
         """
         Catch HA Input select updates
@@ -9765,8 +9874,12 @@ class PredBat(hass.Hass):
         for item in CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
-                self.log("select_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value, event=True)
+                self.log("select_event: {}, {} = {}".format(item["name"], entity, value))
+                if item["name"] == "update":
+                    self.log("Calling update service for {}".format(value))
+                    self.download_predbat_version(value)
+                else:
+                    self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -9882,7 +9995,7 @@ class PredBat(hass.Hass):
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
                                 "in_progress": False,
-                                "auto_update": False,
+                                "auto_update": True,
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],

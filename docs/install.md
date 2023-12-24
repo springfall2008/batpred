@@ -63,7 +63,7 @@ old location and update your logfile location (if you have set it). You should r
 - Install HACS if you haven't already ([https://hacs.xyz/docs/setup/download](https://hacs.xyz/docs/setup/download))
 - Enable AppDaemon in HACS: [https://hacs.xyz/docs/categories/appdaemon_apps/](https://hacs.xyz/docs/categories/appdaemon_apps/)
 
-## Predbat install
+## Predbat install with HACS
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
@@ -71,9 +71,6 @@ Once installed you will get automatic updates from each release!
 
 - Add <https://github.com/springfall2008/batpred> as a custom repository of type 'AppDaemon'
 - Click on the Repo and Download the app
-
-*After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
-(If this happens you will get a template configuration error in the entity predbat.status).*
 
 Edit in HomeAssistant config/appdaemon/apps/batpred/config/apps.yaml to configure Predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
 
@@ -90,13 +87,32 @@ While the above warning might not prevent Predbat from startup you should fix th
 
 ## Predbat manual install
 
-Note: **Not recommended if you have HACS**
+Note: **Not recommended if you are using HACS**
 
-- Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant
-- Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant
+- Copy apps/predbat/predbat.py to 'config/appdaemon/apps/' directory in home assistant (or wherever you set appdaemon apps_dir to)
+- Copy apps/predbat/apps.yml to 'config/appdaemon/apps' directory in home assistant (or wherever you set appdaemon apps_dir to)
 - Edit in HomeAssistant config/appdaemon/apps/apps.yml to configure
 
 - If you later install with HACS then you must move the apps.yml into config/appdaemon/apps/predbat/config
+
+## Predbat updates
+
+## HACS Update
+
+Note that HACS only checks for updates once a day by default, you can however force it to check again or download a specific version
+by using the re-download option on the custom repository.
+
+*After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
+(If this happens you will get a template configuration error in the entity predbat.status).*
+
+## Predbat built-in update
+
+Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest will be
+at the top of the list. Predbat will update itself and restart.
+
+## Manual update
+
+You can go to Github and download predbat.py from the releases tab and then copy this file over the existing version manually.
 
 ## Solcast install
 

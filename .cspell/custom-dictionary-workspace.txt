@@ -8,6 +8,7 @@ appkey
 argname
 automations
 autopep
+autoupdate
 Batpred
 batteryb
 bierner
