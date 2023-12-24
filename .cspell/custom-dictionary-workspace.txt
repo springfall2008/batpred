@@ -35,6 +35,7 @@ dlimit
 dstamp
 dstart
 dwindow
+elif
 endt
 futurerate
 gekey
