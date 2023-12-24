@@ -455,7 +455,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": 'Unknown',
+        "default": "Unknown",
         "reset_inverter": True,
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
@@ -2470,7 +2470,7 @@ class PredBat(hass.Hass):
         """
         Download release data
         """
-        auto_update = self.get_arg('auto_update')
+        auto_update = self.get_arg("auto_update")
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
         self.releases = {}
@@ -2500,11 +2500,15 @@ class PredBat(hass.Hass):
                     self.releases["latest_beta_body"] = release.get("body", "Unknown")
                     found_latest_beta = True
 
-            self.log("Predbat {} version {} currently running, latest version is {} latest beta {}".format(__file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
+            self.log(
+                "Predbat {} version {} currently running, latest version is {} latest beta {}".format(
+                    __file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]
+                )
+            )
             PREDBAT_UPDATE_OPTIONS = []
             this_tag = THIS_VERSION
 
-            # Find all versions for the dropdown menu
+            # Find all versions for the dropdown menu
             for release in data:
                 prerelease = release.get("prerelease", True)
                 tag = release.get("tag_name", None)
@@ -2520,11 +2524,11 @@ class PredBat(hass.Hass):
                     break
 
             # Update the drop down menu
-            item =  self.config_index.get("update", None)
+            item = self.config_index.get("update", None)
             if item:
-                item['options'] = PREDBAT_UPDATE_OPTIONS
-                item['value'] = None
-            
+                item["options"] = PREDBAT_UPDATE_OPTIONS
+                item["value"] = None
+
             # See what version we are on and auto-update
             if this_tag not in PREDBAT_UPDATE_OPTIONS:
                 this_tag = this_tag + " (?)"
@@ -9829,7 +9833,7 @@ class PredBat(hass.Hass):
         """
         Download a version of Predbat
         """
-        tag_split = version.split(' ')
+        tag_split = version.split(" ")
         self.log("Split returns {}".format(tag_split))
         if tag_split:
             tag = tag_split[0]
@@ -9842,7 +9846,7 @@ class PredBat(hass.Hass):
                 size = len(data)
                 if size >= 10000:
                     self.log("Write new version {} bytes to {}".format(len(data), new_filename))
-                    with open(new_filename, 'w') as han:
+                    with open(new_filename, "w") as han:
                         han.write(data)
                     self.call_notify("Predbat: update to: {}".format(version))
                     self.log("Perform the update.....")
@@ -9878,7 +9882,6 @@ class PredBat(hass.Hass):
                     self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
-
 
     def number_event(self, event, data, kwargs):
         """
