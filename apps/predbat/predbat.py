@@ -9812,6 +9812,9 @@ class PredBat(hass.Hass):
                     self.log("Write new version {} bytes to {}".format(len(data), new_filename))
                     with open(new_filename, 'w') as han:
                         han.write(data)
+                    self.log("Perform the update.....")
+                    os.system("mv -f {} {}".format(new_filename, __file__))
+                    return True
                 else:
                     self.log("File is too small, update failed")
                     return False
