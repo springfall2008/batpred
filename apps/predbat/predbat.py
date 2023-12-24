@@ -455,7 +455,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": 'Unknown',
+        "default": "Unknown",
         "reset_inverter": True,
     },
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -2493,7 +2493,7 @@ class PredBat(hass.Hass):
             self.log("Predbat {} version {} currently running, latest version is {}".format(__file__, self.releases["this"], self.releases["latest"]))
             PREDBAT_UPDATE_OPTIONS = []
             this_tag = THIS_VERSION
-            # Expose update dropdown menu
+            # Expose update dropdown menu
             for release in data:
                 prerelease = release.get("prerelease", True)
                 tag = release.get("tag_name", None)
@@ -2505,10 +2505,10 @@ class PredBat(hass.Hass):
                             this_tag = full_name
                 if len(PREDBAT_UPDATE_OPTIONS) >= 10:
                     break
-            item =  self.config_index.get("update", None)
+            item = self.config_index.get("update", None)
             if item:
-                item['options'] = PREDBAT_UPDATE_OPTIONS
-                item['value'] = None
+                item["options"] = PREDBAT_UPDATE_OPTIONS
+                item["value"] = None
             if this_tag not in PREDBAT_UPDATE_OPTIONS:
                 this_tag = this_tag + " (?)"
                 PREDBAT_UPDATE_OPTIONS.append(this_tag)
@@ -9797,7 +9797,7 @@ class PredBat(hass.Hass):
         """
         Download a version of Predbat
         """
-        tag_split = version.split(' ')
+        tag_split = version.split(" ")
         self.log("Split returns {}".format(tag_split))
         if tag_split:
             tag = tag_split[0]
@@ -9810,7 +9810,7 @@ class PredBat(hass.Hass):
                 size = len(data)
                 if size >= 10000:
                     self.log("Write new version {} bytes to {}".format(len(data), new_filename))
-                    with open(new_filename, 'w') as han:
+                    with open(new_filename, "w") as han:
                         han.write(data)
                     self.log("Perform the update.....")
                     os.system("mv -f {} {}".format(new_filename, __file__))
@@ -9845,7 +9845,6 @@ class PredBat(hass.Hass):
                     self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
-
 
     def number_event(self, event, data, kwargs):
         """
