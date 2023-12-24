@@ -40,7 +40,7 @@ For this integration the key elements are:
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 - Software - [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) - MQTT integration
-- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yaml) package (in templates directory) with the MQTT sensors. This is the default with a couple of additional inputs to support battery capacity.
+- Home Assistant configuration - [sofar_inverter.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yml) package (in templates directory) with the MQTT sensors. This is the default with a couple of additional inputs to support battery capacity. This should be installed in Home Assistant.
 - Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory), should be copied to apps.yaml
 
 This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
