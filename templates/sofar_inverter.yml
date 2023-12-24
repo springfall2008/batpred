@@ -74,9 +74,9 @@ mqtt:
         {% elif value_json.running_state == 6 %}
         {{ "6-Fault" }}
         {% elif value_json.running_state == 7 %}
-        {{ "7-Permenant Fault" }}
+        {{ "7-Permanent Fault" }}
         {% else %}
-        {{ "Undeterminated" }}
+        {{ "Undetermined" }}
         {% endif %}
 
     - name: "sofar_grid_voltage"
