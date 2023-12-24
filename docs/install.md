@@ -99,7 +99,7 @@ Note: **Not recommended if you are using HACS**
 
 ## HACS Update
 
-Note that HACS only checks for updates once a day by default, you can however force it to check again or download a specific version 
+Note that HACS only checks for updates once a day by default, you can however force it to check again or download a specific version
 by using the redownload option on the custom repository.
 
 *After an update with HACS you may need to reboot AppDaemon as it sometimes reads the config wrongly during the update
