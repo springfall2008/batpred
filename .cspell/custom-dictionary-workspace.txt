@@ -48,6 +48,7 @@ hadashboard
 HAOS
 hass
 hassapi
+heatsink
 homeassistant
 houseb
 iboost
