@@ -1,13 +1,13 @@
 #Sofar ME3000SP Sofar2mqtt sensors
-#Updated to now include the new MQTT sensors required for 2022.12 release of Home Assistant onwards 
+#Updated to now include the new MQTT sensors required for 2022.12 release of Home Assistant onwards
 sensor:
   - platform: integration
-    name: Energy_from_battery 
+    name: Energy_from_battery
     source: sensor.sofar_inverter_battery_discharge
     unit_prefix: k
     unit_time: h
     method: left
-    
+
   - platform: integration
     name: Energy_to_battery
     source: sensor.sofar_inverter_battery_charge
@@ -48,7 +48,7 @@ template:
       device_class: energy
       state: >-
         {% set e = (states('input_number.sofar_battery_size') | float ) %}
-        {% set p  = (states('sensor.sofar_inverter_battery_SOC') | float ) %} 
+        {% set p  = (states('sensor.sofar_inverter_battery_SOC') | float ) %}
         {{ e * p / (100) | float(0) }}
       availability: >
         {{  states('sensor.sofar_inverter_battery_SOC') | is_number }}
@@ -77,35 +77,35 @@ mqtt:
         {{ "7-Permenant Fault" }}
         {% else %}
         {{ "Undeterminated" }}
-        {% endif %} 
-    
+        {% endif %}
+
     - name: "sofar_grid_voltage"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "V"
       device_class: voltage
       state_class: measurement
       value_template: "{{ value_json.grid_voltage / 10}}"
-    
-    - name: "sofar_grid_current"  
+
+    - name: "sofar_grid_current"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "A"
       device_class: current
       state_class: measurement
       value_template: "{{ value_json.grid_current /100 }}"
-    
-    - name: "sofar_grid_frequency"  
+
+    - name: "sofar_grid_frequency"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "Hz"
       device_class: frequency
       state_class: measurement
       value_template: "{{ value_json.grid_freq /100 }}"
-    
-    - name: "sofar_mqtt_runtime"  
+
+    - name: "sofar_mqtt_runtime"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "s"
       value_template: "{{ value_json.runtime /1000 }}"
 
-    - name: "sofar_grid_power"  
+    - name: "sofar_grid_power"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
@@ -115,145 +115,145 @@ mqtt:
         {{ (65535 - value_json.grid_power) * 10 }}
         {% else %}
         {{ -(value_json.grid_power) * 10 }}
-        {% endif %} 
-    
+        {% endif %}
+
     - name: "sofar_inverter_battery_power"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
-      value_template: > 
+      value_template: >
         {% if value_json.battery_power > (65535 / 2) %}
         {{ -(65535 - value_json.battery_power) * 10 }}
         {% else %}
         {{ (value_json.battery_power) * 10 }}
-        {% endif %} 
-        
+        {% endif %}
+
     - name: "sofar_inverter_system_power"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
-      value_template: > 
+      value_template: >
         {% if value_json.systemIO_power > (65535 / 2) %}
         {{ (65535 - value_json.systemIO_power) * 10 }}
         {% else %}
         {{ -(value_json.systemIO_power) * 10 }}
-        {% endif %} 
-    
+        {% endif %}
+
     - name: "sofar_inverter_battery_discharge"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
-      value_template: > 
+      value_template: >
         {% if (value_json.battery_power > 32767) %}
         {{ (65535 - value_json.battery_power) * 10 }}
         {% else %}
         {{ 0 }}
-        {% endif %} 
-    
+        {% endif %}
+
     - name: "sofar_inverter_battery_charge"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
-      value_template: > 
+      value_template: >
         {% if (value_json.battery_power < 32767) %}
         {{ (value_json.battery_power) * 10 }}
         {% else %}
         {{ 0 }}
-        {% endif %} 
-    
+        {% endif %}
+
     - name: "sofar_inverter_battery_voltage"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "V"
       device_class: voltage
       state_class: measurement
       value_template: "{{ value_json.battery_voltage / 100}}"
-    
-    - name: "sofar_inverter_battery_current"  
+
+    - name: "sofar_inverter_battery_current"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "A"
       device_class: current
       state_class: measurement
       value_template: "{{ value_json.battery_current /100}}"
-    
-    - name: "sofar_inverter_battery_SOC"  
+
+    - name: "sofar_inverter_battery_SOC"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "%"
       device_class: battery
       state_class: measurement
       value_template: "{{ value_json.batterySOC }}"
-    
+
     - name: "sofar_inverter_battery_temp"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "°C"
       device_class: temperature
       state_class: measurement
       value_template: "{{ value_json.battery_temp }}"
-    
+
     - name: "sofar_inverter_battery_cycles"
       state_topic: "Sofar2mqtt/state"
       state_class: total_increasing
       value_template: "{{ value_json.battery_cycles }}"
-    
-    - name: "sofar_house_consumption_power"  
+
+    - name: "sofar_house_consumption_power"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
       value_template: "{{ value_json.consumption *10 }}"
-    
-    - name: "sofar_solar_power"  
+
+    - name: "sofar_solar_power"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "W"
       device_class: power
       state_class: measurement
       value_template: "{{ value_json.solarPV *10 }}"
-    
-    - name: "sofar_solar_current"  
+
+    - name: "sofar_solar_current"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "A"
       device_class: current
       state_class: measurement
       value_template: "{{ value_json.solarPVAmps }}"
-    
-    - name: "sofar_energy_today_exported"  
+
+    - name: "sofar_energy_today_exported"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "kWh"
       device_class: energy
       state_class: total_increasing
       value_template: "{{ value_json.today_exported /100 }}"
-    
-    - name: "sofar_energy_today_purchase"  
+
+    - name: "sofar_energy_today_purchase"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "kWh"
       device_class: energy
       state_class: total_increasing
       value_template: "{{ value_json.today_purchase /100 }}"
-    
-    - name: "sofar_energy_today_consumption"  
+
+    - name: "sofar_energy_today_consumption"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "kWh"
       device_class: energy
       state_class: total_increasing
       value_template: "{{ value_json.today_consumption /100 }}"
-    
-    - name: "sofar_energy_today_generation"  
+
+    - name: "sofar_energy_today_generation"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "kWh"
       device_class: energy
       state_class: total_increasing
       value_template: "{{ value_json.today_generation /100 }}"
-    
+
     - name: "sofar_inverter_heatsink_temp"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "°C"
       device_class: temperature
       state_class: measurement
       value_template: "{{ value_json.inverter_HStemp }}"
-    
+
     - name: "sofar_inverter_inner_temp"
       state_topic: "Sofar2mqtt/state"
       unit_of_measurement: "°C"
@@ -267,7 +267,7 @@ mqtt:
       state_topic: "Sofar2mqtt/set/standby"
       payload_on: "true"
       retain: true
-        
+
     - name: "SoFar Auto Saver Mode"
       command_topic: "Sofar2mqtt/set/auto"
       state_topic: "Sofar2mqtt/set/auto"
@@ -275,84 +275,84 @@ mqtt:
       payload_on: "true"
       payload_off: "battery_save"
       retain: true
-        
+
     - name: "SoFar Auto Mode"
       command_topic: "Sofar2mqtt/set/auto"
       state_topic: "Sofar2mqtt/set/auto"
       qos: 1
       payload_on: "true"
       retain: true
-        
+
     - name: "SoFar Battery Saver Mode"
       command_topic: "Sofar2mqtt/set/auto"
       state_topic: "Sofar2mqtt/set/auto"
       qos: 1
       payload_on: "battery_save"
       retain: true
-        
+
     - name: "SoFar Charge Mode 1000"
       command_topic: "Sofar2mqtt/set/charge"
       state_topic: "Sofar2mqtt/set/charge"
       qos: 1
       payload_on: "1000"
       retain: true
-        
+
     - name: "SoFar Charge Mode 1500"
       command_topic: "Sofar2mqtt/set/charge"
       state_topic: "Sofar2mqtt/set/charge"
       qos: 1
       payload_on: "1500"
       retain: true
-        
+
     - name: "SoFar Charge Mode 2000"
       command_topic: "Sofar2mqtt/set/charge"
       state_topic: "Sofar2mqtt/set/charge"
       qos: 1
       payload_on: "2000"
       retain: true
-        
+
     - name: "SoFar Charge Mode 2500"
       command_topic: "Sofar2mqtt/set/charge"
       state_topic: "Sofar2mqtt/set/charge"
       qos: 1
       payload_on: "2500"
       retain: true
-        
+
     - name: "SoFar Charge Mode 3000"
       command_topic: "Sofar2mqtt/set/charge"
       state_topic: "Sofar2mqtt/set/charge"
       qos: 1
       payload_on: "3000"
       retain: true
-        
+
     - name: "SoFar DisCharge Mode 1000"
       command_topic: "Sofar2mqtt/set/discharge"
       state_topic: "Sofar2mqtt/set/discharge"
       qos: 1
       payload_on: "1000"
       retain: true
-        
+
     - name: "SoFar DisCharge Mode 1500"
       command_topic: "Sofar2mqtt/set/discharge"
       state_topic: "Sofar2mqtt/set/discharge"
       qos: 1
       payload_on: "1500"
       retain: true
-        
+
     - name: "SoFar DisCharge Mode 2000"
       command_topic: "Sofar2mqtt/set/discharge"
       state_topic: "Sofar2mqtt/set/discharge"
       qos: 1
       payload_on: "2000"
       retain: true
-        
+
     - name: "SoFar DisCharge Mode 2500"
       command_topic: "Sofar2mqtt/set/discharge"
       state_topic: "Sofar2mqtt/set/discharge"
       qos: 1
       payload_on: "2500"
       retain: true
-        
+
     - name: "SoFar DisCharge Mode 3000"
       command_topic: "Sofar2mqtt/set/discharge"
       state_topic: "Sofar2mqtt/set/discharge"
