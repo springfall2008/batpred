@@ -5658,7 +5658,7 @@ class PredBat(hass.Hass):
         else:
             html += "<td><b>Import p</b></td>"
             html += "<td><b>Export p</b></td>"
-        html += "<td><b>State</b></td>"
+        html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
         html += "<td><b>PV kWh</b></td>"
         html += "<td><b>Load kWh</b></td>"
@@ -5752,6 +5752,7 @@ class PredBat(hass.Hass):
             rate_color_export = "#FFFFFF"
             soc_color = "#3AEE85"
             pv_symbol = ""
+            split = False
 
             if soc_percent < 20.0:
                 soc_color = "#F18261"
@@ -5774,7 +5775,9 @@ class PredBat(hass.Hass):
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
-            if rate_value_import <= import_cost_threshold:
+            if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
+                rate_color_import = "#74C1FF"
+            elif rate_value_import <= import_cost_threshold:
                 rate_color_import = "#3AEE85"
             elif rate_value_import > (import_cost_threshold * 1.5):
                 rate_color_import = "#F18261"
@@ -5794,7 +5797,7 @@ class PredBat(hass.Hass):
                         limit_percent = soc_percent
                     elif limit_percent == soc_percent_min:
                         state = "HoldChrg&rarr;"
-                        state_color = "#34dbeb"
+                        state_color = "#34DBEB"
                     elif limit_percent < soc_percent_min:
                         state = "NoCharge&searr;"
                         state_color = "#FFFFFF"
@@ -5809,17 +5812,21 @@ class PredBat(hass.Hass):
                     if state == soc_sym:
                         state = ""
                     if state:
-                        state += "/"
+                        state += "</td><td bgcolor=#AAAAAA>"  # charging and freeze discharging in same slot, split the state into two
+                        split = True
+                    else:
+                        state_color = "#AAAAAA"
                     state += "FreezeDis&rarr;"
-                    state_color = "#AAAAAA"
                 elif limit < 100:
                     if state == soc_sym:
                         state = ""
                     if state:
-                        state += "/"
+                        state += "</td><td bgcolor=#FFFF00>"  # charging and discharging in the same slot
+                        split = True
+                    else:
+                        state_color = "#FFFF00"
                     state += "Discharge&searr;"
                     show_limit = str(int(limit))
-                    state_color = "#FFFF00"
 
             # Import and export rates -> to string
             if self.rate_import_replicated.get(minute, False):
@@ -5899,12 +5906,18 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
-                html += "<td rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
+                if split:  # for slots that are both charging and discharging, just output the (split cell) state
+                    html += "<td "
+                else:  # otherwise (non-split slots), display the state spanning over two cells
+                    html += "<td colspan=2 "
+                html += "rowspan=" + str(rowspan) + " bgcolor=" + state_color + ">" + state + "</td>"
+                html += "<td rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
             elif not in_span:
-                html += "<td bgcolor=" + state_color + ">" + state + "</td>"
-            if start_span:
-                html += "<td  rowspan=" + str(rowspan) + " bgcolor=#FFFFFF> " + show_limit + "</td>"
-            elif not in_span:
+                if split:
+                    html += "<td "
+                else:
+                    html += "<td colspan=2 "
+                html += "bgcolor=" + state_color + ">" + state + "</td>"
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
