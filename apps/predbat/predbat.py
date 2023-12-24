@@ -455,9 +455,10 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": "Unknown",
+        "default": 'Unknown',
         "reset_inverter": True,
     },
+    {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "iboost_enable", "friendly_name": "IBoost enable", "type": "switch", "default": False},
     {"name": "iboost_solar", "friendly_name": "IBoost on solar power", "type": "switch", "default": True},
@@ -2469,15 +2470,18 @@ class PredBat(hass.Hass):
         """
         Download release data
         """
+        auto_update = self.get_arg('auto_update')
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
         self.releases = {}
         if data and isinstance(data, list):
             found_latest = False
+            found_latest_beta = False
 
             release = data[0]
             self.releases["this"] = THIS_VERSION
             self.releases["latest"] = "Unknown"
+            self.releases["latest_beta"] = "Unknown"
 
             for release in data:
                 if release.get("tag_name", "Unknown") == THIS_VERSION:
@@ -2490,28 +2494,56 @@ class PredBat(hass.Hass):
                     self.releases["latest_body"] = release.get("body", "Unknown")
                     found_latest = True
 
-            self.log("Predbat {} version {} currently running, latest version is {}".format(__file__, self.releases["this"], self.releases["latest"]))
+                if not found_latest_beta:
+                    self.releases["latest_beta"] = release.get("tag_name", "Unknown")
+                    self.releases["latest_beta_name"] = release.get("name", "Unknown")
+                    self.releases["latest_beta_body"] = release.get("body", "Unknown")
+                    found_latest_beta = True
+
+            self.log("Predbat {} version {} currently running, latest version is {} latest beta {}".format(__file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
             PREDBAT_UPDATE_OPTIONS = []
             this_tag = THIS_VERSION
-            # Expose update dropdown menu
+
+            # Find all versions for the dropdown menu
             for release in data:
                 prerelease = release.get("prerelease", True)
                 tag = release.get("tag_name", None)
                 if tag:
-                    if (not prerelease) or (this_tag == tag):
+                    if prerelease:
+                        full_name = tag + " (beta) " + release.get("name", "")
+                    else:
                         full_name = tag + " " + release.get("name", "")
-                        PREDBAT_UPDATE_OPTIONS.append(full_name)
-                        if this_tag == tag:
-                            this_tag = full_name
+                    PREDBAT_UPDATE_OPTIONS.append(full_name)
+                    if this_tag == tag:
+                        this_tag = full_name
                 if len(PREDBAT_UPDATE_OPTIONS) >= 10:
                     break
-            item = self.config_index.get("update", None)
+
+            # Update the drop down menu
+            item =  self.config_index.get("update", None)
             if item:
-                item["options"] = PREDBAT_UPDATE_OPTIONS
-                item["value"] = None
+                item['options'] = PREDBAT_UPDATE_OPTIONS
+                item['value'] = None
+            
+            # See what version we are on and auto-update
             if this_tag not in PREDBAT_UPDATE_OPTIONS:
                 this_tag = this_tag + " (?)"
                 PREDBAT_UPDATE_OPTIONS.append(this_tag)
+                self.log("Autoupdate: Currently on unknown version {}".format(this_tag))
+            else:
+                if self.releases["this"] == self.releases["latest"]:
+                    self.log("Autoupdate: Currently up to date")
+                elif self.releases["this"] == self.releases["latest_beta"]:
+                    self.log("Autoupdate: Currently on latest beta")
+                else:
+                    latest_version = self.releases["latest"] + " " + self.releases["latest_name"]
+                    if auto_update:
+                        self.log("Autoupdate: There is an update pending {} - auto update triggered!".format(latest_version))
+                        self.download_predbat_version(latest_version)
+                    else:
+                        self.log("Autoupdate: There is an update pending {} - auto update is off".format(latest_version))
+
+            # Refresh the list
             self.expose_config("update", this_tag)
 
         else:
@@ -9797,7 +9829,7 @@ class PredBat(hass.Hass):
         """
         Download a version of Predbat
         """
-        tag_split = version.split(" ")
+        tag_split = version.split(' ')
         self.log("Split returns {}".format(tag_split))
         if tag_split:
             tag = tag_split[0]
@@ -9810,8 +9842,9 @@ class PredBat(hass.Hass):
                 size = len(data)
                 if size >= 10000:
                     self.log("Write new version {} bytes to {}".format(len(data), new_filename))
-                    with open(new_filename, "w") as han:
+                    with open(new_filename, 'w') as han:
                         han.write(data)
+                    self.call_notify("Predbat: update to: {}".format(version))
                     self.log("Perform the update.....")
                     os.system("mv -f {} {}".format(new_filename, __file__))
                     return True
@@ -9845,6 +9878,7 @@ class PredBat(hass.Hass):
                     self.expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
+
 
     def number_event(self, event, data, kwargs):
         """
