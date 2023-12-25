@@ -3563,10 +3563,10 @@ class PredBat(hass.Hass):
             pv_total10 += pv_data10.get(minute + minutes_now, 0.0)
 
         pv_factor = None
-        if pv_total > 0:
-            pv_factor = self.dp2(pv_total / pv_total10)
-            pv_factor = min(pv_factor, 2.0)
-            pv_factor = pv_factor - 1.0
+        if pv_total > 0 and (pv_total > pv_total10):
+            pv_diff = pv_total - pv_total10
+            pv_factor = self.dp2(pv_diff / pv_total)
+            pv_factor = min(pv_factor, 1.0)
 
         if self.metric_cloud_enable:
             pv_factor_round = pv_factor
@@ -3610,7 +3610,7 @@ class PredBat(hass.Hass):
 
             # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
             if cloud_factor and cloud_factor > 0:
-                cloud_on = (minute / PREDICT_STEP) % 2
+                cloud_on = int(minute / 5) % 2
                 if cloud_on > 0:
                     cloud_diff += values[minute] * cloud_factor
                     values[minute] += cloud_diff
@@ -4070,7 +4070,7 @@ class PredBat(hass.Hass):
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = self.dp3(battery_draw * (60 / step))
                 predict_battery_cycle[stamp] = self.dp3(battery_cycle)
-                predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step] * (30 / step))
+                predict_pv_power[stamp] = self.dp3((pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step]) * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
 
