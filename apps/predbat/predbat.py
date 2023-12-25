@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.22"
+THIS_VERSION = "v7.14.23"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -456,7 +456,6 @@ CONFIG_ITEMS = [
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
         "default": "Unknown",
-        "reset_inverter": True,
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -4049,7 +4048,7 @@ class PredBat(hass.Hass):
                     predict_export[minute] = 0
 
                 # Soc at next charge start
-                if minute < first_charge:
+                if minute <= first_charge:
                     first_charge_soc = prev_soc
 
             # Have we past the charging or discharging time?
@@ -8781,7 +8780,7 @@ class PredBat(hass.Hass):
                     # Set configured window minutes for the SOC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
-                elif (minutes_start >= (24 * 60)) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
+                elif ((minutes_start - self.minutes_now) >= (24 * 60)) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                     # No charging require in the next 24 hours
                     self.log("No charge window required, disabling before the start")
                     inverter.disable_charge_window()
@@ -9975,10 +9974,13 @@ class PredBat(hass.Hass):
                 if entity and ((item.get("value") is None) or (value != item["value"])):
                     if item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
+                        self.log("Set reset inverter true due to reset_inverter on item {}".format(item))
                     if item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
+                        self.log("Set reset inverter true due to reset_inverter_force on item {}".format(item))
                         if event:
                             self.inverter_needs_reset_force = True
+                            self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(item))
                     item["value"] = value
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
