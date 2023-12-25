@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.24"
+THIS_VERSION = "v7.14.23"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -2504,7 +2504,7 @@ class PredBat(hass.Hass):
                     __file__, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]
                 )
             )
-            PREDBAT_UPDATE_OPTIONS = ["main"]
+            PREDBAT_UPDATE_OPTIONS = []
             this_tag = THIS_VERSION
 
             # Find all versions for the dropdown menu
@@ -3610,7 +3610,7 @@ class PredBat(hass.Hass):
 
             # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
             if cloud_factor and cloud_factor > 0:
-                cloud_on = (minute / PREDICT_STEP) % 2
+                cloud_on = int(minute / PREDICT_STEP) % 2
                 if cloud_on > 0:
                     cloud_diff += values[minute] * cloud_factor
                     values[minute] += cloud_diff
@@ -4070,7 +4070,7 @@ class PredBat(hass.Hass):
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = self.dp3(battery_draw * (60 / step))
                 predict_battery_cycle[stamp] = self.dp3(battery_cycle)
-                predict_pv_power[stamp] = self.dp3(pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step] * (30 / step))
+                predict_pv_power[stamp] = self.dp3((pv_forecast_minute_step[minute] + pv_forecast_minute_step[minute + step]) * (30 / step))
                 predict_grid_power[stamp] = self.dp3(diff * (60 / step))
                 predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
 
@@ -4813,73 +4813,72 @@ class PredBat(hass.Hass):
         max_minute = max(rates) + 1
         midnight = datetime.strptime("00:00:00", "%H:%M:%S")
         for this_rate in info:
-            if this_rate:
-                start_str = this_rate.get("start", "00:00:00")
-                start_str = self.resolve_arg("start", start_str, "00:00:00")
-                end_str = this_rate.get("end", "00:00:00")
-                end_str = self.resolve_arg("end", end_str, "00:00:00")
+            start_str = this_rate.get("start", "00:00:00")
+            start_str = self.resolve_arg("start", start_str, "00:00:00")
+            end_str = this_rate.get("end", "00:00:00")
+            end_str = self.resolve_arg("end", end_str, "00:00:00")
 
-                if start_str.count(":") < 2:
-                    start_str += ":00"
-                if end_str.count(":") < 2:
-                    end_str += ":00"
+            if start_str.count(":") < 2:
+                start_str += ":00"
+            if end_str.count(":") < 2:
+                end_str += ":00"
 
+            try:
+                start = datetime.strptime(start_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad start time {} provided in energy rates".format(start_str))
+                self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
+                continue
+
+            try:
+                end = datetime.strptime(end_str, "%H:%M:%S")
+            except ValueError:
+                self.log("WARN: Bad end time {} provided in energy rates".format(end_str))
+                self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
+                continue
+
+            date = None
+            if "date" in this_rate:
+                date_str = self.resolve_arg("date", this_rate["date"])
                 try:
-                    start = datetime.strptime(start_str, "%H:%M:%S")
+                    date = datetime.strptime(date_str, "%Y-%m-%d")
                 except ValueError:
-                    self.log("WARN: Bad start time {} provided in energy rates".format(start_str))
-                    self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
+                    self.log("WARN: Bad date {} provided in energy rates".format(this_rate["date"]))
+                    self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                     continue
 
-                try:
-                    end = datetime.strptime(end_str, "%H:%M:%S")
-                except ValueError:
-                    self.log("WARN: Bad end time {} provided in energy rates".format(end_str))
-                    self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
-                    continue
+            rate = this_rate.get("rate", 0.0)
+            rate = self.resolve_arg("rate", rate, 0.0)
+            try:
+                rate = float(rate)
+            except ValueError:
+                self.log("WARN: Bad rate {} provided in energy rates".format(rate))
+                self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
+                continue
 
-                date = None
-                if "date" in this_rate:
-                    date_str = self.resolve_arg("date", this_rate["date"])
-                    try:
-                        date = datetime.strptime(date_str, "%Y-%m-%d")
-                    except ValueError:
-                        self.log("WARN: Bad date {} provided in energy rates".format(this_rate["date"]))
-                        self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
-                        continue
+            # Time in minutes
+            start_minutes = max(self.minutes_to_time(start, midnight), 0)
+            end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
 
-                rate = this_rate.get("rate", 0.0)
-                rate = self.resolve_arg("rate", rate, 0.0)
-                try:
-                    rate = float(rate)
-                except ValueError:
-                    self.log("WARN: Bad rate {} provided in energy rates".format(rate))
-                    self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
-                    continue
+            self.log("Adding rate {} => {} to {} @ {} date {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date))
 
-                # Time in minutes
-                start_minutes = max(self.minutes_to_time(start, midnight), 0)
-                end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
+            # Make end > start
+            if end_minutes <= start_minutes:
+                end_minutes += 24 * 60
 
-                self.log("Adding rate {} => {} to {} @ {} date {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date))
+            # Adjust for date if specified
+            if date:
+                delta_minutes = self.minutes_to_time(date, self.midnight)
+                start_minutes += delta_minutes
+                end_minutes += delta_minutes
 
-                # Make end > start
-                if end_minutes <= start_minutes:
-                    end_minutes += 24 * 60
-
-                # Adjust for date if specified
-                if date:
-                    delta_minutes = self.minutes_to_time(date, self.midnight)
-                    start_minutes += delta_minutes
-                    end_minutes += delta_minutes
-
-                # Store rates against range
-                if end_minutes >= 0 and start_minutes < max_minute:
-                    for minute in range(start_minutes, end_minutes):
-                        if (not date) or (minute >= 0 and minute < max_minute):
-                            rates[minute % max_minute] = rate
-                            if not date and not prev:
-                                rates[(minute % max_minute) + max_minute] = rate
+            # Store rates against range
+            if end_minutes >= 0 and start_minutes < max_minute:
+                for minute in range(start_minutes, end_minutes):
+                    if (not date) or (minute >= 0 and minute < max_minute):
+                        rates[minute % max_minute] = rate
+                        if not date and not prev:
+                            rates[(minute % max_minute) + max_minute] = rate
 
         return rates
 
@@ -5319,23 +5318,21 @@ class PredBat(hass.Hass):
         rate_max = 0
         rate_average = 0
         rate_n = 0
-        rate = 0
 
         # Scan rates and find min/max/average
-        if rates:
-            rate = rates.get(self.minutes_now, 0)
-            for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
-                if minute in rates:
-                    rate = rates[minute]
-                    if rate > rate_max:
-                        rate_max = rate
-                        rate_max_minute = minute
-                    if rate < rate_min:
-                        rate_min = rate
-                        rate_min_minute = minute
-                    rate_average += rate
-                    rate_n += 1
-                minute += 1
+        rate = rates.get(self.minutes_now, 0)
+        for minute in range(self.minutes_now, self.forecast_minutes + self.minutes_now):
+            if minute in rates:
+                rate = rates[minute]
+                if rate > rate_max:
+                    rate_max = rate
+                    rate_max_minute = minute
+                if rate < rate_min:
+                    rate_min = rate
+                    rate_min_minute = minute
+                rate_average += rate
+                rate_n += 1
+            minute += 1
         if rate_n:
             rate_average /= rate_n
 
