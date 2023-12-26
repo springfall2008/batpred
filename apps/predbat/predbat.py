@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.25"
+THIS_VERSION = "v7.14.26"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3731,8 +3731,8 @@ class PredBat(hass.Hass):
 
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
-            # Add in standing charge
-            if (minute_absolute % (24 * 60)) < step:
+            # Add in standing charge, only for the final plan when we save the results
+            if (minute_absolute % (24 * 60)) < step and save:
                 metric += self.metric_standing_charge
 
             # Outside the recording window?
@@ -6655,8 +6655,10 @@ class PredBat(hass.Hass):
 
                         # Balancing payment to account for battery left over
                         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                        rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-                        metric -= (soc + final_iboost) * max(rate_min, 1.0)
+                        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+                        metric -= (
+                            (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                        )
 
                         # Adjustment for battery cycles metric
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
@@ -6857,9 +6859,9 @@ class PredBat(hass.Hass):
 
             # Balancing payment to account for battery left over
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-            metric -= (soc + final_iboost) * max(rate_min, 1.0)
-            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0)
+            rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+            metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
@@ -7054,9 +7056,11 @@ class PredBat(hass.Hass):
 
                 # Balancing payment to account for battery left over
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min) * self.metric_battery_value_scaling / self.inverter_loss / self.battery_loss
-                metric -= (soc + final_iboost) * max(rate_min, 1.0)
-                metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0)
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+                metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                metric10 -= (
+                    (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                )
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -7684,11 +7688,27 @@ class PredBat(hass.Hass):
         self.rate_best_cost_threshold_charge = best_price
         self.rate_best_cost_threshold_discharge = best_price_discharge
 
+        # Work out the lowest rate we charge at from the first pass
+        lowest_price_charge = best_price
+        for price in price_set:
+            links = price_links[price]
+            for key in links:
+                typ = window_index[key]["type"]
+                window_n = window_index[key]["id"]
+                if typ == "c":
+                    if self.charge_limit_best[window_n] > self.reserve:
+                        if price < lowest_price_charge:
+                            lowest_price_charge = price
+
         # Optimise individual windows in the price band for charge/discharge
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
-        self.log("Starting second optimisation with charge limits {} based on".format(self.charge_limit_best))
+        self.log(
+            "Starting second optimisation best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} based on".format(
+                best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
+            )
+        )
         charge_windows = []
         discharge_windows = []
         charge_socs = []
@@ -7810,7 +7830,7 @@ class PredBat(hass.Hass):
                                     continue
 
                             average = self.discharge_window_best[window_n]["average"]
-                            if price < best_price:
+                            if price < lowest_price_charge:
                                 if self.debug_enable and 0:
                                     self.log(
                                         "Skipping discharge optimisation on rate {} as it is unlikely to be profitable (threshold {} real rate {})".format(
