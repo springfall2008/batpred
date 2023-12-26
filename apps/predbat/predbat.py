@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.24"
+THIS_VERSION = "v7.14.25"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3615,9 +3615,9 @@ class PredBat(hass.Hass):
                     cloud_diff += values[minute] * cloud_factor
                     values[minute] += cloud_diff
                 else:
-                    cloud_sub = min(cloud_diff, values[minute])
-                    values[minute] -= cloud_sub
-                    cloud_diff -= cloud_sub
+                    cloud_diff = min(cloud_diff, values[minute])
+                    values[minute] -= cloud_diff
+                    cloud_diff = 0
 
         return values
 
