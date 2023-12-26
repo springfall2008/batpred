@@ -6656,7 +6656,9 @@ class PredBat(hass.Hass):
                         # Balancing payment to account for battery left over
                         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-                        metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                        metric -= (
+                            (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                        )
 
                         # Adjustment for battery cycles metric
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
@@ -7056,7 +7058,9 @@ class PredBat(hass.Hass):
                 # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                 rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
                 metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-                metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                metric10 -= (
+                    (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                )
 
                 # Metric adjustment based on 10% outcome weighting
                 if metric10 > metric:
@@ -7700,7 +7704,11 @@ class PredBat(hass.Hass):
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
-        self.log("Starting second optimisation best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} based on".format(best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best))
+        self.log(
+            "Starting second optimisation best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} based on".format(
+                best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
+            )
+        )
         charge_windows = []
         discharge_windows = []
         charge_socs = []
