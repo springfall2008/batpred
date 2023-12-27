@@ -7725,14 +7725,14 @@ class PredBat(hass.Hass):
                         # Store price set with window
                         self.charge_window_best[window_n]["set"] = price
 
-                        # For start at high only tune down excess high slots
+                        # For start at high only tune down excess high slots 
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
                                 self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
                             continue
 
-                        # Start at low is to add extra charge slots above threshold only
-                        if start_at_low and (price <= best_price or (self.charge_limit_best[window_n] == 0)):
+                        # Start at low is to add extra charge slots above threshold or tune down below threshold slots
+                        if start_at_low and (price <= best_price and (self.charge_limit_best[window_n] == 0)):
                             continue
 
                         if self.calculate_best_charge:
@@ -7877,22 +7877,14 @@ class PredBat(hass.Hass):
             if self.calculate_best_charge:
                 self.log(
                     "Best charge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price,
-                        self.dp2(best_metric),
-                        self.dp2(best_cost),
-                        self.dp2(best_keep),
-                        self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True),
+                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True)
                     )
                 )
 
             if self.calculate_best_discharge:
                 self.log(
                     "Best discharge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price,
-                        self.dp2(best_metric),
-                        self.dp2(best_cost),
-                        self.dp2(best_keep),
-                        self.window_as_text(self.discharge_window_best, self.discharge_limits_best, ignore_max=True),
+                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(self.discharge_window_best, self.discharge_limits_best, ignore_max=True)
                     )
                 )
 
