@@ -13,6 +13,9 @@ The Integration that communicates with your inverter will be depend on the brand
 
 ## AppDaemon install
 
+Predbat is written in Python and runs on a continual loop (default every 5 minutes) within the AppDaemon add-on to Home Assistant.
+The first task therefore is to install and configure AppDaemon.
+
 - Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
 - You will need to edit the *appdaemon.yaml* configuration file for AppDaemon
 - Find the appdaemon.yaml file in the directory addon_configs/a0d7b954_appdaemon: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
@@ -20,10 +23,10 @@ The Integration that communicates with your inverter will be depend on the brand
     ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 - Add to the appdaemon.yaml configuration file:
   - A section **app_dir** which should point to /homeassistant/appdaemon/apps
-  - Ensure that the **time_zone** is correctly (e.g. Europe/London)
+  - Ensure that the **time_zone** is set correctly (e.g. Europe/London)
   - Add **thread_duration_warning_threshold: 120** in the appdaemon section
 - It's recommended you also add a **logs** section and specify a new logfile location so that you can see the complete logs, I set mine
-to /homeassistant/appdaemon/appdaemon.log and increase the logfile maximum size and number of logfile generations to capture a few days worth.
+to /homeassistant/appdaemon/appdaemon.log and increase the logfile maximum size and number of logfile generations to capture a few days worth of logs.
 
 Example config:
 
@@ -55,7 +58,7 @@ logs:
 CAUTION: If you are upgrading AppDaemon from an older version to version 0.15.2 or above:
 
 - Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
-- Update AppDaemon to 0.15.2
+- Update AppDaemon to the latest version
 - Go into addon_configs/a0d7b954_appdaemon and edit appdaemon.yaml. You need to add app_dir (see above) to point to the
 old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml
 (most people don't use this file) or adjust it's path to the new location (/homeassistant/secrets.yaml).
@@ -65,6 +68,9 @@ old location and update your logfile location (if you have set it). You should r
 
 ## HACS install
 
+Predbat is available through the Home Assistant Community Store (HACS). You can install Predbat manually (see below)
+but its usually easier to install it through HACS.
+
 - Install HACS if you haven't already ([https://hacs.xyz/docs/setup/download](https://hacs.xyz/docs/setup/download))
 - Enable AppDaemon in HACS: [https://hacs.xyz/docs/categories/appdaemon_apps/](https://hacs.xyz/docs/categories/appdaemon_apps/)
 
@@ -72,7 +78,7 @@ old location and update your logfile location (if you have set it). You should r
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
-Once installed you will get automatic updates for each new release of Predbat!
+If you install Predbat through HACS, once installed you will get automatic updates for each new release of Predbat!
 
 - In HACS, click on Automation
 - Click on the three dots in the top right corner, choose *Custom Repositories*
@@ -91,7 +97,7 @@ Note: **Not recommended if you are using HACS**
 
 ## Solcast Install
 
-Predbat needs a solar forecast in order to predict battery levels.
+Predbat needs a solar forecast in order to predict solar generation and battery charging.
 
 If you don't have solar then use a file editor to comment out the following lines from the Solar forecast part of the apps.yaml configuration:
 
@@ -111,7 +117,7 @@ and checking that you can see the half-hourly solar forecasts in the Solcast ent
 
 Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit)
 in the Solcast integration and instead have your own automation that updates the solar forecast a few times a day
-(e.g. dawn, dusk and just before your nightly charge slot).
+(e.g. dawn, dusk, and just before your nightly charge slot).
 
 Example Solcast update script:
 
@@ -178,8 +184,8 @@ You may therefore need to manually copy across any new apps.yaml settings from t
 
 ## HACS Update
 
-Note that HACS only checks for updates once a day by default, you can however force it to check again or download a specific version
-by using the re-download option from the three dots top-right menu for the Predbat repository in HACS.
+HACS checks for updates and new releases only once a day by default, you can however force it to check again, or download a specific version
+by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
 
 **NOTE:** If you update Predbat through HACS you may need to restart AppDaemon as it sometimes reads the config wrongly during the update.
 (If this happens you will get a template configuration error in the entity predbat.status).<BR>
@@ -187,8 +193,10 @@ Go to Add-on's, AppDaemon, and click 'Restart'.
 
 ## Predbat built-in update
 
-Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest will be
+Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest version will be
 at the top of the list. Predbat will update itself and automatically restart.
+
+Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on Github.
 
 ## Manual update of Predbat
 
