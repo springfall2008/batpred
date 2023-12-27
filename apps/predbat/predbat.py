@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.26"
+THIS_VERSION = "v7.14.27"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4721,7 +4721,7 @@ class PredBat(hass.Hass):
                         and (minute_mod in self.future_energy_rates_export)
                     ):
                         prev_rate = rate_offset
-                        rate_offset = rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute]
+                        rate_offset = max(rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute], 0)
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
                     elif (not is_import) and (not is_gas):
@@ -7709,10 +7709,6 @@ class PredBat(hass.Hass):
                 best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
             )
         )
-        charge_windows = []
-        discharge_windows = []
-        charge_socs = []
-        discharge_socs = []
         for start_at_low in [False, True]:
             if start_at_low:
                 price_set.reverse()
@@ -7729,12 +7725,14 @@ class PredBat(hass.Hass):
                         # Store price set with window
                         self.charge_window_best[window_n]["set"] = price
 
-                        # Skip those outside threshold
+                        # For start at high only tune down excess high slots 
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
                                 self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
                             continue
-                        if start_at_low and price <= best_price:
+
+                        # Start at low is to add extra charge slots above threshold only
+                        if start_at_low and (price <= best_price or (self.charge_limit_best[window_n] == 0)):
                             continue
 
                         if self.calculate_best_charge:
@@ -7757,8 +7755,6 @@ class PredBat(hass.Hass):
                                 end_record=self.end_record,
                             )
                             self.charge_limit_best[window_n] = best_soc
-                            charge_windows.append(self.charge_window_best[window_n])
-                            charge_socs.append(self.calc_percent_limit(best_soc))
 
                             if 0:
                                 # Find all adjacent windows in price range
@@ -7818,7 +7814,8 @@ class PredBat(hass.Hass):
                         self.discharge_window_best[window_n]["set"] = price
 
                         # Do highest price first
-                        if start_at_low:
+                        # Second pass to tune down any excess exports only
+                        if start_at_low and ((price > best_price) or (self.discharge_limits_best[window_n] == 100.0)):
                             continue
 
                         if self.calculate_best_discharge:
@@ -7858,8 +7855,7 @@ class PredBat(hass.Hass):
                             )
                             self.discharge_limits_best[window_n] = best_soc
                             self.discharge_window_best[window_n]["start"] = best_start
-                            discharge_windows.append(self.discharge_window_best[window_n])
-                            discharge_socs.append(best_soc)
+
                             if self.debug_enable:
                                 self.log(
                                     "Best discharge limit window {} time {} - {} cost {} discharge_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(
@@ -7877,17 +7873,18 @@ class PredBat(hass.Hass):
                                     )
                                 )
 
-            # Log new set of charge and discharge windows
-            if charge_windows:
+            # Log set of charge and discharge windows
+            if self.calculate_best_charge:
                 self.log(
                     "Best charge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(charge_windows, charge_socs, ignore_min=True)
+                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True)
                     )
                 )
-            if discharge_windows:
+
+            if self.calculate_best_discharge:
                 self.log(
                     "Best discharge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(discharge_windows[::-1], discharge_socs[::-1], ignore_max=True)
+                        price, self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.window_as_text(self.discharge_window_best, self.discharge_limits_best, ignore_max=True)
                     )
                 )
 
