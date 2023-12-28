@@ -81,7 +81,7 @@ The following configuration item in apps.yaml defaults to obtaining the standing
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
 
-### Octopus Saving sessions
+## Octopus Saving sessions
 
 Predbat is able to automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
