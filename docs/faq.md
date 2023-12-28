@@ -70,8 +70,8 @@ logger:
 
 If you get this error in the Predbat log file:
 
-- Check that the Octopus integration is working and that **event.octopus_energy_<meter_number>_current_day_rates**
-and **sensor.octopus_energy_<meter_number>_current_rate** are both populated by the integration.
+- Check that the Octopus integration is working and that **event.octopus_energy_electricity_<meter_number>_current_day_rates**
+and **sensor.octopus_electricity_energy_<meter_number>_current_rate** are both populated by the integration.
 - Ensure that you have followed the [Octopus Integration Installation instructions](install.md#octopus-energy), including enabling the Octopus Integration events.
 - If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named **sensor.electricity_<meter_number>_current_rate**
 (i.e. no 'octopus_energy_' prefix) but the 'event' entities have the 'octopus_energy' prefix.<BR>
