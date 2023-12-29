@@ -99,7 +99,10 @@ using the **octopus_saving_session_octopoints_per_penny** configuration item in 
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
 
-If you do not have an export tariff then forced export will not apply.
+Note that Predbat's operational mode **select.predbat_mode** must be set to either 'Control charge'
+or 'Control charge & discharge' for Predbat to be able to manage the battery for the saving session.
+
+If you do not have an export tariff then forced export will not apply and Predbat will just ensure you have enough battery charge to see you through the saving session period.
 
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
