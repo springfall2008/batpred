@@ -208,8 +208,9 @@ If you use **pv_metric10_weight** then you probably don't need to enable this as
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
 
-**metric_min_improvement_discharge** (_expert mode_) Sets the minimum cost improvement it's worth discharging for.
-A value of 0.1 is the default which prevents any marginal discharges. If you increase this value then discharges will become less common and shorter.
+**metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
+A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
+then discharges will become less common and shorter.
 
 **rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
 the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
