@@ -5,6 +5,8 @@ You will need to use a file editor within Home Assistant (e.g. either the File E
 
 This section of the documentation describes what the different configuration items in apps.yaml do.
 
+When you edit apps.yaml, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file. You don't need to restart AppDaemon for your edits to take effect.
+
 ## Templates
 
 You can find template configurations in the following locations:
@@ -22,231 +24,185 @@ The GivEnergy template will be installed by default but if you are using another
 
 Basic configuration items
 
+- **prefix** - Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
 - **timezone** - Set to your local timezone, default is Europe/London. It must be set to a
 [valid Python time zone for your location](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
+- **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
+Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
-- **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
-- **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings
-are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**.
-Keep in mind HA default history is only 10 days.
-- **days_previous_weight** A list of the weightings to use of the data for each of the days in days_previous.
-- **forecast_hours** - the number of hours to forecast ahead, 48 is the suggested amount.
-- **input_number.forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours
-is the suggested amount (to match energy rate cycles)
+ **days_previous** - A list (one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
+It's recommended that you set this with sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.<BR>
+Typical settings could be 1, 7 or 7, 14, or 2, 3, 4, 5, 6, 7, 8.<BR>
+Do keep in mind that Home Assistant only keeps 10 days history by default, so might need to increase the number of days history kept in HA before its purged
+by adding the following to /homeassistant/configuration.yaml:
+
+```yaml
+    recorder:
+      purge_keep_days: 14
+```
+
+- **days_previous_weight** - A list (one entry per line) of weightings to be applied to each of the days in days_previous. Default value is 1, all history days are equally weighted.
+- **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
 ## Inverter information
 
-The following are entity names in HA for GivTCP, assuming you only have one inverter and the entity names are standard then it will be auto discovered.
-For other brands of inverter see [Other Inverters](other-inverters.md)
+The template apps.yaml comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
+If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
+For other inverter brands, see [Other Inverters](other-inverters.md)
 
-- **num_inverters** - If you increase this above 1 you must provide multiple of each of these entities
+- **num_inverters** - The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
 - **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
 
 ## Historical data
 
+Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.
+Unless you have a specific reason to not use the GivTCP data (e.g. you've lost your GivTCP data), its recommended to use GivTCP.
+
 ### Data from GivTCP
 
-It's recommended you get this data from GivTCP, there are also controls for load_scaling and import_export_scaling if they need scale adjustments
+The following configuration entries in apps.yaml are pre-configured to automatically use the appropriate GivTCP sensors.
+Edit if necessary if you have multiple inverters or non-standard GivTCP sensor names:
 
 - **load_today** - GivTCP Entity name for the house load in kWh today (must be incrementing)
 - **import_today** - GivTCP Imported energy today in kWh (incrementing)
 - **export_today** - GivTCP Exported energy today in kWh (incrementing)
-- **pv_today** - GivTCP PV energy today in kWh (incrementing)
+- **pv_today** - GivTCP PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.
+If you have an AC-coupled GivEnergy inverter then enter the Home Assistant sensor for your PV inverter.
+If you don't have any PV panels, comment or delete this line out of apps.yaml.
+
+See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
 If you have multiple inverters then you may find that the load_today figures from GivTCP are incorrect as the inverters share the house load between them.
-In this circumstance one solution is to create a template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
+In this circumstance one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
 
 e.g.
 
 ```yaml
 {{ states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
 + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-- states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) - <inverter 2>...
+- states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
 + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
 - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) }}
 ```
 
 ### GivEnergy Cloud Data
 
-If you have an issue with the GivTCP data you can get this historical data from the GivEnergy cloud instead. This data is updated every 30 minutes
+If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
+Obviously connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
-- **ge_cloud_data** - When True use the GE Cloud for data rather than load_today, import_today and export_today
+- **ge_cloud_data** - When True Predbat will use the GE Cloud for data rather than load_today, import_today and export_today
 - **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
-- **ge_cloud_key** - Set to your API Key for GE Cloud (long string)
+- **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 
-### Load filtering
+## Load filtering
 
 By default if Predbat sees a gap in the historical load data it will fill it with average data. This is to help in the cases of small amounts of lost data.
-For entire lost days you should change **days_previous** to point to different days(s) or include 3 or more days and the modal filter will discard the
-lowest one.
+For entire lost days you should change **days_previous** to point to different days(s) or include 3 or more days and if you set **switch.predbat_load_filter_modal** to true,
+the lowest day's historical load will be discarded.
 
-- **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap, the default is 30.
+- **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
+To disable, set it to 1440.
 
-## Inverter control
+## Inverter control configurations
 
-- **inverter_limit** - One per inverter, when set defines the maximum watts of AC power for your inverter (e.g. 3600). This will
-help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source
-of the data isn't minute by minute. If you have a separate Solar inverter as well then add the solar inverter limit to the battery
-inverter limit to give one total amount.
+- **inverter_limit** - One per inverter, when set defines the maximum watts of AC output power for your inverter (e.g. 3600).
+This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
 
-- **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the
-grid at (e.g. 2500). This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
-approval was lower than your maximum inverter power (check your install information for details). If not set the export limit is
-the same as the inverter limit.
+- **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
+This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
+approval was lower than your maximum inverter power (check your install information for details).
+If you do not set an export limit then it's the same as the inverter limit.
 
-- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional), when set overrides the maximum
-charge/discharge rate register settings used when controlling the inverter. This can be used for workarounds if you need
-to cap your inverter battery rate as Predbat overwrites the maximum rate registers when it enables a timed charge or discharge.
+- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional), when set in watts, overrides the maximum
+charge/discharge rate settings used when controlling the inverter.
+This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
+will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
-- **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware
-in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
-Recommended setting is 200 for gen1 hybrids with this issue.
+## Controlling the Inverter
 
-- **set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter
-to avoid cross charging when batteries are out of balance.
-
-- **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set
-to 99 to workaround some gen2 inverters which refuse to be set to 100.
+There are two ways that Predbat can control GivTCP to control the inverter, either via REST API calls (preferred) or via the GivTCP inverter controls in Home Assistant.
 
 ### REST Interface inverter control
 
-- **givtcp_rest** - One per Inverter, sets the REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal one for the first inverter). When enabled the Control per inverter below isn't used and instead communication is directly via REST and
-thus bypasses some issues with MQTT. If using Docker then change homeassistant.local to the Docker IP address.
+- **givtcp_rest** - One per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
+is the normal one for the first inverter and :6346 for the second inverter).
+When enabled the Control per inverter below isn't used and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
+If using Docker then change homeassistant.local to the Docker IP address.
 
 To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
 
 If you get a bunch of inverter information back then it's working!
 
-It's recommended you enable Raw register output in GivTCP for added monitoring:
+It's recommended you enable 'Output Raw Register Values' in GivTCP (via Add-on's / GivTCP / configuration tab) for added monitoring:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
 
-### Home-assistant Inverter control
+### Home-assistant inverter control
 
-Control per inverter (only used if REST isn't set):
+As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
+The template apps.yaml is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
+but may need changing if you have multiple inverters or non-standard GivTCP entity names.
 
+The **givtcp_rest** line should be commented out/deleted in order for Predbat to use the direct GivTCP Home Assistant controls.
+
+- **charge_rate** - GivTCP battery charge rate entity in watts
+- **discharge_rate** - GivTCP battery discharge max rate entity in watts
+- **battery_power** - GivTCP current battery power in watts
+- **pv_power** - GivTCP current PV power in watts
+- **load_power** - GivTCP current load power in watts
 - **soc_kw** - GivTCP Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
 - **soc_max** - GivTCP Entity name for the maximum charge level for the battery
 - **reserve** - GivTCP sensor name for the reserve setting in %
 - **inverter_mode** - GivTCP inverter mode control
 - **inverter_time** - GivTCP inverter timestamp
-- **charge_enable** - GivTCP charge enable entity - says if the battery will be charged in the time window
-- **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
 - **charge_start_time** - GivTCP battery charge start time entity
 - **charge_end_time** - GivTCP battery charge end time entity
-- **charge_rate** - GivTCP battery charge rate entity in watts
-- **discharge_rate** - GivTCP battery discharge max rate entity in watts
-- **battery_power** - GivTCP current battery power in watts
+- **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
 - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
 - **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
 - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
 - **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
 
-## Solcast
+If you are using REST control the above GivTCP configuration items can be deleted or commented out of apps.yaml.
 
-The following are entity names in Solcast, unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking:
+## Solcast Solar Forecast
 
-- **pv_forecast_today** - Entity name for solcast today's forecast
-- **pv_forecast_tomorrow** - Entity name for solcast forecast for tomorrow
-- **pv_forecast_d3** - Entity name for solcast forecast for day 3
-- **pv_forecast_d4** - Entity name for solcast forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
+The template apps.yaml is pre-configured with regular expressions for the following configuration items that should auto-discover the Solcast entity names.
+They are unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking, or edit if you have non-standard names:
 
-## Octopus Energy
+- **pv_forecast_today** - Entity name for today's solcast forecast
+- **pv_forecast_tomorrow** - Entity name for tomorrow's solcast's forecast
+- **pv_forecast_d3** - Entity name for solcast's forecast for day 3
+- **pv_forecast_d4** - Entity name for solcast's forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
 
-The following are entity names in the Octopus Energy plugin.
-They are set to a regular expression and auto-discovered but you can comment out to disable or set them manually.
+If you do not have a PV array then comment out or delete these lines from apps.yaml.
 
-- **metric_octopus_import** - Import rates from the Octopus plugin, should point to the sensor
-- **metric_octopus_export** - Export rates from the Octopus plugin, should point to the sensor
-- **metric_octopus_gas** - Gas rates from the Octopus plugin, only used by IBoost model when enabled
+If you have multiple PV arrays connected to GivEnergy Hybrid inverters or you have GivEnergy AC-coupled inverters, then ensure your configuration in solcast covers all arrays.
+If however you have a mixed PV array setup with some PV that does not feed into your GivEnergy inverters
+(e.g. hybrid GE inverters but a separate older FIT array that directly feeds AC into the house),
+then it's recommended that solcast is only configured for the PV connected to the GivEnergy inverters.
 
- **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
- events which are disabled by the plugin by default in some versions:
+## Energy Rates
 
-```yaml
-    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+There are a number of configuration items in apps.yaml for telling Predbat what your import and export rates are.
 
-    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+These are described in detail in [Energy Rates](energy-rates.md) and are listed here just for completeness:
 
-    event.octopus_energy_gas_xxxxxxxx_previous_day_rates
-    event.octopus_energy_gas_xxxxxxxx_current_day_rates
-    event.octopus_energy_gas_xxxxxxxx_next_day_rates
-
-```  
-
-- **octopus_intelligent_slot** - If you have Octopus Intelligent GO and the Octopus Energy plugin installed point to the 'slot' sensor.
-
-This is used to find Intelligent Go slots and thus predict when your car will charge and report the additional low rate slots outside
-the normal low rate hours
-
-- **octopus_saving_session** - Points to the sensor in the Octopus Energy plugin that publishes saving sessions (binary_sensor.octopus_energy_XXXXX_saving_sessions).
-
-This is used to automatically join saving sessions and to determine the rate of the saving session. It's assumed the saving amount will
-be added to your import and export rates. This calculation assumes you normally consume zero during a saving session as you are a home
-battery user.
-
-- **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence (currently 8)
-
-- **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking
-it into account for battery load and generating the slot information
-- **input_number.predbat_metric_octopus_saving_rate** - Set the assuming saving rate for an Octopus saving session (in pence)
-
-Or you can override these by manually supplying an octopus pricing URL (expert feature)
-
-- **rates_import_octopus_url**
-- **rates_export_octopus_url**
-
-## Standing charge
-
-Predbat also includes the daily standing charge in cost predictions (optional)
-
-- **metric_standing_charge** - Set to the standing charge in pounds e.g. 0.50 is 50p. Can be typed in directly or point to a sensor that
-stores this information (e.g. Octopus Plugin).
-
-Delete this line from apps.yaml or set it to zero if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
-
-## Manual energy rates
-
-Or manually set your rates in a 24-hour period using these:
-
-```yaml
-rates_import:
-  - start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
-rates_export:
-  - start: "HH:MM:SS"
-    end: "HH:MM:SS"
-    rate: pence
-```
-
-**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
-rate is in pence e.g. 4.2
-
-## Manually Over-riding energy rates
-
-You can also override the energy rates (regardless of if they are set manually or via Octopus) using the override feature.
-The override is used to set times where rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two)
-
-```yaml
-rates_import_override:
-  - start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
-    date : "YYYY-MM-DD"
-rates_export_override:
-  - start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
-    date : "YYYY-MM-DD"
-```
-
-**date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09"
+- **metric_octopus_import** - Import rates from the Octopus Energy integration
+- **metric_octopus_export** - Export rates from the Octopus Energy integration
+- **metric_octopus_gas** - Gas rates from the Octopus Energy integration
+- **octopus_intelligent_slot** - Octopus Intelligent GO slot sensor from the Octopus Energy integration
+- **octopus_saving_session** - Energy saving sessions sensor from the Octopus Energy integration
+- **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence 
+- **rates_import_octopus_url** - Octopus pricing URL (over-rides metric_octopus_import)
+- **rates_export_octopus_url** - Octopus export pricing URL (over-rides metric_octopus_export)
+- **metric_standing_charge** - Standing charge in pounds
+- **rates_import** - Import rates over a 24-hour period with start and end times
+- **rates_export** - Export rates over a 24-hour period with start and end times
+- **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
+- **rates_export_override** - Over-ride export rate for specific date and time range
 
 ## Car charging filtering
 
@@ -258,6 +214,11 @@ charge from the grid or you use the Octopus Energy plugin to predict when it wil
 - **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
 - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for
 more accurate car charging data to filter out
+
+
+- **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking
+it into account for battery load and generating the slot information
+
 
 ## Planned car charging
 
@@ -317,10 +278,33 @@ to chart this you may want to use **predbat.soc_kw_h0** as your current status r
 - **clock_skew** - Skews the local time that Predbat uses (from AppDaemon), will change when real-time actions happen e.g. triggering a discharge.
 - **predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP
 reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
-- **inverter_battery_rate_min** - Can be set to model the inverter not actually totally stopping discharging or charging the battery (value in watts).
-- **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 100. Can be set to 99 to workaround some
-gen2 inverters which refuse to be set to 100.
 - **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see [Planned car charging](#planned-car-charging)
+
+
+
+
+- **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware
+in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
+Recommended setting is 200 for Gen 1 hybrids with this issue.
+
+- **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
+AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
+
+# Some batteries tail off their charge rate at high soc%
+  # enter the charging curve here as a % of the max charge rate for each soc percentage.
+  # the default is 1.0 (full power)
+  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
+  #battery_charge_power_curve:
+  #  91 : 0.91
+  #  92 : 0.81
+  #  93 : 0.71
+  #  94 : 0.62
+  #  95 : 0.52
+  #  96 : 0.43
+  #  97 : 0.33
+  #  98 : 0.24
+  #  99 : 0.24
+  #  100 : 0.24
 
 ## Balance Inverters
 

@@ -21,6 +21,12 @@ Cloud coverage is modelled by using difference between PV and PV10 is used to wo
 output predictions up and down accordingly as if there were passing clouds. This can have an impact on planning, especially for
 things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
 
+- **input_number.forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours
+is the suggested amount (to match energy rate cycles)
+
+- **set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter
+to avoid cross charging when batteries are out of balance.
+
 Below is a guide to some of the tariff options, in theory most tariffs will work out of the box but still it's worth reviewing your settings.
 
 ## Fixed daily rates
