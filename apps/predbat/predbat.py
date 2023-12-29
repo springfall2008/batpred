@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.27"
+THIS_VERSION = "v7.14.28"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -447,7 +447,7 @@ CONFIG_ITEMS = [
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
         "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
-        "reset_inverter": True,
+        "reset_inverter_force": True,
     },
     {
         "name": "update",
@@ -8677,13 +8677,20 @@ class PredBat(hass.Hass):
         if not self.set_read_only or self.inverter_needs_reset_force:
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
-                self.log("Reset inverter settings to safe mode")
-                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
-                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
-                inverter.adjust_force_discharge(False)
-                inverter.adjust_reserve(0)
-                inverter.adjust_battery_target(100.0)
-                inverter.disable_charge_window()
+                self.log(
+                    "Reset inverter settings to safe mode (set_charge_window={} set_discharge_window={} force={})".format(
+                        self.set_charge_window, self.set_discharge_window, self.inverter_needs_reset_force
+                    )
+                )
+                if self.set_charge_window or self.inverter_needs_reset_force:
+                    inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
+                    inverter.disable_charge_window()
+                    inverter.adjust_battery_target(100.0)
+                if self.set_charge_window or self.set_discharge_window or self.inverter_needs_reset_force:
+                    inverter.adjust_reserve(0)
+                if self.set_discharge_window or self.inverter_needs_reset_force:
+                    inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
+                    inverter.adjust_force_discharge(False)
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = False
 
@@ -9697,24 +9704,27 @@ class PredBat(hass.Hass):
             self.calculate_best_charge = True
             self.calculate_best_discharge = False
             self.set_charge_window = False
+            self.set_discharge_window = False
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = False
             self.set_charge_window = True
+            self.set_discharge_window = False
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = True
             self.set_charge_window = True
+            self.set_discharge_window = True
         else:  # PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
             self.calculate_best_charge = False
             self.calculate_best_discharge = False
             self.set_charge_window = False
+            self.set_discharge_window = False
             self.predbat_mode = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
             self.expose_config("mode", self.predbat_mode)
 
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
 
-        self.set_discharge_window = self.calculate_best_discharge
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
