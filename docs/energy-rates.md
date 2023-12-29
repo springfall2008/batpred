@@ -92,7 +92,7 @@ Like the electricity rates this is set in the apps.yaml template to a regular ex
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
-When a saving session has been joined the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
+In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in apps.yaml (default is 8).
 
@@ -100,6 +100,9 @@ As the saving session import and export rates are very high compared to normal P
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
 
 If you do not have an export tariff then forced export will not apply.
+
+If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
+simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
 
 ## Octopus Rates URL
 
