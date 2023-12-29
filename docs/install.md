@@ -19,7 +19,8 @@ The first task therefore is to install and configure AppDaemon.
 - Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
 - You will need to edit the *appdaemon.yaml* configuration file for AppDaemon
 - Find the appdaemon.yaml file in the directory /addon_configs/a0d7b954_appdaemon: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
-    - If you are using the File Editor to edit appdaemon.yaml, you will need to turn off **enforce base path** to enable you to access files in the appdaemon directory:<br>
+    - If you are using the File Editor to edit appdaemon.yaml, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory
+    (from the File Editor add-on page, click on the 'Configuration' tab to change this setting):<BR>
     ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 - Add to the appdaemon.yaml configuration file:
   - A section **app_dir** which should point to /homeassistant/appdaemon/apps
@@ -55,7 +56,8 @@ logs:
     log_size: 10000000
 ```
 
-CAUTION: If you are upgrading AppDaemon from an older version to version 0.15.2 or above:
+CAUTION: If you are upgrading AppDaemon from an older version to version 0.15.2 or above you need to follow these steps to ensure Predbat continues working.
+These are only required if you are upgrading AppDaemon from an old version, they're not required for new installations of AppDaemon:
 
 - Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
 - Update AppDaemon to the latest version

@@ -1,5 +1,10 @@
 # apps.yaml settings
 
+The basic configuration for Predbat is configured in the *apps.yaml* file that's normally stored in the '/config/appdaemon/apps/batpred/config/' directory.
+You will need to use a file editor within Home Assistant (e.g. either the File Editor or Studio Code Server add-on's) to edit this file.
+
+This section of the documentation describes what the different configuration items in apps.yaml do.
+
 ## Templates
 
 You can find template configurations in the following locations:
@@ -10,15 +15,16 @@ You can find template configurations in the following locations:
 | SolisX | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
 | SolarEdge | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
 
-The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template and modify from there.
+The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into your
+*/config/appdaemon/apps/batpred/config/* directory and modify it from there.
 
 ## Basics
 
 Basic configuration items
 
-- **timezone** - Set to your local timezone, default is Europe/London
-([https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568))
-- **notify_devices** - A list of device names to notify, the default is just 'notify' which contacts all mobile devices
+- **timezone** - Set to your local timezone, default is Europe/London. It must be set to a
+[valid Python time zone for your location](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
+- **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 - **user_config_enable** - When True the user configuration is exposed in Home Assistant as input_number and switch, the config file becomes just the defaults to use
 - **days_previous** - A list of the the number of days to go back in the history to predict your load, recommended settings
 are 1, 7 or both 7 and 14 (if you have enough data). Each list entry is weighted with **days_previous_weight**.
