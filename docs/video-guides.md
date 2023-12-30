@@ -33,6 +33,10 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 - Understand the charts: [https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038](https://www.loom.com/share/e0e312fbb6874f559cd91ca8e292686c?sid=8125a3b0-0321-4583-9038-e252ddbcb038)
 - How to understand Predbat plans: <https://www.loom.com/share/e55b578d08c7414788e88948325907fa?sid=279ff3e5-01a2-4f81-a316-b3d3b2697e8a>
 
+## Controls
+
+- Predbat mode and read-only mode: [https://www.loom.com/share/6425d9e282c6491aa861f4cb23613f5c?sid=a0bbdeea-9f84-42b8-bd6f-234805dc63cf]
+
 ## Tariffs
 
 - Intelligent Octopus import + Agile export: [https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2](https://www.loom.com/share/29b341b70b6b473a9c5ceb6c29996d3c?sid=5a8fe2ba-3235-47c3-a428-48aa4be3d9e2)
