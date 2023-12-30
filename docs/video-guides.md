@@ -9,12 +9,11 @@ Many people have been asking for video guides for Predbat so I'm going to start 
 ## Basic installation
 
 - [Preparing Home Assistant (1) - GivTCP, MQTT & HACS](https://www.loom.com/share/549cc800277b4d39874d9d6a65c0d0aa?sid=580b3293-f65c-4f6b-9c8c-0bef4cb75cc1)
-- [Preparing Home Assistant (2) -, Octopus, ApexChart,  AppDaemon, Predbat](https://www.loom.com/share/e46e9e0159b04cc89abb05ef21c34f9c?sid=a0fc7e9c-1484-4535-8052-46f6f9721862)
-- [Preparing Home Assistant (3) - AppDaemon Configuration process](https://www.loom.com/share/70cfd0a53c4b4ca0a03c7c5fe20f54f4?sid=3728af09-7602-439f-9344-58283941fbae)
+- [Preparing Home Assistant (2) -, Octopus, ApexChart,  AppDaemon, Predbat](https://www.loom.com/share/8b46579c9fda4fa8b6335e5c7caa7190?sid=e4264e41-f959-4888-9041-1e3f9d4e3389)
 
 ## AppDaemon
 
-- [Preparing Home Assistant (3) - AppDaemon Configuration process](https://www.loom.com/share/70cfd0a53c4b4ca0a03c7c5fe20f54f4?sid=a74dee55-9b98-4bb4-bf3c-374c11053c02)
+- [AppDaemon Configuration process](https://www.loom.com/share/70cfd0a53c4b4ca0a03c7c5fe20f54f4?sid=a74dee55-9b98-4bb4-bf3c-374c11053c02)
 - [Fixing the new version so HACS still works (after updating AppDaemon)](https://www.loom.com/share/d1f9e4432c2443eca1e236939b25bb99?sid=fe0627c7-85c1-4de4-a778-de50b58e4687)
 - [AppDaemon log files](https://www.loom.com/share/562e3246c359451ea69428316f58f17f?sid=30bee2e7-86fc-4aca-8081-7c0de255b2e7)
 
