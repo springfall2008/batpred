@@ -35,6 +35,7 @@ dlimit
 dstamp
 dstart
 dwindow
+elif
 endt
 futurerate
 gekey
@@ -47,6 +48,7 @@ hadashboard
 HAOS
 hass
 hassapi
+heatsink
 homeassistant
 houseb
 iboost
