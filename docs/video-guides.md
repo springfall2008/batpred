@@ -8,7 +8,7 @@ All the video guides are now available on my Youtube channel: [Springfall2008](h
 
 - [Preparing Home Assistant (1) - GivTCP, MQTT & HACS](https://www.youtube.com/watch?v=AcDdpaIPm7I)
 - [Preparing Home Assistant (2) -, Octopus, ApexChart,  AppDaemon, Predbat](https://www.youtube.com/watch?v=0ML4L-GYjKI)
-  
+
 - [Configuration of apps.yml](https://youtu.be/VE15l3maDOk)
 - [Configuration inside HA](https://youtu.be/qsLWDd5SLkY)
 - [Understanding historical Data](https://www.youtube.com/watch?v=LrhDRUhziC4)
