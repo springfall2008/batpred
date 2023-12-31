@@ -9,6 +9,7 @@ argname
 automations
 autopep
 autoupdate
+Basepath
 Batpred
 batteryb
 bierner

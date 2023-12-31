@@ -1,5 +1,12 @@
 # Install
 
+These instructions will take you through the process of installing and configuring Predbat for first time use.
+
+It's recommended that you watch the [Video Guides](video-guides.md) before you start.
+
+A level of familiarity with the basics of Home Assistant, Add-on's, Integrations, Entities and File Editing is assumed,
+but if you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
+
 ## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
 The Integration that communicates with your inverter will be depend on the brand of inverter you have:
@@ -9,6 +16,7 @@ The Integration that communicates with your inverter will be depend on the brand
 | GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
 | Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                           |
 
+- Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
 
 ## AppDaemon install
@@ -17,15 +25,15 @@ Predbat is written in Python and runs on a continual loop (default every 5 minut
 The first task therefore is to install and configure AppDaemon.
 
 - Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-- You will need to edit the *appdaemon.yaml* configuration file for AppDaemon
+- You will need to edit the *appdaemon.yaml* configuration file for AppDaemon and so will need to have either the File Editor or Visual Studio add-on's installed first
 - Find the appdaemon.yaml file in the directory /addon_configs/a0d7b954_appdaemon: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
     - If you are using the File Editor to edit appdaemon.yaml, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory
     (from the File Editor add-on page, click on the 'Configuration' tab to change this setting):<BR>
     ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 - Add to the appdaemon.yaml configuration file:
-  - A section **app_dir** which should point to /homeassistant/appdaemon/apps
-  - Ensure that the **time_zone** is set correctly (e.g. Europe/London)
-  - Add **thread_duration_warning_threshold: 120** in the appdaemon section
+    - A section **app_dir** which should point to /homeassistant/appdaemon/apps
+    - Ensure that the **time_zone** is set correctly (e.g. Europe/London)
+    - Add **thread_duration_warning_threshold: 120** in the appdaemon section
 - It's recommended you also add a **logs** section and specify a new logfile location so that you can see the complete logs, I set mine
 to /homeassistant/appdaemon/appdaemon.log and increase the logfile maximum size and number of logfile generations to capture a few days worth of logs.
 
@@ -59,7 +67,7 @@ logs:
 CAUTION: If you are upgrading AppDaemon from an older version to version 0.15.2 or above you need to follow these steps to ensure Predbat continues working.
 These are only required if you are upgrading AppDaemon from an old version, they're not required for new installations of AppDaemon:
 
-- Make sure you have access to the HA filesystem, e.g. I use the Samba add on and connect to the drives on my Mac, but you can use ssh also.
+- Make sure you have access to the HA filesystem, e.g. I use the Samba add-on and connect to the drives on my Mac, but you can use ssh also.
 - Update AppDaemon to the latest version
 - Go into /addon_configs/a0d7b954_appdaemon and edit appdaemon.yaml. You need to add app_dir (see above) to point to the
 old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml
@@ -113,15 +121,13 @@ If you don't have solar then use a file editor to comment out the following line
 If you do have solar panels its recommended to use the Solcast integration to automatically retrieve your forecast solar generation.
 Predbat is configured to automatically discover the Solcast forecast entities in Home Assistant.
 
-Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>).
-Make sure the Solcast integration is working by going to Developer Tools / States, filtering on 'solcast'
-and checking that you can see the half-hourly solar forecasts in the Solcast entities.
+Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a [Solcast account](https://solcast.com/),
+configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-Note that Predbat does not update Solcast for you, it's recommended that you disable polling (due to the API polling limit)
-in the Solcast integration and instead have your own automation that updates the solar forecast a few times a day
+Note that Predbat does not update Solcast for you so you will need to create your own automation that updates the solar forecast a few times a day
 (e.g. dawn, dusk, and just before your nightly charge slot).
 
-Example Solcast update script:
+Example Solcast update automation script:
 
 ```yaml
 alias: Solcast update
@@ -140,17 +146,22 @@ action:
 mode: single
 ```
 
+Manually run the automation and then make sure the Solcast integration is working in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
+and checking that you can see the half-hourly solar forecasts in the Solcast entities.
+
 ## Energy Rates
 
 Predbat needs to know what your electricity import and export rates are in order to optimise battery charging and discharging to minimise your expenditure.
 
-Follow the instructions in the [Energy Rates](energy-rates.md#octopus-energy-plugin) section.
+These rates are configured in Predbat's apps.yaml configuration file. Follow the instructions in the [Energy Rates](energy-rates.md#octopus-energy-plugin) section.
 
-The 'sensor.octopus_xxx' and 'event.octopus_xxx' entities must have a similar pattern of names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
+**Note:** that if you are using the Octopus integration the 'sensor.octopus_xxx' and 'event.octopus_xxx' entities must have a similar pattern of
+names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
 
 ## Configuring Predbat
 
-Edit in Home Assistant the file */config/appdaemon/apps/batpred/config/apps.yaml* to configure Predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
+You will need to use a file editor (either the File Editor or Visual Studio add-on) to edit in Home Assistant the file */config/appdaemon/apps/batpred/config/apps.yaml*
+to configure Predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
 
 When Predbat starts up initially it will perform a sanity check of the AppDaemon configuration itself and confirm the right files are present.
 You will see this check in the log, should it fail a warning will be issued and **predbat.status** will also reflect the warning.
@@ -159,20 +170,23 @@ While the above warning might not prevent Predbat from starting up, you should f
 ## Predbat Output and Configuration Controls
 
 As described above, the basic configuration of Predbat is held in the *apps.yaml* configuration file.
-When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which
-are used to fine-tune how Predbat operates.
-The entities are all prefixed *predbat* and can be seen (and changed) from the Integrations / Entities list in Home Assistant.
+
+When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which are used to fine-tune how Predbat operates.
+The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant.
+
+The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
+Detailed progress messages and error logging is written to the file */homeassistant/appdaemon/appdaemon.log* which you can view within Home Assistant using a file editor.
 
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
 
-The [Output Data](output-data.md) section describes this in more detail.
+The [Output Data](output-data.md) section describes all these points in more detail.
 
 ## Ready to light the touch-paper
 
 By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
 You have checked the logfile doesn't have any errors (there is a lot of output in the logfile, this is normal).
-You have configured predbat's control entities and are ready to start Predbat running.
+You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
 
 In order to enable Predbat you must delete the 'template: True' line in apps.yaml once you are happy with your configuration.
 
@@ -192,13 +206,13 @@ HACS checks for updates and new releases only once a day by default, you can how
 by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
 
 **NOTE:** If you update Predbat through HACS you may need to restart AppDaemon as it sometimes reads the config wrongly during the update.
-(If this happens you will get a template configuration error in the entity predbat.status).<BR>
-Go to Add-on's, AppDaemon, and click 'Restart'.
+(If this happens you will get a template configuration error in the entity **predbat.status**).<BR>
+Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
 
 ## Predbat built-in update
 
-Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest version will be
-at the top of the list. Predbat will update itself and automatically restart.
+Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest version will be at the top of the list.
+Predbat will update itself and automatically restart.
 
 Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on Github.
 
