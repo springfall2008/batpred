@@ -17,7 +17,8 @@ If you want to buy me a beer then please use Paypal - [tdlj@tdlj.net](mailto:tdl
 
 ## Predbat documentation
 
-You can find the latest Predbat documentation at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/).
+You can find the latest Predbat documentation at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/) and 
+how-to videos on my [YouTube channel](https://www.youtube.com/channel/UCr3eWnHExUYFi4-8ZUGfNJQ)
 
 The documentation covers how Predbat works, how to get it installed
 and configured, video tutorials and FAQs to help you get going.
