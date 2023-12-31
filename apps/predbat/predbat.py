@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.30"
+THIS_VERSION = "v7.14.31"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -10349,9 +10349,8 @@ class PredBat(hass.Hass):
         if not config_dir:
             self.log("WARN: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
             passed = False
-        else:
-            app_dirs.append(config_dir)
 
+        app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
         if config_dir and os.path.exists(appdaemon_config):
             with open(appdaemon_config, "r") as han:
@@ -10366,12 +10365,9 @@ class PredBat(hass.Hass):
                     sub_data = data["appdaemon"]
                     if "app_dir" in sub_data:
                         app_dir = sub_data["app_dir"]
-                        if app_dir not in app_dirs:
-                            app_dirs.append(app_dir)
-                        self.log("Sanity: Got app_dir {}".format(app_dir))
-                    else:
-                        self.log("WARN: app_dir is not set in appdaemon.yaml")
-                        passed = False
+                    if app_dir not in app_dirs:
+                        app_dirs.append(app_dir)
+                    self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
                     self.log("WARN: appdaemon section is missing from appdaemon.yaml")
                     passed = False
