@@ -44,7 +44,7 @@ To enable the above events:
 
 - Go to Settings / Devices & Services / Integrations, choose Octopus Energy, then *xx entities*
 - You will see a list of entities (and events) supplied by the Octopus integration
-- Click the 'Filter' symbol on the top right hand corner (a series of lines in downwards pointing arrow) and make sure all the options are selected
+- Click the 'Filter' symbol on the top right hand corner (a series of lines in a downwards pointing arrow) and make sure all the options are selected
 - Then in the left hand-side search entities box, type "current_day"
 - Click on the first event that comes up, check the name is the right one
 - Click the cog wheel, then you should see the option to enable the event

@@ -6,7 +6,7 @@ You will need to use a file editor within Home Assistant (e.g. either the File E
 This section of the documentation describes what the different configuration items in apps.yaml do.
 
 When you edit apps.yaml, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
-You don't need to restart AppDaemon for your edits to take effect.
+You don't need to restart the AppDaemon add-on for your edits to take effect.
 
 ## Templates
 
@@ -31,18 +31,18 @@ Basic configuration items
 - **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
- **days_previous** - A list (one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
-It's recommended that you set this with sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.<BR>
+- **days_previous** - A list (one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
+It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.<BR>
 Typical settings could be 1, 7 or 7, 14, or 2, 3, 4, 5, 6, 7, 8.<BR>
-Do keep in mind that Home Assistant only keeps 10 days history by default, so might need to increase the number of days history kept in HA before its purged
-by adding the following to /homeassistant/configuration.yaml:
+Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before its purged
+by editing and adding the following to the /homeassistant/configuration.yaml configuration file and restarting Home Assistant afterwards:
 
 ```yaml
     recorder:
       purge_keep_days: 14
 ```
 
-- **days_previous_weight** - A list (one entry per line) of weightings to be applied to each of the days in days_previous. Default value is 1, all history days are equally weighted.
+- **days_previous_weight** - A list (one entry per line) of weightings to be applied to each of the days in days_previous. Default value is 1, that all history days are equally weighted.
 - **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
@@ -63,13 +63,20 @@ Unless you have a specific reason to not use the GivTCP data (e.g. you've lost y
 ### Data from GivTCP
 
 The following configuration entries in apps.yaml are pre-configured to automatically use the appropriate GivTCP sensors.
-Edit if necessary if you have multiple inverters or non-standard GivTCP sensor names:
+
+If you have a 3-phase electricity supply and one inverter (and battery) on each phase then you will need to add one line for the load, import, export and PV sensors
+for each of the 3 phases.
+
+If you have a single phase electricity supply and multiple inverters on the phase then you will need to add one line for each of the load and PV sensors.
+You don't need multiple lines for the import or export sensors as each inverter will give the total import or export information.
+
+Edit if necessary if you have non-standard GivTCP sensor names:
 
 - **load_today** - GivTCP Entity name for the house load in kWh today (must be incrementing)
 - **import_today** - GivTCP Imported energy today in kWh (incrementing)
 - **export_today** - GivTCP Exported energy today in kWh (incrementing)
-- **pv_today** - GivTCP PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.
-If you have an AC-coupled GivEnergy inverter then enter the Home Assistant sensor for your PV inverter.
+- **pv_today** - GivTCP PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
+If you have an AC-coupled GivEnergy inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of apps.yaml.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
@@ -107,16 +114,16 @@ To disable, set it to 1440.
 
 ## Inverter control configurations
 
-- **inverter_limit** - One per inverter, when set defines the maximum watts of AC output power for your inverter (e.g. 3600).
+- **inverter_limit** - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
 This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
 
-- **export_limit** - One per inverter (optional), when set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
+- **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
 This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
 approval was lower than your maximum inverter power (check your install information for details).
 If you do not set an export limit then it's the same as the inverter limit.
 
-- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional), when set in watts, overrides the maximum
+- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in watts, overrides the maximum
 charge/discharge rate settings used when controlling the inverter.
 This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
@@ -140,7 +147,7 @@ It's recommended you enable 'Output Raw Register Values' in GivTCP (via Add-on's
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
 
-### Home-assistant inverter control
+### Home Assistant inverter control
 
 As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
 The template apps.yaml is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
@@ -170,20 +177,24 @@ If you are using REST control the above GivTCP configuration items can be delete
 
 ## Solcast Solar Forecast
 
+As described in the [Predbat installation instructions](install.md#solcast-install), Predbat needs a solar forecast
+in order to predict solar generation and battery charging which can be provided by the Solcast integration.
+
 The template apps.yaml is pre-configured with regular expressions for the following configuration items that should auto-discover the Solcast entity names.
 They are unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking, or edit if you have non-standard names:
 
-- **pv_forecast_today** - Entity name for today's solcast forecast
-- **pv_forecast_tomorrow** - Entity name for tomorrow's solcast's forecast
-- **pv_forecast_d3** - Entity name for solcast's forecast for day 3
-- **pv_forecast_d4** - Entity name for solcast's forecast for day 4 (also d5, d6 & d7 are supported, but not that useful)
+- **pv_forecast_today** - Entity name for today's Solcast forecast
+- **pv_forecast_tomorrow** - Entity name for tomorrow's Solcast's forecast
+- **pv_forecast_d3** - Entity name for Solcast's forecast for day 3
+- **pv_forecast_d4** - Entity name for Solcast's forecast for day 4 (also d5, d6 & d7 are supported, but not that useful)
 
-If you do not have a PV array then comment out or delete these lines from apps.yaml.
+If you do not have a PV array then comment out or delete these Solcast lines from apps.yaml.
 
-If you have multiple PV arrays connected to GivEnergy Hybrid inverters or you have GivEnergy AC-coupled inverters, then ensure your configuration in solcast covers all arrays.
+If you have multiple PV arrays connected to GivEnergy Hybrid inverters or you have GivEnergy AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
+
 If however you have a mixed PV array setup with some PV that does not feed into your GivEnergy inverters
 (e.g. hybrid GE inverters but a separate older FIT array that directly feeds AC into the house),
-then it's recommended that solcast is only configured for the PV connected to the GivEnergy inverters.
+then it's recommended that Solcast is only configured for the PV connected to the GivEnergy inverters.
 
 ## Energy Rates
 
@@ -205,64 +216,75 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
 
-## Car charging filtering
+## Car Charging Integration
 
-You might want to remove your electric car charging data from the historical load so as to not bias the calculations, otherwise you will get
+Predbat is able to include electric vehicle charging in its plan and manage the battery activity so that the battery isn't discharged into your car when the car is charging
+(although you can over-ride this by setting **switch.predbat_car_charging_from_battery** to True in Home Assistant).
+
+The following configuration items (Home Assistant entities and apps.yaml configuration items) are used to plan car charging activity within Predbat.
+
+- **num_cars** should be set in apps.yaml to the number of cars you want Predbat to plan for.
+Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can be commented out or deleted).
+
+### Car charging filtering
+
+You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
 high charge levels when the car was charged previously (e.g. last week).
 
-- **car_charging_hold** - When true car charging data is removed from the simulation (by subtracting car_charging_rate), as you either
-charge from the grid or you use the Octopus Energy plugin to predict when it will charge correctly (default 6kw, configure with **car_charging_threshold**)
-- **car_charging_threshold** - Sets the threshold above which is assumed to be car charging and ignore (default 6 = 6kw)
-- **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for
-more accurate car charging data to filter out
+- **switch.car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from the simulation.
 
-- **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking
-it into account for battery load and generating the slot information
+- **car_charging_energy** - Set in apps.yaml to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
+This is pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary for your charger sensor.
 
-## Planned car charging
+- **input_number.car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
+to multiply the car_charging_energy data by (e.g. set to 0.001 to convert Watts to kW).
+
+If you do not have a suitable car charging kWh sensor in Home Assistant then comment the car_charging_energy line out of apps.yaml and configure the following Home Assistant entity:
+
+- **input_number.car_charging_threshold** - Sets the threshold above which home consumption is assumed to be car charging and ignore (default 6 = 6kW).
+
+### Planned car charging
 
 These features allow Predbat to know when you plan to charge your car. If you have Intelligent Octopus setup then you won't need to change
-these as it's done automatically via their app and the Octopus Energy plugin.
+these as it's done automatically via the Octopus app and the Octopus Energy integration in Home Assistant.
 
-- **octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking it into account
-for battery load and generating the slot information
+- **switch.predbat_octopus_intelligent_charging** - When this Home Assistant switch is enabled, Predbat will plan charging around the Intelligent Octopus slots, taking
+it into account for battery load and generating the slot information
 
-Only needed if you don't use Intelligent Octopus:
+If you don't use Intelligent Octopus then there are a number of other apps.yaml configuration items that should be set:
 
-- **car_charging_planned** - Can be set to a sensor which lets Predbat know the car is plugged in and planned to charge during low rate
-slots, or False to disable, or True to always enable
-- **car_charging_planned_response** - An array of values from the planned sensor which indicate that the car is plugged in and will charge
-in the next low rate slot
-- **car_charging_rate** - Set to the car's charging rate (normally 7.5 for 7.5kw).
-- **car_charging_battery_size** - Indicates the car's battery size in kWh, defaults to 100. It will be used to predict car charging stops.
+- **car_charging_planned** - Optional, can be set to a Home Assistant sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots.
+Or manually set it to 'False' to disable this feature, or 'True' to always enable
 
-- **car_charging_now** - When set links to a sensor that tells you that the car is currently charging. Predbat will then assume this 30 minute
-slot is used for charging regardless of the plan. If Octopus Intelligent Charging is enabled then it will also assume it's a low rate slot for
-the car/house, otherwise rates are taken from the normal rate data.
-- **car_charging_now_response** - Sets the range of positive responses for **car_charging_now**, useful if you have a sensor for your car that isn't binary.
+- **car_charging_planned_response** - An array of values in from the above car_charging_planned sensor which indicate that the car is plugged in and will charge
+in the next low rate slot. Customise for your car charger sensor if it sets sensor values that are not in the pre-defined list.
 
-- **car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
-- **car_charging_plan_smart** - When true the cheapest slots can be used for charging, when False it will be the next low rate slot
+- **car_charging_now** - For some cases planning of car charging is difficult to obtain (e.g. Ohme with Intelligent doesn't report slots).<BR>
+The car_charging_now configuration item can be set to point to a sensor that tells you that the car is currently charging.
+Predbat will then assume this 30 minute slot is used for charging regardless of the plan.<BR>
+If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
+low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.
 
-Connect to your cars sensors for accurate data:
+- **car_charging_now_response** - Set to the range of positive responses for car_charging_now, useful if you have a sensor for your car charger that isn't binary.
 
-- **car_charging_limit** - The % limit the car is set to charge to, link to a suitable sensor. Default is 100%
-- **car_charging_soc** - The cars current % charge level, link to a suitable sensor. Default is 0%
+To make planned car charging more accurate, configure the following items in apps.yaml:
 
-Control how your battery behaves during car charging:
+- **car_charging_battery_size** - Set to the car's battery size in kWh, defaults to 100. It will be used to predict car charging stops.
 
-- **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
-When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved
-by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
-your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
-charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
-    - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
+- **car_charging_limit** - Set to point to a sensor that specifies the % limit the car is set to charge to. Default is 100%
 
-- Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
-    - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (e.g. 2 entries for 2 cars)
-    - If you have Intelligent Octopus then Car 0 will be managed by Octopus Energy plugin if enabled
-    - Each car will have it's own slot sensor created **predbat_car_charging_slot_1** for car 1
-    - Each car will have it's own SOC planning sensor created e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+- **car_charging_soc** - Set to point to a sensor that specifies the car's current % charge level. Default is 0%
+
+### Multiple Electric Cars
+
+Multiple cars can be planned with Predbat, in which case you should set **num_cars** in apps.yaml to the number of cars you want to plan
+
+- **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
+  
+- If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if its enabled
+  
+- Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
+SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ## Workarounds
 
@@ -332,7 +354,7 @@ Multiple triggers can be set at once so in total you could use too much energy i
 Each trigger create an entity called 'binary_sensor.predbat_export_trigger_*name*' which will be turned on when the condition is valid
 connect this to your automation to start whatever you want to trigger.
 
-Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kwH you will need available during that time period in apps.yaml:
+Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kWh you will need available during that time period in apps.yaml:
 
 For example:
 

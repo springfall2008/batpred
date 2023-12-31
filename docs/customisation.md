@@ -131,7 +131,8 @@ then historical data will be subtracted from the load data instead.
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
 if you had a sensor in watts you might use 0.001 instead.
 
-**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Energy plugin if enabled
+- **input_number.car_charging_rate** - Set to the car's charging rate in kW per hour (normally 7.5 for 7.5kWh),
+but will be pulled automatically from Octopus Energy integration if enabled for Octopus Intelligent.
 
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
@@ -142,9 +143,10 @@ Car charging planning - is only used if Intelligent Octopus isn't enabled and ca
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation
 to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
-**car_charging_plan_time** Is set to the time you expect your car to be fully charged by
-**car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times,
-when disabled all low rate slots will be used in time order.
+- **car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
+
+- **car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
+when disabled (False) all low rate slots will be used in time order.
 
 **switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
@@ -153,6 +155,15 @@ you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable thi
 If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_intelligent_ignore_unplugged'** (_expert mode_)
 can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
 if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
+
+Control how your battery behaves during car charging:
+
+- **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
+When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved
+by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
+your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
+charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
+    - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
 
 ## Calculation options
 
