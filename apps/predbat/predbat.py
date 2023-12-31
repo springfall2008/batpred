@@ -10349,7 +10349,7 @@ class PredBat(hass.Hass):
         if not config_dir:
             self.log("WARN: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
             passed = False
-        
+
         app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
         if config_dir and os.path.exists(appdaemon_config):
