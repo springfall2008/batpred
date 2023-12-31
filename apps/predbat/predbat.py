@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.28"
+THIS_VERSION = "v7.14.29"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -6369,7 +6369,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         self.inverter_needs_reset = False
-        self.inverter_needs_reset_force = False
+        self.inverter_needs_reset_force = ""
         self.config_index = {}
         self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
@@ -8674,7 +8674,7 @@ class PredBat(hass.Hass):
         """
         Reset inverter to safe mode
         """
-        if not self.set_read_only or self.inverter_needs_reset_force:
+        if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
                 self.log(
@@ -8682,17 +8682,17 @@ class PredBat(hass.Hass):
                         self.set_charge_window, self.set_discharge_window, self.inverter_needs_reset_force
                     )
                 )
-                if self.set_charge_window or self.inverter_needs_reset_force:
+                if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
                     inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0)
-                if self.set_charge_window or self.set_discharge_window or self.inverter_needs_reset_force:
+                if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
-                if self.set_discharge_window or self.inverter_needs_reset_force:
+                if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                     inverter.adjust_force_discharge(False)
         self.inverter_needs_reset = False
-        self.inverter_needs_reset_force = False
+        self.inverter_needs_reset_force = ""
 
     def execute_plan(self):
         status_extra = ""
@@ -10008,13 +10008,13 @@ class PredBat(hass.Hass):
                 if entity and ((item.get("value") is None) or (value != item["value"])):
                     if item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
-                        self.log("Set reset inverter true due to reset_inverter on item {}".format(item))
+                        self.log("Set reset inverter true due to reset_inverter on item {}".format(name))
                     if item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
-                        self.log("Set reset inverter true due to reset_inverter_force on item {}".format(item))
+                        self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
                         if event:
-                            self.inverter_needs_reset_force = True
-                            self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(item))
+                            self.inverter_needs_reset_force = name
+                            self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
