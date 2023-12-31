@@ -20,8 +20,8 @@ The integration also provides support for Intelligent Octopus charging to suppor
 
 Follow the instructions provided in the Octopus Energy integration documentation to install and setup the integration.
 
-Once installed, you will need to configure the integration (go to Integrations / Octopus Energy then click 'Configure')
-and provide the integration with your 'Octopus Api key' (that you obtain from your Octopus account : Personal Details / API access).
+Once installed, you will need to configure the integration (go to Settings / Devices & Services / Integrations / Octopus Energy then click 'Configure')
+and provide the integration with your 'Octopus API key' (that you obtain from your Octopus account : Personal Details / API access).
 
 **CAUTION** To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
 Octopus Energy events which are disabled by default when the integration is installed:
@@ -42,18 +42,19 @@ Octopus Energy events which are disabled by default when the integration is inst
 
 To enable the above events:
 
-- Go to Integrations, choose Octopus Energy, then Entities
+- Go to Settings / Devices & Services / Integrations, choose Octopus Energy, then *xx entities*
 - You will see a list of entities (and events) supplied by the Octopus integration
-- Click the downwards arrow on the right hand side and make sure all the options are selected
-- Then in the left hand-side search box, type "current_day"
+- Click the 'Filter' symbol on the top right hand corner (a series of lines in downwards pointing arrow) and make sure all the options are selected
+- Then in the left hand-side search entities box, type "current_day"
 - Click on the first event that comes up, check the name is the right one
-- Click the cog wheel, then you should see the option to enable the event.
+- Click the cog wheel, then you should see the option to enable the event
+- Click the option to enable the event and press 'Update' to make the change
 
 Repeat this for the other events.
 
 The gas rates are only required if you have a gas boiler, an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.
 
-Verify that the integration is working correctly in Home Assistant by going to Developer Tools, States, and enter 'octopus' in the 'Filter entities' box.
+Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and enter 'octopus' in the 'Filter entities' box.
 Confirm that the Octopus entities are being populated correctly.
 
 ## Configuring Predbat to use the Octopus Energy integration
@@ -184,8 +185,8 @@ rates_export_override:
 
 ## Rate offsets
 
-If you are on an Agile or Tracker tariff you can tune future unknown energy rates by adjusting the entities **input_number.predbat_metric_future_rate_offset_import** (_expert mode_) 
-and **input_number.predbat_metric_future_rate_offset_export** (_expert mode_) inside Home Assistant to set the predicted offset for future unknown rates.
+If you are on an Agile or Tracker tariff you can tune future unknown energy rates by adjusting the entities **input_number.predbat_metric_future_rate_offset_import** (*expert mode*)
+and **input_number.predbat_metric_future_rate_offset_export** (*expert mode*) inside Home Assistant to set the predicted offset for future unknown rates.
 
 ## Future Agile energy rates
 
