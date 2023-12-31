@@ -5,6 +5,7 @@ cards:
     entities:
     - entity: predbat.status
     - entity: update.predbat_version
+    - entity: select.predbat_update
     - entity: select.predbat_mode
   - type: custom:collapsable-cards
     title: 🔀 Control
