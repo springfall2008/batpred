@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.29"
+THIS_VERSION = "v7.14.30"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -54,7 +54,7 @@ PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
 # Predbat update options
-PREDBAT_UPDATE_OPTIONS = []
+PREDBAT_UPDATE_OPTIONS = [THIS_VERSION + " Loading..."]
 
 # Configuration options inside HA
 CONFIG_ITEMS = [
@@ -455,7 +455,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": "Unknown",
+        "default": None,
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -2469,6 +2469,7 @@ class PredBat(hass.Hass):
         """
         Download release data
         """
+        global PREDBAT_UPDATE_OPTIONS
         auto_update = self.get_arg("auto_update")
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
@@ -10031,6 +10032,7 @@ class PredBat(hass.Hass):
                     elif item["type"] == "select":
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
+                        self.log("Set state id {} value {} attributes {}".format(entity, value, {"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon}))
                     elif item["type"] == "update":
                         summary = self.releases.get("this_body", "")
                         latest = self.releases.get("latest", "check HACS")
@@ -10198,6 +10200,15 @@ class PredBat(hass.Hass):
 
             # Get from current state?
             ha_value = self.get_state(entity)
+
+            # Update drop down menu
+            if name == "update":
+                if not ha_value:
+                    # Construct this version information as it's not set correctly already
+                    ha_value = THIS_VERSION + " Loading..."
+                else:
+                    # Leave current value until it's set during version discovery later
+                    continue
 
             # Get from history?
             if ha_value is None:
