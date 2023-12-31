@@ -5,7 +5,8 @@ You will need to use a file editor within Home Assistant (e.g. either the File E
 
 This section of the documentation describes what the different configuration items in apps.yaml do.
 
-When you edit apps.yaml, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file. You don't need to restart AppDaemon for your edits to take effect.
+When you edit apps.yaml, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
+You don't need to restart AppDaemon for your edits to take effect.
 
 ## Templates
 
@@ -175,7 +176,7 @@ They are unlikely to need changing although a few people have reported their ent
 - **pv_forecast_today** - Entity name for today's solcast forecast
 - **pv_forecast_tomorrow** - Entity name for tomorrow's solcast's forecast
 - **pv_forecast_d3** - Entity name for solcast's forecast for day 3
-- **pv_forecast_d4** - Entity name for solcast's forecast for day 4 (also d5, d6 & d7 are supported but not that useful)
+- **pv_forecast_d4** - Entity name for solcast's forecast for day 4 (also d5, d6 & d7 are supported, but not that useful)
 
 If you do not have a PV array then comment out or delete these lines from apps.yaml.
 
@@ -195,7 +196,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration
 - **octopus_intelligent_slot** - Octopus Intelligent GO slot sensor from the Octopus Energy integration
 - **octopus_saving_session** - Energy saving sessions sensor from the Octopus Energy integration
-- **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence 
+- **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence
 - **rates_import_octopus_url** - Octopus pricing URL (over-rides metric_octopus_import)
 - **rates_export_octopus_url** - Octopus export pricing URL (over-rides metric_octopus_export)
 - **metric_standing_charge** - Standing charge in pounds
@@ -215,10 +216,8 @@ charge from the grid or you use the Octopus Energy plugin to predict when it wil
 - **car_charging_energy** - Set to a HA entity which is incrementing kWh data for the car charger, will be used instead of threshold for
 more accurate car charging data to filter out
 
-
 - **switch.predbat_octopus_intelligent_charging** - When enabled Predbat will plan charging around the Intelligent Octopus slots, taking
 it into account for battery load and generating the slot information
-
 
 ## Planned car charging
 
@@ -280,9 +279,6 @@ to chart this you may want to use **predbat.soc_kw_h0** as your current status r
 reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
 - **car_charging_now** - Can be used to workaround Ohme issue with Intelligent where the plan is not published, see [Planned car charging](#planned-car-charging)
 
-
-
-
 - **inverter_battery_rate_min** - One per inverter (optional), set in watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 Recommended setting is 200 for Gen 1 hybrids with this issue.
@@ -290,21 +286,24 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
 - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
-# Some batteries tail off their charge rate at high soc%
-  # enter the charging curve here as a % of the max charge rate for each soc percentage.
-  # the default is 1.0 (full power)
-  # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
-  #battery_charge_power_curve:
-  #  91 : 0.91
-  #  92 : 0.81
-  #  93 : 0.71
-  #  94 : 0.62
-  #  95 : 0.52
-  #  96 : 0.43
-  #  97 : 0.33
-  #  98 : 0.24
-  #  99 : 0.24
-  #  100 : 0.24
+- **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
+Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+The default is 1.0 (full power) charge all the way to 100%.
+Example from GE 9.5kWh battery with latest firmware and Gen 1 inverter:
+
+```yaml
+  battery_charge_power_curve:
+    91 : 0.91
+    92 : 0.81
+    93 : 0.71
+    94 : 0.62
+    95 : 0.52
+    96 : 0.43
+    97 : 0.33
+    98 : 0.24
+    99 : 0.24
+    100 : 0.24
+```
 
 ## Balance Inverters
 
