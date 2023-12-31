@@ -10032,7 +10032,6 @@ class PredBat(hass.Hass):
                     elif item["type"] == "select":
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
-                        self.log("Set state id {} value {} attributes {}".format(entity, value, {"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon}))
                     elif item["type"] == "update":
                         summary = self.releases.get("this_body", "")
                         latest = self.releases.get("latest", "check HACS")
