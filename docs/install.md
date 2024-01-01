@@ -13,13 +13,13 @@ The Integration that communicates with your inverter will be depend on the brand
 
 ## AppDaemon-Predbat combined install
 
-The simplest way to install Predbat now is with a combined AppDeamon/Predbat add-in. This is a fork of AppDaemon which installs
+The simplest way to install Predbat now is with a combined AppDaemon/Predbat add-in. This is a fork of AppDaemon which installs
 Predbat automatically.
 
 - Go to settings, Add-ons, Add on store (bottom right), Top right three dots, Repositories and add
 '<https://github.com/springfall2008/appdaemon-predbat>' to the list and close.
 - Next select AppDaemon with Predbat and Install and then hit 'start'
-- If you haven't already change your Editor settings to ensure 'enforce basepath' is disabled (settings, Add-ons, File Editor, Configuration)
+- If you haven't already change your Editor settings to ensure 'enforce base path' is disabled (settings, Add-ons, File Editor, Configuration)
 - Now use your Editor to find '/addon_configs/46f69597_appdaemon-predbat', here there is
     - predbat.log - contains the active logfile with any errors
     - apps/apps.yaml - you need to edit apps.yaml to remove the template settings and customise
