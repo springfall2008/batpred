@@ -6,9 +6,9 @@
 See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
 check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions).
-The default solcast sensor names maybe wrong, you might need to update the apps.yml config to match your own names
+The default solcast sensor names maybe wrong, you might need to update the `apps.yaml` config to match your own names
 (some people don't have the solcast_ bit in their names)
-- Did you configure AppDaemon apps_dir correctly in appdaemon.yaml?
+- Did you configure AppDaemon apps_dir correctly in `appdaemon.yaml`?
 
 ## Why is my predicted charge % higher or lower than I might expect?
 

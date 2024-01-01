@@ -25,17 +25,17 @@ Predbat is written in Python and runs on a continual loop (default every 5 minut
 The first task therefore is to install and configure AppDaemon.
 
 - Install the AppDaemon add-on [https://github.com/hassio-addons/addon-appdaemon](https://github.com/hassio-addons/addon-appdaemon)
-- You will need to edit the *appdaemon.yaml* configuration file for AppDaemon and so will need to have either the File Editor or Visual Studio add-on's installed first
-- Find the appdaemon.yaml file in the directory /addon_configs/a0d7b954_appdaemon: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
-    - If you are using the File Editor to edit appdaemon.yaml, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory
+- You will need to edit the `appdaemon.yaml` configuration file for AppDaemon and so will need to have either the File Editor or Studio Code Server add-on's installed first
+- Find the appdaemon.yaml file in the directory `/addon_configs/a0d7b954_appdaemon`: ![image](https://github.com/springfall2008/batpred/assets/48591903/bf8bf9cf-75b1-4a8d-a1c5-fbb7b3b17521)
+    - If you are using the File Editor to edit `appdaemon.yaml`, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory
     (from the File Editor add-on page, click on the 'Configuration' tab to change this setting):<BR>
     ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
-- Add to the appdaemon.yaml configuration file:
-    - A section **app_dir** which should point to /homeassistant/appdaemon/apps
+- Add to the `appdaemon.yaml` configuration file:
+    - A section **app_dir** which should refer to the directory `/homeassistant/appdaemon/apps` where Predbat will be installed
     - Ensure that the **time_zone** is set correctly (e.g. Europe/London)
     - Add **thread_duration_warning_threshold: 120** in the appdaemon section
 - It's recommended you also add a **logs** section and specify a new logfile location so that you can see the complete logs, I set mine
-to /homeassistant/appdaemon/appdaemon.log and increase the logfile maximum size and number of logfile generations to capture a few days worth of logs.
+to `/homeassistant/appdaemon/appdaemon.log` and increase the logfile maximum size and number of logfile generations to capture a few days worth of logs.
 
 Example config:
 
@@ -69,10 +69,10 @@ These are only required if you are upgrading AppDaemon from an old version, they
 
 - Make sure you have access to the HA filesystem, e.g. I use the Samba add-on and connect to the drives on my Mac, but you can use ssh also.
 - Update AppDaemon to the latest version
-- Go into /addon_configs/a0d7b954_appdaemon and edit appdaemon.yaml. You need to add app_dir (see above) to point to the
+- Go into the directory `/addon_configs/a0d7b954_appdaemon` and edit `appdaemon.yaml`. You need to add app_dir (see above) to point to the
 old location and update your logfile location (if you have set it). You should remove the line that points to secrets.yaml
-(most people don't use this file) or adjust it's path to the new location (/homeassistant/secrets.yaml)
-- Move the entire 'apps' directory from /addon_configs/a0d7b954_appdaemon (new location) to /config/appdaemon (the old location)
+(most people don't use this file) or adjust it's path to the new location (`/homeassistant/secrets.yaml`)
+- Move the entire 'apps' directory from `/addon_configs/a0d7b954_appdaemon` (new location) to `/config/appdaemon` (the old location)
 - Restart AppDaemon
 - Check it has started and confirm Predbat is running correctly again.
 
@@ -99,11 +99,11 @@ If you install Predbat through HACS, once installed you will get automatic updat
 
 Note: **Not recommended if you are using HACS**
 
-- Copy apps/predbat/predbat.py to the '/config/appdaemon/apps/' directory in Home Assistant (or wherever you set appdaemon app_dir to)
-- Copy apps/predbat/apps.yaml to the '/config/appdaemon/apps/' directory in Home Assistant (or wherever you set appdaemon app_dir to)
-- Edit in Home Assistant the /config/appdaemon/apps/apps.yaml file to configure Predbat
+- Copy the file apps/predbat/predbat.py to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
+- Copy apps/predbat/apps.yaml to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
+- Edit in Home Assistant the `/config/appdaemon/apps/apps.yaml` file to configure Predbat
 
-- If you later install with HACS then you must move the apps.yaml into /config/appdaemon/apps/predbat/config
+- If you later install with HACS then you must move the apps.yaml into `/config/appdaemon/apps/predbat/config`
 
 ## Solcast Install
 
@@ -153,15 +153,15 @@ and checking that you can see the half-hourly solar forecasts in the Solcast ent
 
 Predbat needs to know what your electricity import and export rates are in order to optimise battery charging and discharging to minimise your expenditure.
 
-These rates are configured in Predbat's apps.yaml configuration file. Follow the instructions in the [Energy Rates](energy-rates.md#octopus-energy-plugin) section.
+These rates are configured in Predbat's `apps.yaml` configuration file. Follow the instructions in the [Energy Rates](energy-rates.md) document.
 
 **Note:** that if you are using the Octopus integration the 'sensor.octopus_xxx' and 'event.octopus_xxx' entities must have a similar pattern of
 names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
 
 ## Configuring Predbat
 
-You will need to use a file editor (either the File Editor or Visual Studio add-on) to edit in Home Assistant the file */config/appdaemon/apps/batpred/config/apps.yaml*
-to configure Predbat - see [Configuring apps.yaml](config-yml-settings.md#Basics).
+You will need to use a file editor (either the File Editor or Visual Studio Server add-on) to edit in Home Assistant the file `/config/appdaemon/apps/batpred/config/apps.yaml`
+to configure Predbat - see [Configuring apps.yaml](apps-yaml.md#Basics).
 
 When Predbat starts up initially it will perform a sanity check of the AppDaemon configuration itself and confirm the right files are present.
 You will see this check in the log, should it fail a warning will be issued and **predbat.status** will also reflect the warning.
@@ -169,13 +169,13 @@ While the above warning might not prevent Predbat from starting up, you should f
 
 ## Predbat Output and Configuration Controls
 
-As described above, the basic configuration of Predbat is held in the *apps.yaml* configuration file.
+As described above, the basic configuration of Predbat is held in the `apps.yaml` configuration file.
 
 When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which are used to fine-tune how Predbat operates.
 The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant.
 
 The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
-Detailed progress messages and error logging is written to the file */homeassistant/appdaemon/appdaemon.log* which you can view within Home Assistant using a file editor.
+Detailed progress messages and error logging is written to the file `/homeassistant/appdaemon/appdaemon.log`` which you can view within Home Assistant using a file editor.
 
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
@@ -197,8 +197,8 @@ to the correct mode of operation for your system.
 
 ## Updating Predbat
 
-Note that future updates to Predbat will not overwrite the apps.yaml configuration file that you have tailored to your setup.
-You may therefore need to manually copy across any new apps.yaml settings from the [Template apps.yaml](config-yml-settings.md#Templates) for new features.
+Note that future updates to Predbat will not overwrite the `apps.yaml` configuration file that you have tailored to your setup.
+You may therefore need to manually copy across any new apps.yaml settings from the [Template apps.yaml](apps-yaml.md#templates) for new features.
 
 ## HACS Update
 
@@ -219,4 +219,4 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 ## Manual update of Predbat
 
 You can go to Github and download predbat.py from the releases tab and then manually copy this file
-over the existing version in */config/appdaemon/apps/batpred/* manually.
+over the existing version in `/config/appdaemon/apps/batpred/` manually.
