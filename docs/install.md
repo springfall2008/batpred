@@ -175,7 +175,7 @@ When Predbat first runs it will create a number of output and configuration cont
 The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant.
 
 The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
-Detailed progress messages and error logging is written to the file `/homeassistant/appdaemon/appdaemon.log`` which you can view within Home Assistant using a file editor.
+Detailed progress messages and error logging is written to the file `/homeassistant/appdaemon/appdaemon.log` which you can view within Home Assistant using a file editor.
 
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
