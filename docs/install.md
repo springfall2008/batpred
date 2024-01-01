@@ -4,8 +4,9 @@ These instructions will take you through the process of installing and configuri
 
 It's recommended that you watch the [Video Guides](video-guides.md) before you start.
 
-A level of familiarity with the basics of Home Assistant, Add-on's, Integrations, Entities and File Editing is assumed,
-but if you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
+A level of familiarity with the basics of Home Assistant, Add-on's, Integrations, Entities and File Editing is assumed.
+There are plenty of "Home Assistant basics" tutorials on YouTube, but if you get stuck, please read the [FAQ's](faq.md)
+and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
 ## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
@@ -19,7 +20,37 @@ The Integration that communicates with your inverter will be depend on the brand
 - Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
 
-## AppDaemon install
+## AppDaemon-Predbat combined install
+
+The simplest way to install Predbat now is with a combined AppDaemon/Predbat add-on.
+This is a fork of AppDaemon which automatically includes an install of Predbat.
+
+Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install AppDaemon, HACS and Predbat as three separate installation steps.
+If you are already running AppDaemon then the original installation method for Predbat still exists and is described below in [Predbat Installation into AppDaemon](#predbat-installation-into-appdaemon).
+
+To install the combined AppDaemon-predbat add-on:
+
+- Go to Settings / Add-ons / Add-on Store (bottom right), click the three dots in the top right, then Repositories and type
+[https://github.com/springfall2008/appdaemon-predbat](https://github.com/springfall2008/appdaemon-predbat)', click ADD, then CLOSE.
+- In order to refresh the list of available add-on's, navigate back through Settings / Add-ons / Add-on Store, scroll down and select 'AppDaemon with Predbat'
+- Click Install and wait for the add-on to be installed
+- Once it has finished installing, click 'Start'
+- If you haven't already change your Editor settings to ensure 'enforce basepath' is disabled (settings, Add-ons, File Editor, Configuration)
+- Now use your Editor to find `/addon_configs/46f69597_appdaemon-predbat`, here there is
+  - predbat.log - contains the active logfile with any errors
+  - apps/apps.yaml - you need to edit apps.yaml to remove the template settings and customise
+- Once you have edited apps.yaml click 'restart' on the appdaemon-predbat add-on
+
+Once installed you should perform updates directly within Predbat by using the 'select.predbat_update' selector or by enabling the **switch.predbat_auto_update**
+
+If you use this method you do not need to install AppDaemon or HACS so you can skip directly to [Solcast install](#solcast-install) below.
+
+## Predbat installation into AppDaemon
+
+This is the "classic" way of installing Predbat, to firstly install the AppDaemon add-on, to install HACS (the Home Assistant Community Store),
+and then to install Predbat from HACS to run within AppDaemon.
+
+### AppDaemon install
 
 Predbat is written in Python and runs on a continual loop (default every 5 minutes) within the AppDaemon add-on to Home Assistant.
 The first task therefore is to install and configure AppDaemon.
@@ -76,7 +107,7 @@ old location and update your logfile location (if you have set it). You should r
 - Restart AppDaemon
 - Check it has started and confirm Predbat is running correctly again.
 
-## HACS install
+### HACS install
 
 Predbat is available through the Home Assistant Community Store (HACS). You can install Predbat manually (see below)
 but its usually easier to install it through HACS.
@@ -84,7 +115,7 @@ but its usually easier to install it through HACS.
 - Install HACS if you haven't already ([https://hacs.xyz/docs/setup/download](https://hacs.xyz/docs/setup/download))
 - Enable AppDaemon in HACS: [https://hacs.xyz/docs/categories/appdaemon_apps/](https://hacs.xyz/docs/categories/appdaemon_apps/)
 
-## Install Predbat through HACS
+### Install Predbat through HACS
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge)](https://github.com/hacs/integration)
 
@@ -96,6 +127,8 @@ If you install Predbat through HACS, once installed you will get automatic updat
 - Click *Explore and download repositories* (bottom right), type 'Predbat' in the search box, select the Predbat Repository, then click 'Download' to install the Predbat app.
 
 ## Predbat manual install
+
+A manual install is suitable for those running Docker type systems where HACS does not function correctly and you had to manually install AppDaemon.
 
 Note: **Not recommended if you are using HACS**
 
