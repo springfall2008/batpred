@@ -11,7 +11,7 @@ Please see the sections below for how to achieve each step. This is just a check
     - CAUTION: You need to enable the events for previous, current and next rates for import and export in HA as the plugin leaves them disabled by default (see the above link for details)
 4. Install Predbat and AppDaemon, either:
    - a) Install AppDaemon-Predbat combined install - [AppDaemon-Predbat combined install](install.md#appdaemon-predbat-combined-install)
-   - b) Complete the seperate installation steps
+   - b) Complete the separate installation steps
      - i) Install AppDaemon if you haven't already  - [AppDaemon install](install.md#appdaemon-install)
      - ii) Install HACS if you haven't already - [HACS install](install.md#hacs-install)
      - iii) Install Predbat using HACS - [Predbat install](install.md#predbat-install)
