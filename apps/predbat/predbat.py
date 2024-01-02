@@ -366,6 +366,19 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True, "reset_inverter": True},
+    {"name": "car_charging_manual_soc", "friendly_name": "Car charging manual SOC", "type": "switch", "default": False},
+    {
+        "name": "car_charging_manual_soc_kwh",
+        "friendly_name": "Car manual SOC kWh",
+        "type": "input_number",
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "unit": "kWh",
+        "icon": "mdi:ev-station",
+        "enable": "car_charging_manual_soc",
+        "default": 0.0,
+    },
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
     {
         "name": "octopus_intelligent_ignore_unplugged",
@@ -4030,6 +4043,9 @@ class PredBat(hass.Hass):
                 final_soc = soc
                 for car_n in range(0, self.num_cars):
                     final_car_soc[car_n] = car_soc[car_n]
+                    if minute == 0:
+                        # Next car SOC
+                        self.car_charging_soc_next[car_n] = car_soc[car_n]
 
                 final_metric = metric
                 final_import_kwh = import_kwh
@@ -6461,6 +6477,7 @@ class PredBat(hass.Hass):
         self.car_charging_battery_size = [100]
         self.car_charging_limit = [100]
         self.car_charging_soc = [0]
+        self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
         self.discharge_window = []
@@ -6475,6 +6492,7 @@ class PredBat(hass.Hass):
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
+        self.car_charging_manual_soc = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.simulate_offset = 0
@@ -8000,6 +8018,7 @@ class PredBat(hass.Hass):
 
         self.car_charging_planned_response = self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])
         self.car_charging_now_response = self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])
+        self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
         # Car charging planned sensor
         for car_n in range(0, self.num_cars):
@@ -8032,7 +8051,6 @@ class PredBat(hass.Hass):
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
             self.car_charging_limit[car_n] = (float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0
 
-        self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
         if self.num_cars > 0:
             self.log(
                 "Cars {} charging from battery {} planned {}, charging_now {} smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(
@@ -9269,10 +9287,14 @@ class PredBat(hass.Hass):
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
 
-        # Work out car SOC
+        # Work out car SOC and reset next
         self.car_charging_soc = [0.0 for car_n in range(0, self.num_cars)]
+        self.car_charging_soc_next = [None for car_n in range(0, self.num_cars)]
         for car_n in range(0, self.num_cars):
-            self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+            if (car_n == 0) and self.car_charging_manual_soc:
+                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh")
+            else:
+                self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
             self.log("Current Car SOC kWh: {}".format(self.car_charging_soc))
 
@@ -9762,6 +9784,7 @@ class PredBat(hass.Hass):
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
+        self.car_charging_manual_soc = self.get_arg("car_charging_manual_soc")
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 
@@ -9846,6 +9869,14 @@ class PredBat(hass.Hass):
             # Save next IBoost model value
             self.expose_config("iboost_today", self.iboost_next)
             self.log("IBoost model today updated to {}".format(self.iboost_next))
+
+        # Car SOC increment
+        if scheduled:
+            for car_n in range(0, self.num_cars):
+                if (car_n == 0) and self.car_charging_manual_soc:
+                    self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                    if self.car_charging_soc_next[car_n] is not None:
+                        self.expose_config("car_charging_manual_soc_kwh", self.car_charging_soc_next[car_n])
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0:

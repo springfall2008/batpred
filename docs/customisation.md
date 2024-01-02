@@ -154,6 +154,11 @@ If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_
 can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
 if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
 
+If your car does not have an SOC sensor and you are not using Octopus Intelligent you can set **switch.predbat_car_charging_manual_soc**
+to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars current state of charge (soc)
+in kWh. You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
+charging sessions but will not reset it automatically.
+
 ## Calculation options
 
 See the Predbat mode setting as above for basic calculation options
