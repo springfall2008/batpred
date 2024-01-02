@@ -4044,7 +4044,7 @@ class PredBat(hass.Hass):
                 for car_n in range(0, self.num_cars):
                     final_car_soc[car_n] = car_soc[car_n]
                     if minute == 0:
-                        # Next car SOC
+                        # Next car SOC
                         self.car_charging_soc_next[car_n] = car_soc[car_n]
 
                 final_metric = metric
@@ -9869,8 +9869,8 @@ class PredBat(hass.Hass):
             # Save next IBoost model value
             self.expose_config("iboost_today", self.iboost_next)
             self.log("IBoost model today updated to {}".format(self.iboost_next))
-        
-        # Car SOC increment 
+
+        # Car SOC increment
         if scheduled:
             for car_n in range(0, self.num_cars):
                 if (car_n == 0) and self.car_charging_manual_soc:
