@@ -1,35 +1,39 @@
 # Installation summary
 
-Note there are [step by step installation](video-guides.md#basic-installation) videos, see the [video guides](video-guides.md) section for those and other videos.
-
 Please see the sections below for how to achieve each step. This is just a checklist of things:
 
-1. Before you start, its recommended that you watch the [Video Guides](video-guides.md)
-2. Make sure the right inverter control module is installed and running - [GivTCP install](install.md#inverter-control-integration-install-givtcpsolax-modbus)
-3. Install AppDaemon if you haven't already  - [AppDaemon install](install.md#appdaemon-install)
-4. Install HACS if you haven't already - [HACS install](install.md#hacs-install)
-5. Install Predbat using HACS - [Predbat install](install.md#install-predbat-through-hacs)
-6. Install Solcast if you haven't already [Solcast install](install.md#solcast-install)
-    - Also check Solcast is being auto-updated a few times a day and that you see the data in Home Assistant
-7. Follow the [Energy Rates](energy-rates.md) to tell Predbat what your import and export energy rates are.
+1. Before you start, its recommended that you watch the [step by step installation](video-guides.md#basic-installation) videos,
+see the [video guides](video-guides.md) section for those and other videos
+2. Make sure the right inverter control module is installed and running - [GivTCP or Solax install](install.md#inverter-control-integration-install-givtcpsolax-modbus)
+3. Install a file editor (either the File editor or Studio Code Server add-on) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
+4. Install Predbat and AppDaemon, either:
+    - a) Install the AppDaemon-Predbat combined add-on - [AppDaemon-Predbat combined install](install.md#appdaemon-predbat-combined-install)
+    - b) Complete the separate installation steps:
+        - i) Install HACS if you haven't already - [HACS install](install.md#hacs-install)
+        - ii) Install AppDaemon if you haven't already - [AppDaemon install](install.md#appdaemon-install)
+        - iii) Install Predbat using HACS - [Predbat install](install.md#install-predbat-through-hacs)
+5. Install Solcast if you haven't already [Solcast install](install.md#solcast-install).
+Create an automation to update Solcast a times a day, and check that you see the Solcast data in Home Assistant
+6. Follow the [Energy Rates](energy-rates.md) instructions to tell Predbat what your import and export energy rates are.
 If you use Octopus Energy then this includes installing the Octopus Energy integration (if you haven't already) - [Octopus Energy](energy-rates.md#octopus-energy-integration)
-8. Go and edit apps.yaml (in /config/appdaemon/apps/predbat/config/apps.yaml) to match your system - [apps.yaml settings](apps-yaml.md)
+7. Edit Predbat's `apps.yaml` configuration file (which will be in either the directory `/addon_configs/46f69597_appdaemon-predbat/apps`
+or `/config/appdaemon/apps/predbat/config/` depending on which Predbat install method you used) to match your system - [apps.yaml settings](apps-yaml.md)
     - Inverter settings match the names in GivTCP - should be automatic (but if you have 2 names you will have to edit apps.yaml)
         - You have set the right number of inverters (**num_inverters**)
         - Adjust your **inverter_limit** and **export_limit** as required
     - You have your energy rates set correctly either using Octopus Energy integration or entered manually
     - That the Solcast plugin is matching the configuration correctly - should be automatic
     - If you have a car charging sensor you might want to add that also to help make predictions more accurate
-9. Add the Predbat entities to your dashboard - [Output data](output-data.md)
-10. Follow the configuration guide to tune things for your system  - [Configuration guide](configuration-guide.md)
-11. Set up the Apex Charts so you can check what Predbat is doing - [Creating the charts](creating-charts.md)
-12. Set up the Predbat Plan card for another view on what Predbat is doing - [Create the Predbat Plan card](predbat-plan-card.md)
-13. Then check Predbat is working correctly:
-    - Look at the AppDaemon log file and make sure you have no errors or warnings that are unexpected
+8. Add the Predbat entities to your dashboard - [Output data](output-data.md)
+9. Follow the configuration guide to tune things for your system  - [Configuration guide](configuration-guide.md)
+10. Set up the Predbat Plan card so you can check what Predbat is planning to do - [Create the Predbat Plan card](predbat-plan-card.md)
+11. Set up the Apex Charts for other views on what Predbat is doing - [Creating the charts](creating-charts.md)
+12. Then check Predbat is working correctly:
+    - Look at the Predbat AppDaemon log file and make sure you have no errors or warnings that are unexpected
     - Comment out or delete the [template: True line in apps.yaml](apps-yaml.md#basics) when you are ready to start Predbat
-    - The **predbat.status** in Home Assistant should be Idle (errors are reported here too)
-    - Start with **select.predbat_mode** as Monitor but remember to change it later to enable Predbat to control your inverter
-14. Look at the [FAQ](faq.md) for help
+    - The **predbat.status** in Home Assistant should be 'Idle' (if there are any errors then they are reported here too)
+    - Start with **select.predbat_mode** set to 'Monitor' but remember to change it later to enable Predbat to control your inverter
+13. Look at the [FAQ](faq.md) for help
 
 Overview of the key configuration elements:
 

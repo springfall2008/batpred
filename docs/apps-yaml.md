@@ -1,9 +1,20 @@
 # apps.yaml settings
 
-The basic configuration for Predbat is configured in the `apps.yaml` file that's normally stored in the `/config/appdaemon/apps/batpred/config/` directory.
-You will need to use a file editor within Home Assistant (e.g. either the File Editor or Studio Code Server add-on's) to edit this file.
+The basic configuration for Predbat is configured in the `apps.yaml` file.
 
-This section of the documentation describes what the different configuration items in apps.yaml do.
+Depending on whether you have used the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) or the
+[HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), the `apps.yaml` file will be held in one of two directories in Home Assistant:
+
+- `/addon_configs/46f69597_appdaemon-predbat/apps` if you used the combined AppDaemon/Predbat add-on installation method
+
+or
+
+- `/config/appdaemon/apps/batpred/config/` if you used the HACS, AppDaemon add-on then Predbat installation method
+
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
+to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
+
+This section of the documentation describes what the different configuration items in `apps.yaml` do.
 
 When you edit `apps.yaml`, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
 You don't need to restart the AppDaemon add-on for your edits to take effect.
@@ -18,8 +29,8 @@ You can find template configurations in the following locations:
 | SolisX | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
 | SolarEdge | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
 
-The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into your
-`/config/appdaemon/apps/batpred/config/` directory and modify it from there.
+The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into the directory
+where your `apps.yaml` is stored, and modify it from there.
 
 ## Basics
 
@@ -53,7 +64,7 @@ such as 30 or 36 if you have a small battery and thus don't need to forecast 2 d
 
 ## Inverter information
 
-The template apps.yaml comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
+The template `apps.yaml` comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 For other inverter brands, see [Other Inverters](other-inverters.md)
 
