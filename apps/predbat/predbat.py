@@ -7891,8 +7891,7 @@ class PredBat(hass.Hass):
             # Log set of charge and discharge windows
             if self.calculate_best_charge:
                 self.log(
-                    "Best charge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price,
+                    "Best charge windows best_metric {} best_cost {} metric_keep {} windows {}".format(
                         self.dp2(best_metric),
                         self.dp2(best_cost),
                         self.dp2(best_keep),
@@ -7902,8 +7901,7 @@ class PredBat(hass.Hass):
 
             if self.calculate_best_discharge:
                 self.log(
-                    "Best discharge windows in price group {} best_metric {} best_cost {} metric_keep {} windows {}".format(
-                        price,
+                    "Best discharge windows best_metric {} best_cost {} metric_keep {} windows {}".format(
                         self.dp2(best_metric),
                         self.dp2(best_cost),
                         self.dp2(best_keep),
