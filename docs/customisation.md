@@ -169,7 +169,11 @@ When False home battery discharge will be prevented when your car charges, all l
 by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
 your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
 charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
-    - CAUTION: If you turn this switch back on during a car charging session you will need to set your battery discharge rate back to maximum manually.
+
+If your car does not have an SOC sensor and you are not using Octopus Intelligent you can set **switch.predbat_car_charging_manual_soc**
+to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars current state of charge (soc)
+in kWh. You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
+charging sessions but will not reset it automatically.
 
 ## Calculation options
 

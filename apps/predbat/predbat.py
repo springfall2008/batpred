@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.27"
+THIS_VERSION = "v7.14.31"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -54,7 +54,7 @@ PREDBAT_MODE_CONTROL_CHARGE = 2
 PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
 # Predbat update options
-PREDBAT_UPDATE_OPTIONS = []
+PREDBAT_UPDATE_OPTIONS = [THIS_VERSION + " Loading..."]
 
 # Configuration options inside HA
 CONFIG_ITEMS = [
@@ -366,6 +366,19 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {"name": "car_charging_hold", "friendly_name": "Car charging hold", "type": "switch", "default": True, "reset_inverter": True},
+    {"name": "car_charging_manual_soc", "friendly_name": "Car charging manual SOC", "type": "switch", "default": False},
+    {
+        "name": "car_charging_manual_soc_kwh",
+        "friendly_name": "Car manual SOC kWh",
+        "type": "input_number",
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "unit": "kWh",
+        "icon": "mdi:ev-station",
+        "enable": "car_charging_manual_soc",
+        "default": 0.0,
+    },
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
     {
         "name": "octopus_intelligent_ignore_unplugged",
@@ -447,7 +460,7 @@ CONFIG_ITEMS = [
         "options": PREDBAT_MODE_OPTIONS,
         "icon": "mdi:state-machine",
         "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
-        "reset_inverter": True,
+        "reset_inverter_force": True,
     },
     {
         "name": "update",
@@ -455,7 +468,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
-        "default": "Unknown",
+        "default": None,
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -2469,6 +2482,7 @@ class PredBat(hass.Hass):
         """
         Download release data
         """
+        global PREDBAT_UPDATE_OPTIONS
         auto_update = self.get_arg("auto_update")
         url = "https://api.github.com/repos/springfall2008/batpred/releases"
         data = self.download_predbat_releases_url(url)
@@ -4029,6 +4043,9 @@ class PredBat(hass.Hass):
                 final_soc = soc
                 for car_n in range(0, self.num_cars):
                     final_car_soc[car_n] = car_soc[car_n]
+                    if minute == 0:
+                        # Next car SOC
+                        self.car_charging_soc_next[car_n] = car_soc[car_n]
 
                 final_metric = metric
                 final_import_kwh = import_kwh
@@ -4944,12 +4961,12 @@ class PredBat(hass.Hass):
             kwh = self.car_charging_rate[car_n] * hours
 
             kwh_add = kwh * self.car_charging_loss
-            kwh_left = self.car_charging_limit[car_n] - car_soc
+            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
 
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
                 percent = kwh_left / kwh_add
-                length = int((length * percent) / 5 + 2.5) * 5
+                length = min(int(((length * percent) / 5) + 2.5) * 5, end - start)
                 end = start + length
                 hours = length / 60
                 kwh = self.car_charging_rate[car_n] * hours
@@ -6369,7 +6386,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         self.inverter_needs_reset = False
-        self.inverter_needs_reset_force = False
+        self.inverter_needs_reset_force = ""
         self.config_index = {}
         self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
@@ -6460,6 +6477,7 @@ class PredBat(hass.Hass):
         self.car_charging_battery_size = [100]
         self.car_charging_limit = [100]
         self.car_charging_soc = [0]
+        self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
         self.discharge_window = []
@@ -6474,6 +6492,7 @@ class PredBat(hass.Hass):
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
+        self.car_charging_manual_soc = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.simulate_offset = 0
@@ -7999,6 +8018,7 @@ class PredBat(hass.Hass):
 
         self.car_charging_planned_response = self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])
         self.car_charging_now_response = self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])
+        self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
 
         # Car charging planned sensor
         for car_n in range(0, self.num_cars):
@@ -8031,7 +8051,6 @@ class PredBat(hass.Hass):
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
             self.car_charging_limit[car_n] = (float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0
 
-        self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
         if self.num_cars > 0:
             self.log(
                 "Cars {} charging from battery {} planned {}, charging_now {} smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(
@@ -8674,18 +8693,25 @@ class PredBat(hass.Hass):
         """
         Reset inverter to safe mode
         """
-        if not self.set_read_only or self.inverter_needs_reset_force:
+        if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
-                self.log("Reset inverter settings to safe mode")
-                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
-                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
-                inverter.adjust_force_discharge(False)
-                inverter.adjust_reserve(0)
-                inverter.adjust_battery_target(100.0)
-                inverter.disable_charge_window()
+                self.log(
+                    "Reset inverter settings to safe mode (set_charge_window={} set_discharge_window={} force={})".format(
+                        self.set_charge_window, self.set_discharge_window, self.inverter_needs_reset_force
+                    )
+                )
+                if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
+                    inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
+                    inverter.disable_charge_window()
+                    inverter.adjust_battery_target(100.0)
+                if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
+                    inverter.adjust_reserve(0)
+                if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
+                    inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
+                    inverter.adjust_force_discharge(False)
         self.inverter_needs_reset = False
-        self.inverter_needs_reset_force = False
+        self.inverter_needs_reset_force = ""
 
     def execute_plan(self):
         status_extra = ""
@@ -9261,10 +9287,14 @@ class PredBat(hass.Hass):
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
 
-        # Work out car SOC
+        # Work out car SOC and reset next
         self.car_charging_soc = [0.0 for car_n in range(0, self.num_cars)]
+        self.car_charging_soc_next = [None for car_n in range(0, self.num_cars)]
         for car_n in range(0, self.num_cars):
-            self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
+            if (car_n == 0) and self.car_charging_manual_soc:
+                self.car_charging_soc[car_n] = self.get_arg("car_charging_manual_soc_kwh")
+            else:
+                self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
             self.log("Current Car SOC kWh: {}".format(self.car_charging_soc))
 
@@ -9697,24 +9727,27 @@ class PredBat(hass.Hass):
             self.calculate_best_charge = True
             self.calculate_best_discharge = False
             self.set_charge_window = False
+            self.set_discharge_window = False
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = False
             self.set_charge_window = True
+            self.set_discharge_window = False
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = True
             self.set_charge_window = True
+            self.set_discharge_window = True
         else:  # PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
             self.calculate_best_charge = False
             self.calculate_best_discharge = False
             self.set_charge_window = False
+            self.set_discharge_window = False
             self.predbat_mode = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
             self.expose_config("mode", self.predbat_mode)
 
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
 
-        self.set_discharge_window = self.calculate_best_discharge
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
@@ -9751,6 +9784,7 @@ class PredBat(hass.Hass):
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
+        self.car_charging_manual_soc = self.get_arg("car_charging_manual_soc")
         self.car_charging_threshold = float(self.get_arg("car_charging_threshold")) / 60.0
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 
@@ -9835,6 +9869,14 @@ class PredBat(hass.Hass):
             # Save next IBoost model value
             self.expose_config("iboost_today", self.iboost_next)
             self.log("IBoost model today updated to {}".format(self.iboost_next))
+
+        # Car SOC increment
+        if scheduled:
+            for car_n in range(0, self.num_cars):
+                if (car_n == 0) and self.car_charging_manual_soc:
+                    self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                    if self.car_charging_soc_next[car_n] is not None:
+                        self.expose_config("car_charging_manual_soc_kwh", self.car_charging_soc_next[car_n])
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0:
@@ -9998,13 +10040,13 @@ class PredBat(hass.Hass):
                 if entity and ((item.get("value") is None) or (value != item["value"])):
                     if item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
-                        self.log("Set reset inverter true due to reset_inverter on item {}".format(item))
+                        self.log("Set reset inverter true due to reset_inverter on item {}".format(name))
                     if item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
-                        self.log("Set reset inverter true due to reset_inverter_force on item {}".format(item))
+                        self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
                         if event:
-                            self.inverter_needs_reset_force = True
-                            self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(item))
+                            self.inverter_needs_reset_force = name
+                            self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
@@ -10189,6 +10231,15 @@ class PredBat(hass.Hass):
             # Get from current state?
             ha_value = self.get_state(entity)
 
+            # Update drop down menu
+            if name == "update":
+                if not ha_value:
+                    # Construct this version information as it's not set correctly already
+                    ha_value = THIS_VERSION + " Loading..."
+                else:
+                    # Leave current value until it's set during version discovery later
+                    continue
+
             # Get from history?
             if ha_value is None:
                 history = self.get_history(entity_id=entity)
@@ -10329,9 +10380,8 @@ class PredBat(hass.Hass):
         if not config_dir:
             self.log("WARN: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
             passed = False
-        else:
-            app_dirs.append(config_dir)
 
+        app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
         if config_dir and os.path.exists(appdaemon_config):
             with open(appdaemon_config, "r") as han:
@@ -10346,12 +10396,9 @@ class PredBat(hass.Hass):
                     sub_data = data["appdaemon"]
                     if "app_dir" in sub_data:
                         app_dir = sub_data["app_dir"]
-                        if app_dir not in app_dirs:
-                            app_dirs.append(app_dir)
-                        self.log("Sanity: Got app_dir {}".format(app_dir))
-                    else:
-                        self.log("WARN: app_dir is not set in appdaemon.yaml")
-                        passed = False
+                    if app_dir not in app_dirs:
+                        app_dirs.append(app_dir)
+                    self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
                     self.log("WARN: appdaemon section is missing from appdaemon.yaml")
                     passed = False
