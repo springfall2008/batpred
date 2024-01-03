@@ -5,7 +5,7 @@
 - First look at predbat.status in Home Assistant and the AppDaemon.log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
 check your entity settings are correct.
-- Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the Solcast instructions).
+- Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
 The default solcast sensor names maybe wrong, you might need to update the `apps.yaml` config to match your own names
 (some people don't have the solcast_ bit in their names)
 - Did you configure AppDaemon apps_dir correctly in `appdaemon.yaml`?
@@ -35,7 +35,7 @@ a script that changes the reserve %, this will cause problems - please disable o
 
 ## I changed a config item but it made no difference?
 
-- You might have to wait a few minutes until the next update cycle
+- You might have to wait a few minutes until the next update cycle. Depending on the speed of the computer that Predbat is running on, it can take 1-5 minutes for Predbat to run through.
 
 ## It's all running but I'm not getting very good results
 
@@ -46,7 +46,7 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
 - Make sure your inverter max AC rate has been set correctly
 - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
-- Do you have a solar diverter? If so maybe you want to try using the IBoost model settings.
+- Do you have a solar diverter? If so maybe you want to try using the iBoost model settings.
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
@@ -78,6 +78,22 @@ and **sensor.octopus_electricity_energy_<meter_number>_current_rate** are both p
 If the 'event' and 'sensor' entities are not consistently named then Predbat will not be able to find the event entities if the sensor names don't match what's expected.<BR>
 To fix this, uninstall the Octopus integration, reboot Home Assistant,
 delete all the old Octopus sensors, and [re-install the Octopus Integration](install.md#octopus-energy).
+
+## WARN: No solar data has been configured
+
+If you get this warning message in the Predbat log file:
+
+- Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
+- Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )
+- Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
+and checking that you can see the half-hourly solar forecasts in the Solcast entities
+- If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities
+- Check **sensor.solcast_pv_api_limit** (it's normally 10 for new Solcast accounts) meaning you can call the Solcast API 10 times a day
+(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.
+Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls you have made today.
+If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
+It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
+- Check the [Solcast server API status](https://status.solcast.com/) is OK
 
 ## I have another problem not listed above
 
