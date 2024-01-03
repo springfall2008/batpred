@@ -16,8 +16,9 @@ The mode that Predbat operates in will change the operation, this can be configu
 - Control charge
 - Control charge & discharge
 
-If **switch.predbat_set_read_only** is True then the plan will be updated but the inverter controls will not be used, this is useful to pause
-Predbat operation while an automation takes over.
+If the **switch.predbat_set_read_only** is set to True then this prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
+Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
+This is useful if you want to over-ride what predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works prior to turning it on 'in anger'.
 
 _NOTE: Changing the Predbat mode or the read only switch will cause Predbat to reset the inverter settings to default, this will disable
 both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
@@ -94,6 +95,9 @@ means to value future battery levels less, greater than 1.0 will value it more (
 **input_number.battery_rate_max_scaling** adjusts your maximum charge/discharge rate from that reported by GivTCP
 e.g. a value of 1.1 would simulate a 10% faster charge/discharge than reported by the inverter
 
+**switch.predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the Nominal field rather than from the normal GivTCP
+reported size. If your battery size is reported wrongly maybe try turning this on and see if it helps.
+
 **input_number.load_scaling** is a Scaling factor applied to historical load, tune up if you want to be more pessimistic on future consumption
 Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 
@@ -101,7 +105,7 @@ Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 This can  be used to make the 10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
 scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.pv_scaling** is a scaling factor applied to pv data, tune down if you want to be more pessimistic on PV production vs Solcast
+**input_number.pv_scaling** is a scaling factor applied to PV data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
 
 **input_number.pv_metric10_weight** is the weighting given to the 10% PV scenario. Use 0.0 to disable this.
@@ -117,7 +121,9 @@ using **days_previous** and weighted using ***days_previous_weight** in the same
 day from the list of days to use (provided you have more than 1 day selected in days_previous). This can be used to ignore
 a single low usage day in your average calculation. By default is feature is enabled but can be disabled only in expert mode.
 
-## Car charging hold options
+## Car Charging
+
+### Car charging hold options
 
 Car charging hold is a feature where you try to filter out previous car charging from your historical data so that
 future predictions are more accurate.
@@ -131,28 +137,38 @@ then historical data will be subtracted from the load data instead.
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
 if you had a sensor in watts you might use 0.001 instead.
 
-**car_charging_rate** sets the rate your car is assumed to charge at, but will be pulled automatically from Octopus Energy plugin if enabled
+- **input_number.car_charging_rate** - Set to the car's charging rate in kW per hour (normally 7.5 for 7.5kWh),
+but will be pulled automatically from Octopus Energy integration if enabled for Octopus Intelligent.
 
 **car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
-## Car charging plan options
+### Car charging plan options
 
 Car charging planning - is only used if Intelligent Octopus isn't enabled and car_charging_planned is connected correctly.
 
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation
 to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
-**car_charging_plan_time** Is set to the time you expect your car to be fully charged by
-**car_charging_plan_smart** When enabled allows Predbat to allocated car charging slots to the cheapest times,
-when disabled all low rate slots will be used in time order.
+- **car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
+
+- **car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
+when disabled (False) all low rate slots will be used in time order.
 
 **switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
 
-If Octopus Intelligent Charging is enabled the switch **'switch.predbat_octopus_intelligent_ignore_unplugged'** (_expert mode_)
+If Octopus Intelligent Charging is enabled the switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
 can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
 if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
+
+Control how your battery behaves during car charging:
+
+- **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
+When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved
+by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
+your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
+charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
 If your car does not have an SOC sensor and you are not using Octopus Intelligent you can set **switch.predbat_car_charging_manual_soc**
 to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars current state of charge (soc)
@@ -213,8 +229,9 @@ If you use **pv_metric10_weight** then you probably don't need to enable this as
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
 
-**metric_min_improvement_discharge** (_expert mode_) Sets the minimum cost improvement it's worth discharging for.
-A value of 0.1 is the default which prevents any marginal discharges. If you increase this value then discharges will become less common and shorter.
+**metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
+A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
+then discharges will become less common and shorter.
 
 **rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
 the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
@@ -272,14 +289,30 @@ when a charge slot is not active, this can be used to workaround some firmware i
 used for solar charging as well as grid charging. When disabled the SOC % will not be changed after a charge slot.
 This is disabled by default.
 
-## IBoost model options
+## Balance Inverters
 
-IBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat
-hot water (or similar). The predicted output from the IBoost model is returned in **iboost_best**.
+When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
+When enabled, balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
+
+The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your
+machine is fast enough, but the default is 60 seconds.
+
+Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant to enable this feature.
+
+- **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
+- **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
+- **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
+- **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
+- **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
+
+## iBoost model options
+
+iBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat
+hot water (or similar). The predicted output from the iBoost model is returned in **iboost_best**.
 
 The following entities are only available when you turn on iboost enable:
 
-**iboost_solar** When enabled assumes IBoost will use solar power to boost.
+**iboost_solar** When enabled assumes iBoost will use solar power to boost.
 
 **iboost_min_soc** sets the minimum home battery soc % to enable iboost solar on, default 0
 
@@ -300,8 +333,27 @@ You will see **predbat.iboost_today** entity which tracks the estimated amount c
 
 The **binary_sensor.iboost_active** entity will be enabled when IBoost should be active, can be used for automations to trigger boost
 
-If you have an incrementing Sensor that tracks IBoost energy usage then you should set **iboost_energy_today** sensor in
+If you have an incrementing Sensor that tracks iBoost energy usage then you should set **iboost_energy_today** sensor in
 apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sensor isn't in kWh.
+
+## Holiday mode
+
+When you go away you are likely to use less electricity and so the previous load data will be quite pessimistic.
+
+Using the Home Assistant entity **input_number.predbat_holiday_days_left** you can set the number of full days that
+you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero.
+Whilst holiday days left is non-zero, Predbat's 'holiday mode' is active.
+
+When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in apps.yaml.
+This means Predbat will adjust more quickly to the new usage pattern.
+
+If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going
+to take longer for the historical data to catch up, you could then enable holiday mode for another 7 days after your return.
+
+In summary:
+
+- For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
+- For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
 
 ## Debug
 

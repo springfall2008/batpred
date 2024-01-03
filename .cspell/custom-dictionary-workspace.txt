@@ -9,6 +9,7 @@ argname
 automations
 autopep
 autoupdate
+Basepath
 Batpred
 batteryb
 bierner
@@ -92,6 +93,7 @@ pylint
 pyproject
 pytz
 rarr
+Redownload
 rname
 rowspan
 rstart
