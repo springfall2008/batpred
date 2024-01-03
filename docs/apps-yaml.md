@@ -324,9 +324,9 @@ To make planned car charging more accurate, configure the following items in `ap
 Multiple cars can be planned with Predbat, in which case you should set **num_cars** in `apps.yaml` to the number of cars you want to plan
 
 - **car_charging_limit**, **car_charging_planned**, **car_charging_battery_size** and **car_charging_soc** must then be a list of values (i.e. 2 entries for 2 cars)
-  
+
 - If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if its enabled
-  
+
 - Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
