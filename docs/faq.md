@@ -90,7 +90,8 @@ and checking that you can see the half-hourly solar forecasts in the Solcast ent
 - If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities
 - Check **sensor.solcast_pv_api_limit** (it's normally 10 for new Solcast accounts) meaning you can call the Solcast API 10 times a day
 (but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.
-Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls you have made today.
+Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls you have made today
+(alternatively, you can confirm how many API calls you have made today by logging into your solcast account).
 If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK

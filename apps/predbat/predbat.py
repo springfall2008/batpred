@@ -5375,7 +5375,7 @@ class PredBat(hass.Hass):
         for minute in range(self.minutes_now, self.forecast_minutes + 24 * 60 + self.minutes_now):
             rate_min_forward[minute] = min(rate_array[minute:])
 
-        self.log("Rate min forward looking: now {} at end of forecast {}".format(rate_min_forward[self.minutes_now], self.dp2(rate_min_forward[self.forecast_minutes])))
+        self.log("Rate min forward looking: now {} at end of forecast {}".format(self.dp2(rate_min_forward[self.minutes_now]), self.dp2(rate_min_forward[self.forecast_minutes])))
 
         return rate_min_forward
 
