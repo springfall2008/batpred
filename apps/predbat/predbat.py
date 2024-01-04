@@ -7397,7 +7397,7 @@ class PredBat(hass.Hass):
                         )
                     )
             elif ((limit > 0 and self.set_charge_freeze) or 
-                  (limit >= self.reserve and (not self.set_charge_freeze)) or 
+                  (limit > self.reserve and (not self.set_charge_freeze)) or 
                   (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end)
             ):
                 new_limit_best.append(limit)
@@ -7969,7 +7969,7 @@ class PredBat(hass.Hass):
         if self.charge_window_best and self.calculate_best_charge:
             # Set all to max
             for window_n in range(0, len(self.charge_window_best)):
-                if self.charge_window_best[window_n]["start"] < self.end_record:
+                if self.charge_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
                     if reset_all:
                         self.charge_limit_best[window_n] = 0.0
                 else:
