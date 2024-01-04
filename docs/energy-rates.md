@@ -197,6 +197,13 @@ In the energy market it's possible to calculate the Octopus Agile rates from aro
 enable this in apps.yaml for Import, Export or both. This will approximate next day's rates based on the spot prices.
 The approximation is only used until the real Octopus Agile rates are released around 4pm.
 
+- **futurerate_url** - URL of future energy market prices; this should not normally need to be changed
+- **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on energy market prices or not.
+Set these depending upon whether you have an agile tariff for import, export or both
+- **futurerate_peak_start** and **futurerate_peak_end** - during the peak period Octopus apply an additional peak-rate price adjustment.
+These configuration items enable the peak-rate hours to be adjusted
+- **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - the price premium (in pence) to be added to the energy market prices during the above-defined peak period
+
 CAUTION: You may violate the terms and conditions of the Nordpool site if you use this data and as such the authors of
 Predbat accept no responsibility for any violations:
 
@@ -205,7 +212,7 @@ Predbat accept no responsibility for any violations:
 ```yaml
 futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
 futurerate_adjust_import: True
-futurerate_adjust_export: True
+futurerate_adjust_export: False
 futurerate_peak_start: "16:00:00"
 futurerate_peak_end: "19:00:00"
 futurerate_peak_premium_import: 14

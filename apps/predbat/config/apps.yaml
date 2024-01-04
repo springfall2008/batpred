@@ -366,8 +366,8 @@ pred_bat:
 
   # Nordpool market energy rates
   #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
-  #futurerate_adjust_import: False
-  #futurerate_adjust_export: True
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
   #futurerate_peak_start: "16:00:00"
   #futurerate_peak_end: "19:00:00"
   #futurerate_peak_premium_import: 14

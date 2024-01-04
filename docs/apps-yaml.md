@@ -241,6 +241,10 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_export** - Export rates over a 24-hour period with start and end times
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
+- **futurerate_url** - URL of future energy market prices for Agile users
+- **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
+- **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
+- **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - price premium to be added during the peak period
 
 ## Car Charging Integration
 
