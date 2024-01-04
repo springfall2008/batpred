@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.31"
+THIS_VERSION = "v7.14.32"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -7966,7 +7966,7 @@ class PredBat(hass.Hass):
         if self.charge_window_best and self.calculate_best_charge:
             # Set all to max
             for window_n in range(0, len(self.charge_window_best)):
-                if self.charge_window_best[window_n]["start"] < self.end_record:
+                if self.charge_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
                     if reset_all:
                         self.charge_limit_best[window_n] = 0.0
                 else:
