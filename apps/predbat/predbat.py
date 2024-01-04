@@ -7396,9 +7396,10 @@ class PredBat(hass.Hass):
                             window_n, new_limit_best[-1], new_window_best[-1], start, end, limit
                         )
                     )
-            elif ((limit > 0 and self.set_charge_freeze) or 
-                  (limit > self.reserve and (not self.set_charge_freeze)) or 
-                  (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end)
+            elif (
+                (limit > 0 and self.set_charge_freeze)
+                or (limit > self.reserve and (not self.set_charge_freeze))
+                or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end)
             ):
                 new_limit_best.append(limit)
                 new_window_best.append(window)
@@ -8968,9 +8969,10 @@ class PredBat(hass.Hass):
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
                         inverter.mimic_target_soc(0)
                     elif not self.inverter_hybrid and self.inverter_soc_reset:
-                        if (self.charge_limit_best and 
-                            (self.minutes_now >= inverter.charge_start_time_minutes) and 
-                            (self.minutes_now < inverter.charge_end_time_minutes)
+                        if (
+                            self.charge_limit_best
+                            and (self.minutes_now >= inverter.charge_start_time_minutes)
+                            and (self.minutes_now < inverter.charge_end_time_minutes)
                             and (not disabled_charge_window)
                         ):
                             self.log(
@@ -9006,8 +9008,8 @@ class PredBat(hass.Hass):
                             limit = 0
                     else:
                         limit = self.charge_limit_percent_best[0]
-                        
-                    # Only set the reserve when we reach the desired percent
+
+                    # Only set the reserve when we reach the desired percent
                     if inverter.soc_percent > limit:
                         self.log("Adjust reserve to default as SOC {} % is above target {} %".format(inverter.soc_percent, limit))
                         inverter.adjust_reserve(0)
