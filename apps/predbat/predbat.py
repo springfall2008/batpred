@@ -8705,13 +8705,17 @@ class PredBat(hass.Hass):
                 )
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60.0 * 1000.0)
-                    inverter.disable_charge_window()
+                    if self.set_read_only and self.set_charge_window:
+                        # Only reset charge window if we are no longer controller charge window
+                        inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0)
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                     inverter.adjust_force_discharge(False)
+                
+
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
@@ -8795,7 +8799,7 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
                                 inverter.disable_charge_window()
-                                
+
                                 disabled_charge_window = True
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
