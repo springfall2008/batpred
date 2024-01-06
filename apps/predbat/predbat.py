@@ -8795,6 +8795,7 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
                                 inverter.disable_charge_window()
+                                
                                 disabled_charge_window = True
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
@@ -8997,7 +8998,7 @@ class PredBat(hass.Hass):
                             )
                         )
 
-            # If we should set reserve?
+            # If we should set reserve during charging
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
                 if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (self.minutes_now >= inverter.charge_start_time_minutes):
                     # Compute limit to account for freeze setting
@@ -9010,7 +9011,7 @@ class PredBat(hass.Hass):
                         limit = self.charge_limit_percent_best[0]
 
                     # Only set the reserve when we reach the desired percent
-                    if inverter.soc_percent > limit:
+                    if (inverter.soc_percent > limit) or (not disabled_charge_window):
                         self.log("Adjust reserve to default as SOC {} % is above target {} %".format(inverter.soc_percent, limit))
                         inverter.adjust_reserve(0)
                     else:
