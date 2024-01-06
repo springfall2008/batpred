@@ -8714,7 +8714,6 @@ class PredBat(hass.Hass):
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                     inverter.adjust_force_discharge(False)
-                
 
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
