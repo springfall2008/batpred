@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.34"
+THIS_VERSION = "v7.14.35"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -393,6 +393,7 @@ CONFIG_ITEMS = [
     {"name": "calculate_fast_plan", "friendly_name": "Calculate plan faster (less accurate)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass", "type": "switch", "enable": "expert_mode", "default": False},
+    {"name": "calculate_regions", "friendly_name": "Calculate region optimisation", "type": "switch", "default": False},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
@@ -6545,6 +6546,8 @@ class PredBat(hass.Hass):
         pv_forecast_minute_step,
         pv_forecast_minute10_step,
         end_record=None,
+        region_start=None,
+        region_end=None
     ):
         """
         Pick an import price threshold which gives the best results
@@ -6571,6 +6574,8 @@ class PredBat(hass.Hass):
         # Most expensive first
         all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
         self.log("All prices {}".format(all_prices))
+        if region_start:
+            self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
         window_prices = {}
         window_prices_discharge = {}
         for loop_price in all_prices:
@@ -6621,6 +6626,11 @@ class PredBat(hass.Hass):
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(0, record_charge_windows):
+
+                            if region_start:
+                                if charge_window[window_n]['start'] > region_end or charge_window[window_n]['end'] < region_start:
+                                    continue
+              
                             if window_n in all_n:
                                 if window_prices[window_n] > highest_price_charge:
                                     highest_price_charge = window_prices[window_n]
@@ -6635,6 +6645,9 @@ class PredBat(hass.Hass):
                                 continue
 
                             for window_n in all_d:
+                                if region_start:
+                                    if discharge_window[window_n]['start'] > region_end or discharge_window[window_n]['end'] < region_start:
+                                        continue
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
                                 )
@@ -7698,6 +7711,28 @@ class PredBat(hass.Hass):
                 pv_forecast_minute10_step,
                 end_record=self.end_record,
             )
+            if self.calculate_regions:
+                self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+                for region in range(0, self.end_record, 4*60):
+                    region_end = min(region + 4*60, self.end_record)
+                    self.charge_limit_best, ignore_discharge_limits, best_price, best_price_discharge = self.optimise_charge_limit_price(
+                        price_set,
+                        price_links,
+                        window_index,
+                        record_charge_windows,
+                        self.charge_limit_best,
+                        self.charge_window_best,
+                        self.discharge_window_best,
+                        self.discharge_limits_best,
+                        load_minutes_step,
+                        load_minutes_step10,
+                        pv_forecast_minute_step,
+                        pv_forecast_minute10_step,
+                        end_record=self.end_record,
+                        region_start=region + self.minutes_now,
+                        region_end=region_end + self.minutes_now
+                    )
+
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -9770,6 +9805,7 @@ class PredBat(hass.Hass):
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
+        self.calculate_regions = self.get_arg("calculate_regions")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
