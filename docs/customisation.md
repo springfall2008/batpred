@@ -179,6 +179,10 @@ charging sessions but will not reset it automatically.
 
 See the Predbat mode setting as above for basic calculation options
 
+**switch.predbat_calculate_regions** (_expert mode_) When True the a second pass of the initial thresholds is
+calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
+mode.
+
 **switch.predbat_calculate_fast_plan** (_expert mode_) When True the plan is calculated with a limited number of
 windows to make calculations faster. When False (default) all windows are considered but planning will take a little
 longer but be more accurate.
