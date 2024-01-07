@@ -4914,7 +4914,12 @@ class PredBat(hass.Hass):
         else:
             price_sorted = [n for n in range(0, len(low_rates))]
 
-        ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
+        try:
+            ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
+        except ValueError:
+            ready_time = datetime.strptime("07:00:00", "%H:%M:%S")
+            self.log("WARN: Car charging plan time for car {} is invalid".format(car_n))
+
         ready_minutes = ready_time.hour * 60 + ready_time.minute
 
         # Ready minutes wrap?
