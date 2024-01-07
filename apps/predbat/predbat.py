@@ -393,7 +393,7 @@ CONFIG_ITEMS = [
     {"name": "calculate_fast_plan", "friendly_name": "Calculate plan faster (less accurate)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass", "type": "switch", "enable": "expert_mode", "default": False},
-    {"name": "calculate_regions", "friendly_name": "Calculate region optimisation", "type": "switch", "default": False},
+    {"name": "calculate_regions", "friendly_name": "Calculate region optimisation", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
