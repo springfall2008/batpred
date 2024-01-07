@@ -3746,7 +3746,7 @@ class PredBat(hass.Hass):
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
             # Add in standing charge, only for the final plan when we save the results
-            if (minute_absolute % (24 * 60)) < step and (save in ['best', 'base', 'base10', 'best10']):
+            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
                 metric += self.metric_standing_charge
 
             # Outside the recording window?
@@ -8558,7 +8558,7 @@ class PredBat(hass.Hass):
                         self.discharge_limits_best,
                         load_minutes_step,
                         pv_forecast_minute_step,
-                        end_record=self.end_record
+                        end_record=self.end_record,
                     )
 
                     # Work out record windows
@@ -8583,7 +8583,7 @@ class PredBat(hass.Hass):
                     self.discharge_limits_best,
                     load_minutes_step,
                     pv_forecast_minute_step,
-                    end_record=self.end_record
+                    end_record=self.end_record,
                 )
                 # Initial charge slot filter
                 if self.set_charge_window:
@@ -8715,7 +8715,6 @@ class PredBat(hass.Hass):
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * 60 * 1000)
                     inverter.adjust_force_discharge(False)
-                
 
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
