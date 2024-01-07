@@ -393,7 +393,7 @@ CONFIG_ITEMS = [
     {"name": "calculate_fast_plan", "friendly_name": "Calculate plan faster (less accurate)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_second_pass", "friendly_name": "Calculate full second pass (slower)", "type": "switch", "enable": "expert_mode", "default": False},
     {"name": "calculate_tweak_plan", "friendly_name": "Calculate tweak second pass", "type": "switch", "enable": "expert_mode", "default": False},
-    {"name": "calculate_regions", "friendly_name": "Calculate region optimisation", "type": "switch", "default": False},
+    {"name": "calculate_regions", "friendly_name": "Calculate region optimisation", "type": "switch", "enable": "expert_mode", "default": True},
     {"name": "calculate_inday_adjustment", "friendly_name": "Calculate in-day adjustment", "type": "switch", "enable": "expert_mode", "default": True},
     {
         "name": "calculate_plan_every",
@@ -6547,7 +6547,7 @@ class PredBat(hass.Hass):
         pv_forecast_minute10_step,
         end_record=None,
         region_start=None,
-        region_end=None,
+        region_end=None
     ):
         """
         Pick an import price threshold which gives the best results
@@ -6626,10 +6626,11 @@ class PredBat(hass.Hass):
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(0, record_charge_windows):
-                            if region_start:
-                                if charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start:
-                                    continue
 
+                            if region_start:
+                                if charge_window[window_n]['start'] > region_end or charge_window[window_n]['end'] < region_start:
+                                    continue
+              
                             if window_n in all_n:
                                 if window_prices[window_n] > highest_price_charge:
                                     highest_price_charge = window_prices[window_n]
@@ -6645,7 +6646,7 @@ class PredBat(hass.Hass):
 
                             for window_n in all_d:
                                 if region_start:
-                                    if discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start:
+                                    if discharge_window[window_n]['start'] > region_end or discharge_window[window_n]['end'] < region_start:
                                         continue
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
@@ -7712,8 +7713,8 @@ class PredBat(hass.Hass):
             )
             if self.calculate_regions:
                 self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
-                for region in range(0, self.end_record, 4 * 60):
-                    region_end = min(region + 4 * 60, self.end_record)
+                for region in range(0, self.end_record, 4*60):
+                    region_end = min(region + 4*60, self.end_record)
                     self.charge_limit_best, ignore_discharge_limits, region_best_price, region_best_price_discharge = self.optimise_charge_limit_price(
                         price_set,
                         price_links,
@@ -7729,8 +7730,9 @@ class PredBat(hass.Hass):
                         pv_forecast_minute10_step,
                         end_record=self.end_record,
                         region_start=region + self.minutes_now,
-                        region_end=region_end + self.minutes_now,
+                        region_end=region_end + self.minutes_now
                     )
+
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
