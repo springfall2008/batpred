@@ -3746,7 +3746,7 @@ class PredBat(hass.Hass):
             discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
             # Add in standing charge, only for the final plan when we save the results
-            if (minute_absolute % (24 * 60)) < step and save:
+            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
                 metric += self.metric_standing_charge
 
             # Outside the recording window?
@@ -5375,9 +5375,7 @@ class PredBat(hass.Hass):
         for minute in range(self.minutes_now, self.forecast_minutes + 24 * 60 + self.minutes_now):
             rate_min_forward[minute] = min(rate_array[minute:])
 
-        self.log(
-            "Rate min forward looking: now {}, and at end of forecast {}".format(self.dp2(rate_min_forward[self.minutes_now]), self.dp2(rate_min_forward[self.forecast_minutes]))
-        )
+        self.log("Rate min forward looking: now {} at end of forecast {}".format(rate_min_forward[self.minutes_now], self.dp2(rate_min_forward[self.forecast_minutes])))
 
         return rate_min_forward
 
@@ -6907,8 +6905,8 @@ class PredBat(hass.Hass):
             if self.set_charge_freeze and try_soc == self.reserve:
                 metric += 0.1
 
-            # Preference to 100%
-            if try_soc == self.soc_max:
+            # Very minor preference to 100% or 0% so that slots are contiguous
+            if (try_soc == self.soc_max) or (try_soc == 0):
                 metric -= 0.01
 
             self.debug_enable = was_debug
@@ -7897,20 +7895,22 @@ class PredBat(hass.Hass):
             # Log set of charge and discharge windows
             if self.calculate_best_charge:
                 self.log(
-                    "Best charge windows best_metric {} best_cost {} metric_keep {} windows {}".format(
+                    "Best charge windows best_metric {} best_cost {} metric_keep {} end_record {} windows {}".format(
                         self.dp2(best_metric),
                         self.dp2(best_cost),
                         self.dp2(best_keep),
+                        self.time_abs_str(self.end_record + self.minutes_now),
                         self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True),
                     )
                 )
 
             if self.calculate_best_discharge:
                 self.log(
-                    "Best discharge windows best_metric {} best_cost {} metric_keep {} windows {}".format(
+                    "Best discharge windows best_metric {} best_cost {} metric_keep {} end_record {} windows {}".format(
                         self.dp2(best_metric),
                         self.dp2(best_cost),
                         self.dp2(best_keep),
+                        self.time_abs_str(self.end_record + self.minutes_now),
                         self.window_as_text(self.discharge_window_best, self.discharge_limits_best, ignore_max=True),
                     )
                 )
@@ -8584,7 +8584,6 @@ class PredBat(hass.Hass):
                     load_minutes_step,
                     pv_forecast_minute_step,
                     end_record=self.end_record,
-                    save="debug",
                 )
                 # Initial charge slot filter
                 if self.set_charge_window:
