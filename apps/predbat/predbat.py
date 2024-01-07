@@ -6905,7 +6905,7 @@ class PredBat(hass.Hass):
             if self.set_charge_freeze and try_soc == self.reserve:
                 metric += 0.1
 
-            # Very minor preference to 100% or 0% so that slots are contigous
+            # Very minor preference to 100% or 0% so that slots are contiguous
             if (try_soc == self.soc_max) or (try_soc == 0):
                 metric -= 0.01
 
