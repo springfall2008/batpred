@@ -216,6 +216,10 @@ then it's recommended that Solcast is only configured for the PV connected to th
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (worst case) PV forecast, and the '90%' (best case) PV forecast.<BR>
 By default Predbat will use the central estimate and applies to it the **input_number.pv_metric10_weight** weighting of the 10% (worst case) estimate.
 
+Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
+this modulates the PV output predictions up and down accordingly as if there were passing clouds.
+This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
+
 - **pv_estimate** in `apps.yaml` can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10',
 or '90' to always use the 90% PV estimate (not recommended!).<BR>
 Set to blank or delete / comment out the line to use the default central estimate.
