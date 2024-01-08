@@ -7110,7 +7110,7 @@ class PredBat(hass.Hass):
                 metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
                 # Adjust to try to keep existing windows
-                if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
+                if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
                     pwindow = discharge_window[window_n]
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
