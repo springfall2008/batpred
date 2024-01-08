@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.35"
+THIS_VERSION = "v7.14.36"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -6911,7 +6911,7 @@ class PredBat(hass.Hass):
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
-            if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
+            if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
                 try_percent = self.calc_percent_limit(try_soc)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
@@ -7110,7 +7110,7 @@ class PredBat(hass.Hass):
                 metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
                 # Adjust to try to keep existing windows
-                if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
+                if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
                     pwindow = discharge_window[window_n]
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
