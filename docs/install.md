@@ -256,7 +256,9 @@ The detailed [Predbat Customisation Guide](customisation.md) details all the Pre
 ## Ready to light the touch-paper
 
 By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
-You have checked the logfile doesn't have any errors (there is a lot of output in the logfile, this is normal).
+
+You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
+
 You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
 
 In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.

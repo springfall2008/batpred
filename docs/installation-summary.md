@@ -31,7 +31,7 @@ or `/config/appdaemon/apps/predbat/config/` depending on which Predbat install m
 11. Set up the Predbat Plan card so you can check what Predbat is planning to do - [Create the Predbat Plan card](predbat-plan-card.md)
 12. Set up the Apex Charts for other views on what Predbat is doing - [Creating the charts](creating-charts.md)
 13. Then check Predbat is working correctly:
-    - Look at the Predbat AppDaemon log file and make sure you have no errors or warnings that are unexpected
+    - Look at the [Predbat AppDaemon log file](output-data.md#predbat-logfile) and make sure you have no errors or warnings that are unexpected
     - Comment out or delete the [template: True line in apps.yaml](apps-yaml.md#basics) when you are ready to start Predbat
     - The **predbat.status** in Home Assistant should be 'Idle' (if there are any errors then they are reported here too)
     - Start with **select.predbat_mode** set to 'Monitor' but remember to change it later to enable Predbat to control your inverter

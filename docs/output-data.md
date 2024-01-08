@@ -124,11 +124,30 @@ The calculated best results under PV 10% scenario:
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
 
-## Sample Predbat data out
+## Sample Predbat data out dashboard
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
 
-## Monitoring that Predbat and GivTCP are running OK
+## Predbat Logfile
+
+Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,
+or if you want to verify that Predbat is running OK.
+
+There is a lot of output in the logfile, this is normal!
+
+Depending upon whether you have used the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) or the
+[HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), the logfile will be held in one of two directories in Home Assistant:
+
+- `/addon_configs/46f69597_appdaemon-predbat/predbat.log` if you used the combined AppDaemon/Predbat add-on installation method
+
+or
+
+- `/homeassistant/appdaemon/appdaemon.log` if you used the HACS, AppDaemon add-on then Predbat installation method
+
+You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
+to view Predbat's logfile - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
+
+## Automated monitoring that Predbat and GivTCP are running OK
 
 With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
 you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device.
