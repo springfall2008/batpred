@@ -239,18 +239,26 @@ As described above, the basic configuration of Predbat is held in the `apps.yaml
 When Predbat first runs it will create a number of output and configuration control entities in Home Assistant which are used to fine-tune how Predbat operates.
 The entities are all prefixed *predbat* and can be seen (and changed) from the Settings / Devices & Services / Entities list in Home Assistant.
 
-The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
-Detailed progress messages and error logging is written to the Predbat logfile which you can view within Home Assistant using a file editor.
-
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
 
-The [Output Data](output-data.md) section describes all these points in more detail.
+The [Output Data](output-data.md) section describes these points in more detail.
+
+The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
+Detailed progress messages and error logging is written to the Predbat logfile which you can view within Home Assistant using a file editor.
+
+The [Predbat Configuration Guide](configuration-guide.md) gives an overview of the main Predbat configuration items and
+detail of 'standard Predbat configuration' settings for different electricity tariff types - e.g. a cheap overnight rate,
+multiple import rates during the day, and variable tariffs such as Agile, etc.
+
+The detailed [Predbat Customisation Guide](customisation.md) details all the Predbat configuration items (switches, input numbers, etc) in Home Assistant, and what each of them does.
 
 ## Ready to light the touch-paper
 
 By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
-You have checked the logfile doesn't have any errors (there is a lot of output in the logfile, this is normal).
+
+You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
+
 You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
 
 In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.

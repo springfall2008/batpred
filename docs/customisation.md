@@ -1,7 +1,6 @@
 # Customisation
 
-These are configuration items that you can modify to fit your needs, you can configure these in Home Assistant directly.
-Changing the items in apps.yaml will have no effect.
+These are the Predbat configuration items in Home Assistant that you can modify to fit your needs, you can configure these in Home Assistant directly.
 
 See [Displaying output data](output-data.md#displayng-output-data)
 for information on how to view and edit these entities within
@@ -81,9 +80,9 @@ legacy reasons but please adjust.
 **switch.inverter_hybrid** When True you have a hybrid inverter so no inverter losses for DC charging. When false
 you have inverter losses as it's AC coupled battery.
 
-**input_number.metric_battery_cycle** (_expert mode_) Sets the cost in pence per kWh of using your battery for
-charging and discharging. Higher numbers will reduce battery cycles at the expensive of higher energy costs.
-Figures of around 1p-5p are recommended, the default is 0.
+**input_number.metric_battery_cycle** (_expert mode_) Sets the cost in pence per kWh of using your battery for charging and discharging.
+Higher numbers will reduce battery cycles at the expense of using higher energy costs.
+Figures of around 1p-5p are recommended, the default is 2p.
 
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) Can be used to scale the value of the energy
 in the battery at the end of the plan. The battery value is accounted for in the optimisations at the lowest future
@@ -114,7 +113,7 @@ A value of 0.15 is recommended.
 
 ## Historical load data
 
-The historical load data is taken from the load sensor as configured in apps.yaml and the days are selected
+The historical load data is taken from the load sensor as configured in `apps.yaml` and the days are selected
 using **days_previous** and weighted using ***days_previous_weight** in the same configuration file
 
 **switch.predbat_load_filter_modal** (_expert mode_) when enabled will automatically discard the lowest daily consumption
@@ -208,49 +207,50 @@ you want to discharge late.
 
 ## Battery margins and metrics options
 
-**best_soc_keep** is minimum battery level to try to keep above during the whole period of the simulation time,
-soft constraint only (use min for hard constraint). It's usually good to have this above 0 to allow some margin
+**input_number.best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep above during the whole period of the simulation time.
+This is a soft constraint only so it is possible for your SoC to drop below this - use **input_number.best_soc_min** for hard SoC constraint that will always be maintained.
+It's usually good to have best_soc_keep set to a value above 0 to allow some margin
 in case you use more energy than planned between charge slots.
 
-**best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
-minimum discharge level also (set to 0 if you want to skip some slots). If you set this non-zero you will need
+**input_number.best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
+minimum discharge level also (set to 0 if you want to skip some slots). If you set this to a non-zero value you will need
 to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
-**best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
+**input_number.best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
 
-**combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
+**switch.combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
 increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
 a saving session). The default is enable (True)
 
-**combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
+**switch.combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
 they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
 
-**metric_min_improvement** (_expert mode_) sets the minimum cost improvement that it's worth lowering the battery SOC % for.
+**input_number.metric_min_improvement** (_expert mode_) sets the minimum cost improvement that it's worth lowering the battery SOC % for.
 If it's 0 then this is disabled and the battery will be charged less if it's cost neutral.
 If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
 
-**metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
+**input_number.metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
 A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
 then discharges will become less common and shorter.
 
-**rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
+**input_number.rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
 the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**rate_high_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
+**input_number.rate_high_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
 the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
-**metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are
+**input_number.metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
-**metric_future_rate_offset_export** (_expert mode_) Sets an offset to apply to future export energy rates that are
+**input_number.metric_future_rate_offset_export** (_expert mode_) Sets an offset to apply to future export energy rates that are
 not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm.
 If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
 
@@ -263,32 +263,32 @@ in the charts template in Github).
 
 ## Inverter control options
 
-**set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
+**switch.set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
 
-**set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
+**switch.set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
 Off by default.
 
 **switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be limited to the
 lowest possible to meet the charge target. Only really effective for charge windows >30 minutes.
 Off by default.
 
-**set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
+**switch.set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
 
-**set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing
+**switch.set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing
 from the grid/solar as an alternative to charging. Enabled by default.
 
-**set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used
+**switch.set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used
 (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for
 solar exports but don't allow forced export (brown energy).
 
-If you have **inverter_hybrid** set to False then if **inverter_soc_reset** (_expert mode_) is set to True then the
+If you have **switch.inverter_hybrid** set to False then if **switch.inverter_soc_reset** (_expert mode_) is set to True then the
 target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
 
-**set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the
+**input_number.set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the
 minimum and recommended to make use of the full battery
 
-**inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
+**switch.inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
 when a charge slot is not active, this can be used to workaround some firmware issues where the SOC target is
 used for solar charging as well as grid charging. When disabled the SOC % will not be changed after a charge slot.
 This is disabled by default.
@@ -311,7 +311,7 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 
 ## iBoost model options
 
-iBoost model, when enabled with **iboost_enable** tries to model excess solar energy being used to heat
+iBoost model, when enabled with **switch.iboost_enable** tries to model excess solar energy being used to heat
 hot water (or similar). The predicted output from the iBoost model is returned in **iboost_best**.
 
 The following entities are only available when you turn on iboost enable:
