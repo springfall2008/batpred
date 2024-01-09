@@ -15,7 +15,10 @@ The Integration that communicates with your inverter will be depend on the brand
 | Brand     | Integration  | Github Link                                                                      |
 | :-------- | :----------- | :------------------------------------------------------------------------------- |
 | GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
-| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                           |
+| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                         |
+| Sofar     | Sofar MQTT   | <https://github.com/cmcgerty/Sofar2mqtt> |
+
+Please see [Other Inverters](other-inverters.md) for details on how Solis, Solax and Sofar install details.
 
 - Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
