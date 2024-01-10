@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.37"
+THIS_VERSION = "v7.14.38"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3309,9 +3309,9 @@ class PredBat(hass.Hass):
         while index < 0:
             index += 24 * 60
         if backwards:
-            return data.get(index, 0) - data.get(index + 1, 0)
+            return max(data.get(index, 0) - data.get(index + 1, 0), 0)
         else:
-            return data.get(index + 1, 0) - data.get(index, 0)
+            return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
     def record_length(self, charge_window, charge_limit, best_price):
         """
