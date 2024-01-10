@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.35"
+THIS_VERSION = "v7.14.38"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -3216,14 +3216,13 @@ class PredBat(hass.Hass):
 
         idx = 0
         for days in self.days_previous:
-            use_days = min(days, self.load_minutes_age)
+            use_days = max(min(days, self.load_minutes_age), 1)
             sum_day = 0
-            if use_days > 0:
-                full_days = 24 * 60 * (use_days - 1)
-                for minute in range(0, 24 * 60, PREDICT_STEP):
-                    minute_previous = 24 * 60 - minute + full_days
-                    load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
-                    sum_day += load_yesterday
+            full_days = 24 * 60 * (use_days - 1)
+            for minute in range(0, 24 * 60, PREDICT_STEP):
+                minute_previous = 24 * 60 - minute + full_days
+                load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(data, minute_previous, historical=False, step=PREDICT_STEP)
+                sum_day += load_yesterday
             sum_days.append(self.dp2(sum_day))
             sum_days_id[days] = sum_day
             if sum_day < min_sum:
@@ -3241,40 +3240,39 @@ class PredBat(hass.Hass):
         # Gap filling
         gap_size = max(self.get_arg("load_filter_threshold", 30), 5)
         for days in self.days_previous:
-            use_days = min(days, self.load_minutes_age)
+            use_days = max(min(days, self.load_minutes_age), 1)
             num_gaps = 0
-            if use_days > 0:
-                full_days = 24 * 60 * (use_days - 1)
+            full_days = 24 * 60 * (use_days - 1)
+            for minute in range(0, 24 * 60, PREDICT_STEP):
+                minute_previous = 24 * 60 - minute + full_days
+                if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
+                    num_gaps += PREDICT_STEP
+
+            # If we have some gaps
+            if num_gaps > 0:
+                average_day = sum_days_id[days]
+                if (average_day == 0) or (num_gaps >= 24 * 60):
+                    self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
+                    average_day = 24.0
+                else:
+                    real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
+                    average_day /= real_data_percent
+                    self.log(
+                        "WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
+                            days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)
+                        )
+                    )
+
+                # Do the filling
+                per_minute_increment = average_day / (24 * 60)
                 for minute in range(0, 24 * 60, PREDICT_STEP):
                     minute_previous = 24 * 60 - minute + full_days
                     if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                        num_gaps += PREDICT_STEP
-
-                # If we have some gaps
-                if num_gaps > 0:
-                    average_day = sum_days_id[days]
-                    if (average_day == 0) or (num_gaps >= 24 * 60):
-                        self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
-                        average_day = 24.0
-                    else:
-                        real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
-                        average_day /= real_data_percent
-                        self.log(
-                            "WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
-                                days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)
-                            )
-                        )
-
-                    # Do the filling
-                    per_minute_increment = average_day / (24 * 60)
-                    for minute in range(0, 24 * 60, PREDICT_STEP):
-                        minute_previous = 24 * 60 - minute + full_days
-                        if data.get(minute_previous, 0) == data.get(minute_previous + gap_size, 0):
-                            for offset in range(minute_previous, 0, -1):
-                                if offset in data:
-                                    data[offset] += per_minute_increment * PREDICT_STEP
-                                else:
-                                    data[offset] = per_minute_increment * PREDICT_STEP
+                        for offset in range(minute_previous, 0, -1):
+                            if offset in data:
+                                data[offset] += per_minute_increment * PREDICT_STEP
+                            else:
+                                data[offset] = per_minute_increment * PREDICT_STEP
 
     def get_historical(self, data, minute):
         """
@@ -3289,14 +3287,13 @@ class PredBat(hass.Hass):
             return 0
 
         for days in self.days_previous:
-            use_days = min(days, self.load_minutes_age)
+            use_days = max(min(days, self.load_minutes_age), 1)
             weight = self.days_previous_weight[this_point]
-            if use_days > 0:
-                full_days = 24 * 60 * (use_days - 1)
-                minute_previous = 24 * 60 - minute + full_days
-                value = self.get_from_incrementing(data, minute_previous)
-                total += value * weight
-                total_weight += weight
+            full_days = 24 * 60 * (use_days - 1)
+            minute_previous = 24 * 60 - minute + full_days
+            value = self.get_from_incrementing(data, minute_previous)
+            total += value * weight
+            total_weight += weight
             this_point += 1
 
         # Zero data?
@@ -3312,9 +3309,9 @@ class PredBat(hass.Hass):
         while index < 0:
             index += 24 * 60
         if backwards:
-            return data.get(index, 0) - data.get(index + 1, 0)
+            return max(data.get(index, 0) - data.get(index + 1, 0), 0)
         else:
-            return data.get(index + 1, 0) - data.get(index, 0)
+            return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
     def record_length(self, charge_window, charge_limit, best_price):
         """
@@ -6911,7 +6908,7 @@ class PredBat(hass.Hass):
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
-            if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
+            if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
                 try_percent = self.calc_percent_limit(try_soc)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
@@ -7110,7 +7107,7 @@ class PredBat(hass.Hass):
                 metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
                 # Adjust to try to keep existing windows
-                if window_n < 2 and this_discharge_limit < 100.0 and self.discharge_window:
+                if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
                     pwindow = discharge_window[window_n]
                     dwindow = self.discharge_window[0]
                     if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"]:
