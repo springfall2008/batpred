@@ -6,8 +6,8 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 [Playlist of Predbat installation videos](https://www.youtube.com/playlist?list=PLTjtFJ0drtomKJzT7oZ3pCa0kzvFzUA_u)
 
-- [Preparing Home Assistant (1) - GivTCP, MQTT & HACS](https://www.youtube.com/watch?v=AcDdpaIPm7I)
-- [Preparing Home Assistant (2) - Octopus Energy Integration, ApexChart,  AppDaemon, Predbat](https://www.youtube.com/watch?v=0ML4L-GYjKI)
+- [Setting Up HomeAssistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
+- [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans](https://youtu.be/44NyYbyd8PY?si=ZCWaJDAKIxJExlk0)
 
 - [Configuration of apps.yaml](https://youtu.be/VE15l3maDOk)
 - [Configuration of Predbat inside Home Assistant](https://youtu.be/qsLWDd5SLkY)
@@ -17,6 +17,8 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [AppDaemon log files](https://www.youtube.com/watch?v=2pVlGSuMVtA)
 
 ## Other configuration videos
+
+[Playlist of other Predbat configuration videos](https://www.youtube.com/watch?v=kfFmp_firGY&list=PLTjtFJ0drtonvXiCQ5OGu1RISLLo4HnDQ)
 
 - [AppDaemon Configuration process](https://www.youtube.com/watch?v=kfFmp_firGY&t=15s)
 - [Fixing the new version so HACS still works (after updating AppDaemon)](https://www.youtube.com/watch?v=2dEMjnWUttI&t=12s)
