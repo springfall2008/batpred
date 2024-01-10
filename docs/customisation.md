@@ -285,8 +285,10 @@ solar exports but don't allow forced export (brown energy).
 If you have **switch.inverter_hybrid** set to False then if **switch.inverter_soc_reset** (_expert mode_) is set to True then the
 target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
 
-**input_number.set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the
-minimum and recommended to make use of the full battery
+**input_number.set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the minimum and recommended to make use of the full battery.<BR>
+If you want to pre-prepare the battery to retain extra charge in the event of a high likelihood of a grid power outage such as storms predicted,
+you can increase set_reserve_min to 100%, and then change it back afterwards.<BR>
+(Obviously this is only any use if your inverter is wired to act as an Emergency Power Supply or whole-home backup 'island mode' on the GivEnergy AIO).
 
 **switch.inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
 when a charge slot is not active, this can be used to workaround some firmware issues where the SOC target is
