@@ -69,6 +69,7 @@ metricmid
 minb
 minmax
 minuteb
+Mixergy
 mkdocs
 Modbus
 mqtt

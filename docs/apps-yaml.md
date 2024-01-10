@@ -307,7 +307,10 @@ high battery charge levels when the car was charged previously (e.g. last week).
 - **switch.car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from Predbat's battery prediction plan.
 
 - **car_charging_energy** - Set in apps.yaml to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
-This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.
+This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.<BR>
+This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
+You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
+e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
 
 - **input_number.car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
 to multiply the car_charging_energy data by if required (e.g. set to 0.001 to convert Watts to kW).
