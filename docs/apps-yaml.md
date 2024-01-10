@@ -375,6 +375,30 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
+## Load Forecast
+
+In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
+such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat):
+
+- **load_forecast** - this should be configured to point to a sensor and attribute that is in the format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+
+For example:<BR>
+![IMAGE](images/load_forecast.png)
+
+`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above format) like this:
+
+```yaml
+load_forecast:
+  - sensor_name$attribute_name
+```
+
+So if using Predheat it would be configured as:
+
+```yaml
+load_forecast:
+  - predheat.heat_energy$external
+```
+
 ## Balance Inverters
 
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
