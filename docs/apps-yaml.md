@@ -46,18 +46,52 @@ Once you have made all other required changes to apps.yaml this line should be d
 
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
-- **days_previous** - A list (one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.<BR>
-Typical settings could be 1, 7 or 7, 14, or 2, 3, 4, 5, 6, 7, 8.<BR>
-Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before its purged
+- **days_previous** - A list (which has to be entered as one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
+It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
+
+For example, to take an average house load over all the days of the last week:
+
+```yaml
+  days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+```
+
+Or if you just want same day last week's consumption:
+
+```yaml
+  days_previous:
+    - 7
+```
+
+Or if you want the average of the same day for the last 2 weeks:
+
+```yaml
+  days_previous:
+    - 7
+    - 14
+```
+
+Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before it is purged
 by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 
 ```yaml
-    recorder:
-      purge_keep_days: 14
+  recorder:
+    purge_keep_days: 14
 ```
 
-- **days_previous_weight** - A list (one entry per line) of weightings to be applied to each of the days in days_previous. Default value is 1, that all history days are equally weighted.
+- **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
+The default value is 1, that all history days are equally weighted, so if you don't want to weight individual days you can simply use:
+
+```yaml
+  days_previous_weight:
+    - 1
+```
 
 - **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
@@ -104,11 +138,11 @@ In this circumstance one solution is to create a Home Assistant template helper 
 e.g.
 
 ```yaml
-{{ states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
-+ states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-- states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
-+ states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
-- states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) }}
+{{ ( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
+  + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
+  - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
+  + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+  - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) ) | round(1) }}
 ```
 
 ### GivEnergy Cloud Data

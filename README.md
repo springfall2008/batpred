@@ -18,7 +18,7 @@ If you want to buy me a beer then please use Paypal - [tdlj@tdlj.net](mailto:tdl
 ## Predbat documentation
 
 You can find the latest Predbat documentation at [https://springfall2008.github.io/batpred/](https://springfall2008.github.io/batpred/) and
-how-to videos on my [YouTube channel](https://www.youtube.com/channel/UCr3eWnHExUYFi4-8ZUGfNJQ)
+how-to videos on my [YouTube channel](https://www.youtube.com/channel/UCr3eWnHExUYFi4-8ZUGfNJQ).
 
 The documentation covers how Predbat works, how to get it installed
 and configured, video tutorials and FAQs to help you get going.
@@ -29,7 +29,7 @@ It also explains how you can contribute to the project.
 For support please raise a Github ticket or use the [GivTCP](https://www.facebook.com/groups/615579009972782) or [Solis](https://www.facebook.com/groups/288045168816481) Facebook Groups.
 
 ```text
-Copyright (c) Trefor Southwell October 2023 - All rights reserved
-This software maybe used at not cost for personal use only
-No warranty is given, either expressed or implied
+Copyright (c) Trefor Southwell 2024 - All rights reserved
+This software maybe used at no cost for personal use only.
+No warranty is given, either expressed or implied.
 ```
