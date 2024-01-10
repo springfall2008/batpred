@@ -8,7 +8,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Setting Up HomeAssistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
 - [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans](https://youtu.be/44NyYbyd8PY?si=ZCWaJDAKIxJExlk0)
-  
+
 - [Configuration of apps.yaml](https://youtu.be/VE15l3maDOk)
 - [Configuration of Predbat inside Home Assistant](https://youtu.be/qsLWDd5SLkY)
 - [Understanding historical data](https://www.youtube.com/watch?v=LrhDRUhziC4)
