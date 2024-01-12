@@ -196,7 +196,7 @@ If you get a bunch of inverter information back then it's working!
 
 It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
+![image](images/GivTCP-output_raw_register_values.png)
 
 ### Home Assistant inverter control
 
