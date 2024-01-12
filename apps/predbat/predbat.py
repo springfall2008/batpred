@@ -8812,7 +8812,7 @@ class PredBat(hass.Hass):
                     self.log("Move on charge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 # Check if start is within 24 hours of now and end is in the future
-                if ((minutes_start - self.minutes_now) < (24 * 60)) and minutes_end > self.minutes_now:
+                if ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log(
@@ -8855,13 +8855,17 @@ class PredBat(hass.Hass):
                         if (self.minutes_now < minutes_end) and (
                             (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                            # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
-                            self.log(
-                                "Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
-                                    self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
+                                self.log("Charge window would wrap, disabling until later")
+                                inverter.disable_charge_window()
+                            else:
+                                # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
+                                self.log(
+                                    "Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
+                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                    )
                                 )
-                            )
-                            inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+                                inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
                             self.log(
                                 "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(
@@ -8874,7 +8878,7 @@ class PredBat(hass.Hass):
                     inverter.charge_end_time_minutes = minutes_end
                 elif ((minutes_start - self.minutes_now) >= (24 * 60)) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                     # No charging require in the next 24 hours
-                    self.log("No charge window required, disabling before the start")
+                    self.log("No charge window required for 24-hours, disabling before the start")
                     inverter.disable_charge_window()
                 else:
                     self.log("No change to charge window yet, waiting for schedule.")
@@ -10166,6 +10170,64 @@ class PredBat(hass.Hass):
         if entity not in self.dashboard_index:
             self.dashboard_index.append(entity)
 
+    def save_settings(self):
+        """
+        Save current predbat settings
+        """
+        basename = "/predbat_restore_settings.yaml"
+        filename = None
+        text = ""
+        text += 'alias: "Restore Predbat settings from {}"\n'.format(self.time_abs_str(self.minutes_now))
+        text += "mode: single\n"
+        text += "trigger: []\n"
+        text += "condition: []\n"
+        text += "action:\n"
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                filename = root + basename
+        if filename:
+            enable_list = [None]
+            for item in CONFIG_ITEMS:
+                enable = item.get("enable", None)
+                if enable and enable not in enable_list:
+                    enable_list.append(enable)
+
+            for try_enable in enable_list:
+                for item in CONFIG_ITEMS:
+                    entity = item["entity"]
+                    enable = item.get("enable", None)
+
+                    if entity == "select.predbat_update":
+                        # Do not restore predbat version
+                        continue
+
+                    if enable == try_enable and self.user_config_item_enabled(item):
+                        value = item.get("value", None)
+                        if value is not None:
+                            if item["type"] == "input_number":
+                                text += "  - service: input_number.set_value\n"
+                                text += "    target:\n"
+                                text += "      entity_id: {}\n".format(entity)
+                                text += "    data:\n"
+                                text += "      value: {}\n".format(value)
+                            elif item["type"] == "switch":
+                                if value:
+                                    text += "  - service: switch.turn_on\n"
+                                else:
+                                    text += "  - service: switch.turn_off\n"
+                                text += "    target:\n"
+                                text += "      entity_id: {}\n".format(entity)
+                                text += "    data: {}\n"
+                            elif item["type"] == "select":
+                                text += "  - service: select.select_option\n"
+                                text += "    target:\n"
+                                text += "      entity_id: {}\n".format(entity)
+                                text += "    data:\n"
+                                text += '      option: "{}"\n'.format(value)
+            with open(filename, "w") as file:
+                file.write(text)
+            self.log("Wrote settings to {}".format(filename))
+
     def create_debug_yaml(self):
         """
         Write out a debug info yaml
@@ -10625,6 +10687,7 @@ class PredBat(hass.Hass):
             try:
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
+                self.save_settings()
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
@@ -10655,6 +10718,7 @@ class PredBat(hass.Hass):
                 self.prediction_started = False
             if config_changed:
                 self.create_entity_list()
+                self.save_settings()
             self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
