@@ -126,7 +126,7 @@ The calculated best results under PV 10% scenario:
 
 ## Sample Predbat data out dashboard
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
+![image](images/Predbat-data_out_dashboard_sample.png)
 
 ## Predbat Logfile
 
