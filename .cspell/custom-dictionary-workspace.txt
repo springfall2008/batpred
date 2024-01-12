@@ -49,6 +49,7 @@ hadashboard
 HAOS
 hass
 hassapi
+hassio
 heatsink
 homeassistant
 houseb

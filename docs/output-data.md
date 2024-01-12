@@ -158,6 +158,7 @@ This automation will raise an alert if any of the following occur:
 
 - The inverter goes offline for more than 30 minutes
 - No last_updated_time received from the inverter for more than 30 minutes
+- Inverter temperature less than 5 degrees for more than 30 minutes (should never happen)
 - The battery goes offline to the inverter for more than 30 minutes
 
 The script will need to be customised for your inverter id, battery id and mobile details, and can be extended for multiple inverters and batteries.
@@ -246,6 +247,17 @@ action:
                   sticky: true
                   color: red
 mode: single
+```
+
+As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
+Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
+
+To restart the GivTCP add-on, add the following at the end of each 'sequence' sub-section within the action section:
+
+```yaml
+          - service: hassio.addon_restart
+            data:
+              addon: a6a2857d_givtcp
 ```
 
 ### Predbat error monitor
