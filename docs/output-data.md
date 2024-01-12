@@ -183,6 +183,15 @@ trigger:
     id: no-givtcp-update
     variables:
       inv_id: inverter <id>
+  - platform: numeric_state
+    entity_id:
+      - sensor.givtcp_<inverter id>_invertor_temperature
+    for:
+      minutes: 30
+    below: 5
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
   - platform: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
