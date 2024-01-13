@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.39"
+THIS_VERSION = "v7.14.40"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -272,7 +272,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
-        "default": 2.0,
+        "default": 1.0,
     },
     {
         "name": "metric_battery_value_scaling",

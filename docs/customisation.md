@@ -82,7 +82,7 @@ you have inverter losses as it's AC coupled battery.
 
 **input_number.metric_battery_cycle** (_expert mode_) Sets the cost in pence per kWh of using your battery for charging and discharging.
 Higher numbers will reduce battery cycles at the expense of using higher energy costs.
-Figures of around 1p-5p are recommended, the default is 2p.
+Figures of around 1p-5p are recommended, the default is 1p per kWh.
 
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) Can be used to scale the value of the energy
 in the battery at the end of the plan. The battery value is accounted for in the optimisations at the lowest future

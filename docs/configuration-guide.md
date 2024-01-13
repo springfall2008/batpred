@@ -16,7 +16,7 @@ Also set **switch.inverter_hybrid** to True or False depending upon if you have 
 The setting **input_number.metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence on using your battery for charging and discharging.<BR>
 In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each cycle is 19kWh and so the cost per cycle is £4000 / 19 / 6000 = 3.5p.
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
-The default is 2p but can be set to 0 if you want to turn this feature off.
+The default is 1p but can be set to 0 if you want to turn this feature off.
 Note that the cycle cost will not be included in the cost predictions that Predbat produces, its just taken into account in the planning stage.<BR>
 _NB: Setting this to a non-zero value will increase your daily cost, but will reduce your home battery usage._
 
