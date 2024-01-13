@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.39"
+THIS_VERSION = "v7.14.40"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -272,7 +272,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
-        "default": 2.0,
+        "default": 1.0,
     },
     {
         "name": "metric_battery_value_scaling",
@@ -8855,7 +8855,7 @@ class PredBat(hass.Hass):
                         if (self.minutes_now < minutes_end) and (
                             (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
+                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24*60:
                                 self.log("Charge window would wrap, disabling until later")
                                 inverter.disable_charge_window()
                             else:
@@ -10177,7 +10177,7 @@ class PredBat(hass.Hass):
         basename = "/predbat_restore_settings.yaml"
         filename = None
         text = ""
-        text += 'alias: "Restore Predbat settings from {}"\n'.format(self.time_abs_str(self.minutes_now))
+        text += "alias: \"Restore Predbat settings from {}\"\n".format(self.time_abs_str(self.minutes_now))
         text += "mode: single\n"
         text += "trigger: []\n"
         text += "condition: []\n"
@@ -10198,7 +10198,7 @@ class PredBat(hass.Hass):
                     enable = item.get("enable", None)
 
                     if entity == "select.predbat_update":
-                        # Do not restore predbat version
+                        # Do not restore predbat version 
                         continue
 
                     if enable == try_enable and self.user_config_item_enabled(item):
@@ -10223,7 +10223,7 @@ class PredBat(hass.Hass):
                                 text += "    target:\n"
                                 text += "      entity_id: {}\n".format(entity)
                                 text += "    data:\n"
-                                text += '      option: "{}"\n'.format(value)
+                                text += "      option: \"{}\"\n".format(value)
             with open(filename, "w") as file:
                 file.write(text)
             self.log("Wrote settings to {}".format(filename))
