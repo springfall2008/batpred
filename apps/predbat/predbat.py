@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.40"
+THIS_VERSION = "v7.14.41"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -878,7 +878,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "New Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
+                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
                     self.id,
                     self.base.dp2(self.soc_max),
                     self.base.dp2(self.nominal_capacity),
@@ -8728,6 +8728,9 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
+        # Return if we recomputed or not
+        return recompute
+
     def reset_inverter(self):
         """
         Reset inverter to safe mode
@@ -8855,7 +8858,7 @@ class PredBat(hass.Hass):
                         if (self.minutes_now < minutes_end) and (
                             (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
+                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24*60:
                                 self.log("Charge window would wrap, disabling until later")
                                 inverter.disable_charge_window()
                             else:
@@ -9056,7 +9059,7 @@ class PredBat(hass.Hass):
 
                     # Only set the reserve when we reach the desired percent
                     if (inverter.soc_percent > limit) or (not disabled_charge_window):
-                        self.log("Adjust reserve to default as SOC {} % is above target {} %".format(inverter.soc_percent, limit))
+                        self.log("Adjust reserve to default as SOC {} % is above target {} % or charging active".format(inverter.soc_percent, limit))
                         inverter.adjust_reserve(0)
                     else:
                         self.log("Adjust reserve to target charge {} % (set_reserve_enable is true)".format(limit))
@@ -9893,12 +9896,14 @@ class PredBat(hass.Hass):
             self.log("Plan was last updated on {} and is now {} minutes old".format(self.plan_last_updated, self.dp1(plan_age_minutes)))
 
         # Calculate the new plan (or re-use existing)
-        self.calculate_plan(recompute=recompute)
+        recompute = self.calculate_plan(recompute=recompute)
 
         # Publish rate data
         self.publish_rate_and_threshold()
 
-        # Execute the plan
+        # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
+        if recompute:
+            self.fetch_inverter_data()
         status, status_extra = self.execute_plan()
 
         # If the plan was not updated, and the time has expired lets update it now
@@ -9912,7 +9917,9 @@ class PredBat(hass.Hass):
                         self.dp1(plan_age_minutes), self.calculate_plan_every
                     )
                 )
+                # Calcuate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
+                self.fetch_inverter_data()
                 status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(self.dp1(plan_age_minutes), self.calculate_plan_every))
@@ -10177,7 +10184,7 @@ class PredBat(hass.Hass):
         basename = "/predbat_restore_settings.yaml"
         filename = None
         text = ""
-        text += 'alias: "Restore Predbat settings from {}"\n'.format(self.time_abs_str(self.minutes_now))
+        text += "alias: \"Restore Predbat settings from {}\"\n".format(self.time_abs_str(self.minutes_now))
         text += "mode: single\n"
         text += "trigger: []\n"
         text += "condition: []\n"
@@ -10198,7 +10205,7 @@ class PredBat(hass.Hass):
                     enable = item.get("enable", None)
 
                     if entity == "select.predbat_update":
-                        # Do not restore predbat version
+                        # Do not restore predbat version 
                         continue
 
                     if enable == try_enable and self.user_config_item_enabled(item):
@@ -10223,7 +10230,7 @@ class PredBat(hass.Hass):
                                 text += "    target:\n"
                                 text += "      entity_id: {}\n".format(entity)
                                 text += "    data:\n"
-                                text += '      option: "{}"\n'.format(value)
+                                text += "      option: \"{}\"\n".format(value)
             with open(filename, "w") as file:
                 file.write(text)
             self.log("Wrote settings to {}".format(filename))
