@@ -55,7 +55,7 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
 # Predbat update options
 PREDBAT_UPDATE_OPTIONS = [THIS_VERSION + " Loading..."]
-PREDBAT_SAVE_RESTORE = ['save current', 'restore default']
+PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
 
 # Configuration options inside HA
 CONFIG_ITEMS = [
@@ -478,7 +478,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_SAVE_RESTORE,
         "icon": "mdi:state-machine",
-        "default": '',
+        "default": "",
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -8737,7 +8737,7 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
-        # Return if we recomputed or not
+        # Return if we recomputed or not
         return recompute
 
     def reset_inverter(self):
@@ -8867,7 +8867,7 @@ class PredBat(hass.Hass):
                         if (self.minutes_now < minutes_end) and (
                             (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24*60:
+                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
                                 self.log("Charge window would wrap, disabling until later")
                                 inverter.disable_charge_window()
                             else:
@@ -10210,18 +10210,18 @@ class PredBat(hass.Hass):
                 self.save_restore_dir = root + "/predbat_save"
         if not self.save_restore_dir:
             return
-        
+
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
 
-        PREDBAT_SAVE_RESTORE = ['save current', 'restore default']
+        PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
         for root, dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
-                if filepath.endswith('.yaml'):
+                if filepath.endswith(".yaml"):
                     PREDBAT_SAVE_RESTORE.append(name)
         item = self.config_index.get("saverestore", None)
-        item['options'] = PREDBAT_SAVE_RESTORE
+        item["options"] = PREDBAT_SAVE_RESTORE
         self.expose_config("saverestore", None)
 
     def restore_settings_yaml(self, filename):
@@ -10257,10 +10257,10 @@ class PredBat(hass.Hass):
         """
         if not self.save_restore_dir:
             return
-        
+
         filename = self.time_abs_str(self.minutes_now)
-        filename = filename.replace(' ', '_')
-        filename = filename.replace(':', '_')
+        filename = filename.replace(" ", "_")
+        filename = filename.replace(":", "_")
         filename += ".yaml"
         filepath = os.path.join(self.save_restore_dir, filename)
         with open(filepath, "w") as file:
@@ -10768,5 +10768,4 @@ class PredBat(hass.Hass):
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
-                raise 
-
+                raise
