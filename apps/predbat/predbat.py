@@ -55,7 +55,7 @@ PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
 # Predbat update options
 PREDBAT_UPDATE_OPTIONS = [THIS_VERSION + " Loading..."]
-PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+PREDBAT_SAVE_RESTORE = ['save current', 'restore default']
 
 # Configuration options inside HA
 CONFIG_ITEMS = [
@@ -478,7 +478,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": PREDBAT_SAVE_RESTORE,
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": '',
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -8737,7 +8737,7 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
-        # Return if we recomputed or not
+        # Return if we recomputed or not
         return recompute
 
     def reset_inverter(self):
@@ -8867,7 +8867,7 @@ class PredBat(hass.Hass):
                         if (self.minutes_now < minutes_end) and (
                             (minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes
                         ):
-                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
+                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24*60:
                                 self.log("Charge window would wrap, disabling until later")
                                 inverter.disable_charge_window()
                             else:
@@ -10210,18 +10210,18 @@ class PredBat(hass.Hass):
                 self.save_restore_dir = root + "/predbat_save"
         if not self.save_restore_dir:
             return
-
+        
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
 
-        PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+        PREDBAT_SAVE_RESTORE = ['save current', 'restore default']
         for root, dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
-                if filepath.endswith(".yaml"):
+                if filepath.endswith('.yaml'):
                     PREDBAT_SAVE_RESTORE.append(name)
         item = self.config_index.get("saverestore", None)
-        item["options"] = PREDBAT_SAVE_RESTORE
+        item['options'] = PREDBAT_SAVE_RESTORE
         self.expose_config("saverestore", None)
 
     def restore_settings_yaml(self, filename):
@@ -10257,73 +10257,15 @@ class PredBat(hass.Hass):
         """
         if not self.save_restore_dir:
             return
-
+        
         filename = self.time_abs_str(self.minutes_now)
-        filename = filename.replace(" ", "_")
-        filename = filename.replace(":", "_")
+        filename = filename.replace(' ', '_')
+        filename = filename.replace(':', '_')
         filename += ".yaml"
         filepath = os.path.join(self.save_restore_dir, filename)
         with open(filepath, "w") as file:
             yaml.dump(CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath))
-
-    def save_settings(self):
-        """
-        Save current predbat settings
-        """
-        basename = "/predbat_restore_settings.yaml"
-        filename = None
-        text = ""
-        text += 'alias: "Restore Predbat settings from {}"\n'.format(self.time_abs_str(self.minutes_now))
-        text += "mode: single\n"
-        text += "trigger: []\n"
-        text += "condition: []\n"
-        text += "action:\n"
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                filename = root + basename
-        if filename:
-            enable_list = [None]
-            for item in CONFIG_ITEMS:
-                enable = item.get("enable", None)
-                if enable and enable not in enable_list:
-                    enable_list.append(enable)
-
-            for try_enable in enable_list:
-                for item in CONFIG_ITEMS:
-                    entity = item["entity"]
-                    enable = item.get("enable", None)
-
-                    if entity == "select.predbat_update":
-                        # Do not restore predbat version
-                        continue
-
-                    if enable == try_enable and self.user_config_item_enabled(item):
-                        value = item.get("value", None)
-                        if value is not None:
-                            if item["type"] == "input_number":
-                                text += "  - service: input_number.set_value\n"
-                                text += "    target:\n"
-                                text += "      entity_id: {}\n".format(entity)
-                                text += "    data:\n"
-                                text += "      value: {}\n".format(value)
-                            elif item["type"] == "switch":
-                                if value:
-                                    text += "  - service: switch.turn_on\n"
-                                else:
-                                    text += "  - service: switch.turn_off\n"
-                                text += "    target:\n"
-                                text += "      entity_id: {}\n".format(entity)
-                                text += "    data: {}\n"
-                            elif item["type"] == "select":
-                                text += "  - service: select.select_option\n"
-                                text += "    target:\n"
-                                text += "      entity_id: {}\n".format(entity)
-                                text += "    data:\n"
-                                text += '      option: "{}"\n'.format(value)
-            with open(filename, "w") as file:
-                file.write(text)
-            self.log("Wrote settings to {}".format(filename))
 
     def create_debug_yaml(self):
         """
@@ -10784,7 +10726,6 @@ class PredBat(hass.Hass):
             try:
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
-                self.save_settings()
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
@@ -10815,7 +10756,6 @@ class PredBat(hass.Hass):
                 self.prediction_started = False
             if config_changed:
                 self.create_entity_list()
-                self.save_settings()
             self.prediction_started = False
 
     def run_time_loop_balance(self, cb_args):
@@ -10828,4 +10768,5 @@ class PredBat(hass.Hass):
             except Exception as e:
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
-                raise
+                raise 
+
