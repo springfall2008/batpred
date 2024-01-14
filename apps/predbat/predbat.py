@@ -9917,7 +9917,7 @@ class PredBat(hass.Hass):
                         self.dp1(plan_age_minutes), self.calculate_plan_every
                     )
                 )
-                # Calcuate an updated plan, fetch the inverter data again and execute the plan
+                # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
                 self.fetch_inverter_data()
                 status, status_extra = self.execute_plan()
