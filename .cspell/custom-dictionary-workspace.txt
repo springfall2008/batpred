@@ -98,6 +98,7 @@ rname
 rowspan
 rstart
 rtype
+saverestore
 searr
 Selfuse
 socb
