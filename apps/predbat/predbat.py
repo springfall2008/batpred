@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.43"
+THIS_VERSION = "v7.14.44"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -837,19 +837,23 @@ class Inverter:
 
         # Check inverter time and confirm skew
         if self.inverter_time:
-            tdiff = self.inverter_time - self.base.now_utc
+            # Fetch current time again as it may have changed since we run this inverter update
+            local_tz = pytz.timezone(self.base.get_arg("timezone", "Europe/London"))
+            now_utc = datetime.now(local_tz)
+
+            tdiff = self.inverter_time - now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
-                self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, self.base.now_utc, tdiff))
+                self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 5:
                 self.base.log(
                     "WARN: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
-                        self.inverter_time, self.base.now_utc, tdiff
+                        self.inverter_time, now_utc, tdiff
                     )
                 )
                 self.base.record_status(
                     "Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
-                        self.inverter_time, self.base.now_utc, tdiff
+                        self.inverter_time, now_utc, tdiff
                     ),
                     had_errors=True,
                 )
