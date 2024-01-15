@@ -7,6 +7,7 @@ cards:
     - entity: update.predbat_version
     - entity: select.predbat_update
     - entity: select.predbat_mode
+    - entity: select.predbat_saverestore
   - type: custom:collapsable-cards
     title: 🔀 Control
     defaultOpen: false
