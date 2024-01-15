@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.42"
+THIS_VERSION = "v7.14.43"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -10235,7 +10235,8 @@ class PredBat(hass.Hass):
         if not self.save_restore_dir:
             return
 
-        self.save_settings_yaml("previous.yaml")
+        if filename != "previous.yaml":
+            self.save_settings_yaml("previous.yaml")
 
         if not filename:
             self.log("Restore settings to default")
