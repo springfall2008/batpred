@@ -68,7 +68,7 @@ CONFIG_ITEMS = [
         "release_url": "https://github.com/springfall2008/batpred/releases/tag/" + THIS_VERSION,
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
     },
-    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", "default": True},
+    {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", "default": False},
     {
         "name": "pv_metric10_weight",
         "friendly_name": "Metric 10 Weight",
@@ -10235,11 +10235,15 @@ class PredBat(hass.Hass):
         if not self.save_restore_dir:
             return
 
+        self.save_settings_yaml("previous.yaml")
+
         if not filename:
             self.log("Restore settings to default")
             for item in CONFIG_ITEMS:
-                self.log("Restore setting: {} = {}".format(item["name"], item["default"]))
-                self.expose_config(item["name"], item["default"], event=True)
+                if (item["value"] != item.get("default", None)) and (item["name"] != "update"):
+                    self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
+                    self.expose_config(item["name"], item["default"], event=True)
+            self.call_notify("Predbat settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -10247,25 +10251,28 @@ class PredBat(hass.Hass):
                 with open(filepath, "r") as file:
                     settings = yaml.safe_load(file)
                     for item in settings:
-                        self.log("Restore setting: {} = {}".format(item["name"], item["value"]))
-                        self.expose_config(item["name"], item["value"], event=True)
+                        current = self.config_index.get(item["name"], None)
+                        if current and (current["value"] != item["value"]) and (item["name"] != "update"):
+                            self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
+                            self.expose_config(item["name"], item["value"], event=True)
+                self.call_notify("Predbat settings restored from {}".format(filename))
         self.expose_config("saverestore", None)
 
-    def save_settings_yaml(self):
+    def save_settings_yaml(self, filename=None):
         """
         Save current Predbat settings
         """
         if not self.save_restore_dir:
             return
 
-        filename = self.time_abs_str(self.minutes_now)
-        filename = filename.replace(" ", "_")
-        filename = filename.replace(":", "_")
-        filename += ".yaml"
+        if not filename:
+            filename = self.now_utc.strftime("%y_%m_%d_%H_%M_%S")
+            filename += ".yaml"
         filepath = os.path.join(self.save_restore_dir, filename)
         with open(filepath, "w") as file:
             yaml.dump(CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath))
+        self.call_notify("Predbat settings saved to {}".format(filename))
 
     def create_debug_yaml(self):
         """
@@ -10355,11 +10362,7 @@ class PredBat(hass.Hass):
             name = item["name"]
             self.config_index[name] = item
 
-            # Set the default for expert mode to False for new installs only
-            if name == "expert_mode":
-                if new_install:
-                    item["default"] = False
-            elif name == "mode":
+            if name == "mode":
                 if new_install:
                     item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
 
