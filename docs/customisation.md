@@ -8,16 +8,16 @@ Home Assistant.
 
 ## Saving and restoring Predbat settings
 
-The selector **select.predbat_saverestore** can be used to save you current settings to a yaml file (kept in /config/predbat_save/) and to 
+The selector **select.predbat_saverestore** can be used to save you current settings to a yaml file (kept in /config/predbat_save/) and to
 restore the settings from one of these files.
 
 Selecting **save current** will cause the settings to be save to a date/time stamped file. You can rename this file yourself in the HA filesystem
 to give it a more human readable name or delete it if you no longer want it. This is normally best done in the SSH window or via a Samba mount.
 
-Selecting **restore default** will put all your settings back to the Predbat defaults. 
+Selecting **restore default** will put all your settings back to the Predbat defaults.
 Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
 
-Selecting any of the .yaml files you have created will restore your settings from this file. 
+Selecting any of the .yaml files you have created will restore your settings from this file.
 Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/209442c1-bd4d-4812-84e2-c5a81794bd1d)
