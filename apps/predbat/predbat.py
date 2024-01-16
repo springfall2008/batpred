@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.14.44"
+THIS_VERSION = "v7.14.45"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -67,6 +67,7 @@ CONFIG_ITEMS = [
         "installed_version": THIS_VERSION,
         "release_url": "https://github.com/springfall2008/batpred/releases/tag/" + THIS_VERSION,
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
+        "restore": False,
     },
     {"name": "expert_mode", "friendly_name": "Expert Mode", "type": "switch", "default": False},
     {
@@ -379,6 +380,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:ev-station",
         "enable": "car_charging_manual_soc",
         "default": 0.0,
+        "restore": False,
     },
     {"name": "octopus_intelligent_charging", "friendly_name": "Octopus Intelligent Charging", "type": "switch", "default": True},
     {
@@ -471,6 +473,7 @@ CONFIG_ITEMS = [
         "options": PREDBAT_UPDATE_OPTIONS,
         "icon": "mdi:state-machine",
         "default": None,
+        "restore": False,
     },
     {
         "name": "saverestore",
@@ -479,6 +482,7 @@ CONFIG_ITEMS = [
         "options": PREDBAT_SAVE_RESTORE,
         "icon": "mdi:state-machine",
         "default": "",
+        "restore": False,
     },
     {"name": "auto_update", "friendly_name": "Predbat automatic update enable", "type": "switch", "default": False},
     {"name": "load_filter_modal", "friendly_name": "Apply modal filter historical load", "type": "switch", "enable": "expert_mode", "default": True},
@@ -520,6 +524,7 @@ CONFIG_ITEMS = [
         "unit": "w",
         "enable": "iboost_enable",
         "default": 2400,
+        "restore": False,
     },
     {
         "name": "iboost_min_power",
@@ -554,6 +559,7 @@ CONFIG_ITEMS = [
         "unit": "days",
         "icon": "mdi:clock-end",
         "default": 0,
+        "restore": False,
     },
     {
         "name": "forecast_plan_hours",
@@ -9802,22 +9808,26 @@ class PredBat(hass.Hass):
             self.calculate_best_discharge = False
             self.set_charge_window = False
             self.set_discharge_window = False
+            self.set_soc_enable = True
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = False
             self.set_charge_window = True
             self.set_discharge_window = False
+            self.set_soc_enable = True
         elif self.predbat_mode == PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE]:
             self.calculate_best_charge = True
             self.calculate_best_discharge = True
             self.set_charge_window = True
             self.set_discharge_window = True
+            self.set_soc_enable = True
         else:  # PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
             self.calculate_best_charge = False
             self.calculate_best_discharge = False
             self.set_charge_window = False
             self.set_discharge_window = False
             self.predbat_mode = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
+            self.set_soc_enable = False
             self.expose_config("mode", self.predbat_mode)
 
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
@@ -10245,7 +10255,7 @@ class PredBat(hass.Hass):
         if not filename:
             self.log("Restore settings to default")
             for item in CONFIG_ITEMS:
-                if (item["value"] != item.get("default", None)) and (item["name"] != "update"):
+                if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     self.expose_config(item["name"], item["default"], event=True)
             self.call_notify("Predbat settings restored from default")
@@ -10257,7 +10267,7 @@ class PredBat(hass.Hass):
                     settings = yaml.safe_load(file)
                     for item in settings:
                         current = self.config_index.get(item["name"], None)
-                        if current and (current["value"] != item["value"]) and (item["name"] != "update"):
+                        if current and (current["value"] != item["value"]) and current.get("restore", True):
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                             self.expose_config(item["name"], item["value"], event=True)
                 self.call_notify("Predbat settings restored from {}".format(filename))
