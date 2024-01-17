@@ -9384,14 +9384,16 @@ class PredBat(hass.Hass):
                 available_events = self.get_state(entity_id=entity_id, attribute="available_events")
                 if available_events:
                     for event in available_events:
-                        code = event.get("code", None)
+                        code = event.get("code", None) # decode the available events structure for code, start/end time & rate
                         start = event.get("start", None)
                         end = event.get("end", None)
+                        start_time = self.str2time(start) # reformat the saving session start & end time for improved readability
+                        end_time = self.str2time(end)
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:  # Join the new Octopus saving event and send an alert
-                            self.log("Joining Octopus saving event code {} start {} end {} price per kWh {}".format(code, start, end, saving_rate))
+                            self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate)) #gc
                             self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            self.call_notify("Predbat: Joined Octopus saving event: start {}, end {}, price per kWh {}".format(start, end, saving_rate))
+                            self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
 
                 if joined_events:
                     for event in joined_events:
