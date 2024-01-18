@@ -156,7 +156,7 @@ If you install Predbat through HACS, once installed you will get automatic updat
 
 **NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
 
-These are located under the Home Assistant directory `/config/appdaemon/` which contains:
+As you are following the 'install Predbat through HACS' installation method these are located under the Home Assistant directory `/config/appdaemon/` which contains:
 
 - **appdaemon.log** - AppDaemon and Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
 - **apps/batpred/config/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.

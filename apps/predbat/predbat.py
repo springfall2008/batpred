@@ -5687,7 +5687,7 @@ class PredBat(hass.Hass):
         if self.num_cars > 0:
             html += "<td><b>Car kWh</b></td>"
         if self.iboost_enable:
-            html += "<td><b>IBoost kWh</b></td>"
+            html += "<td><b>iBoost kWh</b></td>"
         html += "<td><b>SOC %</b></td>"
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"

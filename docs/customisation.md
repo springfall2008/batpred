@@ -237,13 +237,17 @@ You could even go to something like -0.1 to say you would charge less even if it
 A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
 then discharges will become less common and shorter.
 
-**input_number.rate_low_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
-the threshold below average rates as the minimum to consider for a charge window, 0.8 = 80% of average rate
+**input_number.rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
+and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
+If rate_low_threshold is set to a non zero value this will set the threshold below future average import rates as the minimum to consider for a charge window,
+e.g. setting to 0.8 = 80% of average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.rate_high_threshold** (_expert mode_) When 0 (default) this is automatic but can be overridden. When non zero it sets
-the threshold above average rates as to the minimum export rate to consider exporting for - 1.2 = 20% above average rate
+**input_number.rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
+and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
+If rate_high_threshold is set to a non zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
+e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
 **input_number.metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are
@@ -363,6 +367,6 @@ In summary:
 
 ## Debug
 
-**debug_enable** when on prints lots of debug, leave off by default
+**switch.debug_enable** when on prints lots of debug, leave off by default
 
-**plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan
+**switch.plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan) for more details.

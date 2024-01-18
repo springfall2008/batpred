@@ -54,11 +54,14 @@ The current Predbat status is reported in the Home Assistant entity **predbat.st
 exported if the battery is full. This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
 - **Charging** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
+
 - **Freeze charging** - The current battery level is held and the grid/solar covers any load. Solar power will also be used to charge the battery.
 - **Hold charging** - A type of charge where the target SOC % is the same as the current SOC %, effectively the same as a charge freeze (but without being explicitly selected).
+
 - **No Charge** - A charge where the target SOC % is lower than the current battery SOC level so there will be no charging unless the usage is unexpectedly high.
 
 - **Discharging** - The battery is being force-discharged. The house load will be covered by the battery and any excess is exported to the grid. Any solar generated will be exported.
+
 - **Freeze discharging** - The battery is covering the load but charging is disabled, thus any solar generated will be exported.
 
 - **Error** - There is a configuration error or other problem, you should check the [Predbat AppDaemon log file](output-data.md#predbat-logfile) for more details.
