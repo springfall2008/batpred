@@ -369,4 +369,5 @@ In summary:
 
 **switch.debug_enable** when on prints lots of debug, leave off by default
 
-**switch.plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan) for more details.
+**switch.plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan)
+for more details.

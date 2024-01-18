@@ -9395,7 +9395,7 @@ class PredBat(hass.Hass):
                                 "Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(
                                     code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate
                                 )
-                            )  # gc
+                            )
                             self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             self.call_notify(
                                 "Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate)
