@@ -37,8 +37,8 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 - Any limit applied (e.g. charging to 70%)
 - Forecast Solar generation (from Solcast)
 - Forecast house load (from your historical load data)
-- Planned car charging
-- Planned iBoost immersion heating
+- Planned car charging (if car charging is configured in Predbat)
+- Planned iBoost immersion heating (if iBoost is configured)
 - What the battery SOC will be at the start of the 30 minute slot
 - The forecast cost for the half hour slot
 - A running total cost
@@ -76,7 +76,8 @@ charging and discharging activity - if Predbat plans this, state will show as bo
 e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Discharge&searr; 4%' is discharge the battery to the 4% reserve level.
 
 - **PV kWh** - The predicted solar forecast for the half hour slot, estimated from the [Solcast Forecast](apps-yaml.md#solcast-solar-forecast).<BR>
-If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red, above 0.1kWh it will be Yellow, otherwise it will be Silver Grey.
+If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red with a little sun symbol, above 0.1kWh it will be Yellow with a sun symbol,
+otherwise it will be Silver Grey.
 
 - **Load kWh** - The predicted house load for the half hour slot, estimated as a weighted average of the number of [days_previous](apps-yaml.md#basics)
 [Historical data](apps-yaml.md#historical-data) from your inverter or other house load sensor.<BR>
