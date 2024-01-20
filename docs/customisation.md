@@ -6,6 +6,22 @@ See [Displaying output data](output-data.md#displayng-output-data)
 for information on how to view and edit these entities within
 Home Assistant.
 
+## Saving and restoring Predbat settings
+
+The selector **select.predbat_saverestore** can be used to save you current settings to a yaml file (kept in /config/predbat_save/) and to
+restore the settings from one of these files.
+
+Selecting **save current** will cause the settings to be save to a date/time stamped file. You can rename this file yourself in the HA filesystem
+to give it a more human readable name or delete it if you no longer want it. This is normally best done in the SSH window or via a Samba mount.
+
+Selecting **restore default** will put all your settings back to the Predbat defaults.
+Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
+
+Selecting any of the .yaml files you have created will restore your settings from this file.
+Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/209442c1-bd4d-4812-84e2-c5a81794bd1d)
+
 ## Predbat mode
 
 The mode that Predbat operates in will change the operation, this can be configured with **select.predbat_mode** drop down menu as follows:
@@ -21,6 +37,8 @@ This is useful if you want to over-ride what predbat is planning to do (e.g. you
 
 _NOTE: Changing the Predbat mode or the read only switch will cause Predbat to reset the inverter settings to default, this will disable
 both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/43faa962-6b8a-495a-88f8-f762aa1d55b8)
 
 ### Predbat Monitor mode
 
@@ -82,7 +100,7 @@ you have inverter losses as it's AC coupled battery.
 
 **input_number.metric_battery_cycle** (_expert mode_) Sets the cost in pence per kWh of using your battery for charging and discharging.
 Higher numbers will reduce battery cycles at the expense of using higher energy costs.
-Figures of around 1p-5p are recommended, the default is 2p.
+Figures of around 1p-5p are recommended, the default is 1p per kWh.
 
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) Can be used to scale the value of the energy
 in the battery at the end of the plan. The battery value is accounted for in the optimisations at the lowest future
@@ -103,6 +121,9 @@ Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 **input_number.load_scaling10** is a Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling).
 This can  be used to make the 10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
 scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+
+**input_number.load_scaling_saving** is a Scaling factor applied to historical load only during Octopus Saving sessions. This can be used to model
+your household cutting down on energy use only inside a session (e.g. turning off a heat pump).
 
 **input_number.pv_scaling** is a scaling factor applied to PV data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
@@ -364,6 +385,35 @@ In summary:
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
+
+## Manual control
+
+In some cases you may want to override Predbat behaviour and make a decision yourself. One way to achieve this is to put Predbat into
+read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
+control it yourself using GivTCP or the App.
+
+A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
+
+Can you force a charge within a 30 minute slot by using the **select.predbat_manual_charge** selector. Pick the 30 minute slot you wish
+to charge in and this will be actioned. You can select multiple slots by using the drop down menu more than once, when Predbat updates
+you will see the slots picked in the current value of this selector and in the HTML plan (upside down F symbol).
+
+You can cancel a force slot by selecting the time again (it will be shown in square brackets to indicate its already selected).
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/aa668cc3-60fc-4956-8619-822f09f601dd)
+
+The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the
+manual force charge feature. The force discharge takes priority over force charging.
+
+The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
+battery will cover the house load (if there is enough charge).
+
+When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
+slot expires (they do not repeat).
+
+_CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/7e69730f-a379-483a-8281-f72de0cc6e97)
 
 ## Debug
 

@@ -100,6 +100,7 @@ rname
 rowspan
 rstart
 rtype
+saverestore
 searr
 Selfuse
 socb
@@ -127,6 +128,7 @@ Trefor
 treforsiphone
 unstaged
 Wallbox
+welink
 xaxis
 yaxis
 zappi
