@@ -8559,16 +8559,11 @@ class PredBat(hass.Hass):
             self.plan_valid = False  # In case of crash, plan is now invalid
 
             # Calculate best charge windows
-            if self.low_rates:
+            if self.low_rates and self.calculate_best_charge and self.set_charge_window:
                 # If we are using calculated windows directly then save them
                 self.charge_window_best = copy.deepcopy(self.low_rates)
             else:
                 # Default best charge window as this one
-                self.charge_window_best = self.charge_window
-
-            if self.set_soc_enable and not self.set_charge_window:
-                # If we can't control the charge window, but we can control the SOC then don't calculate a new window or the calculated SOC will be wrong
-                self.log("Note: Set SOC is enabled, but set charge window is disabled, so using the existing charge window only")
                 self.charge_window_best = self.charge_window
 
             # Calculate best discharge windows
