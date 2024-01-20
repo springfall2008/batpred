@@ -4856,11 +4856,31 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (not find_high) and (rate_low_start in self.manual_charge_times or rate_low_start in self.manual_idle_times or minute in self.manual_charge_times or minute in self.manual_idle_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (
+                        (not find_high)
+                        and (
+                            rate_low_start in self.manual_charge_times
+                            or rate_low_start in self.manual_idle_times
+                            or minute in self.manual_charge_times
+                            or minute in self.manual_idle_times
+                        )
+                        and (rate_low_start >= 0)
+                        and ((minute - rate_low_start) >= 30)
+                    ):
                         # Manual import slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start in self.manual_discharge_times or rate_low_start in self.manual_idle_times or minute in self.manual_discharge_times or minute in self.manual_idle_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (
+                        find_high
+                        and (
+                            rate_low_start in self.manual_discharge_times
+                            or rate_low_start in self.manual_idle_times
+                            or minute in self.manual_discharge_times
+                            or minute in self.manual_idle_times
+                        )
+                        and (rate_low_start >= 0)
+                        and ((minute - rate_low_start) >= 30)
+                    ):
                         # Manual export slot
                         rate_low_end = minute
                         break
@@ -8629,10 +8649,22 @@ class PredBat(hass.Hass):
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         load_minutes_step = self.step_data_history(
-            self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, type_load=True, load_forecast=self.load_forecast, load_scaling_dynamic=self.load_scaling_dynamic
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
         )
         load_minutes_step10 = self.step_data_history(
-            self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment * self.load_scaling10, type_load=True, load_forecast=self.load_forecast, load_scaling_dynamic=self.load_scaling_dynamic
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment * self.load_scaling10,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
