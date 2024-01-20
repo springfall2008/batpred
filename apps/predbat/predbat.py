@@ -5024,7 +5024,7 @@ class PredBat(hass.Hass):
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
                 percent = kwh_left / kwh_add
-                length = min(int(((length * percent) / 5) + 2.5) * 5, end - start)
+                length = min(int(((length * percent) / 5) + 0.5) * 5, end - start)
                 end = start + length
                 hours = length / 60
                 kwh = self.car_charging_rate[car_n] * hours
