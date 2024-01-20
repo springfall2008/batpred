@@ -49,6 +49,7 @@ hadashboard
 HAOS
 hass
 hassapi
+hassio
 heatsink
 homeassistant
 houseb
@@ -69,6 +70,7 @@ metricmid
 minb
 minmax
 minuteb
+Mixergy
 mkdocs
 Modbus
 mqtt

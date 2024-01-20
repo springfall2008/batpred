@@ -46,18 +46,52 @@ Once you have made all other required changes to apps.yaml this line should be d
 
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
-- **days_previous** - A list (one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.<BR>
-Typical settings could be 1, 7 or 7, 14, or 2, 3, 4, 5, 6, 7, 8.<BR>
-Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before its purged
+- **days_previous** - A list (which has to be entered as one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
+It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
+
+For example, to take an average house load over all the days of the last week:
+
+```yaml
+  days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+```
+
+Or if you just want same day last week's consumption:
+
+```yaml
+  days_previous:
+    - 7
+```
+
+Or if you want the average of the same day for the last 2 weeks:
+
+```yaml
+  days_previous:
+    - 7
+    - 14
+```
+
+Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before it is purged
 by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 
 ```yaml
-    recorder:
-      purge_keep_days: 14
+  recorder:
+    purge_keep_days: 14
 ```
 
-- **days_previous_weight** - A list (one entry per line) of weightings to be applied to each of the days in days_previous. Default value is 1, that all history days are equally weighted.
+- **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
+The default value is 1, that all history days are equally weighted, so if you don't want to weight individual days you can simply use:
+
+```yaml
+  days_previous_weight:
+    - 1
+```
 
 - **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
@@ -104,11 +138,11 @@ In this circumstance one solution is to create a Home Assistant template helper 
 e.g.
 
 ```yaml
-{{ states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
-+ states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-- states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
-+ states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
-- states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) }}
+{{ ( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
+  + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
+  - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
+  + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+  - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) ) | round(1) }}
 ```
 
 ### GivEnergy Cloud Data
@@ -162,7 +196,7 @@ If you get a bunch of inverter information back then it's working!
 
 It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring:
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/e6cf0304-57f3-4259-8354-95a7c4f9b77f)
+![image](images/GivTCP-output_raw_register_values.png)
 
 ### Home Assistant inverter control
 
@@ -273,7 +307,10 @@ high battery charge levels when the car was charged previously (e.g. last week).
 - **switch.car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from Predbat's battery prediction plan.
 
 - **car_charging_energy** - Set in apps.yaml to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
-This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.
+This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.<BR>
+This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
+You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
+e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
 
 - **input_number.car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
 to multiply the car_charging_energy data by if required (e.g. set to 0.001 to convert Watts to kW).
@@ -337,6 +374,30 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 
 - Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
 SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+
+## Load Forecast
+
+In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
+such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat):
+
+- **load_forecast** - this should be configured to point to a sensor and attribute that is in the format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+
+For example:<BR>
+![IMAGE](images/load_forecast.png)
+
+`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above format) like this:
+
+```yaml
+load_forecast:
+  - sensor_name$attribute_name
+```
+
+So if using Predheat it would be configured as:
+
+```yaml
+load_forecast:
+  - predheat.heat_energy$external
+```
 
 ## Balance Inverters
 

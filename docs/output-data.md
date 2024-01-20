@@ -126,7 +126,7 @@ The calculated best results under PV 10% scenario:
 
 ## Sample Predbat data out dashboard
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/5c73cd6e-3110-4ecd-af42-7e6d156af4b2)
+![image](images/predbat-data_out_dashboard_sample.png)
 
 ## Predbat Logfile
 
@@ -158,6 +158,7 @@ This automation will raise an alert if any of the following occur:
 
 - The inverter goes offline for more than 30 minutes
 - No last_updated_time received from the inverter for more than 30 minutes
+- Inverter temperature less than 5 degrees for more than 30 minutes (should never happen)
 - The battery goes offline to the inverter for more than 30 minutes
 
 The script will need to be customised for your inverter id, battery id and mobile details, and can be extended for multiple inverters and batteries.
@@ -168,7 +169,7 @@ description: Alert when communications to GivTCP have ceased for 30 minutes
 trigger:
   - platform: state
     entity_id: sensor.givtcp_<inverter id>_last_updated_time
-    to: null
+    to: "null"
     for:
       minutes: 30
     id: no-givtcp-update
@@ -177,61 +178,86 @@ trigger:
   - platform: state
     entity_id:
       - sensor.givtcp_<inverter id>_status
-    from: online
+    from: "online"
     for:
       minutes: 30
+    id: no-givtcp-update
+    variables:
+      inv_id: inverter <id>
+  - platform: numeric_state
+    entity_id:
+      - sensor.givtcp_<inverter id>_invertor_temperature
+    for:
+      minutes: 30
+    below: 5
     id: no-givtcp-update
     variables:
       inv_id: inverter <id>
   - platform: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
-    to: unknown
+    to: "unknown"
     for:
       minutes: 30
     id: battery-unavailable
     variables:
       batt_id: <batt size/id>
 action:
-  - condition: trigger
-    id:
-      - no-givtcp-update
-  - service: notify.mobile_app_<your mobile device id>
-    data:
-      title: GivTCP communication issue
-      message: |
-        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-        No GivTCP update received from {{ inv_id }} for the past 30 minutes.
-      data:
-        visibility: public
-        persistent: true
-        push:
-          sound:
-            name: default
-            critical: 1
-            volume: 0.8
-        sticky: true
-        color: red
-  - condition: trigger
-    id:
-      - battery-unavailable
-  - service: notify.mobile_app_<your mobile device id>
-    data:
-      title: GivTCP communication issue
-      message: |
-        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-        Battery {{ batt_id }} offline to GivTCP for the past 30 minutes.
-      data:
-        visibility: public
-        persistent: true
-        push:
-          sound:
-            name: default
-            critical: 1
-            volume: 0.8
-        sticky: true
-        color: red
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - no-givtcp-update
+        sequence:
+          - service: notify.mobile_app_<your mobile device id>
+            data:
+              title: GivTCP communication issue
+              message: |
+                {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+                No GivTCP update received from {{ inv_id }} for the past 30 minutes.
+              data:
+                visibility: public
+                persistent: true
+                push:
+                  sound:
+                    name: default
+                    critical: 1
+                    volume: 0.8
+                sticky: true
+                color: red
+      - conditions:
+          - condition: trigger
+            id:
+              - battery-unavailable
+        sequence:
+          - service: notify.mobile_app_<your mobile device id>
+            data:
+              title: GivTCP communication issue
+              message: |
+                {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+                Battery {{ batt_id }} offline to GivTCP for the past 30 minutes.
+              data:
+                visibility: public
+                persistent: true
+                push:
+                  sound:
+                    name: default
+                    critical: 1
+                    volume: 0.8
+                  sticky: true
+                  color: red
 mode: single
+```
+
+As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
+Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
+
+To restart the GivTCP add-on, add the following at the end of each 'sequence' sub-section within the action section:
+
+```yaml
+          - service: hassio.addon_restart
+            data:
+              addon: a6a2857d_givtcp
 ```
 
 ### Predbat error monitor
