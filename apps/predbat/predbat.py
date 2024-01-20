@@ -4841,11 +4841,31 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (not find_high) and (rate_low_start in self.manual_charge_times or rate_low_start in self.manual_idle_times or minute in self.manual_charge_times or minute in self.manual_idle_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (
+                        (not find_high)
+                        and (
+                            rate_low_start in self.manual_charge_times
+                            or rate_low_start in self.manual_idle_times
+                            or minute in self.manual_charge_times
+                            or minute in self.manual_idle_times
+                        )
+                        and (rate_low_start >= 0)
+                        and ((minute - rate_low_start) >= 30)
+                    ):
                         # Manual import slot
                         rate_low_end = minute
                         break
-                    if find_high and (rate_low_start in self.manual_discharge_times or rate_low_start in self.manual_idle_times or minute in self.manual_discharge_times or minute in self.manual_idle_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (
+                        find_high
+                        and (
+                            rate_low_start in self.manual_discharge_times
+                            or rate_low_start in self.manual_idle_times
+                            or minute in self.manual_discharge_times
+                            or minute in self.manual_idle_times
+                        )
+                        and (rate_low_start >= 0)
+                        and ((minute - rate_low_start) >= 30)
+                    ):
                         # Manual export slot
                         rate_low_end = minute
                         break
