@@ -310,7 +310,8 @@ pred_bat:
   # -  date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
-  #    rate: 5
+  #    rate: 112
+  #    load_scaling: 0.8
 
   # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
   # If you use 10 then disable pv_metric10_weight below

@@ -100,6 +100,9 @@ In the Predbat plan, for joined saving sessions the energy rates for import and 
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in apps.yaml (default is 8).
 
+If you normally cut back your house usage during a saving session then you can change **input_number.predbat_load_scaling_saving** to allow Predbat to assume an energy
+reduction in this period. E.g. setting to a value of 0.8 would indicate you will use 80% of the normal consumption in that period (a 20% reduction).
+
 As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
 If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.
 
@@ -184,7 +187,21 @@ rates_export_override:
     rate : pence
 ```
 
+Optionally you can add a predicted load scaling in these periods using **load_scaling** for example:
+
+```yaml
+rates_import_override:
+  -  date: '2024-01-21'
+     start: '17:30:00'
+     end: '18:30:00'
+     rate: 150
+     load_scaling: 0.8
+```
+
+Would say that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
+
 **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", **start** and **end** in "HH:MM:SS" time format e.g. "12:30:00", and **rate** in pence.
+**load_scaling** is a factor, where 1.0 would be no change, 0.8 is 80% of nominal.
 
 ## Rate offsets
 

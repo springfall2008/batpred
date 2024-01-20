@@ -122,6 +122,9 @@ Use 1.0 to use exactly previous load data (1.1 would add 10% to load)
 This can  be used to make the 10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
 scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
+**input_number.load_scaling_saving** is a Scaling factor applied to historical load only during Octopus Saving sessions. This can be used to model
+your household cutting down on energy use only inside a session (e.g. turning off a heat pump).
+
 **input_number.pv_scaling** is a scaling factor applied to PV data, tune down if you want to be more pessimistic on PV production vs Solcast
 Use 1.0 to use exactly the Solcast data (0.9 would remove 10% from forecast)
 
@@ -405,7 +408,7 @@ manual force charge feature. The force discharge takes priority over force charg
 The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
 battery will cover the house load (if there is enough charge).
 
-When you use the manual override features you can only select times in the next 12 hours, the overrides will be removed once their time
+When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
 
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_

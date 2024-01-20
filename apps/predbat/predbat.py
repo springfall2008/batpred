@@ -115,6 +115,17 @@ CONFIG_ITEMS = [
         "default": 1.1,
     },
     {
+        "name": "load_scaling_saving",
+        "friendly_name": "Load Scaling for saving sessions",
+        "type": "input_number",
+        "min": 0,
+        "max": 2.0,
+        "step": 0.01,
+        "unit": "multiple",
+        "icon": "mdi:multiplication",
+        "default": 1.0,
+    },
+    {
         "name": "battery_rate_max_scaling",
         "friendly_name": "Battery rate max scaling",
         "type": "input_number",
@@ -3639,7 +3650,7 @@ class PredBat(hass.Hass):
         else:
             return None
 
-    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, type_load=False, load_forecast={}, cloud_factor=None):
+    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None):
         """
         Create cached step data for historical array
         """
@@ -3648,6 +3659,10 @@ class PredBat(hass.Hass):
         for minute in range(0, self.forecast_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
+
+            scaling_dynamic = 1.0
+            if load_scaling_dynamic:
+                scaling_dynamic = load_scaling_dynamic.get(minute_absolute, scaling_dynamic)
 
             # Reset in-day adjustment for tomorrow
             if (minute + minutes_now) > 24 * 60:
@@ -3668,7 +3683,7 @@ class PredBat(hass.Hass):
             if load_forecast:
                 for offset in range(0, step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
-            values[minute] = value * scale_today + load_extra
+            values[minute] = (value * scale_today + load_extra) * scaling_dynamic
 
             # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
             if cloud_factor and cloud_factor > 0:
@@ -4918,6 +4933,7 @@ class PredBat(hass.Hass):
                 start_str = self.resolve_arg("start", start_str, "00:00:00")
                 end_str = this_rate.get("end", "00:00:00")
                 end_str = self.resolve_arg("end", end_str, "00:00:00")
+                load_scaling = this_rate.get("load_scaling", None)
 
                 if start_str.count(":") < 2:
                     start_str += ":00"
@@ -4978,8 +4994,12 @@ class PredBat(hass.Hass):
                     for minute in range(start_minutes, end_minutes):
                         if (not date) or (minute >= 0 and minute < max_minute):
                             rates[minute % max_minute] = rate
+                            if load_scaling is not None:
+                                self.load_scaling_dynamic[minute % max_minute] = load_scaling
                             if not date and not prev:
                                 rates[(minute % max_minute) + max_minute] = rate
+                                if load_scaling is not None:
+                                    self.load_scaling_dynamic[(minute % max_minute) + max_minute] = load_scaling
 
         return rates
 
@@ -5132,6 +5152,7 @@ class PredBat(hass.Hass):
                         self.rate_export[minute] += rate
                     else:
                         self.rate_import[minute] += rate
+                        self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
     def load_octopus_slots(self, octopus_slots):
         """
@@ -6627,6 +6648,7 @@ class PredBat(hass.Hass):
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
+        self.load_scaling_dynamic = {}
 
     def optimise_charge_limit_price(
         self,
@@ -8627,10 +8649,22 @@ class PredBat(hass.Hass):
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         load_minutes_step = self.step_data_history(
-            self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment, type_load=True, load_forecast=self.load_forecast
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
         )
         load_minutes_step10 = self.step_data_history(
-            self.load_minutes, self.minutes_now, forward=False, scale_today=self.load_inday_adjustment * self.load_scaling10, type_load=True, load_forecast=self.load_forecast
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment * self.load_scaling10,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
@@ -9255,6 +9289,7 @@ class PredBat(hass.Hass):
         self.load_forecast = {}
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.load_scaling_dynamic = {}
 
         # Iboost load data
         if self.iboost_enable:
@@ -9772,6 +9807,7 @@ class PredBat(hass.Hass):
         """
         time_overrides = []
         minutes_now = int(self.minutes_now / 30) * 30
+        manual_time_max = 18 * 60
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
@@ -9788,7 +9824,7 @@ class PredBat(hass.Hass):
                 minutes = start_time.hour * 60 + start_time.minute
                 if minutes < minutes_now:
                     minutes += 24 * 60
-                if (minutes - minutes_now) < 12 * 60:
+                if (minutes - minutes_now) < manual_time_max:
                     time_overrides.append(minutes)
 
         # Reconstruct the list in order based on minutes
@@ -9800,7 +9836,7 @@ class PredBat(hass.Hass):
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + 12 * 60, 30):
+        for minute in range(minutes_now, minutes_now + manual_time_max, 30):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
@@ -9888,6 +9924,7 @@ class PredBat(hass.Hass):
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
+        self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
 
         self.best_soc_step = 0.25
