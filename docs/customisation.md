@@ -383,6 +383,35 @@ In summary:
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
 
+## Manual control
+
+In some cases you may want to override Predbat behaviour and make a decision yourself. One way to achieve this is to put Predbat into
+read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
+control it yourself using GivTCP or the App.
+
+A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
+
+Can you force a charge within a 30 minute slot by using the **select.predbat_manual_charge** selector. Pick the 30 minute slot you wish
+to charge in and this will be actioned. You can select multiple slots by using the drop down menu more than once, when Predbat updates
+you will see the slots picked in the current value of this selector and in the HTML plan (upside down F symbol).
+
+You can cancel a force slot by selecting the time again (it will be shown in square brackets to indicate its already selected).
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/aa668cc3-60fc-4956-8619-822f09f601dd)
+
+The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the
+manual force charge feature. The force discharge takes priority over force charging.
+
+The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
+battery will cover the house load (if there is enough charge).
+
+When you use the manual override features you can only select times in the next 12 hours, the overrides will be removed once their time
+slot expires (they do not repeat).
+
+_CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/7e69730f-a379-483a-8281-f72de0cc6e97)
+
 ## Debug
 
 **switch.debug_enable** when on prints lots of debug, leave off by default
