@@ -387,13 +387,13 @@ In summary:
 
 In some cases you may want to override Predbat behaviour and make a decision yourself. One way to achieve this is to put Predbat into
 read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
-control it yourself using GivTCP or the App. 
+control it yourself using GivTCP or the App.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
 Can you force a charge within a 30 minute slot by using the **select.predbat_manual_charge** selector. Pick the 30 minute slot you wish
 to charge in and this will be actioned. You can select multiple slots by using the drop down menu more than once, when Predbat updates
-you will see the slots picked in the current value of this selector and in the HTML plan (upside down F symbol). 
+you will see the slots picked in the current value of this selector and in the HTML plan (upside down F symbol).
 
 You can cancel a force slot by selecting the time again (it will be shown in square brackets to indicate its already selected).
 
@@ -411,7 +411,6 @@ slot expires (they do not repeat).
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/7e69730f-a379-483a-8281-f72de0cc6e97)
-
 
 ## Debug
 
