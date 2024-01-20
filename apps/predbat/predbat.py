@@ -481,7 +481,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": [],
         "icon": "mdi:state-machine",
-        "default": '',
+        "default": "",
         "restore": False,
         "manual": True,
     },
@@ -491,7 +491,7 @@ CONFIG_ITEMS = [
         "type": "select",
         "options": [],
         "icon": "mdi:state-machine",
-        "default": '',
+        "default": "",
         "restore": False,
         "manual": True,
     },
@@ -4812,12 +4812,12 @@ class PredBat(hass.Hass):
             if minute in rates:
                 rate = rates[minute]
                 if (
-                    ((not find_high) and (rate <= threshold_rate)) or
-                    (find_high and (rate >= threshold_rate) and (rate > 0)) or
-                    (not find_high and (minute in self.manual_charge_times)) or 
-                    (not find_high and (rate_low_start in self.manual_charge_times)) or
-                    (find_high and (minute in self.manual_discharge_times)) or 
-                    (find_high and (rate_low_start in self.manual_discharge_times))
+                    ((not find_high) and (rate <= threshold_rate))
+                    or (find_high and (rate >= threshold_rate) and (rate > 0))
+                    or (not find_high and (minute in self.manual_charge_times))
+                    or (not find_high and (rate_low_start in self.manual_charge_times))
+                    or (find_high and (minute in self.manual_discharge_times))
+                    or (find_high and (rate_low_start in self.manual_discharge_times))
                 ):
                     if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate) + 0.5) != int(self.dp2(rate_low_rate) + 0.5)):
                         # Refuse mixed rates that are different by more than 0.5p
@@ -9709,10 +9709,10 @@ class PredBat(hass.Hass):
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
-        values = item.get('value', '')
+        values = item.get("value", "")
         values_list = []
         if values:
-            values_list = values.split(',')
+            values_list = values.split(",")
         if "[" in value:
             value = value.replace("[", "")
             value = value.replace("]", "")
@@ -9720,7 +9720,7 @@ class PredBat(hass.Hass):
                 values_list.remove(value)
         else:
             values_list.append(value)
-        self.expose_config(config_item, ','.join(values_list))
+        self.expose_config(config_item, ",".join(values_list))
         self.manual_times(config_item)
 
     def manual_times(self, config_item):
@@ -9732,10 +9732,10 @@ class PredBat(hass.Hass):
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
-        values = item.get('value', '')
+        values = item.get("value", "")
         values_list = []
         if values:
-            values_list = values.split(',')
+            values_list = values.split(",")
         for value in values_list:
             try:
                 start_time = datetime.strptime(value, "%H:%M:%S")
@@ -9745,29 +9745,29 @@ class PredBat(hass.Hass):
                 minutes = start_time.hour * 60 + start_time.minute
                 if minutes < minutes_now:
                     minutes += 24 * 60
-                if (minutes - minutes_now) < 12*60:
+                if (minutes - minutes_now) < 12 * 60:
                     time_overrides.append(minutes)
-        
+
         # Reconstruct the list in order based on minutes
         values_list = []
         for minute in time_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             values_list.append(minute_str)
-        values = ','.join(values_list)
+        values = ",".join(values_list)
 
         # Create the new dropdown
         time_values = []
-        for minute in range(minutes_now, minutes_now + 12*60, 30):
+        for minute in range(minutes_now, minutes_now + 12 * 60, 30):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             if minute in time_overrides:
-                minute_str = '[' + minute_str + ']'
+                minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
         if values not in time_values:
             time_values.append(values)
-        item['options'] = time_values
+        item["options"] = time_values
         if not values:
             values = None
-        item['value'] = None # Force update to expose
+        item["value"] = None  # Force update to expose
         self.expose_config(config_item, values)
 
         if time_overrides:
@@ -9975,8 +9975,8 @@ class PredBat(hass.Hass):
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 
         # Update list of slot times
-        self.manual_charge_times = self.manual_times('manual_charge')
-        self.manual_discharge_times = self.manual_times('manual_discharge')
+        self.manual_charge_times = self.manual_times("manual_charge")
+        self.manual_discharge_times = self.manual_times("manual_discharge")
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
