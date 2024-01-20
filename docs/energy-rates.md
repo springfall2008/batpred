@@ -184,7 +184,21 @@ rates_export_override:
     rate : pence
 ```
 
+Optionally you can add a predicted load scaling in these periods using **load_scaling** for example:
+
+```yaml
+rates_import_override:
+  -  date: '2024-01-21'
+     start: '17:30:00'
+     end: '18:30:00'
+     rate: 150
+     load_scaling: 0.8
+```
+
+Would say that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
+
 **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", **start** and **end** in "HH:MM:SS" time format e.g. "12:30:00", and **rate** in pence.
+**load_scaling** is a factor, where 1.0 would be no change, 0.8 is 80% of nominal.
 
 ## Rate offsets
 
