@@ -4854,11 +4854,7 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (
-                        (rate_low_start in self.manual_all_times or minute in self.manual_all_times)
-                        and (rate_low_start >= 0)
-                        and ((minute - rate_low_start) >= 30)
-                    ):
+                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
                         # Manual slot
                         rate_low_end = minute
                         break
@@ -7498,7 +7494,13 @@ class PredBat(hass.Hass):
             end = window["end"]
             limit = charge_limit_best[window_n]
 
-            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
+            if (
+                new_window_best
+                and (start == new_window_best[-1]["end"])
+                and (limit == new_limit_best[-1])
+                and (start not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.manual_all_times)
+            ):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log(
@@ -7705,7 +7707,13 @@ class PredBat(hass.Hass):
         for window_n in range(0, len(discharge_limits_best)):
             if discharge_limits_best[window_n] < 100.0:
                 # Also merge contiguous enabled windows
-                if new_best and (discharge_window_best[window_n]["start"] == new_best[-1]["end"]) and (discharge_limits_best[window_n] == new_enable[-1]) and (discharge_window_best[window_n]["start"] not in self.manual_all_times) and (new_best[-1]["start"] not in self.manual_all_times):
+                if (
+                    new_best
+                    and (discharge_window_best[window_n]["start"] == new_best[-1]["end"])
+                    and (discharge_limits_best[window_n] == new_enable[-1])
+                    and (discharge_window_best[window_n]["start"] not in self.manual_all_times)
+                    and (new_best[-1]["start"] not in self.manual_all_times)
+                ):
                     new_best[-1]["end"] = discharge_window_best[window_n]["end"]
                     if self.debug_enable:
                         self.log("Combine discharge slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
