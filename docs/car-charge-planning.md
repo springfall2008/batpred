@@ -18,7 +18,7 @@ There are two ways to plan car charging slots:
     If you leave this disabled then all low rate slots will be used. This may mean you need to use expert mode and change your low rate
     threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. flux)
     - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
-    - _WARNING: Do not set **car_charging_now** or you will create a circular dependancy._
+    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 NOTE: Multiple cars can be planned with Predbat.
 
