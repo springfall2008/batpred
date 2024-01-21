@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.0"
+THIS_VERSION = "v7.15.1"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4839,10 +4839,8 @@ class PredBat(hass.Hass):
                 if (
                     ((not find_high) and (rate <= threshold_rate))
                     or (find_high and (rate >= threshold_rate) and (rate > 0))
-                    or (not find_high and (minute in self.manual_charge_times or minute in self.manual_idle_times))
-                    or (not find_high and (rate_low_start in self.manual_charge_times or rate_low_start in self.manual_idle_times))
-                    or (find_high and (minute in self.manual_discharge_times or minute in self.manual_idle_times))
-                    or (find_high and (rate_low_start in self.manual_discharge_times or minute in self.manual_idle_times))
+                    or minute in self.manual_all_times
+                    or rate_low_start in self.manual_all_times
                 ):
                     if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate) + 0.5) != int(self.dp2(rate_low_rate) + 0.5)):
                         # Refuse mixed rates that are different by more than 0.5p
@@ -4857,31 +4855,11 @@ class PredBat(hass.Hass):
                         rate_low_end = minute
                         break
                     if (
-                        (not find_high)
-                        and (
-                            rate_low_start in self.manual_charge_times
-                            or rate_low_start in self.manual_idle_times
-                            or minute in self.manual_charge_times
-                            or minute in self.manual_idle_times
-                        )
+                        (rate_low_start in self.manual_all_times or minute in self.manual_all_times)
                         and (rate_low_start >= 0)
                         and ((minute - rate_low_start) >= 30)
                     ):
-                        # Manual import slot
-                        rate_low_end = minute
-                        break
-                    if (
-                        find_high
-                        and (
-                            rate_low_start in self.manual_discharge_times
-                            or rate_low_start in self.manual_idle_times
-                            or minute in self.manual_discharge_times
-                            or minute in self.manual_idle_times
-                        )
-                        and (rate_low_start >= 0)
-                        and ((minute - rate_low_start) >= 30)
-                    ):
-                        # Manual export slot
+                        # Manual slot
                         rate_low_end = minute
                         break
                     if find_high and (rate_low_start >= 0) and ((minute - rate_low_start) >= 60 * 4):
@@ -5543,7 +5521,7 @@ class PredBat(hass.Hass):
                 # Only count those starting inside the window, those outside appear for 'free' as they won't be optimised
                 if window_start >= (self.minutes_now + self.forecast_minutes):
                     selected_rates.append(window_id)
-                elif take_enable or (not find_high and window_start < upcoming_period):
+                elif take_enable or (not find_high and window_start < upcoming_period) or window_start in self.manual_all_times:
                     if window_price < lowest:
                         lowest = window_price
                     if window_price > highest:
@@ -6506,6 +6484,7 @@ class PredBat(hass.Hass):
         self.manual_charge_times = []
         self.manual_discharge_times = []
         self.manual_idle_times = []
+        self.manual_all_times = []
         self.config_index = {}
         self.dashboard_index = []
         self.prefix = self.args.get("prefix", "predbat")
@@ -7519,7 +7498,7 @@ class PredBat(hass.Hass):
             end = window["end"]
             limit = charge_limit_best[window_n]
 
-            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]):
+            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log(
@@ -7726,7 +7705,7 @@ class PredBat(hass.Hass):
         for window_n in range(0, len(discharge_limits_best)):
             if discharge_limits_best[window_n] < 100.0:
                 # Also merge contiguous enabled windows
-                if new_best and (discharge_window_best[window_n]["start"] == new_best[-1]["end"]) and (discharge_limits_best[window_n] == new_enable[-1]):
+                if new_best and (discharge_window_best[window_n]["start"] == new_best[-1]["end"]) and (discharge_limits_best[window_n] == new_enable[-1]) and (discharge_window_best[window_n]["start"] not in self.manual_all_times) and (new_best[-1]["start"] not in self.manual_all_times):
                     new_best[-1]["end"] = discharge_window_best[window_n]["end"]
                     if self.debug_enable:
                         self.log("Combine discharge slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
@@ -7753,7 +7732,7 @@ class PredBat(hass.Hass):
             window_n = window_index[key]["id"]
             if typ == "c":
                 window_start = self.charge_window_best[window_n]["start"]
-                if self.calculate_best_charge and (window_start not in self.manual_charge_times) and (window_start not in self.manual_idle_times):
+                if self.calculate_best_charge and (window_start not in self.manual_all_times):
                     best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_charge_limit(
                         window_n,
                         record_charge_windows,
@@ -7770,7 +7749,7 @@ class PredBat(hass.Hass):
                     self.charge_limit_best[window_n] = best_soc
             else:
                 window_start = self.discharge_window_best[window_n]["start"]
-                if self.calculate_best_discharge and (window_start not in self.manual_discharge_times) and (window_start not in self.manual_idle_times):
+                if self.calculate_best_discharge and (window_start not in self.manual_all_times):
                     if not self.calculate_discharge_oncharge:
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                         if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
@@ -7911,7 +7890,7 @@ class PredBat(hass.Hass):
                                 self.log("Skip start at high window {} best limit {}".format(window_n, (self.charge_limit_best[window_n])))
                             continue
 
-                        if self.calculate_best_charge and (window_start not in self.manual_charge_times) and (window_start not in self.manual_idle_times):
+                        if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
                                 self.log("Optimise price set {} start_at_low {} best_price {}".format(price, start_at_low, best_price))
                                 printed_set = True
@@ -7960,7 +7939,7 @@ class PredBat(hass.Hass):
                         if start_at_low and ((price > best_price) or (self.discharge_limits_best[window_n] == 100.0)):
                             continue
 
-                        if self.calculate_best_discharge and (window_start not in self.manual_discharge_times) and (window_start not in self.manual_idle_times):
+                        if self.calculate_best_discharge and (window_start not in self.manual_all_times):
                             if not self.calculate_discharge_oncharge:
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
@@ -8047,7 +8026,7 @@ class PredBat(hass.Hass):
                 window_n = window_index[key]["id"]
                 if typ == "c":
                     window_start = self.charge_window_best[window_n]["start"]
-                    if self.calculate_best_charge and (window_start not in self.manual_charge_times) and (window_start not in self.manual_idle_times):
+                    if self.calculate_best_charge and (window_start not in self.manual_all_times):
                         best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_charge_limit(
                             window_n,
                             record_charge_windows,
@@ -8064,7 +8043,7 @@ class PredBat(hass.Hass):
                         self.charge_limit_best[window_n] = best_soc
                 else:
                     window_start = self.discharge_window_best[window_n]["start"]
-                    if self.calculate_best_discharge and (window_start not in self.manual_discharge_times) and (window_start not in self.manual_idle_times):
+                    if self.calculate_best_discharge and (window_start not in self.manual_all_times):
                         if not self.calculate_discharge_oncharge:
                             hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                             if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
@@ -9791,7 +9770,9 @@ class PredBat(hass.Hass):
         values_list = []
         if values:
             values_list = values.split(",")
-        if "[" in value:
+        if value == "reset":
+            values_list = []
+        elif "[" in value:
             value = value.replace("[", "")
             value = value.replace("]", "")
             if value in values_list:
@@ -9843,6 +9824,7 @@ class PredBat(hass.Hass):
             time_values.append(minute_str)
         if values not in time_values:
             time_values.append(values)
+        time_values.append("reset")
         item["options"] = time_values
         if not values:
             values = None
@@ -10058,6 +10040,7 @@ class PredBat(hass.Hass):
         self.manual_charge_times = self.manual_times("manual_charge")
         self.manual_discharge_times = self.manual_times("manual_discharge")
         self.manual_idle_times = self.manual_times("manual_idle")
+        self.manual_all_times = self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
