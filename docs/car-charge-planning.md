@@ -8,6 +8,7 @@ There are two ways to plan car charging slots:
     - Information about the car's battery size will also be extracted from the Octopus Energy integration
     - You will need to set the cars current soc sensor, **car_charging_soc** in apps.yaml correctly to have accurate results
     - If you set **car_charging_limit** in `apps.yaml` then Predbat can also know if the car's limit is set lower than in Intelligent Octopus
+    - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it.
     - Let the Octopus app control when your car charges
 
 - Predbat-led charging - Here Predbat plans the charging based on the upcoming low rate slots
@@ -17,6 +18,7 @@ There are two ways to plan car charging slots:
     If you leave this disabled then all low rate slots will be used. This may mean you need to use expert mode and change your low rate
     threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. flux)
     - Use an automation based on **binary_sensor.predbat_car_charging_slot** to control when your car charges
+    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 NOTE: Multiple cars can be planned with Predbat.
 
