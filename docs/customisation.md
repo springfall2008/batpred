@@ -281,6 +281,10 @@ If you set this too high you might not get any export slots. If it's too low you
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
+Setting this to 1 to 1.5p for example results in Predbat being a little more aggressive in the charging calculation -
+Predbat will charge the battery to a higher percentage than it would otherwise as it expects a cost benefit of using today's lower rates.
+NB: this can lead to higher costs and to some export if solar generation is better than forecast.
+
 **input_number.metric_future_rate_offset_export** (_expert mode_) Sets an offset to apply to future export energy rates that are
 not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm.
 If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
