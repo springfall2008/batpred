@@ -1,6 +1,8 @@
 # Customisation
 
-These are the Predbat configuration items in Home Assistant that you can modify to fit your needs, you can configure these in Home Assistant directly.
+This document describes the Predbat configuration items in Home Assistant that you can modify to customise Predbat to fit your needs.
+
+All of these settings are entities that can be configured directly in Home Assistant (unlike the '[apps.yaml](apps-yaml.md)' configuration items that have to be edited with a file editor).
 
 See [Displaying output data](output-data.md#displayng-output-data)
 for information on how to view and edit these entities within
@@ -8,17 +10,17 @@ Home Assistant.
 
 ## Saving and restoring Predbat settings
 
-The selector **select.predbat_saverestore** can be used to save you current settings to a yaml file (kept in /config/predbat_save/) and to
+The selector **select.predbat_saverestore** can be used to save your current Predbat settings to a yaml file (kept in the directory `/config/predbat_save/`) and to
 restore the settings from one of these files.
 
-Selecting **save current** will cause the settings to be save to a date/time stamped file. You can rename this file yourself in the HA filesystem
-to give it a more human readable name or delete it if you no longer want it. This is normally best done in the SSH window or via a Samba mount.
+Selecting the selector option **save current** will cause the settings to be saved to a date/time stamped file.
+You can rename this file yourself in the Home Assistant filesystem to give it a more human readable name, or delete it if you no longer want to keep it.
+This is normally best done in an SSH window or via a Samba mount.
 
-Selecting **restore default** will put all your settings back to the Predbat defaults.
-Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
+Selecting the option **restore default** will put all your settings back to the Predbat defaults.
+Before the restore the current Predbat settings will be saved to the file **previous.yaml** - should you have made a mistake you can restore them quickly again.
 
 Selecting any of the .yaml files you have created will restore your settings from this file.
-Before the the restore the current settings will be saved as **previous.yaml** should you have made a mistake you can restore them quickly again.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/209442c1-bd4d-4812-84e2-c5a81794bd1d)
 
@@ -42,35 +44,39 @@ both charge and discharge, reset charge and discharge rates to full power and re
 
 ### Predbat Monitor mode
 
-In **monitor** mode Predbat will not control charging or discharging, inverter balancing will take place if enabled, the plan will show
-just what is expected based on the current inverter configuration alone.
+In **monitor** mode Predbat will not control or Plan any charging or discharging, inverter balancing will take place if enabled,
+and the plan will show just what is expected based on the current inverter configuration alone.
 
 ### Predbat Control SOC Only mode
 
 In **Control SOC Only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
-window will not be modified.  This can be useful if you just have one fixed
-charge slot per day and you only want Predbat to control the percentage.
+window will not be modified.
 
-_CAUTION: If the charge window is disabled then no charging will take place._
+This mode can be useful if you just have one fixed charge slot per day and you only want Predbat to control the percentage the battery is charged based on solar generation
+and predicted house load.
+
+_CAUTION: You must manually set any charging required on the inverter and if the charge window is disabled then no charging will take place._
 
 ### Predbat Control Charge mode
 
 In **Control Charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
 disabled by Predbat.
+Predbat will set the inverter into Eco mode when required to enable the battery to support house load, but it will not plan any forced discharging of the battery for export purposes.
+
+This mode can be useful if you don't have an export rate, or if you want to preserve the battery for home demand.
 
 ### Predbat Control Charge & Discharge mode
 
 In **Control Charge and Discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
 
-If you have set the **switch.predbat_set_discharge_freeze_only** to True then forced export won't occur but Predbat can force the export
+If you have set the **switch.predbat_set_discharge_freeze_only** set to True then forced export won't occur but Predbat can force the export
 of solar power to the grid when desired.
 
 ## Expert mode
 
-Predbat has a toggle switch called **switch.predbat_expert_mode** which is off by default for new installs (on
-by default for upgraded installs). A lot of configuration items will not be available unless expert mode is enabled.
-It's recommended for new users to start without expert mode and then maybe enable it later once you become more
-confident with the tool.
+Predbat has a toggle switch called **switch.predbat_expert_mode** which is set to Off by default for new installs (On by default for upgraded installs).
+A lot of Predbat's more advanced configuration options will not be available unless expert mode is enabled.
+It's recommended for new users to start without expert mode and then maybe enable it later once you become more confident with the tool.
 
 ## Performance related
 
@@ -388,22 +394,24 @@ In summary:
 
 ## Manual control
 
-In some cases you may want to override Predbat behaviour and make a decision yourself. One way to achieve this is to put Predbat into
+In some cases you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into
 read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
 control it yourself using GivTCP or the App.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
-Can you force a charge within a 30 minute slot by using the **select.predbat_manual_charge** selector. Pick the 30 minute slot you wish
-to charge in and this will be actioned. You can select multiple slots by using the drop down menu more than once, when Predbat updates
-you will see the slots picked in the current value of this selector and in the HTML plan (upside down F symbol).
+You can force the battery to be charged within a 30 minute slot by using the **select.predbat_manual_charge** selector.
+Pick the 30 minute slot you wish to charge in and Predbat will change the plan to charge in the selected slot.
+You can select multiple slots by using the drop down menu more than once.
+When Predbat updates the plan you will see the slots picked to be charging slots in the current value of this selector,
+and annotated in the [Predbat HTML plan](predbat-plan-card.md#displaying-the-predbat-plan) with an upside down 'F' symbol.
 
-You can cancel a force slot by selecting the time again (it will be shown in square brackets to indicate its already selected).
+You can cancel a force slot by selecting the slot time again (it will be shown in square brackets to indicate its already selected).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/aa668cc3-60fc-4956-8619-822f09f601dd)
 
-The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the
-manual force charge feature. The force discharge takes priority over force charging.
+The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the manual force charge feature.
+The force discharge takes priority over force charging.
 
 The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
 battery will cover the house load (if there is enough charge).
