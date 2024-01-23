@@ -50,6 +50,22 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
+## The plan doesn't charge or discharge when I expect it to
+
+It is very important to correctly set Predbat's [Battery Loss Options](customisation.md#battery-loss-options)
+and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as these can have a huge and critical impact on the plan that Predbat generates.
+
+Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
+it depends on many factors and your personal preferences. Many users will need to customise and tweak the [Predbat configuration](customisation.md) to suit their needs.
+
+The SOC level that Predbat aims to keep in the battery **input_number.best_soc_keep** and the absolute minimum SoC level **input_number.best_soc_min** are the first thing to check.
+If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
+
+Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery is the loss rates
+**input_number.battery_loss**, **input_number.battery_loss_discharge** and **input_number.inverter_loss**.
+
+**input_number.metric_battery_cycle**
+
 ## Predbat is causing warning messages in the Home Assistant Core log
 
 - If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning
