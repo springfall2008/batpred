@@ -4,7 +4,7 @@ This document describes the Predbat configuration items in Home Assistant that y
 
 All of these settings are entities that can be configured directly in Home Assistant (unlike the '[apps.yaml](apps-yaml.md)' configuration items that have to be edited with a file editor).
 
-See [Displaying output data](output-data.md#displayng-output-data)
+See [Displaying output data](output-data.md)
 for information on how to view and edit these entities within
 Home Assistant.
 
@@ -111,12 +111,14 @@ Higher numbers will reduce battery cycles at the expense of using higher energy 
 In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each full charge and discharge cycle is 19kWh
 and so the cost per cycle is £4000 / 19 / 6000 = 3.5p.
 
-Taking the 3.5p example, Predbat will apply a "virtual cost" of 3.5p to every kWh charge and discharge of the battery.
-This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.
+Taking the 3.5p example, Predbat will apply a "virtual cost" of 3.5p to every kWh of charge and of discharge of the battery.
+This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.<BR>
+_NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
 
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
 The default is 1p but can be set to 0 if you want to turn this feature off.
-Note that the cycle cost will not be included in the cost predictions that Predbat produces, its just taken into account in the planning stage.<BR>
+Note that the cycle cost will not be included in the cost predictions that Predbat produces such as the Predbat HTML plan or Apex charts,
+its just a cost taken into account by Predbat at the planning stage when the plan is calculated.<BR>
 _NB: Setting this to a non-zero value will increase your daily cost, but will reduce your home battery usage._
 
 Figures of around 1p-5p are recommended, the default is 1p per kWh.
@@ -221,6 +223,8 @@ charging sessions but will not reset it automatically.
 
 See the Predbat mode setting as above for basic calculation options
 
+**input_number.forecast_plan_hours** is the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles).
+
 **switch.predbat_calculate_regions** (_expert mode_) When True the a second pass of the initial thresholds is
 calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
 mode.
@@ -233,6 +237,9 @@ longer term plan will be less accurate.
 
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
+
+**switch.set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
+to avoid cross charging when batteries are out of balance.
 
 **switch.predbat_calculate_tweak_plan** (_expert mode_) When True causes Predbat to perform a second pass optimisation
 across the next 8 charge and discharge windows in time order.

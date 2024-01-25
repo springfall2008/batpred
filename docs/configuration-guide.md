@@ -9,26 +9,16 @@ You might want to also set to the [car charging plan](apps-yaml.md#planned-car-c
 
 It is recommended that you [create a dashboard page](output-data.md#displaying-output-data) with all the required entities to control Predbat.
 
+This page gives a summary of some of the key configuration settings you should consider in Predbat for different energy tariffs;
+the [Predbat customisation guide](customisation.md) details all the Predbat customisation options.
+
 You should try to tune **input_number.inverter_loss**, **input_number.battery_loss** and **input_number.battery_loss_discharge** to the correct % loss for your system
 in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
 Also set **switch.inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
 
 The setting **input_number.metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
-In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each full charge and discharge cycle is 19kWh
-and so the cost per cycle is £4000 / 19 / 6000 = 3.5p.
-
-Taking the 3.5p example, Predbat will apply a "virtual cost" of 3.5p to every kWh charge and discharge of the battery.
-This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.
-
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
 The default is 1p but can be set to 0 if you want to turn this feature off.
-Note that the cycle cost will not be included in the cost predictions that Predbat produces, its just taken into account in the planning stage.<BR>
-_NB: Setting this to a non-zero value will increase your daily cost, but will reduce your home battery usage._
-
-- **input_number.forecast_plan_hours** - the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles)
-
-- **switch.set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
-to avoid cross charging when batteries are out of balance.
 
 Below is a guide to some of the electricity tariff options and a set of recommended Predbat settings for each tariff type.
 In theory most tariffs will work out of the box but still it's worth reviewing your settings.
