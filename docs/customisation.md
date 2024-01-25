@@ -276,8 +276,8 @@ a saving session). The default is enable (True)
 **switch.combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
 they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
 
-**input_number.metric_min_improvement** (_expert mode_) sets the minimum cost improvement that it's worth lowering the battery SOC % for.
-If it's 0 then this is disabled and the battery will be charged less if it's cost neutral.
+**input_number.metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SOC % for.
+The default value is 0 which means this feature is disabled and the battery will be charged less if it's cost neutral.
 If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
