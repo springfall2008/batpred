@@ -4857,7 +4857,11 @@ class PredBat(hass.Hass):
                         # If combine is disabled, for import slots make them all N minutes so we can select some not all
                         rate_low_end = minute
                         break
-                    if (rate_low_start in self.manual_all_times or minute in self.manual_all_times) and (rate_low_start >= 0) and ((minute - rate_low_start) >= 30):
+                    if (
+                        (rate_low_start in self.manual_all_times or minute in self.manual_all_times)
+                        and (rate_low_start >= 0)
+                        and ((minute - rate_low_start) >= 30)
+                    ):
                         # Manual slot
                         rate_low_end = minute
                         break
@@ -6777,14 +6781,7 @@ class PredBat(hass.Hass):
 
                         # Simulate with medium PV
                         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                            try_charge_limit,
-                            charge_window,
-                            discharge_window,
-                            try_discharge,
-                            load_minutes_step,
-                            pv_forecast_minute_step,
-                            end_record=end_record,
-                            step=step,
+                            try_charge_limit, charge_window, discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record, step=step,
                         )
 
                         # Debug re-enable if it was on
@@ -7513,13 +7510,7 @@ class PredBat(hass.Hass):
             end = window["end"]
             limit = charge_limit_best[window_n]
 
-            if (
-                new_window_best
-                and (start == new_window_best[-1]["end"])
-                and (limit == new_limit_best[-1])
-                and (start not in self.manual_all_times)
-                and (new_window_best[-1]["start"] not in self.manual_all_times)
-            ):
+            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log(
@@ -7726,13 +7717,7 @@ class PredBat(hass.Hass):
         for window_n in range(0, len(discharge_limits_best)):
             if discharge_limits_best[window_n] < 100.0:
                 # Also merge contiguous enabled windows
-                if (
-                    new_best
-                    and (discharge_window_best[window_n]["start"] == new_best[-1]["end"])
-                    and (discharge_limits_best[window_n] == new_enable[-1])
-                    and (discharge_window_best[window_n]["start"] not in self.manual_all_times)
-                    and (new_best[-1]["start"] not in self.manual_all_times)
-                ):
+                if new_best and (discharge_window_best[window_n]["start"] == new_best[-1]["end"]) and (discharge_limits_best[window_n] == new_enable[-1]) and (discharge_window_best[window_n]["start"] not in self.manual_all_times) and (new_best[-1]["start"] not in self.manual_all_times):
                     new_best[-1]["end"] = discharge_window_best[window_n]["end"]
                     if self.debug_enable:
                         self.log("Combine discharge slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
@@ -7928,11 +7913,7 @@ class PredBat(hass.Hass):
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
-                                self.log(
-                                    "Optimise price set {} start_at_low {} best_price {} best_metric {} best_cost {}".format(
-                                        price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)
-                                    )
-                                )
+                                self.log("Optimise price set {} start_at_low {} best_price {} best_metric {} best_cost {}".format(price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)))
                                 printed_set = True
                             average = self.charge_window_best[window_n]["average"]
 
@@ -7998,11 +7979,7 @@ class PredBat(hass.Hass):
                                 continue
 
                             if not printed_set:
-                                self.log(
-                                    "Optimise price set {} start_at_low {} best_price {} best_metric {} best_cost {}".format(
-                                        price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)
-                                    )
-                                )
+                                self.log("Optimise price set {} start_at_low {} best_price {} best_metric {} best_cost {}".format(price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)))
                                 printed_set = True
 
                             best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
@@ -9101,7 +9078,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_force_discharge(False)
                         resetReserve = True
 
-                    if self.set_discharge_freeze:
+                    if self.set_discharge_freeze and not isCharging:
                         # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
                         inverter.adjust_charge_rate(inverter.battery_rate_max_charge * 60 * 1000)
             elif self.set_discharge_window:
