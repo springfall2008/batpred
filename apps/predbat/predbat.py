@@ -7845,7 +7845,7 @@ class PredBat(hass.Hass):
                 self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
                 region_size = int(16 * 60)
                 while region_size >= 4 * 60:
-                    self.log(">> Region optimision pass width {}".format(region_size))
+                    self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record, region_size):
                         region_end = min(region + region_size, self.end_record)
                         self.charge_limit_best, ignore_discharge_limits, region_best_price, region_best_price_discharge, best_metric, best_cost = self.optimise_charge_limit_price(
