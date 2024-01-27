@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.2"
+THIS_VERSION = "v7.15.3"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -8533,7 +8533,7 @@ class PredBat(hass.Hass):
         """
         Find the lowest charge rate that fits the charge slow
         """
-        margin = 20
+        margin = 10
         if self.set_charge_low_power:
             minutes_left = window["end"] - minutes_now - margin
 
