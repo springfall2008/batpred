@@ -8573,7 +8573,11 @@ class PredBat(hass.Hass):
                             break
                 rate_w -= 125.0
             if not quiet:
-                self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
+                self.log(
+                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
+                        minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)
+                    )
+                )
             return best_rate
         else:
             return max_rate
