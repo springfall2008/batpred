@@ -3,19 +3,21 @@ Battery Prediction app
 see Readme for information
 """
 
+import copy
+import os
+import re
+import time
+
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from datetime import datetime, timedelta
-import re
-import time
+
+import adbase as ad
+import appdaemon.plugins.hass.hassapi as hass
 import pytz
 import requests
-import copy
-import appdaemon.plugins.hass.hassapi as hass
-import adbase as ad
-import os
 import yaml
 
 THIS_VERSION = "v7.15.3"
