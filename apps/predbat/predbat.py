@@ -8529,7 +8529,7 @@ class PredBat(hass.Hass):
 
         self.log("BALANCE: Completed this run")
 
-    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate):
+    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate, quiet=True):
         """
         Find the lowest charge rate that fits the charge slow
         """
@@ -8571,8 +8571,13 @@ class PredBat(hass.Hass):
                         if charge_now >= target_soc:
                             best_rate = rate
                             break
-                rate_w -= 200.0
-            # self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
+                rate_w -= 125.0
+            if not quiet:
+                self.log(
+                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
+                        minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)
+                    )
+                )
             return best_rate
         else:
             return max_rate
@@ -8965,7 +8970,7 @@ class PredBat(hass.Hass):
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         charge_rate = self.find_charge_rate(
-                            self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge
+                            self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
                         )
                         inverter.adjust_charge_rate(int(charge_rate * 60.0 * 1000.0))
 
