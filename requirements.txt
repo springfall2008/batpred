@@ -2,3 +2,4 @@ appdaemon
 mkdocs
 pre-commit
 pytz
+adbase
