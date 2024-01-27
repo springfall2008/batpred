@@ -151,7 +151,7 @@ future predictions are more accurate.
 When **car_charging_hold** is enabled when for loads of above the power threshold **car_charging_threshold** are
 assumed to be car charging and **car_charging_rate** will be subtracted from the historical load data.
 
-For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml 
+For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml
 In this case when **car_charging_hold** is enabled historical data will be subtracted from the load data instead of using
 the fixed threshold method.
 
