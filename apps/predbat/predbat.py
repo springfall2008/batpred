@@ -720,9 +720,7 @@ SOLAX_SOLIS_MODES = {
 
 class Inverter:
     def self_test(self, minutes_now):
-        self.base.log(
-            f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========"
-        )
+        self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
         self.adjust_battery_target(99)
         self.adjust_battery_target(100)
         self.adjust_reserve(100)
@@ -3896,7 +3894,9 @@ class PredBat(hass.Hass):
 
             # IBoost model
             if self.iboost_enable:
-                if iboost_today_kwh < self.iboost_max_energy and (self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)):
+                if iboost_today_kwh < self.iboost_max_energy and (
+                    self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
+                ):
                     iboost_amount = min(pv_dc, self.iboost_max_power * step)
                     pv_dc -= iboost_amount
 
@@ -7195,7 +7195,11 @@ class PredBat(hass.Hass):
                 if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
                     pwindow = discharge_window[window_n]
                     dwindow = self.discharge_window[0]
-                    if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"] and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"])):
+                    if (
+                        self.minutes_now >= pwindow["start"]
+                        and self.minutes_now < pwindow["end"]
+                        and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]))
+                    ):
                         metric -= max(0.5, self.metric_min_improvement_discharge)
 
                 if self.debug_enable:
