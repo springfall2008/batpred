@@ -718,7 +718,9 @@ SOLAX_SOLIS_MODES = {
 
 class Inverter:
     def self_test(self, minutes_now):
-        self.base.log("======= INVERTER CONTROL SELF TEST START - REST={} ========".format(self.rest_api))
+        self.base.log(
+            f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========"
+        )
         self.adjust_battery_target(99)
         self.adjust_battery_target(100)
         self.adjust_reserve(100)
@@ -7675,11 +7677,11 @@ class PredBat(hass.Hass):
                             limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
                             discharge_limits_best[window_n] = self.calc_percent_limit(limit_soc)
                             if limit != discharge_limits_best[window_n] and self.debug_enable:
-                                    self.log(
-                                        "Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(
-                                            window_n, window_start, window_end, limit, discharge_limits_best[window_n]
-                                        )
+                                self.log(
+                                    "Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(
+                                        window_n, window_start, window_end, limit, discharge_limits_best[window_n]
                                     )
+                                )
             else:
                 self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
                 discharge_limits_best[window_n] = 100
