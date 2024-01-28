@@ -11124,7 +11124,7 @@ class PredBat(hass.Hass):
             if run_every_balance > 0:
                 self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
                 seconds_offset_balance = seconds_now % run_every_balance
-                seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 5  # Offset to start after Predbat update task
+                seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
                 next_time_balance = midnight + timedelta(seconds=seconds_next_balance)
                 self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
