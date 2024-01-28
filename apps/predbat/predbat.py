@@ -989,7 +989,7 @@ class Inverter:
         charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
         predbat_status_sensor = "predbat.status"
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
-        battery_power_sensor = battery_power_sensor.replace('number.', 'sensor.') # Workaround as old template had number.
+        battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
         final_curve = {}
 
         max_power = int(self.battery_rate_max_charge * 1000.0 * 60.0)
@@ -1001,25 +1001,58 @@ class Inverter:
             battery_power_data = self.base.get_history(entity_id=battery_power_sensor, days=self.base.max_days_previous)
 
             if soc_kwh_data and charge_rate_data and charge_rate_data and battery_power_data:
-                soc_kwh = self.base.minute_data(soc_kwh_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-                charge_rate = self.base.minute_data(charge_rate_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+                soc_kwh = self.base.minute_data(
+                    soc_kwh_data[0],
+                    self.base.max_days_previous,
+                    self.base.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
+                charge_rate = self.base.minute_data(
+                    charge_rate_data[0],
+                    self.base.max_days_previous,
+                    self.base.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
                 predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
-                battery_power = self.base.minute_data(battery_power_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+                battery_power = self.base.minute_data(
+                    battery_power_data[0],
+                    self.base.max_days_previous,
+                    self.base.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                )
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Find charge curve has {} days of data, max days {}".format(min_len/60/24.0, self.base.max_days_previous))
+                self.log("Find charge curve has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
 
                 soc_percent = {}
                 for minute in range(0, min_len):
-                    soc_percent[minute] = int((soc_kwh[minute] / self.soc_max)*100.0 + 0.5)
+                    soc_percent[minute] = int((soc_kwh[minute] / self.soc_max) * 100.0 + 0.5)
 
                 # Find 100% end points
                 data_point = 99
                 for minute in range(0, min_len):
-                    if soc_percent.get(minute, 0) == data_point and predbat_status[minute] == 'Charging' and charge_rate[minute] == max_power and battery_power[minute] <= 0:
+                    if soc_percent.get(minute, 0) == data_point and predbat_status[minute] == "Charging" and charge_rate[minute] == max_power and battery_power[minute] <= 0:
                         found = False
                         total_power = 0
                         for target_minute in range(minute + 1, min_len):
-                            if predbat_status[target_minute] != 'Charging' or charge_rate[minute] != max_power or battery_power[minute] > 0:
+                            if predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] > 0:
                                 break
                             total_power += abs(battery_power[minute])
                             if soc_percent.get(target_minute, 0) == (data_point - 1):
@@ -1029,7 +1062,11 @@ class Inverter:
                                 soc_charged = from_soc - to_soc
                                 average_power = total_power / time_diff
                                 charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                self.log("Charge Curve Percent: {} at {} took {} minutes charged {} curve {} average_power {}".format(data_point, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power))
+                                self.log(
+                                    "Charge Curve Percent: {} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                        data_point, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power
+                                    )
+                                )
                                 final_curve[data_point] = charge_curve
                                 if data_point == 99:
                                     final_curve[100] = charge_curve
@@ -1044,8 +1081,6 @@ class Inverter:
                 self.log("Note: Can not find battery charge curve, one of the required settings for soc_kw and charge_rate do not have history, check apps.yaml")
         else:
             self.log("Note: Can not find battery charge curve, one of the required settings for soc_kw and charge_rate are missing from apps.yaml")
-
-                
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
         """
@@ -3055,7 +3090,7 @@ class PredBat(hass.Hass):
         if not history:
             self.log("Warning, empty history passed to minute_data_state, ignoring (check your settings)...")
             return mdata
-        
+
         # Process history
         for item in history:
             # Ignore data without correct keys
@@ -3075,10 +3110,10 @@ class PredBat(hass.Hass):
             if not prev_last_updated_time:
                 prev_last_updated_time = last_updated_time
                 last_state = state
-    
+
             timed = now - last_updated_time
             timed_to = now - prev_last_updated_time
-        
+
             minutes_to = int(timed_to.seconds / 60) + int(timed_to.days * 60 * 24)
             minutes = int(timed.seconds / 60) + int(timed.days * 60 * 24)
 
@@ -3850,7 +3885,7 @@ class PredBat(hass.Hass):
         soc_percent = self.calc_percent_limit(soc)
         max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
         return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
-        
+
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -8711,7 +8746,11 @@ class PredBat(hass.Hass):
                             break
                 rate_w -= 125.0
             if not quiet:
-                self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
+                self.log(
+                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
+                        minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)
+                    )
+                )
             return best_rate
         else:
             return max_rate
