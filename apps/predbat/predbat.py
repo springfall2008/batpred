@@ -3720,7 +3720,7 @@ class PredBat(hass.Hass):
         soc_percent = self.calc_percent_limit(soc)
         max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
         return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
-
+        
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -3941,7 +3941,7 @@ class PredBat(hass.Hass):
 
             # discharge freeze?
             if self.set_discharge_freeze:
-                charge_rate_now = self.battery_rate_max_charge_scaled
+                charge_rate_now = self.battery_rate_max_charge
                 if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
                     # Freeze mode
                     charge_rate_now = self.battery_rate_min  # 0
@@ -3994,7 +3994,7 @@ class PredBat(hass.Hass):
                         self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
                     )
                 else:
-                    charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
+                    charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
 
                 # Apply the charging curve
                 charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
@@ -8580,11 +8580,7 @@ class PredBat(hass.Hass):
                             break
                 rate_w -= 125.0
             if not quiet:
-                self.log(
-                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
-                        minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)
-                    )
-                )
+                self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
             return best_rate
         else:
             return max_rate
