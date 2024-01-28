@@ -3713,6 +3713,14 @@ class PredBat(hass.Hass):
             else:
                 return min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
 
+    def get_charge_rate_curve(self, soc, charge_rate_setting):
+        """
+        Compute true charging rate from SOC and charge rate setting
+        """
+        soc_percent = self.calc_percent_limit(soc)
+        max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
+        return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
+        
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -3948,8 +3956,7 @@ class PredBat(hass.Hass):
 
             # Battery behaviour
             battery_draw = 0
-            soc_percent = self.calc_percent_limit(soc)
-            charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
+            charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
@@ -3990,7 +3997,7 @@ class PredBat(hass.Hass):
                     charge_rate_now = self.battery_rate_max_charge_scaled  # Assume charge becomes enabled here
 
                 # Apply the charging curve
-                charge_rate_now_curve = charge_rate_now * self.battery_charge_power_curve.get(soc_percent, 1.0)
+                charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 charge_rate_now_curve /= self.inverter_loss
@@ -8565,19 +8572,15 @@ class PredBat(hass.Hass):
                     minute = 0
                     for minute in range(0, minutes_left, PREDICT_STEP):
                         charge_now_percent = self.calc_percent_limit(charge_now)
-                        rate_scale = self.battery_charge_power_curve.get(charge_now_percent, 1.0) * self.battery_rate_max_scaling
-                        charge_amount = rate * rate_scale * PREDICT_STEP * self.battery_loss
+                        rate_scale = self.get_charge_rate_curve(charge_now, rate)
+                        charge_amount = rate_scale * PREDICT_STEP * self.battery_loss
                         charge_now += charge_amount
                         if charge_now >= target_soc:
                             best_rate = rate
                             break
                 rate_w -= 125.0
             if not quiet:
-                self.log(
-                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
-                        minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)
-                    )
-                )
+                self.log("Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(minutes_now, soc, window, target_soc, int(max_rate * 60.0 * 1000.0), int(min_rate * 60.0 * 1000.0), int(best_rate * 60.0 * 1000.0)))
             return best_rate
         else:
             return max_rate
