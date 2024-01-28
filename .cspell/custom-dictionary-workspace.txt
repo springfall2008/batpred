@@ -8,6 +8,7 @@ appkey
 argname
 automations
 autopep
+autodocstring
 autoupdate
 Basepath
 Batpred
@@ -77,6 +78,7 @@ mqtt
 myenergi
 nattribute
 nearr
+njpwerner
 nord
 Nordpool
 octoplus
@@ -109,6 +111,7 @@ SolarEdge
 Solax
 Solcast
 solisx
+sourcery
 Southwell
 springfall
 startt
