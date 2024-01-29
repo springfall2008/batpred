@@ -445,7 +445,16 @@ AIO firmware versions refuse to be set to 100.  Comment the line out or set to 1
 
 - **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
 Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+
 The default is 1.0 (full power) charge all the way to 100%.
+
+Modelling the charge curve becomes important if you have limited charging slots (e.g. ony a few hours a night) or you wish to make accurate use of the
+low power charging mode (**switch.predbat_set_charge_low_power**).
+
+Predbat can now automatically calculate the charging curve for you if you have enough suitable data in your load history. The charging curve will be calculated
+when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
+You should look at the AppDaemon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
+
 Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
 ```yaml
