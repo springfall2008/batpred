@@ -6,9 +6,9 @@ apexcharts
 appdaemon
 appkey
 argname
+autodocstring
 automations
 autopep
-autodocstring
 autoupdate
 Basepath
 Batpred
