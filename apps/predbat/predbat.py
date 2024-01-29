@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.4"
+THIS_VERSION = "v7.15.5"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -995,10 +995,10 @@ class Inverter:
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Find charge curve with sensors {} and {} and {} and {}".format(soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
-            soc_kwh_data = self.base.get_history(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
-            charge_rate_data = self.base.get_history(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
-            predbat_status_data = self.base.get_history(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
-            battery_power_data = self.base.get_history(entity_id=battery_power_sensor, days=self.base.max_days_previous)
+            soc_kwh_data = self.base.get_history_async(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
+            charge_rate_data = self.base.get_history_async(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
+            predbat_status_data = self.base.get_history_async(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
+            battery_power_data = self.base.get_history_async(entity_id=battery_power_sensor, days=self.base.max_days_previous)
 
             if soc_kwh_data and charge_rate_data and charge_rate_data and battery_power_data:
                 soc_kwh = self.base.minute_data(
@@ -3035,6 +3035,32 @@ class PredBat(hass.Hass):
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
 
+    async def get_history_async_hook(self, result, entity_id, days):
+        """
+        Async function to get history from HA
+        """
+        if days:
+            result["data"] = await self.get_history(entity_id=entity_id, days=days)
+        else:
+            result["data"] = await self.get_history(entity_id=entity_id)
+
+    def get_history_async(self, entity_id, days=None):
+        """
+        Async function to get history from HA using Async task
+        """
+        result = {}
+        task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
+        cnt = 0
+        while not task.done() and (cnt < 120):
+            time.sleep(0.05)
+            cnt += 0.05
+
+        if "data" in result:
+            return result["data"]
+        else:
+            self.log("Failure to fetch history for {}".format(entity_id))
+            raise ValueError
+
     def minute_data_import_export(self, now_utc, key, scale=1.0):
         """
         Download one or more entities for import/export data
@@ -3046,7 +3072,7 @@ class PredBat(hass.Hass):
         import_today = {}
         for entity_id in entity_ids:
             try:
-                history = self.get_history(entity_id=entity_id, days=self.max_days_previous)
+                history = self.get_history_async(entity_id=entity_id, days=self.max_days_previous)
             except (ValueError, TypeError):
                 history = []
 
@@ -3072,7 +3098,7 @@ class PredBat(hass.Hass):
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
-            history = self.get_history(entity_id=entity_id, days=max_days_previous)
+            history = self.get_history_async(entity_id=entity_id, days=max_days_previous)
             if history:
                 item = history[0][0]
                 try:
@@ -10842,7 +10868,7 @@ class PredBat(hass.Hass):
 
             # Get from history?
             if ha_value is None:
-                history = self.get_history(entity_id=entity)
+                history = self.get_history_async(entity_id=entity)
                 if history:
                     history = history[0]
                     ha_value = history[-1]["state"]
