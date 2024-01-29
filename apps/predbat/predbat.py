@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.3"
+THIS_VERSION = "v7.15.4"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -989,11 +989,11 @@ class Inverter:
         charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
         predbat_status_sensor = "predbat.status"
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
-        battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
         final_curve = {}
 
         max_power = int(self.battery_rate_max_charge * 1000.0 * 60.0)
-        if soc_kwh_sensor and charge_rate_sensor:
+        if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
+            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Find charge curve with sensors {} and {} and {} and {}".format(soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             soc_kwh_data = self.base.get_history(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
             charge_rate_data = self.base.get_history(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
