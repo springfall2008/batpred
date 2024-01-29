@@ -1082,7 +1082,7 @@ class Inverter:
                     for required in range(90, 100):
                         if required not in final_curve:
                             found_required = False
-                    
+
                     if found_required:
                         # Scale curve to 1.0
                         rate_scaling = 0
@@ -1101,9 +1101,13 @@ class Inverter:
                     else:
                         self.log("Note: Found incomplete battery charging curve, maybe try again when you have more data.")
                 else:
-                    self.log("Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml")
+                    self.log(
+                        "Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                    )
             else:
-                self.log("Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml")
+                self.log(
+                    "Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                )
         else:
             self.log("Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
 
