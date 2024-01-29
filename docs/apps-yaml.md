@@ -453,7 +453,7 @@ low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable data in your load history. The charging curve will be calculated
 when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
-You should look at the AppDeamon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
+You should look at the AppDaemon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
 
 Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
