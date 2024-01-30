@@ -1386,10 +1386,10 @@ class Inverter:
     def mimic_target_soc(self, current_charge_limit):
         """
         Function to turn on/off charging based on the current SOC and the set charge limit
-        
+
         Parameters:
             current_charge_limit (float): The target SOC (State of Charge) limit for charging.
-        
+
         Returns:
             None
         """
@@ -2227,7 +2227,7 @@ class Inverter:
     def rest_readData(self, api="readData"):
         """
         Get inverter status
-        
+
         :param api: The API endpoint to retrieve data from (default is "readData")
         :return: The JSON response containing the inverter status, or None if there was an error
         """
@@ -3049,9 +3049,9 @@ class PredBat(hass.Hass):
         Async function to get history from HA
         """
         if days:
-            result['data'] = await self.get_history(entity_id=entity_id, days=days)
+            result["data"] = await self.get_history(entity_id=entity_id, days=days)
         else:
-            result['data'] = await self.get_history(entity_id=entity_id)
+            result["data"] = await self.get_history(entity_id=entity_id)
 
     def get_history_async(self, entity_id, days=None):
         """
@@ -3061,11 +3061,11 @@ class PredBat(hass.Hass):
         task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
         cnt = 0
         while not task.done() and (cnt < 120):
-            time.sleep(0.05)   
+            time.sleep(0.05)
             cnt += 0.05
 
-        if 'data' in result:
-            return result['data']
+        if "data" in result:
+            return result["data"]
         else:
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -8397,23 +8397,23 @@ class PredBat(hass.Hass):
                     self.discharge_limits_best[window_n] = 0
 
     def optimise_charge_windows_reset(self, reset_all):
-            """
-            Reset the charge windows to min
+        """
+        Reset the charge windows to min
 
-            Parameters:
-            - reset_all (bool): If True, reset all charge windows. If False, reset only the charge windows that are in the record window.
+        Parameters:
+        - reset_all (bool): If True, reset all charge windows. If False, reset only the charge windows that are in the record window.
 
-            Returns:
-            None
-            """
-            if self.charge_window_best and self.calculate_best_charge:
-                # Set all to max
-                for window_n in range(0, len(self.charge_window_best)):
-                    if self.charge_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
-                        if reset_all:
-                            self.charge_limit_best[window_n] = 0.0
-                    else:
-                        self.charge_limit_best[window_n] = self.soc_max
+        Returns:
+        None
+        """
+        if self.charge_window_best and self.calculate_best_charge:
+            # Set all to max
+            for window_n in range(0, len(self.charge_window_best)):
+                if self.charge_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
+                    if reset_all:
+                        self.charge_limit_best[window_n] = 0.0
+                else:
+                    self.charge_limit_best[window_n] = self.soc_max
 
     def window_as_text(self, windows, percents, ignore_min=False, ignore_max=False):
         """
@@ -9256,7 +9256,13 @@ class PredBat(hass.Hass):
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]) and (inverter.reserve_max >= inverter.soc_percent):
+                            if (
+                                self.set_soc_enable
+                                and self.set_reserve_enable
+                                and self.set_reserve_hold
+                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
+                                and (inverter.reserve_max >= inverter.soc_percent)
+                            ):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
