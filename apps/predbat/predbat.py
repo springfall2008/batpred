@@ -8253,7 +8253,7 @@ class PredBat(hass.Hass):
                                         self.best_soc_max,
                                         self.dp2(best_metric),
                                         self.dp2(best_cost),
-                                        self.charge_limit_best,
+                                        self.calc_percent_limit(self.charge_limit_best),
                                     )
                                 )
                     else:
@@ -8333,7 +8333,7 @@ class PredBat(hass.Hass):
                         self.dp2(best_cost),
                         self.dp2(best_keep),
                         self.time_abs_str(self.end_record + self.minutes_now),
-                        self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True),
+                        self.window_as_text(self.charge_window_best, self.calc_percent_limit(self.charge_limit_best), ignore_min=True),
                     )
                 )
 
@@ -8964,7 +8964,7 @@ class PredBat(hass.Hass):
 
             self.end_record = self.forecast_minutes
         # Show best windows
-        self.log("Best charge    window {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best)))
+        self.log("Best charge    window {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best)))
         self.log("Best discharge window {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Created optimised step data
@@ -10110,7 +10110,7 @@ class PredBat(hass.Hass):
         self.charge_limit_percent = self.calc_percent_limit(self.charge_limit)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
 
-        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit)))
+        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit_percent)))
         self.log("Base discharge window {}".format(self.window_as_text(self.discharge_window, self.discharge_limits)))
 
     def manual_select(self, config_item, value):
