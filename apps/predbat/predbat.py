@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.6"
+THIS_VERSION = "v7.15.7"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -4253,6 +4253,13 @@ class PredBat(hass.Hass):
                 # Apply the charging curve
                 charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
 
+                # If the battery is charging then solar will be used to charge as a priority
+                # So move more of the PV into PV DC
+                if pv_dc < charge_rate_now_curve * step:
+                    extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
+                    pv_ac -= extra_pv
+                    pv_dc += extra_pv
+
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 charge_rate_now_curve /= self.inverter_loss
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
@@ -6438,6 +6445,14 @@ class PredBat(hass.Hass):
     def publish_discharge_limit(self, discharge_window, discharge_limits, best):
         """
         Create entity to chart discharge limit
+
+        Args:
+            discharge_window (list): List of dictionaries representing the discharge window.
+            discharge_limits (list): List of discharge limits in percent.
+            best (bool): Flag indicating whether to push as base or as best
+
+        Returns:
+            None
         """
         discharge_limit_time = {}
         discharge_limit_time_kw = {}
@@ -6586,6 +6601,15 @@ class PredBat(hass.Hass):
     def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
         Create entity to chart charge limit
+
+        Parameters:
+
+        - charge_limit (list): List of charge limits in kWh
+        - charge_window (list): List of charge window dictionaries
+        - charge_limit_percent (list): List of charge limit percentages
+        - best (bool, optional): Flag indicating if we publish as base or as best
+        - soc (dict, optional): Dictionary of the predicted SOC over time
+
         """
         charge_limit_time = {}
         charge_limit_time_kw = {}
