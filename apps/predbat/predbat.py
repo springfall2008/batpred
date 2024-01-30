@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.7"
+THIS_VERSION = "v7.15.8"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1049,33 +1049,34 @@ class Inverter:
                 data_point = 99
                 for minute in range(0, min_len):
                     if soc_percent.get(minute, 0) == data_point and predbat_status[minute] == "Charging" and charge_rate[minute] == max_power and battery_power[minute] <= 0:
-                        found = False
                         total_power = 0
                         for target_minute in range(minute + 1, min_len):
                             if predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] > 0:
                                 break
                             total_power += abs(battery_power[minute])
-                            if soc_percent.get(target_minute, 0) == (data_point - 1):
+                            this_soc = soc_percent.get(target_minute, 0)
+                            if (this_soc == (data_point - 1)) or (this_soc == (data_point - 2)) and total_power > 0:
+                                this_diff = data_point - this_soc
                                 time_diff = target_minute - minute
                                 from_soc = soc_kwh[minute]
                                 to_soc = soc_kwh[target_minute]
                                 soc_charged = from_soc - to_soc
                                 average_power = total_power / time_diff
                                 charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                if self.base.debug_enable:
-                                    self.log(
-                                        "Charge Curve Percent: {} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                            data_point, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power
-                                        )
+                                self.log(
+                                    "Charge Curve Percent: {} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                        data_point, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power
                                     )
+                                )
                                 final_curve[data_point] = charge_curve
                                 if data_point == 99:
                                     final_curve[100] = charge_curve
-                                found = True
+                                if this_diff == 2:
+                                    final_curve[data_point - 1] = charge_curve
+                                    data_point -= 1
+                                data_point -= 1
                                 break
-                        if found:
-                            data_point -= 1
-                    if data_point < 85:
+                    if data_point < 89:
                         break
                 if final_curve:
                     found_required = True
