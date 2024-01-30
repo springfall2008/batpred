@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.6"
+THIS_VERSION = "v7.15.7"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1386,10 +1386,10 @@ class Inverter:
     def mimic_target_soc(self, current_charge_limit):
         """
         Function to turn on/off charging based on the current SOC and the set charge limit
-
+        
         Parameters:
             current_charge_limit (float): The target SOC (State of Charge) limit for charging.
-
+        
         Returns:
             None
         """
@@ -2227,7 +2227,7 @@ class Inverter:
     def rest_readData(self, api="readData"):
         """
         Get inverter status
-
+        
         :param api: The API endpoint to retrieve data from (default is "readData")
         :return: The JSON response containing the inverter status, or None if there was an error
         """
@@ -3049,9 +3049,9 @@ class PredBat(hass.Hass):
         Async function to get history from HA
         """
         if days:
-            result["data"] = await self.get_history(entity_id=entity_id, days=days)
+            result['data'] = await self.get_history(entity_id=entity_id, days=days)
         else:
-            result["data"] = await self.get_history(entity_id=entity_id)
+            result['data'] = await self.get_history(entity_id=entity_id)
 
     def get_history_async(self, entity_id, days=None):
         """
@@ -3061,11 +3061,11 @@ class PredBat(hass.Hass):
         task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
         cnt = 0
         while not task.done() and (cnt < 120):
-            time.sleep(0.05)
+            time.sleep(0.05)   
             cnt += 0.05
 
-        if "data" in result:
-            return result["data"]
+        if 'data' in result:
+            return result['data']
         else:
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -4252,6 +4252,13 @@ class PredBat(hass.Hass):
 
                 # Apply the charging curve
                 charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
+
+                # If the battery is charging then solar will be used to charge as a priority
+                # So move more of the PV into PV DC
+                if pv_dc < charge_rate_now_curve * step:
+                    extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
+                    pv_ac -= extra_pv
+                    pv_dc += extra_pv    
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 charge_rate_now_curve /= self.inverter_loss
@@ -6438,6 +6445,14 @@ class PredBat(hass.Hass):
     def publish_discharge_limit(self, discharge_window, discharge_limits, best):
         """
         Create entity to chart discharge limit
+
+        Args:
+            discharge_window (list): List of dictionaries representing the discharge window.
+            discharge_limits (list): List of discharge limits in percent.
+            best (bool): Flag indicating whether to push as base or as best
+
+        Returns:
+            None
         """
         discharge_limit_time = {}
         discharge_limit_time_kw = {}
@@ -6586,6 +6601,15 @@ class PredBat(hass.Hass):
     def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
         Create entity to chart charge limit
+
+        Parameters:
+
+        - charge_limit (list): List of charge limits in kWh
+        - charge_window (list): List of charge window dictionaries
+        - charge_limit_percent (list): List of charge limit percentages
+        - best (bool, optional): Flag indicating if we publish as base or as best
+        - soc (dict, optional): Dictionary of the predicted SOC over time
+
         """
         charge_limit_time = {}
         charge_limit_time_kw = {}
@@ -9256,13 +9280,7 @@ class PredBat(hass.Hass):
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if (
-                                self.set_soc_enable
-                                and self.set_reserve_enable
-                                and self.set_reserve_hold
-                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
-                                and (inverter.reserve_max >= inverter.soc_percent)
-                            ):
+                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]) and (inverter.reserve_max >= inverter.soc_percent):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
