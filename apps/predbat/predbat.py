@@ -1386,10 +1386,10 @@ class Inverter:
     def mimic_target_soc(self, current_charge_limit):
         """
         Function to turn on/off charging based on the current SOC and the set charge limit
-
+        
         Parameters:
             current_charge_limit (float): The target SOC (State of Charge) limit for charging.
-
+        
         Returns:
             None
         """
@@ -2227,7 +2227,7 @@ class Inverter:
     def rest_readData(self, api="readData"):
         """
         Get inverter status
-
+        
         :param api: The API endpoint to retrieve data from (default is "readData")
         :return: The JSON response containing the inverter status, or None if there was an error
         """
@@ -3049,9 +3049,9 @@ class PredBat(hass.Hass):
         Async function to get history from HA
         """
         if days:
-            result["data"] = await self.get_history(entity_id=entity_id, days=days)
+            result['data'] = await self.get_history(entity_id=entity_id, days=days)
         else:
-            result["data"] = await self.get_history(entity_id=entity_id)
+            result['data'] = await self.get_history(entity_id=entity_id)
 
     def get_history_async(self, entity_id, days=None):
         """
@@ -3061,11 +3061,11 @@ class PredBat(hass.Hass):
         task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
         cnt = 0
         while not task.done() and (cnt < 120):
-            time.sleep(0.05)
+            time.sleep(0.05)   
             cnt += 0.05
 
-        if "data" in result:
-            return result["data"]
+        if 'data' in result:
+            return result['data']
         else:
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -4258,7 +4258,7 @@ class PredBat(hass.Hass):
                 if pv_dc < charge_rate_now_curve * step:
                     extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
                     pv_ac -= extra_pv
-                    pv_dc += extra_pv
+                    pv_dc += extra_pv    
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 charge_rate_now_curve /= self.inverter_loss
@@ -8253,7 +8253,7 @@ class PredBat(hass.Hass):
                                         self.best_soc_max,
                                         self.dp2(best_metric),
                                         self.dp2(best_cost),
-                                        self.charge_limit_best,
+                                        self.calc_percent_limit(self.charge_limit_best),
                                     )
                                 )
                     else:
@@ -8333,7 +8333,7 @@ class PredBat(hass.Hass):
                         self.dp2(best_cost),
                         self.dp2(best_keep),
                         self.time_abs_str(self.end_record + self.minutes_now),
-                        self.window_as_text(self.charge_window_best, self.charge_limit_best, ignore_min=True),
+                        self.window_as_text(self.charge_window_best, self.calc_percent_limit(self.charge_limit_best), ignore_min=True),
                     )
                 )
 
@@ -8964,7 +8964,7 @@ class PredBat(hass.Hass):
 
             self.end_record = self.forecast_minutes
         # Show best windows
-        self.log("Best charge    window {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_best)))
+        self.log("Best charge    window {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best)))
         self.log("Best discharge window {}".format(self.window_as_text(self.discharge_window_best, self.discharge_limits_best)))
 
         # Created optimised step data
@@ -9280,13 +9280,7 @@ class PredBat(hass.Hass):
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if (
-                                self.set_soc_enable
-                                and self.set_reserve_enable
-                                and self.set_reserve_hold
-                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
-                                and (inverter.reserve_max >= inverter.soc_percent)
-                            ):
+                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]) and (inverter.reserve_max >= inverter.soc_percent):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
@@ -10110,7 +10104,7 @@ class PredBat(hass.Hass):
         self.charge_limit_percent = self.calc_percent_limit(self.charge_limit)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
 
-        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit)))
+        self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit_percent)))
         self.log("Base discharge window {}".format(self.window_as_text(self.discharge_window, self.discharge_limits)))
 
     def manual_select(self, config_item, value):
