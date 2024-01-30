@@ -266,10 +266,19 @@ You have configured predbat's control entities, created a couple of dashboard pa
 
 In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
 
-You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the Predbat Plan.
+You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the [Predbat Plan](predbat-plan-card.md).
+In *Monitor* mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.
 
-Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter, set **select.predbat_mode**
-to the correct mode of operation for your system.
+The recommended next step is to start Predbat planning your inverter charging and discharging activity but not (yet) make any changes to the inverter.
+This enables you to get a feel for the Predbat plan and [customise Predbat's settings](customisation.md) to meet your needs.
+
+Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system
+and also set **switch.predbat_set_read_only** to True to stop Predbat making any changes to your inverter.
+
+Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
+set the switch **switch.predbat_set_read_only** to False and Predbat will start controlling your inverter.
+
+You can see the planned charging and discharging activity in the [Predbat Plan](predbat-plan-card.md).
 
 ## Updating Predbat
 
