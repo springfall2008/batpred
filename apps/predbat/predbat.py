@@ -9216,7 +9216,13 @@ class PredBat(hass.Hass):
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]):
+                            if (
+                                self.set_soc_enable
+                                and self.set_reserve_enable
+                                and self.set_reserve_hold
+                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
+                                and (inverter.reserve_max >= inverter.soc_percent)
+                            ):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
