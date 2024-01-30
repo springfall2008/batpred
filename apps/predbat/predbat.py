@@ -3040,9 +3040,9 @@ class PredBat(hass.Hass):
         Async function to get history from HA
         """
         if days:
-            result['data'] = await self.get_history(entity_id=entity_id, days=days)
+            result["data"] = await self.get_history(entity_id=entity_id, days=days)
         else:
-            result['data'] = await self.get_history(entity_id=entity_id)
+            result["data"] = await self.get_history(entity_id=entity_id)
 
     def get_history_async(self, entity_id, days=None):
         """
@@ -3052,11 +3052,11 @@ class PredBat(hass.Hass):
         task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
         cnt = 0
         while not task.done() and (cnt < 120):
-            time.sleep(0.05)   
+            time.sleep(0.05)
             cnt += 0.05
 
-        if 'data' in result:
-            return result['data']
+        if "data" in result:
+            return result["data"]
         else:
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -9216,7 +9216,13 @@ class PredBat(hass.Hass):
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0]) and (inverter.reserve_max >= inverter.soc_percent):
+                            if (
+                                self.set_soc_enable
+                                and self.set_reserve_enable
+                                and self.set_reserve_hold
+                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
+                                and (inverter.reserve_max >= inverter.soc_percent)
+                            ):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
