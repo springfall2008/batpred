@@ -200,7 +200,7 @@ rates_import_override:
 
 Would say that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
 
-You can also make relative adjustments to your energy rates, e.g. if you want to avoid exporting during peak periods to improve your energy 
+You can also make relative adjustments to your energy rates, e.g. if you want to avoid exporting during peak periods to improve your energy
 saving session results you could make a relative adjustment your export rates using **rate_increment**.
 The reason not to just set **rate** is then when an energy saving session is active you do not want to ignore the higher export take.
 
