@@ -1050,7 +1050,13 @@ class Inverter:
                     found = False
                     for minute in range(0, min_len):
                         # Start trigger is when the SOC just increased above the data point
-                        if soc_percent.get(minute - 1, 0) == (data_point + 1) and soc_percent.get(minute, 0) == data_point and predbat_status[minute] == "Charging" and charge_rate[minute] == max_power and battery_power[minute] < 0:
+                        if (
+                            soc_percent.get(minute - 1, 0) == (data_point + 1)
+                            and soc_percent.get(minute, 0) == data_point
+                            and predbat_status[minute] == "Charging"
+                            and charge_rate[minute] == max_power
+                            and battery_power[minute] < 0
+                        ):
                             total_power = 0
                             # Find a period where charging was at full rate and the SOC just drops below the data point
                             for target_minute in range(minute + 1, min_len):
@@ -1070,7 +1076,13 @@ class Inverter:
                                     charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
                                     self.log(
                                         "Charge Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                            data_point, this_soc + 1, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power
+                                            data_point,
+                                            this_soc + 1,
+                                            self.base.time_abs_str(self.base.minutes_now - minute),
+                                            time_diff,
+                                            round(soc_charged, 2),
+                                            charge_curve,
+                                            average_power,
                                         )
                                     )
                                     # Store data points
@@ -5243,7 +5255,11 @@ class PredBat(hass.Hass):
                 start_minutes = max(self.minutes_to_time(start, midnight), 0)
                 end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
 
-                self.log("Adding rate {} => {} to {} @ {} date {} increment {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment))
+                self.log(
+                    "Adding rate {} => {} to {} @ {} date {} increment {}".format(
+                        this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment
+                    )
+                )
 
                 # Make end > start
                 if end_minutes <= start_minutes:
