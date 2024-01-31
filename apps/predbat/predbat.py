@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.8"
+THIS_VERSION = "v7.15.9"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1046,41 +1046,59 @@ class Inverter:
                     soc_percent[minute] = int((soc_kwh[minute] / self.soc_max) * 100.0 + 0.5)
 
                 # Find 100% end points
-                data_point = 99
-                for minute in range(0, min_len):
-                    if soc_percent.get(minute, 0) == data_point and predbat_status[minute] == "Charging" and charge_rate[minute] == max_power and battery_power[minute] <= 0:
-                        total_power = 0
-                        for target_minute in range(minute + 1, min_len):
-                            if predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] > 0:
-                                break
-                            total_power += abs(battery_power[minute])
-                            this_soc = soc_percent.get(target_minute, 0)
-                            if (this_soc == (data_point - 1)) or (this_soc == (data_point - 2)) and total_power > 0:
-                                this_diff = data_point - this_soc
-                                time_diff = target_minute - minute
-                                from_soc = soc_kwh[minute]
-                                to_soc = soc_kwh[target_minute]
-                                soc_charged = from_soc - to_soc
-                                average_power = total_power / time_diff
-                                charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                self.log(
-                                    "Charge Curve Percent: {} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                        data_point, self.base.time_abs_str(self.base.minutes_now - minute), time_diff, round(soc_charged, 2), charge_curve, average_power
+                for data_point in range(99, 85, -1):
+                    found = False
+                    for minute in range(0, min_len):
+                        # Start trigger is when the SOC just increased above the data point
+                        if (
+                            soc_percent.get(minute - 1, 0) == (data_point + 1)
+                            and soc_percent.get(minute, 0) == data_point
+                            and predbat_status[minute] == "Charging"
+                            and charge_rate[minute] == max_power
+                            and battery_power[minute] < 0
+                        ):
+                            total_power = 0
+                            # Find a period where charging was at full rate and the SOC just drops below the data point
+                            for target_minute in range(minute + 1, min_len):
+                                if predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] >= 0:
+                                    break
+                                total_power += abs(battery_power[minute])
+                                this_soc = soc_percent.get(target_minute, 0)
+                                if (this_soc < data_point) and total_power > 0:
+                                    # So the power for this data point average has been stored, it's possible we spanned more than one data point
+                                    # if not all SOC %'s are represented for this battery size
+                                    this_diff = data_point - this_soc
+                                    time_diff = target_minute - minute
+                                    from_soc = soc_kwh[minute]
+                                    to_soc = soc_kwh[target_minute]
+                                    soc_charged = from_soc - to_soc
+                                    average_power = total_power / time_diff
+                                    charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
+                                    self.log(
+                                        "Charge Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                            data_point,
+                                            this_soc + 1,
+                                            self.base.time_abs_str(self.base.minutes_now - minute),
+                                            time_diff,
+                                            round(soc_charged, 2),
+                                            charge_curve,
+                                            average_power,
+                                        )
                                     )
-                                )
-                                final_curve[data_point] = charge_curve
-                                if data_point == 99:
-                                    final_curve[100] = charge_curve
-                                if this_diff == 2:
-                                    final_curve[data_point - 1] = charge_curve
-                                    data_point -= 1
-                                data_point -= 1
-                                break
-                    if data_point < 89:
-                        break
+                                    # Store data points
+                                    for point in range(this_soc + 1, 101):
+                                        if point not in final_curve:
+                                            final_curve[point] = charge_curve
+
+                                    found = True
+                                    break
+                        # Found this data point so stop looking
+                        if found:
+                            break
                 if final_curve:
+                    self.log("Charge curve before adjustment is: {}".format(final_curve))
                     found_required = True
-                    for required in range(90, 100):
+                    for required in range(90, 101):
                         if required not in final_curve:
                             found_required = False
 
