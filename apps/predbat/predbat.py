@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.9"
+THIS_VERSION = "v7.15.10"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -1107,8 +1107,9 @@ class Inverter:
                         rate_scaling = 0
                         for index in final_curve:
                             rate_scaling = max(final_curve[index], rate_scaling)
-                        for index in final_curve:
-                            final_curve[index] = round(final_curve[index] / rate_scaling, 2)
+                        if rate_scaling > 0:
+                            for index in final_curve:
+                                final_curve[index] = round(final_curve[index] / rate_scaling, 2)
                         text = "  battery_charge_power_curve:\n"
                         keys = sorted(final_curve.keys())
                         keys.reverse()
