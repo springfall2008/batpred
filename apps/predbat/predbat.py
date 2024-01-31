@@ -2225,7 +2225,7 @@ class Inverter:
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
 
-    def rest_readData(self, api="readData"):
+    def rest_readData(self, api="readData", retry=True):
         """
         Get inverter status
 
@@ -2244,9 +2244,13 @@ class Inverter:
             if "Control" in json:
                 return json
             else:
-                self.base.log("WARN: Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url))
-                self.base.record_status("Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
-                return None
+                if retry:
+                    # If this is the first call in error then try to re-read the data
+                    return self.rest_runAll()
+                else:
+                    self.base.log("WARN: Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url))
+                    self.base.record_status("Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
+                    return None
         else:
             self.base.log("WARN: Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url))
             self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
@@ -2256,7 +2260,7 @@ class Inverter:
         """
         Updated and get inverter status
         """
-        new_data = self.rest_readData(api="runAll")
+        new_data = self.rest_readData(api="runAll", retry=False)
         if new_data:
             return new_data
         else:
@@ -5210,8 +5214,18 @@ class PredBat(hass.Hass):
                         self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                         continue
 
-                rate = this_rate.get("rate", 0.0)
+                # Support increment to existing rates (for override)
+                if "rate" in this_rate:
+                    rate = this_rate.get("rate", 0.0)
+                    rate_increment = False
+                elif "rate_increment" in this_rate:
+                    rate = this_rate.get("rate_increment", 0.0)
+                    rate_increment = True
+
+                # Resolve any sensor links
                 rate = self.resolve_arg("rate", rate, 0.0)
+
+                # Ensure the end result is a float
                 try:
                     rate = float(rate)
                 except ValueError:
@@ -5223,7 +5237,11 @@ class PredBat(hass.Hass):
                 start_minutes = max(self.minutes_to_time(start, midnight), 0)
                 end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
 
-                self.log("Adding rate {} => {} to {} @ {} date {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date))
+                self.log(
+                    "Adding rate {} => {} to {} @ {} date {} increment {}".format(
+                        this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment
+                    )
+                )
 
                 # Make end > start
                 if end_minutes <= start_minutes:
@@ -5238,14 +5256,18 @@ class PredBat(hass.Hass):
                 # Store rates against range
                 if end_minutes >= 0 and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
+                        minute_mod = minute % max_minute
                         if (not date) or (minute >= 0 and minute < max_minute):
-                            rates[minute % max_minute] = rate
+                            if rate_increment:
+                                rates[minute_mod] = rates.get(minute % max_minute, 0.0) + rate
+                            else:
+                                rates[minute_mod] = rate
                             if load_scaling is not None:
-                                self.load_scaling_dynamic[minute % max_minute] = load_scaling
+                                self.load_scaling_dynamic[minute_mod] = load_scaling
                             if not date and not prev:
-                                rates[(minute % max_minute) + max_minute] = rate
+                                rates[minute_mod + max_minute] = rate
                                 if load_scaling is not None:
-                                    self.load_scaling_dynamic[(minute % max_minute) + max_minute] = load_scaling
+                                    self.load_scaling_dynamic[minute_mod + max_minute] = load_scaling
 
         return rates
 
