@@ -5237,7 +5237,11 @@ class PredBat(hass.Hass):
                 start_minutes = max(self.minutes_to_time(start, midnight), 0)
                 end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
 
-                self.log("Adding rate {} => {} to {} @ {} date {} increment {}".format(this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment))
+                self.log(
+                    "Adding rate {} => {} to {} @ {} date {} increment {}".format(
+                        this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment
+                    )
+                )
 
                 # Make end > start
                 if end_minutes <= start_minutes:
