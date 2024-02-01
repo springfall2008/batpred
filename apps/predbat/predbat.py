@@ -990,6 +990,7 @@ class Inverter:
         predbat_status_sensor = "predbat.status"
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         final_curve = {}
+        final_curve_count = {}
 
         max_power = int(self.battery_rate_max_charge * 1000.0 * 60.0)
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
@@ -1077,27 +1078,33 @@ class Inverter:
                                     soc_charged = from_soc - to_soc
                                     average_power = total_power / time_diff
                                     charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                    self.log(
-                                        "Charge Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                            data_point,
-                                            this_soc + 1,
-                                            self.base.time_abs_str(self.base.minutes_now - minute),
-                                            time_diff,
-                                            round(soc_charged, 2),
-                                            charge_curve,
-                                            average_power,
+                                    if self.base.debug_enable:
+                                        self.log(
+                                            "Charge Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                                data_point,
+                                                this_soc + 1,
+                                                self.base.time_abs_str(self.base.minutes_now - minute),
+                                                time_diff,
+                                                round(soc_charged, 2),
+                                                charge_curve,
+                                                average_power,
+                                            )
                                         )
-                                    )
                                     # Store data points
                                     for point in range(this_soc + 1, 101):
                                         if point not in final_curve:
                                             final_curve[point] = charge_curve
+                                            final_curve_count[point] = 1
+                                        elif point <= data_point:
+                                            # Don't double count those above this point that already have data
+                                            final_curve[point] += charge_curve
+                                            final_curve_count[point] += 1
 
                                     found = True
                                     break
-                        # Found this data point so stop looking
+                        # If a data point was found, skip over this charge and look for more of them
                         if found:
-                            break
+                            minute = target_minute
                 if final_curve:
                     self.log("Charge curve before adjustment is: {}".format(final_curve))
                     found_required = True
@@ -1108,19 +1115,39 @@ class Inverter:
                     if found_required:
                         # Scale curve to 1.0
                         rate_scaling = 0
+
+                        # Average the data points
+                        for index in final_curve:
+                            if final_curve_count[index] > 0:
+                                final_curve[index] = final_curve[index] / final_curve_count[index]
+
+                        # Work out the maxium power to use as a scale factor
                         for index in final_curve:
                             rate_scaling = max(final_curve[index], rate_scaling)
+
+                        # Scale the curve
                         if rate_scaling > 0:
                             for index in final_curve:
                                 final_curve[index] = round(final_curve[index] / rate_scaling, 2)
-                        text = "  battery_charge_power_curve:\n"
-                        keys = sorted(final_curve.keys())
-                        keys.reverse()
-                        for key in keys:
-                            if final_curve[key] < 1.0:
-                                text += "    {} : {}\n".format(key, final_curve[key])
-                        self.log("Charge curve can be entered into apps.yaml:\n" + text)
-                        self.log("Consider setting in HA: input_number.battery_max_rate_scaling: {}".format(round(rate_scaling, 2)))
+                        
+                        # If we have the correct data then output it
+                        if rate_scaling > 0:
+                            text = "  battery_charge_power_curve:\n"
+                            keys = sorted(final_curve.keys())
+                            keys.reverse()
+                            for key in keys:
+                                if final_curve[key] < 1.0 and final_curve[key] > 0.0:
+                                    text += "    {} : {}\n".format(key, final_curve[key])
+                            if self.base.battery_charge_power_curve_auto:
+                                self.log("Charge automatically computed as:\n" + text)
+                            else:
+                                self.log("Charge curve can be entered into apps.yaml or set to auto:\n" + text)
+                            rate_scaling = round(rate_scaling, 2)
+                            if rate_scaling != self.base.battery_rate_max_scaling:
+                                self.log("Consider setting in HA: input_number.battery_max_rate_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
+                            return final_curve
+                        else:
+                            self.log("Note: Found incorrect battery charging curve, maybe try again when you have more data.")
                     else:
                         self.log("Note: Found incomplete battery charging curve, maybe try again when you have more data.")
                 else:
@@ -1133,6 +1160,7 @@ class Inverter:
                 )
         else:
             self.log("Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
+        return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
         """
@@ -3114,17 +3142,7 @@ class PredBat(hass.Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0],
-                    self.max_days_previous,
-                    now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    smoothing=True,
-                    scale=scale,
-                    clean_increment=True,
-                    accumulate=import_today,
-                    required_unit=required_unit,
+                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=True, scale=scale, clean_increment=True, accumulate=import_today, required_unit=required_unit
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
@@ -3299,18 +3317,18 @@ class PredBat(hass.Hass):
                 continue
 
             # Find and converter units
-            if required_unit and ("attributes" in item):
-                if "unit_of_measurement" in item["attributes"]:
-                    unit = item["attributes"]["unit_of_measurement"]
+            if required_unit and ('attributes' in item):
+                if 'unit_of_measurement' in item['attributes']:
+                    unit = item['attributes']['unit_of_measurement']
                     if unit != required_unit:
-                        if required_unit in ["kW", "kWh"] and unit in ["W", "Wh"]:
+                        if required_unit in ['kW', 'kWh'] and unit in ['W', 'Wh']:
                             state = state / 1000.0
-                        elif required_unit in ["W", "Wh"] and unit in ["kW", "kWh"]:
+                        elif required_unit in ['W', 'Wh'] and unit in ['kW', 'kWh']:
                             state = state * 1000.0
                         else:
                             # Ignore data in wrong units if we can't converter
-                            continue
-
+                            continue                        
+                        
             # Divide down the state if required
             if divide_by:
                 state /= divide_by
@@ -6985,8 +7003,9 @@ class PredBat(hass.Hass):
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
         self.load_scaling_dynamic = {}
-        self.computed_charge_curve = False
         self.battery_charge_power_curve = {}
+        self.battery_charge_power_curve_auto = False
+        self.computed_charge_curve = False
 
     def optimise_charge_limit_price(
         self,
@@ -8658,17 +8677,7 @@ class PredBat(hass.Hass):
                     data = None
 
                 load_forecast = self.minute_data(
-                    data,
-                    self.forecast_days,
-                    self.midnight_utc,
-                    "energy",
-                    "last_updated",
-                    backwards=False,
-                    clean_increment=False,
-                    smoothing=True,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="kWh",
+                    data, self.forecast_days, self.midnight_utc, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0, required_unit="kWh"
                 )
 
         return load_forecast
@@ -10127,8 +10136,11 @@ class PredBat(hass.Hass):
             inverter = Inverter(self, id)
             inverter.update_status(self.minutes_now)
 
-            if id == 0 and not self.computed_charge_curve and not self.battery_charge_power_curve:
-                inverter.find_charge_curve()
+            if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
+                curve = inverter.find_charge_curve()
+                if curve:
+                    self.log("Saved computed battery power curve")
+                    self.battery_charge_power_curve = curve
                 self.computed_charge_curve = True
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
@@ -10354,12 +10366,19 @@ class PredBat(hass.Hass):
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.battery_scaling = self.get_arg("battery_scaling", 1.0)
-        self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
-        # Check power curve is a dictionary
-        if not isinstance(self.battery_charge_power_curve, dict):
-            self.battery_charge_power_curve = {}
-            self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
-            self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
+
+        # Charge curve
+        if self.args.get("battery_charge_power_curve", '') == 'auto':
+            self.battery_charge_power_curve_auto = True
+        else:
+            self.battery_charge_power_curve_auto = False
+            self.battery_charge_power_curve = self.args.get("battery_charge_power_curve", {})
+            # Check power curve is a dictionary
+            if not isinstance(self.battery_charge_power_curve, dict):
+                self.battery_charge_power_curve = {}
+                self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
+                self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
+
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_margin = 0.0
         self.best_soc_min = self.get_arg("best_soc_min")
