@@ -1129,7 +1129,7 @@ class Inverter:
                         if rate_scaling > 0:
                             for index in final_curve:
                                 final_curve[index] = round(final_curve[index] / rate_scaling, 2)
-                        
+
                         # If we have the correct data then output it
                         if rate_scaling > 0:
                             text = "  battery_charge_power_curve:\n"
@@ -1144,7 +1144,9 @@ class Inverter:
                                 self.log("Charge curve can be entered into apps.yaml or set to auto:\n" + text)
                             rate_scaling = round(rate_scaling, 2)
                             if rate_scaling != self.base.battery_rate_max_scaling:
-                                self.log("Consider setting in HA: input_number.battery_max_rate_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
+                                self.log(
+                                    "Consider setting in HA: input_number.battery_max_rate_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling)
+                                )
                             return final_curve
                         else:
                             self.log("Note: Found incorrect battery charging curve, maybe try again when you have more data.")
@@ -3142,7 +3144,17 @@ class PredBat(hass.Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=True, scale=scale, clean_increment=True, accumulate=import_today, required_unit=required_unit
+                    history[0],
+                    self.max_days_previous,
+                    now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    smoothing=True,
+                    scale=scale,
+                    clean_increment=True,
+                    accumulate=import_today,
+                    required_unit=required_unit,
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
@@ -3317,18 +3329,18 @@ class PredBat(hass.Hass):
                 continue
 
             # Find and converter units
-            if required_unit and ('attributes' in item):
-                if 'unit_of_measurement' in item['attributes']:
-                    unit = item['attributes']['unit_of_measurement']
+            if required_unit and ("attributes" in item):
+                if "unit_of_measurement" in item["attributes"]:
+                    unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ['kW', 'kWh'] and unit in ['W', 'Wh']:
+                        if required_unit in ["kW", "kWh"] and unit in ["W", "Wh"]:
                             state = state / 1000.0
-                        elif required_unit in ['W', 'Wh'] and unit in ['kW', 'kWh']:
+                        elif required_unit in ["W", "Wh"] and unit in ["kW", "kWh"]:
                             state = state * 1000.0
                         else:
                             # Ignore data in wrong units if we can't converter
-                            continue                        
-                        
+                            continue
+
             # Divide down the state if required
             if divide_by:
                 state /= divide_by
@@ -8677,7 +8689,17 @@ class PredBat(hass.Hass):
                     data = None
 
                 load_forecast = self.minute_data(
-                    data, self.forecast_days, self.midnight_utc, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0, required_unit="kWh"
+                    data,
+                    self.forecast_days,
+                    self.midnight_utc,
+                    "energy",
+                    "last_updated",
+                    backwards=False,
+                    clean_increment=False,
+                    smoothing=True,
+                    divide_by=1.0,
+                    scale=1.0,
+                    required_unit="kWh",
                 )
 
         return load_forecast
@@ -10368,7 +10390,7 @@ class PredBat(hass.Hass):
         self.battery_scaling = self.get_arg("battery_scaling", 1.0)
 
         # Charge curve
-        if self.args.get("battery_charge_power_curve", '') == 'auto':
+        if self.args.get("battery_charge_power_curve", "") == "auto":
             self.battery_charge_power_curve_auto = True
         else:
             self.battery_charge_power_curve_auto = False
