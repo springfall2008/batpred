@@ -5338,12 +5338,18 @@ class PredBat(hass.Hass):
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
                         if (not date) or (minute >= 0 and minute < max_minute):
-                            if rate_increment:
-                                rates[minute_mod] = rates.get(minute % max_minute, 0.0) + rate
-                            else:
-                                rates[minute_mod] = rate
-                            if load_scaling is not None:
-                                self.load_scaling_dynamic[minute_mod] = load_scaling
+                            minute_index = minute_mod
+                            # For incremental adjustments we have to loop over 24-hour periods
+                            while minute_index < max_minute:
+                                if rate_increment:
+                                    rates[minute_index] = rates.get(minute_index, 0.0) + rate
+                                else:
+                                    rates[minute_index] = rate
+                                if load_scaling is not None:
+                                    self.load_scaling_dynamic[minute_index] = load_scaling
+                                if date or not prev:
+                                    break
+                                minute_index += 24 * 60
                             if not date and not prev:
                                 rates[minute_mod + max_minute] = rate
                                 if load_scaling is not None:
