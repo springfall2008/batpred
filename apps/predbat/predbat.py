@@ -1012,6 +1012,7 @@ class Inverter:
                     smoothing=False,
                     divide_by=1.0,
                     scale=self.base.battery_scaling,
+                    required_unit="kWh",
                 )
                 charge_rate = self.base.minute_data(
                     charge_rate_data[0],
@@ -1024,6 +1025,7 @@ class Inverter:
                     smoothing=False,
                     divide_by=1.0,
                     scale=1.0,
+                    required_unit="W",
                 )
                 predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
                 battery_power = self.base.minute_data(
@@ -1037,6 +1039,7 @@ class Inverter:
                     smoothing=False,
                     divide_by=1.0,
                     scale=1.0,
+                    required_unit="W",
                 )
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
                 self.log("Find charge curve has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
@@ -3063,7 +3066,7 @@ class PredBat(hass.Hass):
         """
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
-            self.car_charging_energy = self.minute_data_import_export(now_utc, "car_charging_energy", scale=self.car_charging_energy_scale)
+            self.car_charging_energy = self.minute_data_import_export(now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
         else:
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
@@ -3094,7 +3097,7 @@ class PredBat(hass.Hass):
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
 
-    def minute_data_import_export(self, now_utc, key, scale=1.0):
+    def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None):
         """
         Download one or more entities for import/export data
         """
@@ -3111,7 +3114,17 @@ class PredBat(hass.Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=True, scale=scale, clean_increment=True, accumulate=import_today
+                    history[0],
+                    self.max_days_previous,
+                    now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    smoothing=True,
+                    scale=scale,
+                    clean_increment=True,
+                    accumulate=import_today,
+                    required_unit=required_unit,
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
@@ -3120,7 +3133,7 @@ class PredBat(hass.Hass):
 
         return import_today
 
-    def minute_data_load(self, now_utc, entity_name, max_days_previous):
+    def minute_data_load(self, now_utc, entity_name, max_days_previous, required_unit=None):
         """
         Download one or more entities for load data
         """
@@ -3154,6 +3167,7 @@ class PredBat(hass.Hass):
                     scale=self.load_scaling,
                     clean_increment=True,
                     accumulate=load_minutes,
+                    required_unit=required_unit,
                 )
             else:
                 self.log("ERROR: Unable to fetch history for {}".format(entity_id))
@@ -3243,6 +3257,7 @@ class PredBat(hass.Hass):
         accumulate=[],
         adjust_key=None,
         spreading=None,
+        required_unit=None,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -3260,6 +3275,9 @@ class PredBat(hass.Hass):
         if not history:
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
+
+        if self.debug_enable:
+            self.log("Loading data from {}".format(history[0]))
 
         # Process history
         for item in history:
@@ -3279,6 +3297,19 @@ class PredBat(hass.Hass):
                 last_updated_time = self.str2time(item[last_updated_key])
             except (ValueError, TypeError):
                 continue
+
+            # Find and converter units
+            if required_unit and ("attributes" in item):
+                if "unit_of_measurement" in item["attributes"]:
+                    unit = item["attributes"]["unit_of_measurement"]
+                    if unit != required_unit:
+                        if required_unit in ["kW", "kWh"] and unit in ["W", "Wh"]:
+                            state = state / 1000.0
+                        elif required_unit in ["W", "Wh"] and unit in ["kW", "kWh"]:
+                            state = state * 1000.0
+                        else:
+                            # Ignore data in wrong units if we can't converter
+                            continue
 
             # Divide down the state if required
             if divide_by:
@@ -8627,7 +8658,17 @@ class PredBat(hass.Hass):
                     data = None
 
                 load_forecast = self.minute_data(
-                    data, self.forecast_days, self.midnight_utc, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0
+                    data,
+                    self.forecast_days,
+                    self.midnight_utc,
+                    "energy",
+                    "last_updated",
+                    backwards=False,
+                    clean_increment=False,
+                    smoothing=True,
+                    divide_by=1.0,
+                    scale=1.0,
+                    required_unit="kWh",
                 )
 
         return load_forecast
@@ -9663,7 +9704,7 @@ class PredBat(hass.Hass):
         # Iboost load data
         if self.iboost_enable:
             if "iboost_energy_today" in self.args:
-                self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", 1)
+                self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", 1, required_unit="kWh")
                 if iboost_energy_age >= 1:
                     self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                     self.log("IBoost energy today from sensor reads {} kWh".format(self.iboost_today))
@@ -9674,7 +9715,7 @@ class PredBat(hass.Hass):
         else:
             # Load data
             if "load_today" in self.args:
-                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous)
+                self.load_minutes, self.load_minutes_age = self.minute_data_load(self.now_utc, "load_today", self.max_days_previous, required_unit="kWh")
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:
@@ -9684,21 +9725,21 @@ class PredBat(hass.Hass):
 
             # Load import today data
             if "import_today" in self.args:
-                self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling)
+                self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
-                self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling)
+                self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
-                self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today")
+                self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
