@@ -1121,7 +1121,7 @@ class Inverter:
                             if final_curve_count[index] > 0:
                                 final_curve[index] = final_curve[index] / final_curve_count[index]
 
-                        # Work out the maxium power to use as a scale factor
+                        # Work out the maximum power to use as a scale factor
                         for index in final_curve:
                             rate_scaling = max(final_curve[index], rate_scaling)
 
