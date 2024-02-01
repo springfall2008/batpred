@@ -5339,7 +5339,7 @@ class PredBat(hass.Hass):
                         minute_mod = minute % max_minute
                         if (not date) or (minute >= 0 and minute < max_minute):
                             minute_index = minute_mod
-                            # For incremental adjustements we have to loop over 24-hour periods
+                            # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
                                 if rate_increment:
                                     rates[minute_index] = rates.get(minute_index, 0.0) + rate
