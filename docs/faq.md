@@ -50,6 +50,44 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
+## The plan doesn't charge or discharge when I expect it to
+
+It is very important to correctly set Predbat's [Battery Loss Options](customisation.md#battery-loss-options)
+and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as these can have a huge and critical impact on the plan that Predbat generates.
+
+Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
+it depends on many factors and your personal preferences. Many users will need to customise and tweak their [Predbat configuration](customisation.md) to suit their needs.
+
+The SOC level that Predbat aims to keep in the battery **input_number.best_soc_keep** and the absolute minimum SoC level **input_number.best_soc_min** are the first thing to check.
+If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
+
+Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery are the loss rates
+**input_number.battery_loss**, **input_number.battery_loss_discharge** and **input_number.inverter_loss**.
+Typical values could be 4, 4, 4 or 5, 5, 5.  It is tempting to set these inverter loss figures lower to encourage Predbat to use the battery more,
+but this should be resisted as experience from the GivEnergy community forum suggests total energy conversion losses are in the range of 10-20%.
+
+Putting these losses into context and assuming you have an AC-coupled battery and have set the losses to 4, 4 and 4;
+then for every kWh charged from the grid you will only get 0.92kWh stored in the battery (4% charge + 4% inverter conversion loss)
+and similarly when that 0.92kWh is discharged to the home you will only receive 0.85kWh (0.92 x 0.92).
+
+These loss percentages also impact the Predbat plan. Consider an import rate of 20p/kWh; after conversion losses are considered,
+each 1kWh of stored battery charge will in effect have cost 21.7p (20 / 0.92) to import.
+
+Then for discharging, the same applies. Each kWh of stored battery charge (that cost 21.7p to charge) will in effect have cost 23.6p (21.7 / 0.92) to discharge.
+Predbat makes cost optimisation decisions so unless the current import rate is more than 23.6p, it will be cheaper to let the home run off grid import rather than to discharge the battery.
+
+If you turn [debug mode on for the Predbat plan](predbat-plan-card.md#debug-mode-for-predbat-plan) then you can see the
+effective import and export rates after losses that Predbat calculates in the Predbat plan.
+
+Predbat also uses **input_number.metric_battery_cycle** (_expert mode_ setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.
+
+So if metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
+and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).
+
+**input_number.metric_min_improvement** and **input_number.metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
+as to whether to charge or discharge the battery so could be tweaked. The defaults (0p and 0.1p respectively) should however give good results for most users.
+
 ## Predbat is causing warning messages in the Home Assistant Core log
 
 - If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning

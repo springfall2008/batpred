@@ -46,30 +46,19 @@ Once you have made all other required changes to apps.yaml this line should be d
 
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
-- **days_previous** - A list (which has to be entered as one entry per line) of the number of days of historical house load to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat uses sufficient days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
+- **days_previous** - Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
+days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
+It's recommended that you set days_previous so Predbat calculates an average house load using sufficient days' history so that 'unusual' load activity
+(e.g. saving sessions, "big washing day", etc) get averaged out.
 
-For example, to take an average house load over all the days of the last week:
-
-```yaml
-  days_previous:
-    - 2
-    - 3
-    - 4
-    - 5
-    - 6
-    - 7
-    - 8
-```
-
-Or if you just want same day last week's consumption:
+For example, if you just want Predbat to assume the house load on a particular day is the same as the same day of last week:
 
 ```yaml
   days_previous:
     - 7
 ```
 
-Or if you want the average of the same day for the last 2 weeks:
+Or if you want Predbat to take the average of the same day for the last two weeks:
 
 ```yaml
   days_previous:
@@ -77,8 +66,10 @@ Or if you want the average of the same day for the last 2 weeks:
     - 14
 ```
 
-Do keep in mind that Home Assistant only keeps 10 days history by default, so you might need to increase the number of days history kept in HA before it is purged
-by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
+Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
+
+Do keep in mind that Home Assistant only keeps 10 days history by default, so if you want to access more than this for Predbat you might need to increase the number of days history
+kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 
 ```yaml
   recorder:
@@ -86,6 +77,15 @@ by editing and adding the following to the `/homeassistant/configuration.yaml` c
 ```
 
 - **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
+
+For example, to apply a 100% weighting for the first day entry in days_previous, but only a 50% weighting to the second day in days_previous:
+
+```yaml
+  days_previous_weight:
+    - 1
+    - 0.5
+```
+
 The default value is 1, that all history days are equally weighted, so if you don't want to weight individual days you can simply use:
 
 ```yaml
@@ -445,7 +445,16 @@ AIO firmware versions refuse to be set to 100.  Comment the line out or set to 1
 
 - **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
 Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+
 The default is 1.0 (full power) charge all the way to 100%.
+
+Modelling the charge curve becomes important if you have limited charging slots (e.g. ony a few hours a night) or you wish to make accurate use of the
+low power charging mode (**switch.predbat_set_charge_low_power**).
+
+Predbat can now automatically calculate the charging curve for you if you have enough suitable data in your load history. The charging curve will be calculated
+when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
+You should look at the AppDaemon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
+
 Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
 ```yaml
@@ -497,3 +506,78 @@ Note that this does include charge freeze slots where the discharge rate is set 
 
 - **binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include
 discharge freeze slots where the charge rate is set to zero to export excess solar only.
+
+## Understanding how days_previous works
+
+As described earlier, **days_previous** is a list of the previous days of historical house load that are averaged together to predict your future daily load.
+
+e.g., if you want the average of the same day for the last 2 weeks:
+
+```yaml
+  days_previous:
+    - 7
+    - 14
+```
+
+This section describes in more detail how days_previous is used by Predbat in creating the future battery plan, and gives some worked examples and a 'gotcha' to be aware of.
+
+When Predbat forecasts future home demand it counts backwards the days_previous number of days to find the appropriate historical home consumption.
+This is best explained through a worked example:
+
+In this example, days_previous is set to use history from 2 days ago:
+
+```yaml
+  days_previous:
+    - 2
+```
+
+If right now today it's Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
+
+- For tomorrow (Tuesday) 9am slot, Predbat will look backwards 2 days from Tuesday so will use the historical home consumption from Sunday 9am
+as being the predicted load for Tuesday 9am.
+- For the day after (Wednesday) 9am slot, Predbat again looks backwards 2 days from that day, so will use historical home consumption from Monday 9am as being the Wednesday 9am prediction.
+
+This pattern of counting backwards days_previous days to find the appropriate time slot to load historical home consumption from
+requires Predbat to operate some additional special processing if days_previous is set to a low value or forecast_hours to a high value.
+
+Extending the previous example but this time days_previous is set to use history from just the previous day:
+
+```yaml
+  days_previous:
+    - 1
+```
+
+Today its still Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
+
+- For tomorrow (Tuesday) 9am slot, Predbat will look backwards 1 day from Tuesday so will use the historical home consumption from today (Monday) 9am
+as being the predicted load for Tuesday 9am.
+- For the day after (Wednesday) 9am slot, Predbat again looks backwards 1 days from that day,
+so looks for historical home consumption from Tuesday 9am as being the Wednesday 9am prediction,
+but of course it's still Monday and Tuesday hasn't happened yet so we can't know what that historial consumption was!<BR>
+What Predbat does in this circumstance is to subtract a further day from days_previous and for Wednesday 9am's prediction it will therefore use the historical load from Monday 9am.
+
+This issue of finding future historical load only occurs when days_previous is set to 1 and Predbat is forecasting more than 24 hours ahead from 'now'.
+So to highlight this with some edge cases, today is still Monday 3:15pm, days_previous is still set to '1' and in the forward plan:
+
+- For tomorrow (Tuesday) 2:30pm slot, Predbat looks backwards 1 day from Tuesday and takes the historical home consumption from today (Monday) 2:30pm slot.
+- For tomorrow (Tuesday) 3:00pm slot, Predbat looks backwards 1 day and takes the historical load from today (Monday) 3:00pm slot - which we are only part way through
+so only 15 minutes of load will be predicted for tomorrow 3pm.
+- For tomorrow (Tuesday) 3:30pm slot, Predbat looks backwards 1 day but the 3:30pm slot today hasn't yet occurred so Predbat will take the historical load from the prior day
+and has to use Sunday's 3:30pm load for tomorrow's prediction.
+- Ditto the predicted load for tomorrow (Tuesday) 4:00pm slot comes from Sunday 4pm.
+
+Of course as today rolls forward and Predbat keeps on updating the forward plan every 5 minutes the prediction will be updated with the correct previous_day history as and when it exists.
+
+Its recommended therefore that days_previous isn't set to 1, or if it is, that you understand the way this has to work and the consequences.
+If you want to set days_previous to take an average of the house load over all the days of the last week its suggested that it be set as:
+
+```yaml
+  days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+```
