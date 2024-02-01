@@ -7,6 +7,7 @@ appdaemon
 appkey
 argname
 autodocstring
+autoflake
 automations
 autopep
 autoupdate
@@ -39,6 +40,7 @@ dstart
 dwindow
 elif
 endt
+firstparty
 futurerate
 gekey
 geserial
@@ -62,6 +64,7 @@ ivtime
 Krakenflex
 kwhb
 linebreak
+localfolder
 lockstep
 markdownlint
 maximise
@@ -76,6 +79,7 @@ mkdocs
 Modbus
 mqtt
 myenergi
+mypy
 nattribute
 nearr
 njpwerner
@@ -115,10 +119,12 @@ sourcery
 Southwell
 springfall
 startt
+stdlib
 stepline
 tasmota
 tdata
 tdiff
+thirdparty
 timea
 timeb
 timec
@@ -130,6 +136,7 @@ timezone
 Trefor
 treforsiphone
 unstaged
+venv
 Wallbox
 welink
 xaxis
