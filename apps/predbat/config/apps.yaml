@@ -79,8 +79,8 @@ pred_bat:
     - number.givtcp_{geserial}_battery_discharge_rate
     - number.givtcp2_{geserial2}_battery_discharge_rate
   battery_power:
-    - number.givtcp_{geserial}_battery_power
-    - number.givtcp2_{geserial2}_battery_power
+    - sensor.givtcp_{geserial}_battery_power
+    - sensor.givtcp2_{geserial2}_battery_power
   pv_power:
     - number.givtcp_{geserial}_pv_power
     - number.givtcp2_{geserial2}_pv_power
@@ -149,6 +149,9 @@ pred_bat:
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
+  #
+  # Predbat can compute this curve automatically if you have enough data, restart the add-on and look in the logfile for the data
+  # once set here Predbat will no longer re-compute the curve.
   #battery_charge_power_curve:
   #  91 : 0.91
   #  92 : 0.81

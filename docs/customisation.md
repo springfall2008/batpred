@@ -172,11 +172,12 @@ a single low usage day in your average calculation. By default is feature is ena
 Car charging hold is a feature where you try to filter out previous car charging from your historical data so that
 future predictions are more accurate.
 
-When **car_charging_hold** is enabled loads of above the power threshold **car_charging_threshold** then you are
-assumed to be charging the car and **car_charging_rate** will be subtracted from the historical load data.
+When **car_charging_hold** is enabled when for loads of above the power threshold **car_charging_threshold** are
+assumed to be car charging and **car_charging_rate** will be subtracted from the historical load data.
 
 For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml
-then historical data will be subtracted from the load data instead.
+In this case when **car_charging_hold** is enabled historical data will be subtracted from the load data instead of using
+the fixed threshold method.
 
 **car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
 if you had a sensor in watts you might use 0.001 instead.
