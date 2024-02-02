@@ -130,13 +130,13 @@ greater than 1.0 will value it more (and hence hold more charge at the end of th
 
 ## Scaling and weight options
 
-**input_number.battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter. 
+**input_number.battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example a value of 0.95 would be 95% and indicate charging at 5% slower than reported. For GE inverters the charge rate reports the max
 AC rate and thus needs to be reduced by inverter losses.
 You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
 
-**input_number.battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter. 
-For GE inverters the discharge rate is reported as the max AC rate and thus is fairly accurate. 
+**input_number.battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
+For GE inverters the discharge rate is reported as the max AC rate and thus is fairly accurate.
 You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
 
 **switch.predbat_battery_capacity_nominal** - When enabled Predbat uses the reported battery size from the GivTCP 'Battery Nominal Capacity' field
