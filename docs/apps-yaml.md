@@ -453,7 +453,11 @@ low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable data in your load history. The charging curve will be calculated
 when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
-You should look at the AppDaemon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
+You should look at the AppDaemon/Predbat logfile to find the predicted charging curve and copy/paste it into your apps.yaml. This will also include a recommendation
+for how to set your **battery_rate_max_scaling** setting in HA.
+
+Setting This option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
+history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually save the data.
 
 Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
@@ -470,6 +474,17 @@ Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
     99 : 0.24
     100 : 0.24
 ```
+
+- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low soc% and this optional configuration item enables you to model this in Predbat.
+
+Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+
+The default is 1.0 (full power) discharge all the way to 0%.
+
+You can also look at the automation power curve calculation in the AppDaemon/Predbat log when Predbat starts (when this option is not set).
+
+Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
+the battery.
 
 ## Triggers
 
