@@ -18,7 +18,7 @@ import adbase as ad
 import os
 import yaml
 
-THIS_VERSION = "v7.15.10"
+THIS_VERSION = "v7.15.11"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -127,7 +127,18 @@ CONFIG_ITEMS = [
     },
     {
         "name": "battery_rate_max_scaling",
-        "friendly_name": "Battery rate max scaling",
+        "friendly_name": "Battery rate max scaling charge",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "multiple",
+        "icon": "mdi:multiplication",
+        "default": 0.95,
+    },
+    {
+        "name": "battery_rate_max_scaling_discharge",
+        "friendly_name": "Battery rate max scaling discharge",
         "type": "input_number",
         "min": 0,
         "max": 1.0,
@@ -864,7 +875,7 @@ class Inverter:
         self.battery_rate_max_charge = min(self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_discharge = min(self.base.get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
-        self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling
+        self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id), self.battery_rate_max_raw) / 60.0 / 1000.0
 
         # Convert inverter time into timestamp
@@ -980,22 +991,32 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
-    def find_charge_curve(self):
+    def find_charge_curve(self, discharge):
         """
         Find expected charge curve
         """
+        curve_type = "charge"
+        if discharge:
+            curve_type = "discharge"
 
         soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-        charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+        if discharge:
+            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+        else:
+            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
         predbat_status_sensor = "predbat.status"
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         final_curve = {}
         final_curve_count = {}
 
-        max_power = int(self.battery_rate_max_charge * 1000.0 * 60.0)
+        if discharge:
+            max_power = int(self.battery_rate_max_discharge * 1000.0 * 60.0)
+        else:
+            max_power = int(self.battery_rate_max_charge * 1000.0 * 60.0)
+
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Find charge curve with sensors {} and {} and {} and {}".format(soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
+            self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
             soc_kwh_data = self.base.get_history_async(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
             charge_rate_data = self.base.get_history_async(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
             predbat_status_data = self.base.get_history_async(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
@@ -1043,83 +1064,135 @@ class Inverter:
                     required_unit="W",
                 )
                 min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Find charge curve has {} days of data, max days {}".format(min_len / 60 / 24.0, self.base.max_days_previous))
+                self.log("Find {} curve has {} days of data, max days {}".format(curve_type, min_len / 60 / 24.0, self.base.max_days_previous))
 
                 soc_percent = {}
                 for minute in range(0, min_len):
                     soc_percent[minute] = int((soc_kwh[minute] / self.soc_max) * 100.0 + 0.5)
 
+                if discharge:
+                    search_range = range(5, 20, 1)
+                else:
+                    search_range = range(99, 85, -1)
+
                 # Find 100% end points
-                for data_point in range(99, 85, -1):
-                    found = False
-                    for minute in range(0, min_len):
+                for data_point in search_range:
+                    for minute in range(1, min_len):
                         # Start trigger is when the SOC just increased above the data point
                         if (
-                            soc_percent.get(minute - 1, 0) == (data_point + 1)
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status[minute] == "Charging"
-                            and charge_rate[minute] == max_power
-                            and battery_power[minute] < 0
+                            ( not discharge
+                              and soc_percent.get(minute - 1, 0) == (data_point + 1)
+                              and soc_percent.get(minute, 0) == data_point
+                              and predbat_status[minute - 1] == "Charging"
+                              and predbat_status[minute] == "Charging"
+                              and predbat_status[minute + 1] == "Charging"
+                              and charge_rate[minute - 1] == max_power
+                              and charge_rate[minute] == max_power
+                              and battery_power[minute] < 0
+                            )
+                            or
+                            ( discharge
+                              and soc_percent.get(minute - 1, 0) == (data_point - 1)
+                              and soc_percent.get(minute, 0) == data_point
+                              and predbat_status[minute - 1] == "Discharging"
+                              and predbat_status[minute] == "Discharging"
+                              and predbat_status[minute + 1] == "Discharging"
+                              and charge_rate[minute - 1] == max_power
+                              and charge_rate[minute] == max_power
+                              and battery_power[minute] > 0
+                            )
                         ):
                             total_power = 0
+                            total_count = 0
                             # Find a period where charging was at full rate and the SOC just drops below the data point
-                            for target_minute in range(minute + 1, min_len):
-                                if predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] >= 0:
-                                    break
-                                total_power += abs(battery_power[minute])
+                            for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if (this_soc < data_point) and total_power > 0:
+                                if not discharge and (predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] >= 0):
+                                    break
+                                if discharge and (predbat_status[target_minute] != "Discharging" or charge_rate[minute] != max_power or battery_power[minute] <= 0):
+                                    break
+
+                                if ((discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point))):
+                                    if total_power == 0:
+                                        # No power data, so skip this data point
+                                        break
+                                    if discharge:
+                                        this_soc -= 1
+                                    else:
+                                        this_soc += 1
                                     # So the power for this data point average has been stored, it's possible we spanned more than one data point
                                     # if not all SOC %'s are represented for this battery size
-                                    this_diff = data_point - this_soc
-                                    time_diff = target_minute - minute
                                     from_soc = soc_kwh[minute]
                                     to_soc = soc_kwh[target_minute]
                                     soc_charged = from_soc - to_soc
-                                    average_power = total_power / time_diff
+                                    average_power = total_power / total_count
                                     charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
                                     if self.base.debug_enable:
                                         self.log(
-                                            "Charge Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
+                                            "Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
                                                 data_point,
-                                                this_soc + 1,
+                                                this_soc,
                                                 self.base.time_abs_str(self.base.minutes_now - minute),
-                                                time_diff,
+                                                total_count,
                                                 round(soc_charged, 2),
                                                 charge_curve,
                                                 average_power,
                                             )
                                         )
                                     # Store data points
-                                    for point in range(this_soc + 1, 101):
+                                    if discharge:
+                                        store_range = range(this_soc, data_point - 1, -1)
+                                    else:
+                                        store_range = range(this_soc, data_point + 1)
+
+                                    for point in store_range:
                                         if point not in final_curve:
                                             final_curve[point] = charge_curve
                                             final_curve_count[point] = 1
-                                        elif point <= data_point:
-                                            # Don't double count those above this point that already have data
+                                        else:
                                             final_curve[point] += charge_curve
                                             final_curve_count[point] += 1
 
-                                    found = True
                                     break
-                        # If a data point was found, skip over this charge and look for more of them
-                        if found:
-                            minute = target_minute
+                                else:
+                                    # Store data
+                                    total_power += abs(battery_power[minute])
+                                    total_count += 1
                 if final_curve:
-                    self.log("Charge curve before adjustment is: {}".format(final_curve))
-                    found_required = True
-                    for required in range(90, 101):
-                        if required not in final_curve:
-                            found_required = False
+
+                    # Average the data points
+                    for index in final_curve:
+                        if final_curve_count[index] > 0:
+                            final_curve[index] = final_curve[index] / final_curve_count[index]
+
+                    self.log("Curve before adjustment is: {}".format(final_curve))
+
+                    # Find info for gap filling
+                    found_required = False
+                    if discharge:
+                        fill_range = range(4, 21, 1)
+                        value = min(final_curve.values())
+                    else:
+                        value = max(final_curve.values())
+                        fill_range = range(85, 101)
+                    
+                    # Pick the first value point for fill below
+                    for point in fill_range:
+                        if point in final_curve:
+                            value = final_curve[point]
+                            break
+
+                    # Fill gaps
+                    for point in fill_range:
+                        if point not in final_curve:
+                            final_curve[point] = value
+                            found_required = True
+                        else:
+                            value = final_curve[point]
 
                     if found_required:
                         # Scale curve to 1.0
                         rate_scaling = 0
-
-                        # Average the data points
-                        for index in final_curve:
-                            if final_curve_count[index] > 0:
-                                final_curve[index] = final_curve[index] / final_curve_count[index]
 
                         # Work out the maximum power to use as a scale factor
                         for index in final_curve:
@@ -1132,36 +1205,43 @@ class Inverter:
 
                         # If we have the correct data then output it
                         if rate_scaling > 0:
-                            text = "  battery_charge_power_curve:\n"
+                            if discharge:
+                                text = "  battery_charge_power_curve_discharge:\n"
+                            else:
+                                text = "  battery_charge_power_curve:\n"
                             keys = sorted(final_curve.keys())
                             keys.reverse()
+                            first = True
                             for key in keys:
-                                if final_curve[key] < 1.0 and final_curve[key] > 0.0:
+                                if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
                                     text += "    {} : {}\n".format(key, final_curve[key])
+                                    first = False
                             if self.base.battery_charge_power_curve_auto:
-                                self.log("Charge automatically computed as:\n" + text)
+                                self.log("Curve automatically computed as:\n" + text)
                             else:
-                                self.log("Charge curve can be entered into apps.yaml or set to auto:\n" + text)
+                                self.log("Curve curve can be entered into apps.yaml or set to auto:\n" + text)
                             rate_scaling = round(rate_scaling, 2)
-                            if rate_scaling != self.base.battery_rate_max_scaling:
-                                self.log(
-                                    "Consider setting in HA: input_number.battery_max_rate_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling)
-                                )
+                            if discharge:
+                                if rate_scaling != self.base.battery_rate_max_scaling_discharge:
+                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling_discharge))
+                            else:
+                                if rate_scaling != self.base.battery_rate_max_scaling:
+                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
                             return final_curve
                         else:
-                            self.log("Note: Found incorrect battery charging curve, maybe try again when you have more data.")
+                            self.log("Note: Found incorrect battery charging curve (was 0), maybe try again when you have more data.")
                     else:
-                        self.log("Note: Found incomplete battery charging curve, maybe try again when you have more data.")
+                        self.log("Note: Found incomplete battery charging curve (no data points), maybe try again when you have more data.")
                 else:
                     self.log(
-                        "Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                        "Note: Can not find battery charge curve (no final curve), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                     )
             else:
                 self.log(
-                    "Note: Can not find battery charge curve, one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                    "Note: Can not find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                 )
         else:
-            self.log("Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
+            self.log("Note: Can not find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
@@ -3144,17 +3224,7 @@ class PredBat(hass.Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0],
-                    self.max_days_previous,
-                    now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    smoothing=True,
-                    scale=scale,
-                    clean_increment=True,
-                    accumulate=import_today,
-                    required_unit=required_unit,
+                    history[0], self.max_days_previous, now_utc, "state", "last_updated", backwards=True, smoothing=True, scale=scale, clean_increment=True, accumulate=import_today, required_unit=required_unit
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
@@ -3329,18 +3399,18 @@ class PredBat(hass.Hass):
                 continue
 
             # Find and converter units
-            if required_unit and ("attributes" in item):
-                if "unit_of_measurement" in item["attributes"]:
-                    unit = item["attributes"]["unit_of_measurement"]
+            if required_unit and ('attributes' in item):
+                if 'unit_of_measurement' in item['attributes']:
+                    unit = item['attributes']['unit_of_measurement']
                     if unit != required_unit:
-                        if required_unit in ["kW", "kWh"] and unit in ["W", "Wh"]:
+                        if required_unit in ['kW', 'kWh'] and unit in ['W', 'Wh']:
                             state = state / 1000.0
-                        elif required_unit in ["W", "Wh"] and unit in ["kW", "kWh"]:
+                        elif required_unit in ['W', 'Wh'] and unit in ['kW', 'kWh']:
                             state = state * 1000.0
                         else:
                             # Ignore data in wrong units if we can't converter
-                            continue
-
+                            continue                        
+                        
             # Divide down the state if required
             if divide_by:
                 state /= divide_by
@@ -4059,6 +4129,14 @@ class PredBat(hass.Hass):
         soc_percent = self.calc_percent_limit(soc)
         max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
         return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
+    
+    def get_discharge_rate_curve(self, soc, discharge_rate_setting):
+        """
+        Compute true discharging rate from SOC and charge rate setting
+        """
+        soc_percent = self.calc_percent_limit(soc)
+        max_discharge_rate = self.battery_rate_max_discharge * self.battery_discharge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling_discharge
+        return max(min(discharge_rate_setting, max_discharge_rate), self.battery_rate_min)
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4215,7 +4293,7 @@ class PredBat(hass.Hass):
 
             # Reset modelled discharge rate if no car is charging
             if not self.car_charging_from_battery and not car_freeze:
-                discharge_rate_now = self.battery_rate_max_discharge_scaled
+                discharge_rate_now = self.battery_rate_max_discharge
 
             # IBoost on load
             if self.iboost_enable:
@@ -4291,11 +4369,12 @@ class PredBat(hass.Hass):
                     discharge_rate_now = self.battery_rate_min  # 0
                 elif not car_freeze:
                     # Reset discharge rate
-                    discharge_rate_now = self.battery_rate_max_discharge_scaled
+                    discharge_rate_now = self.battery_rate_max_discharge
 
             # Battery behaviour
             battery_draw = 0
             charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
+            discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
@@ -4304,10 +4383,11 @@ class PredBat(hass.Hass):
             ):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
+                discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
-                battery_draw = discharge_rate_now * step
+                battery_draw = discharge_rate_now_curve * step
                 if (soc - reserve_expected) < battery_draw:
                     battery_draw = max(soc - reserve_expected, 0)
 
@@ -4353,7 +4433,7 @@ class PredBat(hass.Hass):
             else:
                 # ECO Mode
                 if load_yesterday - pv_ac - pv_dc > 0:
-                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now * step, self.inverter_limit * step - pv_ac)
+                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac)
                     battery_state = "e-"
                 else:
                     battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step)
@@ -5349,7 +5429,7 @@ class PredBat(hass.Hass):
                                     self.load_scaling_dynamic[minute_index] = load_scaling
                                 if date or not prev:
                                     break
-                                minute_index += 24 * 60
+                                minute_index += 24*60
                             if not date and not prev:
                                 rates[minute_mod + max_minute] = rate
                                 if load_scaling is not None:
@@ -7023,7 +7103,10 @@ class PredBat(hass.Hass):
         self.load_scaling_dynamic = {}
         self.battery_charge_power_curve = {}
         self.battery_charge_power_curve_auto = False
+        self.battery_discharge_power_curve = {}
+        self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
+        self.computed_discharge_curve = False
 
     def optimise_charge_limit_price(
         self,
@@ -8695,17 +8778,7 @@ class PredBat(hass.Hass):
                     data = None
 
                 load_forecast = self.minute_data(
-                    data,
-                    self.forecast_days,
-                    self.midnight_utc,
-                    "energy",
-                    "last_updated",
-                    backwards=False,
-                    clean_increment=False,
-                    smoothing=True,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="kWh",
+                    data, self.forecast_days, self.midnight_utc, "energy", "last_updated", backwards=False, clean_increment=False, smoothing=True, divide_by=1.0, scale=1.0, required_unit="kWh"
                 )
 
         return load_forecast
@@ -8977,7 +9050,6 @@ class PredBat(hass.Hass):
                     charge_now = soc
                     minute = 0
                     for minute in range(0, minutes_left, PREDICT_STEP):
-                        charge_now_percent = self.calc_percent_limit(charge_now)
                         rate_scale = self.get_charge_rate_curve(charge_now, rate)
                         charge_amount = rate_scale * PREDICT_STEP * self.battery_loss
                         charge_now += charge_amount
@@ -10165,11 +10237,17 @@ class PredBat(hass.Hass):
             inverter.update_status(self.minutes_now)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
-                curve = inverter.find_charge_curve()
-                if curve:
-                    self.log("Saved computed battery power curve")
+                curve = inverter.find_charge_curve(discharge=False)
+                if curve and self.battery_charge_power_curve_auto:
+                    self.log("Saved computed battery charge power curve")
                     self.battery_charge_power_curve = curve
                 self.computed_charge_curve = True
+            if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
+                curve = inverter.find_charge_curve(discharge=True)
+                if curve and self.battery_discharge_power_curve_auto:
+                    self.log("Saved computed battery discharge power curve")
+                    self.battery_discharge_power_curve = curve
+                self.computed_discharge_curve = True
 
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
@@ -10383,6 +10461,7 @@ class PredBat(hass.Hass):
         self.load_scaling10 = self.get_arg("load_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
+        self.battery_rate_max_scaling_discharge = self.get_arg("battery_rate_max_scaling_discharge")
 
         self.best_soc_step = 0.25
         self.metric_cloud_enable = self.get_arg("metric_cloud_enable")
@@ -10404,8 +10483,20 @@ class PredBat(hass.Hass):
             # Check power curve is a dictionary
             if not isinstance(self.battery_charge_power_curve, dict):
                 self.battery_charge_power_curve = {}
-                self.log("WARN: battery_power_curve is incorrectly configured - ignoring")
-                self.record_status("battery_power_curve is incorrectly configured - ignoring", had_errors=True)
+                self.log("WARN: battery_charge_power_curve is incorrectly configured - ignoring")
+                self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
+
+        # Discharge curve
+        if self.args.get("battery_discharge_power_curve", "") == "auto":
+            self.battery_discharge_power_curve_auto = True
+        else:
+            self.battery_discharge_power_curve_auto = False
+            self.battery_discharge_power_curve = self.args.get("battery_discharge_power_curve", {})
+            # Check power curve is a dictionary
+            if not isinstance(self.battery_discharge_power_curve, dict):
+                self.battery_discharge_power_curve = {}
+                self.log("WARN: battery_discharge_power_curve is incorrectly configured - ignoring")
+                self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_margin = 0.0
@@ -10984,10 +11075,10 @@ class PredBat(hass.Hass):
 
         for try_enable in enable_list:
             for item in CONFIG_ITEMS:
-                entity = item["entity"]
+                entity = item.get("entity", None)
                 enable = item.get("enable", None)
 
-                if enable == try_enable and self.user_config_item_enabled(item):
+                if entity and enable == try_enable and self.user_config_item_enabled(item):
                     text += "  - entity: " + entity + "\n"
 
         for entity in self.dashboard_index:
