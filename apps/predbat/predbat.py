@@ -10923,7 +10923,14 @@ class PredBat(hass.Hass):
                         self.set_state(
                             entity_id=entity,
                             state=value,
-                            attributes={"friendly_name": item["friendly_name"], "min": item["min"], "max": item["max"], "step": item["step"], "unit_of_measurement": item["unit"], "icon": icon},
+                            attributes={
+                                "friendly_name": item["friendly_name"],
+                                "min": item["min"],
+                                "max": item["max"],
+                                "step": item["step"],
+                                "unit_of_measurement": item["unit"],
+                                "icon": icon,
+                            },
                         )
                     elif item["type"] == "switch":
                         icon = item.get("icon", "mdi:light-switch")
