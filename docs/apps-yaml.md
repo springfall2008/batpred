@@ -224,7 +224,8 @@ The **givtcp_rest** line should be commented out/deleted in order for Predbat to
 - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
 - **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
 
-If you are using REST control the above GivTCP configuration items can be deleted or commented out of apps.yaml.
+If you are using REST control the above GivTCP configuration items can be deleted or commented out of `apps.yaml`
+(but see section below on [creating the battery charge power curve](#workarounds)).
 
 ## Solcast Solar Forecast
 
@@ -448,14 +449,29 @@ Enter the charging curve as a series of steps of % of max charge rate for each s
 
 The default is 1.0 (full power) charge all the way to 100%.
 
-Modelling the charge curve becomes important if you have limited charging slots (e.g. ony a few hours a night) or you wish to make accurate use of the
+Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
 low power charging mode (**switch.predbat_set_charge_low_power**).
 
-Predbat can now automatically calculate the charging curve for you if you have enough suitable data in your load history. The charging curve will be calculated
+Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
 when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
-You should look at the AppDaemon logfile to find the predicted charging curve and copy/paste it into your apps.yaml.
+You should look at the [AppDaemon logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
-Example from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
+NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
+
+If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in apps.yaml:
+
+```yaml
+  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+```
+
+Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
+
+Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
 ```yaml
   battery_charge_power_curve:
