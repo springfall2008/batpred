@@ -267,13 +267,14 @@ You have configured predbat's control entities, created a couple of dashboard pa
 In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
 
 You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the [Predbat Plan](predbat-plan-card.md).
-In *Monitor* mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.
+In *Monitor* mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.<BR>
+NB: In _Monitor_ mode Predbat will _NOT_ plan any battery charge or discharge activity of its own, it will report on the current inverter charge & discharge settings, house load and solar generation.
 
 The recommended next step is to start Predbat planning your inverter charging and discharging activity but not (yet) make any changes to the inverter.
 This enables you to get a feel for the Predbat plan and [customise Predbat's settings](customisation.md) to meet your needs.
 
-Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system
-and also set **switch.predbat_set_read_only** to True to stop Predbat making any changes to your inverter.
+Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system - usually 'Control charge' or 'Control charge & discharge'.
+ALSO you should set **switch.predbat_set_read_only** to True to stop Predbat making any changes to your inverter.
 
 Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
 set the switch **switch.predbat_set_read_only** to False and Predbat will start controlling your inverter.
@@ -282,8 +283,8 @@ You can see the planned charging and discharging activity in the [Predbat Plan](
 
 ## Updating Predbat
 
-Note that future updates to Predbat will not overwrite the `apps.yaml` configuration file that you have tailored to your setup.
-You may therefore need to manually copy across any new apps.yaml settings from the [Template apps.yaml](apps-yaml.md#templates) for new features.
+Note that any future updates to Predbat will not overwrite the `apps.yaml` configuration file that you have tailored to your setup.
+If new Predbat releases introduce new featurs to apps.yaml you may therefore need to manually copy across the new apps.yaml settings from the [Template apps.yaml](apps-yaml.md#templates).
 
 ## HACS Update
 
@@ -296,7 +297,7 @@ Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
 
 ## Predbat built-in update
 
-Predbat can now update itself, just select the version you want from the **select.predbat_update** drop down menu, the latest version will be at the top of the list.
+Predbat can now update itself, just select the version of Predbat you want to install from the **select.predbat_update** drop down menu, the latest version will be at the top of the list.
 Predbat will update itself and automatically restart.
 
 Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on Github.
