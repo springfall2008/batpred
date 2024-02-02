@@ -55,13 +55,17 @@ exported if the battery is full. This is described as 'ECO' Mode for GivEnergy i
 
 - **Charging** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
 
-- **Freeze charging** - The current battery level is held and the grid/solar covers any load. Solar power will also be used to charge the battery.
+- **Freeze charging** - The current battery level (SoC) is held and the grid/solar covers any load. Think of it as a charge to the current battery level.
+If there is excess Solar power above house load, the solar will be used to charge the battery,
+but if there is a shortfall of Solar power to meet house load, the excess house load is met from grid import.
+
 - **Hold charging** - A type of charge where the target SOC % is the same as the current SOC %, effectively the same as a charge freeze (but without being explicitly selected).
 
 - **No Charge** - A charge where the target SOC % is lower than the current battery SOC level so there will be no charging unless the usage is unexpectedly high.
 
 - **Discharging** - The battery is being force-discharged. The house load will be covered by the battery and any excess is exported to the grid. Any solar generated will be exported.
 
-- **Freeze discharging** - The battery is covering the load but charging is disabled, thus any solar generated will be exported.
+- **Freeze discharging** - This is the same as Idle (Eco) mode but with charging disabled.
+The battery is covering the load but as charging is disabled, any solar generated will be exported.
 
 - **Error** - There is a configuration error or other problem, you should check the [Predbat AppDaemon log file](output-data.md#predbat-logfile) for more details.
