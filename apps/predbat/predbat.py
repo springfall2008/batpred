@@ -134,7 +134,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "multiple",
         "icon": "mdi:multiplication",
-        "default": 0.95,
+        "default": 1.0,
     },
     {
         "name": "battery_rate_max_scaling_discharge",
