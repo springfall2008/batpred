@@ -12,8 +12,8 @@ It is recommended that you [create a dashboard page](output-data.md#displaying-o
 This page gives a summary of some of the key configuration settings you should consider in Predbat for different energy tariffs;
 the [Predbat customisation guide](customisation.md) details all the Predbat customisation options.
 
-You should try to tune **input_number.predbat_inverter_loss**, **input_number.predbat_battery_loss** and **input_number.predbat_battery_loss_discharge** to the correct % loss for your system
-in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
+You should try to tune **input_number.predbat_inverter_loss**, **input_number.predbat_battery_loss** and **input_number.predbat_battery_loss_discharge** to the correct % loss
+for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
 Also set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
 
 The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
