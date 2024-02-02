@@ -2,12 +2,15 @@
 
 There are two ways to plan car charging slots:
 
-- If you have Intelligent Octopus import tariff and the Octopus Energy integration - in which case Predbat will use the slots allocated by Octopus Energy in battery prediction
-    - Ensure **octopus_intelligent_slot** in `apps.yaml` points to the Intelligent Slot sensor in the Octopus Energy integration
+- If you have Intelligent Octopus import tariff and the Octopus Energy integration - in which case Predbat will use the slots allocated by Octopus Energy in battery prediction.
+The [Octopus Energy integration supports Octopus Intelligent](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/) and through that Predbat gets most of the information it needs.
+    - **octopus_intelligent_slot** in `apps.yaml` is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
+You should not need to change this, but its worth checking the [Predbat logfile](#output-data.md#predbat-logfile) to confirm that it has found your Octopus account details
     - Set **switch.predbat_octopus_intelligent_charging** to True
-    - Information about the car's battery size will also be extracted from the Octopus Energy integration
-    - You will need to set the cars current soc sensor, **car_charging_soc** in apps.yaml correctly to have accurate results
-    - If you set **car_charging_limit** in `apps.yaml` then Predbat can also know if the car's limit is set lower than in Intelligent Octopus
+    - Information about the car's battery size will be automatically extracted from the Octopus Energy integration
+    - You should set the cars current soc sensor, **car_charging_soc** in `apps.yaml` to point to a sensor that specifies the car's cuurrent % charge level to have accurate results.
+This should normally be a sensor provided by your car charger. If you don't have this available for your charger then Predbat will assume the charge level is 0%.
+    - If you set **car_charging_limit** in `apps.yaml` then Predbat can also know if the car's limit is set lower than in Intelligent Octopus. If you don't set this Predbat will default to 100%.
     - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it.
     - Let the Octopus app control when your car charges
 
