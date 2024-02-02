@@ -102,7 +102,8 @@ If the SOC is 50% or greater it will be coloured Green, 20% or greater, Yellow, 
 If the cost for the slot is 10p or more it will be coloured Orangey-Red, &frac12;p or more it will be coloured Yellow, -&frac12;p or less it will be coloured Green,
 otherwise it will be coloured White.
 
-- **Total** - The total cumulative cost so far for 'today' at the start of the slot. At midnight tonight this cumulative cost will be reset to zero.<BR>
+- **Total** - The total cumulative cost so far for 'today' at the start of the slot, including the standing charge.
+At midnight tonight this cumulative cost will be reset to the daily standing charge (or zero if metric_standing_charge wasn't set in `apps.yaml`).<BR>
 Due to the way Predbat works, total cost is always reported (in Predbat output entities, this HTML plan, in the [Apex charts](creating-charts.md), etc)
 as starting from midnight today and adding on from there.<BR>
 Looking at the sample Predbat plan above as an example, the plan starts at 10:00 with total cost today already being £3.13. The house load is then fully met through the day and evening
@@ -116,7 +117,7 @@ Total cost is always coloured White.
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.
 
-If **switch.plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import and export rate columns.
+If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import and export rate columns.
 
 The Predbat plan will now look like this with plan_debug turned on:
 
@@ -125,6 +126,7 @@ The Predbat plan will now look like this with plan_debug turned on:
 Import and Export rate will now show the actual rate (according to how you have setup the [energy rates](energy-rates.md)) and also in brackets the *effective* import or export rate.
 
 The *effective rate* takes into account [battery and inverter energy losses](customisation.md#battery-loss-options) for charging and discharging and converting from DC to AC and vice-versa.
+Note that the Cost and Total columns are always based upon the actual Import and Export rate.
 
 Using the above debug plan as an example:
 

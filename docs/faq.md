@@ -18,15 +18,15 @@ it's better to charge more and not risk getting stung importing.
 - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm.
 If you do something like have export>import then Predbat will try to export as much as possible.
 - Have you tuned Solcast to match your output accurately?
-- Have you tuned **best_soc_keep settings**
+- Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
-- You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
+- You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
 - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
 
 ## Why didn't the slot actually get configured?
 
 - Are you in read-only mode?
-- Do you have the predbat_mode set to Control Charge (or Charge & Discharge)?
+- Do you have the predbat_mode set to Control charge (or Control charge & discharge)?
 
 ## The charge limit keeps increasing/decreasing in the charge window or is unstable
 
@@ -39,8 +39,8 @@ a script that changes the reserve %, this will cause problems - please disable o
 
 ## It's all running but I'm not getting very good results
 
-- You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
-If you set **best_soc_keep** too high then predbat could need to charge the battery in unfavourable import rates, so try to set it to a fairly low value,
+- You might want to tune **input_number.predbat_best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
+If you set **input_number.predbat_best_soc_keep** too high then predbat could need to charge the battery in unfavourable import rates, so try to set it to a fairly low value,
 especially if you have a small battery. If you set it to zero then predbat may not charge at all, so use 0.1 as a minimum.
 - Have a read of the [energy rates configuration guide](energy-rates.md) as depending on your tariff different settings maybe required
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
@@ -94,7 +94,7 @@ as to whether to charge or discharge the battery so could be tweaked. The defaul
 - If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning
 messages in the Home Assistant Core log about the size of the predbat.plan_html entity.
 This is just a warning, the entity isn't stored in the database, but you can suppress it by adding the following
-to your configuration.yaml:
+to your `configuration.yaml` file:
 
 ```yaml
 # Filter out 'message too large' warnings from Predbat
