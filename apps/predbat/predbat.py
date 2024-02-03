@@ -10999,8 +10999,8 @@ class PredBat(hass.Hass):
             predbat_code = self.download_predbat_file_from_github(file, os.path.join(this_path, file + "." + tag))
             if predbat_code:
                 # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
-                files = []
-                for line in predbat_code:
+                files = ["predbat.py"]
+                for line in predbat_code.split("\n"):
                     if line.startswith("PREDBAT_FILES"):
                         files = line.split("=")[1].strip()
                         files = files.replace("[", "")
