@@ -47,6 +47,6 @@ This file should be copied to apps.yaml
 
 This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
 
-Note: You will need to change the min reserve in Home Assistant to match your minimum battery level.
+Note: You will need to change the min reserve in Home Assistant (input_number.predbat_set_reserve_min) to match your minimum battery level.
 
 Please see this ticket in Github for ongoing discussions: <https://github.com/springfall2008/batpred/issues/395>
