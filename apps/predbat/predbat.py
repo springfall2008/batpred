@@ -10954,7 +10954,7 @@ class PredBat(hass.Hass):
         """
         self.log("Update event {} {} {}".format(event, data, kwargs))
 
-    def download_predbat_file_from_github(self, filename, new_filename=None):
+    def download_predbat_file_from_github(self, filename, new_filename):
         """
         Downloads a predbat source file from github and returns the contents
 
@@ -10965,7 +10965,7 @@ class PredBat(hass.Hass):
             str: The contents of the file
         """
         url = "https://raw.githubusercontent.com/springfall2008/batpred/master/apps/predbat/{}".format(filename)
-        self.log("Downloading Predbat file from {}".format(url))
+        self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
         r = requests.get(url, headers={})
         if r.ok:
             data = r.text
@@ -10977,45 +10977,60 @@ class PredBat(hass.Hass):
         else:
             self.log("WARN: Downloading Predbat file failed, URL {}".format(url))
             return None
-
+    
     def download_predbat_version(self, version):
         """
         Download a version of Predbat from GitHub
-
+        
         Args:
             version (str): The version of Predbat to download.
 
         Returns:
-            bool: True if the download and update were successful, False otherwise.
+            bool: True if the download and update were successful, False otherwise.        
         """
         tag_split = version.split(" ")
+        this_path = os.path.dirname(__file__)
         self.log("Split returns {}".format(tag_split))
         if tag_split:
             tag = tag_split[0]
 
-            predbat_code = self.download_predbat_file_from_github("predbat.py")
+            # Download predbat.py
+            file = "predbat.py"
+            predbat_code = self.download_predbat_file_from_github(file, os.path.join(this_path, file + "." + tag))
             if predbat_code:
+                # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
+                files = []
                 for line in predbat_code:
                     if line.startswith("PREDBAT_FILES"):
                         files = line.split("=")[1].strip()
                         files = files.replace("[", "")
                         files = files.replace("]", "")
-                        files = files.replace('"', "")
+                        files = files.replace("\"", "")
                         files = files.split(",")
-                        for file in files:
-                            self.download_predbat_file_from_github(file, file + "." + tag)
-                        self.call_notify("Predbat: update to: {}".format(version))
-                        self.log("Perform the update.....")
-                        cmd = ""
-                        for file in files:
-                            cmd += "mv -f {} {} && ".format(file + "." + tag, file)
-                        cmd += "echo 'Update complete'"
-                        self.log("Performing update with command: {}".format(cmd))
-                        os.system(cmd)
-                        return True
-                self.log("Failed to find PREDBAT_FILES in predbat.py")
+                        self.log("Predbat update files are {}".format(files))
+                        break
+
+                # Download the remaining files
+                if files:
+                    for file in files:
+                        # Download the remaining files
+                        if file != "predbat.py":
+                            self.download_predbat_file_from_github(file, os.path.join(this_path, file + "." + tag))
+
+                # Notify that we are about to update
+                self.call_notify("Predbat: update to: {}".format(version))
+
+                # Perform the update
+                self.log("Perform the update.....")
+                cmd = ""
+                for file in files:
+                    cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
+                cmd += "echo 'Update complete'"
+                self.log("Performing update with command: {}".format(cmd))
+                os.system(cmd)
+                return True
             else:
-                self.log("Failed to download Predbat version {}".format(version))
+                self.log("WARN: Predbat update failed to download Predbat version {}".format(version))
         return False
 
     def select_event(self, event, data, kwargs):
