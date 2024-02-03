@@ -10977,16 +10977,16 @@ class PredBat(hass.Hass):
         else:
             self.log("WARN: Downloading Predbat file failed, URL {}".format(url))
             return None
-    
+
     def download_predbat_version(self, version):
         """
         Download a version of Predbat from GitHub
-        
+
         Args:
             version (str): The version of Predbat to download.
 
         Returns:
-            bool: True if the download and update were successful, False otherwise.        
+            bool: True if the download and update were successful, False otherwise.
         """
         tag_split = version.split(" ")
         self.log("Split returns {}".format(tag_split))
@@ -11000,7 +11000,7 @@ class PredBat(hass.Hass):
                         files = line.split("=")[1].strip()
                         files = files.replace("[", "")
                         files = files.replace("]", "")
-                        files = files.replace("\"", "")
+                        files = files.replace('"', "")
                         files = files.split(",")
                         for file in files:
                             self.download_predbat_file_from_github(file, file + "." + tag)
