@@ -11027,7 +11027,7 @@ class PredBat(hass.Hass):
                     cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
                 cmd += "echo 'Update complete'"
                 self.log("Performing update with command: {}".format(cmd))
-                # os.system(cmd)
+                os.system(cmd)
                 return True
             else:
                 self.log("WARN: Predbat update failed to download Predbat version {}".format(version))
