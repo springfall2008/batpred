@@ -4361,6 +4361,17 @@ class PredBat(hass.Hass):
         max_discharge_rate = self.battery_rate_max_discharge * self.battery_discharge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling_discharge
         return max(min(discharge_rate_setting, max_discharge_rate), self.battery_rate_min)
 
+    def find_charge_window_optimised(self, charge_windows):
+        """
+        Takes in an array of charge windows
+        Returns a dictionary defining for each minute that is in the charge window will contain the window number
+        """
+        charge_window_optimised = {}
+        for window_n in range(len(charge_windows)):
+            for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
+                charge_window_optimised[minute] = window_n
+        return charge_window_optimised
+
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
@@ -4426,8 +4437,10 @@ class PredBat(hass.Hass):
         first_charge = end_record
         export_to_first_charge = 0
 
-        # self.log("Sim discharge window {} enable {}".format(discharge_window, discharge_limits))
+        # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = self.remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
+        charge_window_optimised = self.find_charge_window_optimised(charge_window)
+        discharge_window_optimised = self.find_charge_window_optimised(discharge_window)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -4438,11 +4451,15 @@ class PredBat(hass.Hass):
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
-            charge_window_n = self.in_charge_window(charge_window, minute_absolute)
-            charge_limit_n = 0
             prev_soc = soc
-
             reserve_expected = self.reserve
+
+            # Find charge & discharge windows
+            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
+            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
+
+            # Find charge limit
+            charge_limit_n = 0
             if charge_window_n >= 0:
                 charge_limit_n = charge_limit[charge_window_n]
                 if charge_limit_n == 0:
@@ -4453,8 +4470,6 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
-
-            discharge_window_n = self.in_charge_window(discharge_window, minute_absolute)
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
