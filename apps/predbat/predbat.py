@@ -10959,6 +10959,7 @@ class PredBat(hass.Hass):
         Downloads a predbat source file from github and returns the contents
 
         Args:
+            tag (str): The tag to download from (e.g. v1.0.0)
             filename (str): The filename to download (e.g. predbat.py)
             new_filename (str): The new filename to save the file as
         Returns:
@@ -11036,6 +11037,20 @@ class PredBat(hass.Hass):
     def select_event(self, event, data, kwargs):
         """
         Catch HA Input select updates
+
+        Parameters:
+        - event: The event triggered by the input select.
+        - data: The data associated with the event.
+        - kwargs: Additional keyword arguments.
+
+        Returns:
+        None
+
+        Description:
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
+        After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
         value = service_data.get("option", None)
@@ -11070,6 +11085,19 @@ class PredBat(hass.Hass):
     def number_event(self, event, data, kwargs):
         """
         Catch HA Input number updates
+
+        This method is called when there is an update to a Home Assistant input number entity.
+        It extracts the value and entity ID from the event data and processes it accordingly.
+        If the entity ID matches any of the entities specified in the CONFIG_ITEMS list,
+        it logs the entity and value, exposes the configuration item, and updates the pending plan.
+
+        Args:
+            event (str): The event name.
+            data (dict): The event data.
+            kwargs (dict): Additional keyword arguments.
+
+        Returns:
+            None
         """
         service_data = data.get("service_data", {})
         value = service_data.get("value", None)
@@ -11090,6 +11118,18 @@ class PredBat(hass.Hass):
     def switch_event(self, event, data, kwargs):
         """
         Catch HA Switch toggle
+
+        This method is called when a Home Assistant switch is toggled. It handles the logic for updating the state of the switch
+        and triggering any necessary actions based on the switch state.
+
+        Parameters:
+        - event (str): The event triggered by the switch toggle.
+        - data (dict): Additional data associated with the event.
+        - kwargs (dict): Additional keyword arguments.
+
+        Returns:
+        - None
+
         """
         service = data.get("service", None)
         service_data = data.get("service_data", {})
@@ -11119,6 +11159,14 @@ class PredBat(hass.Hass):
     def get_ha_config(self, name, default):
         """
         Get Home assistant config value, use default if not set
+
+        Parameters:
+        name (str): The name of the config value to retrieve.
+        default: The default value to use if the config value is not set.
+
+        Returns:
+        value: The value of the config if it is set, otherwise the default value.
+        default: The default value passed as an argument.
         """
         item = self.config_index.get(name)
         if item and item["name"] == name:
