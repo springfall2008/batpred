@@ -318,7 +318,8 @@ to multiply the car_charging_energy data by if required (e.g. set to 0.001 to co
 
 If you do not have a suitable car charging kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
 
-- **input_number.predbat_car_charging_threshold** - Sets the threshold above which home consumption is assumed to be car charging and will be removed from the home load data (default 6 = 6kW).
+- **input_number.predbat_car_charging_threshold** - Sets the threshold above which home consumption is assumed to be car charging and
+will be removed from the home load data (default 6 = 6kW).
 
 ### Planned Car Charging
 
