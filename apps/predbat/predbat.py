@@ -10977,16 +10977,16 @@ class PredBat(hass.Hass):
         else:
             self.log("WARN: Downloading Predbat file failed, URL {}".format(url))
             return None
-    
+
     def download_predbat_version(self, version):
         """
         Download a version of Predbat from GitHub
-        
+
         Args:
             version (str): The version of Predbat to download.
 
         Returns:
-            bool: True if the download and update were successful, False otherwise.        
+            bool: True if the download and update were successful, False otherwise.
         """
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
@@ -11000,7 +11000,7 @@ class PredBat(hass.Hass):
             if predbat_code:
                 # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
                 files = ["predbat.py"]
-                for line in predbat_code.split('\n'):
+                for line in predbat_code.split("\n"):
                     if line.startswith("PREDBAT_FILES"):
                         files = line.split("=")[1].strip()
                         files = files.replace("[", "")
@@ -11027,7 +11027,7 @@ class PredBat(hass.Hass):
                     cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
                 cmd += "echo 'Update complete'"
                 self.log("Performing update with command: {}".format(cmd))
-                #os.system(cmd)
+                # os.system(cmd)
                 return True
             else:
                 self.log("WARN: Predbat update failed to download Predbat version {}".format(version))
