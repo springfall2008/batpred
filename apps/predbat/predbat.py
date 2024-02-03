@@ -11047,9 +11047,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates. 
-        It extracts the necessary information from the data and performs different actions based on the selected option. 
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
+        This method is used to handle Home Assistant input select updates.
+        It extracts the necessary information from the data and performs different actions based on the selected option.
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
