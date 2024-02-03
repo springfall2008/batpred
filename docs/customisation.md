@@ -44,12 +44,12 @@ both charge and discharge, reset charge and discharge rates to full power and re
 
 ### Predbat Monitor mode
 
-In **monitor** mode Predbat will not control or Plan any charging or discharging, inverter balancing will take place if enabled,
+In **Monitor** mode Predbat will not control or Plan any charging or discharging, inverter balancing will take place if enabled,
 and the plan will show just what is expected based on the current inverter configuration alone.
 
-### Predbat Control SOC Only mode
+### Predbat Control SOC only mode
 
-In **Control SOC Only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
+In **Control SOC only** mode Predbat will adjust the target charge percentage (SOC target) according to the Best plan, but the charge
 window will not be modified.
 
 This mode can be useful if you just have one fixed charge slot per day and you only want Predbat to control the percentage the battery is charged based on solar generation
@@ -57,17 +57,17 @@ and predicted house load.
 
 _CAUTION: You must manually set any charging required on the inverter and if the charge window is disabled then no charging will take place._
 
-### Predbat Control Charge mode
+### Predbat Control charge mode
 
-In **Control Charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
+In **Control charge** mode Predbat will set the charge times and charge percentages according to the Best plan, charging can be enabled and
 disabled by Predbat.
 Predbat will set the inverter into Eco mode when required to enable the battery to support house load, but it will not plan any forced discharging of the battery for export purposes.
 
 This mode can be useful if you don't have an export rate, or if you want to preserve the battery for home demand.
 
-### Predbat Control Charge & Discharge mode
+### Predbat Control charge & discharge mode
 
-In **Control Charge and Discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
+In **Control charge & discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
 
 If you have set the **switch.predbat_set_discharge_freeze_only** set to True then forced export won't occur but Predbat can force the export
 of solar power to the grid when desired.
@@ -94,19 +94,19 @@ reduce your CPU load.
 
 ## Battery loss options
 
-**input_number.battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.05 is 5%.
+**input_number.predbat_battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.05 is 5%.
 
-**input_number.battery_loss_discharge** is an assumed percentage figure for energy lost whilst discharging the battery, the default 0.05 is 5%.
+**input_number.predbat_battery_loss_discharge** is an assumed percentage figure for energy lost whilst discharging the battery, the default 0.05 is 5%.
 
-**input_number.inverter_loss** is an assumed percentage figure for  energy lost during the conversion within the inverter from DC to AC or AC to DC,
+**input_number.predbat_inverter_loss** is an assumed percentage figure for  energy lost during the conversion within the inverter from DC to AC or AC to DC,
 the default is 0% for legacy reasons but please adjust.
 
-**switch.inverter_hybrid** Set to True if you have a hybrid inverter so no inverter losses will be applied for DC charging from Solar generation.
+**switch.predbat_inverter_hybrid** Set to True if you have a hybrid inverter so no inverter losses will be applied for DC charging from Solar generation.
 Set to False if you have an AC coupled battery and inverter losses will be applied when charging from solar.
 NB: This switch only applies when Predbat is modelling solar charging.
 All grid charging (regardless of inverter type) has to undergo an AC to DC conversion and so the inverter_loss % will be included in Predbat's model when charging from the grid.
 
-**input_number.metric_battery_cycle** (_expert mode_) This sets a 'virtual cost' in pence per kWh on using your battery for charging and discharging.
+**input_number.predbat_metric_battery_cycle** (_expert mode_) This sets a 'virtual cost' in pence per kWh on using your battery for charging and discharging.
 Higher numbers will reduce battery cycles at the expense of using higher energy costs.<BR>
 In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each full charge and discharge cycle is 19kWh
 and so the cost per cycle is £4000 / 19 / 6000 = 3.5p.
@@ -130,12 +130,12 @@ greater than 1.0 will value it more (and hence hold more charge at the end of th
 
 ## Scaling and weight options
 
-**input_number.battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
+**input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example a value of 0.95 would be 95% and indicate charging at 5% slower than reported. For GE inverters the charge rate reports the max
 AC rate and thus needs to be reduced by inverter losses.
 You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
 
-**input_number.battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
+**input_number.predbat_battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
 For GE inverters the discharge rate is reported as the max AC rate and thus is fairly accurate.
 You can try computing your discharge curve and check recommendations for changing this figure in the logfile.
 
@@ -143,20 +143,20 @@ You can try computing your discharge curve and check recommendations for changin
 rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps.
 
-**input_number.load_scaling** is a percentage Scaling factor applied to historical load, increase this if you want to be more pessimistic on future consumption.
+**input_number.predbat_load_scaling** is a percentage Scaling factor applied to historical load, increase this if you want to be more pessimistic on future consumption.
 Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load.
 
-**input_number.load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
+**input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
 scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
-**input_number.load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
+**input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
 
-**input_number.pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
+**input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to use exactly use the Solcast forecast generation data. A value of 0.9 for example would remove 10% from the Solcast generation forecast.
 
-**input_number.pv_metric10_weight** is the percentage weighting given to the Solcast 10% PV scenario in calculating solar generation.
+**input_number.predbat_pv_metric10_weight** is the percentage weighting given to the Solcast 10% PV scenario in calculating solar generation.
 Use 0.0 to disable using the PV 10% in Predbat's forecast of solar generation.
 A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scenario, and 9 in every 10 times we will get the 'median' Solcast forecast.<BR>
 Predbat estimates solar generation for each half hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
@@ -165,7 +165,7 @@ A value of 0.15 is recommended.
 ## Historical load data
 
 The historical load data is taken from the load sensor as configured in `apps.yaml` and the days are selected
-using **days_previous** and weighted using ***days_previous_weight** in the same configuration file
+using **days_previous** and weighted using **days_previous_weight** in the same configuration file
 
 **switch.predbat_load_filter_modal** (_expert mode_) when enabled will automatically discard the lowest daily consumption
 day from the list of days to use (provided you have more than 1 day selected in days_previous). This can be used to ignore
@@ -178,20 +178,20 @@ a single low usage day in your average calculation. By default is feature is ena
 Car charging hold is a feature where you try to filter out previous car charging from your historical data so that
 future predictions are more accurate.
 
-When **car_charging_hold** is enabled when for loads of above the power threshold **car_charging_threshold** are
-assumed to be car charging and **car_charging_rate** will be subtracted from the historical load data.
+When **switch.predbat_car_charging_hold** is enabled when for loads of above the power threshold **input_number.predbat_car_charging_threshold** are
+assumed to be car charging and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
 
-For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the apps.yml
-In this case when **car_charging_hold** is enabled historical data will be subtracted from the load data instead of using
+For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the `apps.yaml` configuration file.
+In this case when **switch.predbat_car_charging_hold** is enabled historical data will be subtracted from the load data instead of using
 the fixed threshold method.
 
-**car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
+**input_number.predbat_car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
 if you had a sensor in watts you might use 0.001 instead.
 
-- **input_number.car_charging_rate** - Set to the car's charging rate in kW per hour (normally 7.5 for 7.5kWh),
+- **input_number.predbat_car_charging_rate** - Set to the car's charging rate in kW per hour (normally 7.5 for 7.5kWh),
 but will be pulled automatically from Octopus Energy integration if enabled for Octopus Intelligent.
 
-**car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
+**input_number.predbat_car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
 
 ### Car charging plan options
 
@@ -200,14 +200,14 @@ Car charging planning - is only used if Intelligent Octopus isn't enabled and ca
 This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation
 to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
 
-- **car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
+- **select.predbat_car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
 
-- **car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
+- **switch.predbat_car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
 when disabled (False) all low rate slots will be used in time order.
 
 **switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
-you must have set **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
+you must have set the **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
 
 If Octopus Intelligent Charging is enabled the switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
 can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
@@ -215,7 +215,7 @@ if **car_charging_planned** is set correctly in apps.yaml to detect your car bei
 
 Control how your battery behaves during car charging:
 
-- **car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
+- **switch.predbat_car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved
 by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
 your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
@@ -230,7 +230,8 @@ charging sessions but will not reset it automatically.
 
 See the Predbat mode setting as above for basic calculation options
 
-**input_number.forecast_plan_hours** is the number of hours after the next charge slot to include in the plan, default 24 hours is the suggested amount (to match energy rate cycles).
+**input_number.predbat_forecast_plan_hours** is the number of hours after the next charge slot to include in the plan,
+default 24 hours is the suggested amount (to match energy rate cycles).
 
 **switch.predbat_calculate_regions** (_expert mode_) When True the a second pass of the initial thresholds is
 calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
@@ -245,7 +246,7 @@ longer term plan will be less accurate.
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
 
-**switch.set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
+**switch.predbat_set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
 to avoid cross charging when batteries are out of balance.
 
 **switch.predbat_calculate_tweak_plan** (_expert mode_) When True causes Predbat to perform a second pass optimisation
@@ -263,50 +264,50 @@ This can help to slightly improve the plan for tariffs like Agile but can make i
 
 ## Battery margins and metrics options
 
-**input_number.best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep above during the whole period of the simulation time.
-This is a soft constraint only so it is possible for your SoC to drop below this - use **input_number.best_soc_min** for a hard SoC constraint that will always be maintained.
+**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep above during the whole period of the simulation time.
+This is a soft constraint only so it is possible for your SoC to drop below this - use **input_number.predbat_best_soc_min** for a hard SoC constraint that will always be maintained.
 It's usually good to have best_soc_keep set to a value above 0 to allow some margin
 in case you use more energy than planned between charge slots.
 
-**input_number.best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
+**input_number.predbat_best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
 minimum discharge level also (set to 0 if you want to skip some slots). If you set this to a non-zero value you will need
 to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
-**input_number.best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
+**input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
 
-**switch.combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
+**switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
 increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
 a saving session). The default is enable (True)
 
-**switch.combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
+**switch.predbat_combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
 they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
 
-**input_number.metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SOC % for.
+**input_number.predbat_metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SOC % for.
 The default value is 0 which means this feature is disabled and the battery will be charged less if it's cost neutral.
-If you use **pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better
+If you use **input_number.predbat_pv_metric10_weight** then you probably don't need to enable this as the 10% forecast does the same thing better
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
-You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10)
+You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
+**input_number.predbat_metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
 A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
 then discharges will become less common and shorter.
 
-**input_number.rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
+**input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
 If rate_low_threshold is set to a non zero value this will set the threshold below future average import rates as the minimum to consider for a charge window,
 e.g. setting to 0.8 = 80% of average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
+**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
 and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
 If rate_high_threshold is set to a non zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
 
-**input_number.metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are
+**input_number.predbat_metric_future_rate_offset_import** (_expert mode_) Sets an offset to apply to future import energy rates that are
 not yet published, best used for variable rate tariffs such as Agile import where the rates are not published until 4pm.
 If you set this to a positive value then Predbat will assume unpublished import rates are higher by the given amount.
 
@@ -314,7 +315,7 @@ Setting this to 1 to 1.5p for example results in Predbat being a little more agg
 Predbat will charge the battery to a higher percentage than it would otherwise as it expects a cost benefit of using today's lower rates.
 NB: this can lead to higher costs and to some export if solar generation is better than forecast.
 
-**input_number.metric_future_rate_offset_export** (_expert mode_) Sets an offset to apply to future export energy rates that are
+**input_number.predbat_metric_future_rate_offset_export** (_expert mode_) Sets an offset to apply to future export energy rates that are
 not yet published, best used for variable rate tariffs such as Agile export where the rates are not published until 4pm.
 If you set this to a negative value then Predbat will assume unpublished export rates are lower by the given amount.
 
@@ -322,39 +323,40 @@ If you set this to a negative value then Predbat will assume unpublished export 
 calculate the difference between today's actual load and today's predicated load and adjust the rest of the days usage
 prediction accordingly. A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_)
 to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact). The in-day adjustment
-factor can be see in **predbat.load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
+factor can be seen in **predbat_load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
 in the charts template in Github).
 
 ## Inverter control options
 
-**switch.set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
+**switch.predbat_set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
 
-**switch.set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
+**switch.predbat_set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
 Off by default.
 
 **switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be limited to the
 lowest possible to meet the charge target. Only really effective for charge windows >30 minutes.
 Off by default.
 
-**switch.set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
+**switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
 
-**switch.set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing
+**switch.predbat_set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing
 from the grid/solar as an alternative to charging. Enabled by default.
 
-**switch.set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used
+**switch.predbat_set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used
 (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for
 solar exports but don't allow forced export (brown energy).
 
-If you have **switch.inverter_hybrid** set to False then if **switch.inverter_soc_reset** (_expert mode_) is set to True then the
+If you have **switch.predbat_inverter_hybrid** set to False then if **switch.predbat_inverter_soc_reset** (_expert mode_) is set to True then the
 target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
 
-**input_number.set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use, a value of 4 is the minimum and recommended to make use of the full battery.<BR>
+**input_number.predbat_set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use,
+a value of 4 is the minimum and recommended to make use of the full battery.<BR>
 If you want to pre-prepare the battery to retain extra charge in the event of a high likelihood of a grid power outage such as storms predicted,
 you can increase set_reserve_min to 100%, and then change it back afterwards.<BR>
 (Obviously this is only any use if your inverter is wired to act as an Emergency Power Supply or whole-home backup 'island mode' on the GivEnergy AIO).
 
-**switch.inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
+**switch.predbat_inverter_soc_reset**  (_expert mode_) When enabled the target SOC for the inverter(s) will be reset to 100%
 when a charge slot is not active, this can be used to workaround some firmware issues where the SOC target is
 used for solar charging as well as grid charging. When disabled the SOC % will not be changed after a charge slot.
 This is disabled by default.
@@ -364,7 +366,7 @@ This is disabled by default.
 When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
 When enabled, balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.
 
-The apps.yaml contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your
+The `apps.yaml` contains a setting **balance_inverters_seconds** which defines how often to run the balancing, 30 seconds is recommended if your
 machine is fast enough, but the default is 60 seconds.
 
 Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant to enable this feature.
@@ -377,31 +379,31 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 
 ## iBoost model options
 
-iBoost model, when enabled with **switch.iboost_enable** tries to model excess solar energy being used to heat
-hot water (or similar). The predicted output from the iBoost model is returned in **iboost_best**.
+iBoost model, when enabled with **switch.predbat_iboost_enable** tries to model excess solar energy being used to heat
+hot water (or similar). The predicted output from the iBoost model is returned in **predbat.iboost_best**.
 
-The following entities are only available when you turn on iboost enable:
+The following entities are only available when you turn on iBoost enable:
 
-**iboost_solar** When enabled assumes iBoost will use solar power to boost.
+**switch.predbat_iboost_solar** When enabled assumes iBoost will use solar power to boost.
 
-**iboost_min_soc** sets the minimum home battery soc % to enable iboost solar on, default 0
+**input_number.predbat_iboost_min_soc** sets the minimum home battery soc % to enable iBoost solar on, default 0
 
-**iboost_gas** When enabled assumes IBoost will operate when electric rates are lower than gas rates.
-Note: Gas rates have to be configured in apps.yaml with **metric_octopus_gas**
+**switch.predbat_iboost_gas** When enabled assumes IBoost will operate when electric rates are lower than gas rates.
+Note: Gas rates have to be configured in `apps.yaml` with **metric_octopus_gas**
 
-**iboost_gas_scale** Sets the scaling of the gas rates used before comparing with electric rates, to account for losses
+**input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates used before comparing with electric rates, to account for losses
 
-**iboost_charging** Assume IBoost operates when the battery is charging (can be combined with iboost_gas or not)
+**switch.predbat_iboost_charging** Assume iBoost operates when the battery is charging (can be combined with iboost_gas or not)
 
-**iboost_max_energy** Sets the max energy sets the number of kwh that iBoost can consume during a day before turning off - default 3kWh
+**input_number.predbat_iboost_max_energy** Sets the max energy sets the number of kWh that iBoost can consume during a day before turning off - default 3kWh
 
-**iboost_max_power** Sets the maximum power in watts to consume - default 2400
+**input_number.predbat_iboost_max_power** Sets the maximum power in watts to consume - default 2400
 
-**iboost_min_power** Sets the minimum power in watts to consume - default 500
+**input_number.predbat_iboost_min_power** Sets the minimum power in watts to consume - default 500
 
 You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
 
-The **binary_sensor.iboost_active** entity will be enabled when IBoost should be active, can be used for automations to trigger boost
+The **binary_sensor.predbat_iboost_active** entity will be enabled when iBoost should be active, can be used for automations to trigger boost
 
 If you have an incrementing Sensor that tracks iBoost energy usage then you should set **iboost_energy_today** sensor in
 apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sensor isn't in kWh.
@@ -414,7 +416,7 @@ Using the Home Assistant entity **input_number.predbat_holiday_days_left** you c
 you will be away for (including today). The number will count down by 1 day at midnight until it gets back to zero.
 Whilst holiday days left is non-zero, Predbat's 'holiday mode' is active.
 
-When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in apps.yaml.
+When Predbat's 'holiday mode' is active the historical load data will be taken from yesterday's data (1 day ago) rather than from the **days_previous** setting in `apps.yaml`.
 This means Predbat will adjust more quickly to the new usage pattern.
 
 If you have been away for a longer period of time (more than your normal days_previous setting) then obviously it's going
@@ -458,7 +460,7 @@ _CAUTION: If you leave Predbat turned off for a long period of time then the ove
 
 ## Debug
 
-**switch.debug_enable** when on prints lots of debug, leave off by default
+**switch.predbat_debug_enable** when on prints lots of debug, leave off by default
 
-**switch.plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan)
+**switch.predbat_plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan)
 for more details.

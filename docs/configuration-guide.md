@@ -12,11 +12,11 @@ It is recommended that you [create a dashboard page](output-data.md#displaying-o
 This page gives a summary of some of the key configuration settings you should consider in Predbat for different energy tariffs;
 the [Predbat customisation guide](customisation.md) details all the Predbat customisation options.
 
-You should try to tune **input_number.inverter_loss**, **input_number.battery_loss** and **input_number.battery_loss_discharge** to the correct % loss for your system
-in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
-Also set **switch.inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
+You should try to tune **input_number.predbat_inverter_loss**, **input_number.predbat_battery_loss** and **input_number.predbat_battery_loss_discharge** to the correct % loss
+for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
+Also set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
 
-The setting **input_number.metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
+The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
 The default is 1p but can be set to 0 if you want to turn this feature off.
 
@@ -47,9 +47,9 @@ If you are using expert mode then these options maybe worth reviewing:
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | switch.predbat_combine_charge_slots | True  | As you have just one overnight rate then one slot is fine |
-| input_number.metric_min_improvement | 0  | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement | 0  | Charge less if it's cost neutral |
 
-You should set **select.predbat_mode** to 'Control Charge'
+You should set **select.predbat_mode** to 'Control charge'
 
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
@@ -67,12 +67,12 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | switch.predbat_combine_charge_slots | ? | Setting to False will allow charging at more expensive day rates when it's worth it to export more |
-| input_number.metric_min_improvement  | 0   | Charge less if it's cost neutral |
-| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
-| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_metric_min_improvement  | 0   | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  ?  | Can be set non-zero if you want to force a minimum charge level |
 
-You should set **select.predbat_mode** to 'Control Charge & Discharge'
+You should set **select.predbat_mode** to 'Control charge & discharge'
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 
@@ -92,12 +92,12 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | switch.predbat_combine_charge_slots | ? | Setting to False will allow charging at more expensive day rates when it's worth it to export more |
-| input_number.metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
-| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
 
-You should set **select.predbat_mode** to 'Control Charge & Discharge'
+You should set **select.predbat_mode** to 'Control charge & discharge'
 
 ## Half hourly variable rates (e.g. Octopus Agile)
 
@@ -114,10 +114,10 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24-48 | If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan |
-| input_number.metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
-| input_number.metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
+| input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
+| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_battery_cycle  | ?  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
-| switch.calculate_fast_plan | False | The fast plan feature reduces accuracy of planning |
+| switch.predbat_calculate_fast_plan | False | The fast plan feature reduces accuracy of planning |
 
-You should set **select.predbat_mode** to 'Control Charge & Discharge'
+You should set **select.predbat_mode** to 'Control charge & discharge'

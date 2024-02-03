@@ -18,15 +18,15 @@ it's better to charge more and not risk getting stung importing.
 - Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm.
 If you do something like have export>import then Predbat will try to export as much as possible.
 - Have you tuned Solcast to match your output accurately?
-- Have you tuned **best_soc_keep settings**
+- Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
-- You can also tune **load_scaling** and **pv_scaling** to adjust predictions up and down a bit
+- You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
 - Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
 
 ## Why didn't the slot actually get configured?
 
 - Are you in read-only mode?
-- Do you have the predbat_mode set to Control Charge (or Charge & Discharge)?
+- Do you have the predbat_mode set to Control charge (or Control charge & discharge)?
 
 ## The charge limit keeps increasing/decreasing in the charge window or is unstable
 
@@ -39,8 +39,8 @@ a script that changes the reserve %, this will cause problems - please disable o
 
 ## It's all running but I'm not getting very good results
 
-- You might want to tune **best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
-If you set **best_soc_keep** too high then predbat could need to charge the battery in unfavourable import rates, so try to set it to a fairly low value,
+- You might want to tune **input_number.predbat_best_soc_keep** to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
+If you set **input_number.predbat_best_soc_keep** too high then predbat could need to charge the battery in unfavourable import rates, so try to set it to a fairly low value,
 especially if you have a small battery. If you set it to zero then predbat may not charge at all, so use 0.1 as a minimum.
 - Have a read of the [energy rates configuration guide](energy-rates.md) as depending on your tariff different settings maybe required
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
@@ -58,11 +58,12 @@ and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as t
 Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
 it depends on many factors and your personal preferences. Many users will need to customise and tweak their [Predbat configuration](customisation.md) to suit their needs.
 
-The SOC level that Predbat aims to keep in the battery **input_number.best_soc_keep** and the absolute minimum SoC level **input_number.best_soc_min** are the first thing to check.
+The SOC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
+and the absolute minimum SoC level **input_number.predbat_best_soc_min** are the first thing to check.
 If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
 
 Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery are the loss rates
-**input_number.battery_loss**, **input_number.battery_loss_discharge** and **input_number.inverter_loss**.
+**input_number.predbat_battery_loss**, **input_number.predbat_battery_loss_discharge** and **input_number.predbat_inverter_loss**.
 Typical values could be 4, 4, 4 or 5, 5, 5.  It is tempting to set these inverter loss figures lower to encourage Predbat to use the battery more,
 but this should be resisted as experience from the GivEnergy community forum suggests total energy conversion losses are in the range of 10-20%.
 
@@ -79,13 +80,13 @@ Predbat makes cost optimisation decisions so unless the current import rate is m
 If you turn [debug mode on for the Predbat plan](predbat-plan-card.md#debug-mode-for-predbat-plan) then you can see the
 effective import and export rates after losses that Predbat calculates in the Predbat plan.
 
-Predbat also uses **input_number.metric_battery_cycle** (_expert mode_ setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+Predbat also uses **input_number.predbat_metric_battery_cycle** (_expert mode_ setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
 The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.
 
 So if metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
 and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).
 
-**input_number.metric_min_improvement** and **input_number.metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
+**input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
 as to whether to charge or discharge the battery so could be tweaked. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
 ## Predbat is causing warning messages in the Home Assistant Core log
@@ -93,7 +94,7 @@ as to whether to charge or discharge the battery so could be tweaked. The defaul
 - If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning
 messages in the Home Assistant Core log about the size of the predbat.plan_html entity.
 This is just a warning, the entity isn't stored in the database, but you can suppress it by adding the following
-to your configuration.yaml:
+to your `configuration.yaml` file:
 
 ```yaml
 # Filter out 'message too large' warnings from Predbat
@@ -133,6 +134,24 @@ Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls
 If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
+
+## Note, Can not find battery charge curve
+
+If you get the message "Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
+then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
+
+[Creating the battery charge curve](apps-yaml.md#workarounds) is described in the apps.yaml document.
+The most likely cause of the above message appearing in the logfile is that you are controlling the inverter in REST mode
+but have not uncommented the following entities in apps.yaml that Predbat needs to obtain history from to create the battery charge curve:
+
+```yaml
+  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+```
 
 ## I have another problem not listed above
 

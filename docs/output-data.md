@@ -18,7 +18,8 @@ A set of Apex Charts can also be created to see graphically what Predbat plans t
 
 ## Basic status
 
-- predbat.status - Gives the current status & errors and logs any changes that Predbat makes to your inverter
+- predbat.status - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
+The different Predbat status values and their meanings are detailed in [what does predbat do](what-does-predbat-do.md#predbat-status).
 
 ## Baseline data
 
