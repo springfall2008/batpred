@@ -1,3 +1,4 @@
+adbase
 appdaemon
 mkdocs
 pre-commit
