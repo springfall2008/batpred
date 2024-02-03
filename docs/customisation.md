@@ -323,7 +323,7 @@ If you set this to a negative value then Predbat will assume unpublished export 
 calculate the difference between today's actual load and today's predicated load and adjust the rest of the days usage
 prediction accordingly. A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_)
 to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact). The in-day adjustment
-factor can be seen in **predbat_load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
+factor can be seen in **predbat.load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
 in the charts template in Github).
 
 ## Inverter control options
