@@ -9962,7 +9962,11 @@ class PredBat(hass.Hass):
             else:
                 current_rate_id = entity_id
 
-            data_import = self.get_state(entity_id=current_rate_id, attribute="rates") or self.get_state(entity_id=current_rate_id, attribute="all_rates") or self.get_state(entity_id=current_rate_id, attribute="raw_today")
+            data_import = (
+                self.get_state(entity_id=current_rate_id, attribute="rates")
+                or self.get_state(entity_id=current_rate_id, attribute="all_rates")
+                or self.get_state(entity_id=current_rate_id, attribute="raw_today")
+            )
             if data_import:
                 data_all += data_import
             else:
@@ -9994,7 +9998,7 @@ class PredBat(hass.Hass):
                 to_key = "end"
                 scale = 100.0
             if rate_key not in data_all[0]:
-                rate_key = 'value'
+                rate_key = "value"
             rate_data = self.minute_data(
                 data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale
             )
