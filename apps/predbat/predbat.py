@@ -10954,7 +10954,7 @@ class PredBat(hass.Hass):
         """
         self.log("Update event {} {} {}".format(event, data, kwargs))
 
-    def download_predbat_file_from_github(self, filename, new_filename):
+    def download_predbat_file_from_github(self, tag, filename, new_filename):
         """
         Downloads a predbat source file from github and returns the contents
 
@@ -10964,7 +10964,7 @@ class PredBat(hass.Hass):
         Returns:
             str: The contents of the file
         """
-        url = "https://raw.githubusercontent.com/springfall2008/batpred/master/apps/predbat/{}".format(filename)
+        url = "https://raw.githubusercontent.com/springfall2008/batpred/" + tag + "/apps/predbat/{}".format(filename)
         self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
         r = requests.get(url, headers={})
         if r.ok:
@@ -10996,7 +10996,7 @@ class PredBat(hass.Hass):
 
             # Download predbat.py
             file = "predbat.py"
-            predbat_code = self.download_predbat_file_from_github(file, os.path.join(this_path, file + "." + tag))
+            predbat_code = self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
             if predbat_code:
                 # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
                 files = ["predbat.py"]
@@ -11015,7 +11015,7 @@ class PredBat(hass.Hass):
                     for file in files:
                         # Download the remaining files
                         if file != "predbat.py":
-                            self.download_predbat_file_from_github(file, os.path.join(this_path, file + "." + tag))
+                            self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
 
                 # Notify that we are about to update
                 self.call_notify("Predbat: update to: {}".format(version))
