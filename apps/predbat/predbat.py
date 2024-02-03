@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.11"
+THIS_VERSION = "v7.15.12"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -9962,15 +9962,11 @@ class PredBat(hass.Hass):
             else:
                 current_rate_id = entity_id
 
-            data_import = self.get_state(entity_id=current_rate_id, attribute="rates")
+            data_import = self.get_state(entity_id=current_rate_id, attribute="rates") or self.get_state(entity_id=current_rate_id, attribute="all_rates") or self.get_state(entity_id=current_rate_id, attribute="raw_today")
             if data_import:
                 data_all += data_import
             else:
-                data_import = self.get_state(entity_id=current_rate_id, attribute="all_rates")
-                if data_import:
-                    data_all += data_import
-                else:
-                    self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(current_rate_id))
+                self.log("WARN: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
@@ -9997,6 +9993,8 @@ class PredBat(hass.Hass):
                 from_key = "start"
                 to_key = "end"
                 scale = 100.0
+            if rate_key not in data_all[0]:
+                rate_key = 'value'
             rate_data = self.minute_data(
                 data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale
             )
