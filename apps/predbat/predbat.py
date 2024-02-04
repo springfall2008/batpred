@@ -11045,7 +11045,7 @@ class PredBat(hass.Hass):
                 self.log("WARN: Predbat update failed to download Predbat version {}".format(version))
         return False
 
-    def select_event(self, event, data, kwargs):
+    async def select_event(self, event, data, kwargs):
         """
         Catch HA Input select updates
 
@@ -11093,7 +11093,7 @@ class PredBat(hass.Hass):
                 self.update_pending = True
                 self.plan_valid = False
 
-    def number_event(self, event, data, kwargs):
+    async def number_event(self, event, data, kwargs):
         """
         Catch HA Input number updates
 
@@ -11126,7 +11126,7 @@ class PredBat(hass.Hass):
                 self.update_pending = True
                 self.plan_valid = False
 
-    def switch_event(self, event, data, kwargs):
+    async def switch_event(self, event, data, kwargs):
         """
         Catch HA Switch toggle
 
