@@ -51,11 +51,15 @@ Rate symbols (import and export):
 - &#177; - Rate that has been adjusted with a rate offset in the users apps.yaml
 - &dollar; - Rate that has been adjusted for an Octopus Saving session
 - ? - Rate that has not yet been defined and the previous days data was used instead
+
 Battery SOC symbols:
+
 - &rarr; - Current SOC expected to remain level
 - &searr; - Current SOC expected to fall
 - &nearr; - Current SOC expected to rise
+
 Cost symbols:
+
 - &rarr; - Current cost expected to remain level
 - &searr; - Current cost expected to fall (due to export)
 - &nearr; - Current cost expected to rise (due to import or standing charge)
@@ -150,10 +154,12 @@ Using the above debug plan as an example:
 - At 22:30 the battery is being charged. The actual import rate is 14.07p, but after conversion losses to store the grid AC into the DC battery,
 the energy being put into the battery has effectively cost 14.81p - for every 1kWh of AC grid import you don't get 1kWh of DC stored in the battery,
 so 1kWh of battery charge has effectively cost slightly more than the import rate.
+
 - At 00:30 the battery is being force discharged and excess energy (above the estimated house load of 0.47kWh) will be exported.
 The actual export rate is 18.22p, but after losses converting the stored DC battery charge into AC to supply the home and export it,
 the energy being exported has effectively only earned 17.31p - it will take slightly more than 1kWh of stored DC battery charge to get 1kWh of AC to use or export
 so each discharged and exported kWh actually earns slightly less.
+
 - Putting these together, at 00:00, the effective import rate (after losses) is 13.93p, the effective export rate is 17.31p,
 so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
 Predbat plans to charge and then discharge the battery in the same slot to generate that profit.
