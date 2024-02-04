@@ -4370,7 +4370,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised            
+        return charge_window_optimised
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4470,7 +4470,6 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
-
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -11108,9 +11107,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates. 
-        It extracts the necessary information from the data and performs different actions based on the selected option. 
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
+        This method is used to handle Home Assistant input select updates.
+        It extracts the necessary information from the data and performs different actions based on the selected option.
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
