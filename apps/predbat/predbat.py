@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.13"
+THIS_VERSION = "v7.15.14"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -4379,7 +4379,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+        return charge_window_optimised            
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4479,6 +4479,7 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
+
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -10620,7 +10621,6 @@ class PredBat(hass.Hass):
         values_list = []
         if values:
             values_list = values.split(",")
-        self.log("Selected {} from values list".format(values_list))
         if value == "reset":
             values_list = []
         elif "[" in value:
@@ -10679,7 +10679,7 @@ class PredBat(hass.Hass):
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
-
+        
         if values not in time_values:
             time_values.append(values)
         time_values.append("reset")
@@ -11136,9 +11136,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates.
-        It extracts the necessary information from the data and performs different actions based on the selected option.
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
@@ -11313,7 +11313,6 @@ class PredBat(hass.Hass):
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
                             value = item.get("default", "")
-                        self.log("set_state entity {} state {}".format(entity, value))
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
                     elif item["type"] == "update":
                         summary = self.releases.get("this_body", "")
