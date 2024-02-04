@@ -1856,7 +1856,7 @@ class Inverter:
                 else:
                     entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
                     # Write
-                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=100)
+                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge / 25))
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
 
@@ -1904,7 +1904,7 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
-                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=100)
+                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -2649,7 +2649,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
-            if abs(new - rate) < 100:
+            if abs(new - rate) < (self.battery_rate_max_charge / 25):
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -2669,7 +2669,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Discharge_Rate"]
-            if abs(new - rate) < 100:
+            if abs(new - rate) < (self.battery_rate_max_discharge / 25):
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -4370,7 +4370,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+        return charge_window_optimised            
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4470,6 +4470,7 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
+
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -11097,9 +11098,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates.
-        It extracts the necessary information from the data and performs different actions based on the selected option.
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
