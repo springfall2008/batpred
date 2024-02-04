@@ -47,7 +47,7 @@ Rate symbols (import and export):
 
 - ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
 - ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
-- &#61; - Rate that has been overriden by the users apps.yaml
+- &#61; - Rate that has been overridden by the users apps.yaml
 - &#177; - Rate that has been adjusted with a rate offset in the users apps.yaml
 - &dollar; - Rate that has been adjusted for an Octopus Saving session
 - ? - Rate that has not yet been defined and the previous days data was used instead
