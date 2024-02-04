@@ -11059,7 +11059,7 @@ class PredBat(hass.Hass):
             latest = self.releases.get("latest", None)
             if latest:
                 self.log("Requested install of latest version {}".format(latest))
-                # self.download_predbat_version(latest)
+                self.download_predbat_version(latest)
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")
 
@@ -11098,6 +11098,7 @@ class PredBat(hass.Hass):
         Returns:
             bool: True if the download and update were successful, False otherwise.
         """
+        self.expose_config("update", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
         self.log("Split returns {}".format(tag_split))
@@ -11287,7 +11288,7 @@ class PredBat(hass.Hass):
             return value, default
         return None, default
 
-    def expose_config(self, name, value, quiet=True, event=False, force=False):
+    def expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         """
         Share the config with HA
         """
@@ -11346,7 +11347,7 @@ class PredBat(hass.Hass):
                             attributes={
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
-                                "in_progress": False,
+                                "in_progress": in_progress,
                                 "auto_update": self.get_arg("auto_update"),
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
