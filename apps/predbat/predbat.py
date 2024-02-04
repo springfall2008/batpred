@@ -3129,11 +3129,11 @@ class PredBat(hass.Hass):
 
             # Refresh the list
             self.expose_config("update", this_tag)
-            self.expose_config("version", new_version)
+            self.expose_config("version", new_version, force=True)
 
         else:
             self.log("WARN: Unable to download Predbat version information from github, return code: {}".format(data))
-            self.expose_config("version", False)
+            self.expose_config("version", False, force=True)
 
         return self.releases
 
@@ -11098,7 +11098,7 @@ class PredBat(hass.Hass):
         Returns:
             bool: True if the download and update were successful, False otherwise.
         """
-        self.expose_config("update", True, force=True, in_progress=True)
+        self.expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
         self.log("Split returns {}".format(tag_split))
