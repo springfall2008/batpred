@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.14"
+THIS_VERSION = "v7.15.15"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -68,6 +68,7 @@ CONFIG_ITEMS = [
         "release_url": f"https://github.com/springfall2008/batpred/releases/tag/{THIS_VERSION}",
         "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
         "restore": False,
+        "default": False,
     },
     {
         "name": "expert_mode",
@@ -3084,6 +3085,7 @@ class PredBat(hass.Hass):
             )
             PREDBAT_UPDATE_OPTIONS = ["main"]
             this_tag = THIS_VERSION
+            new_version = False
 
             # Find all versions for the dropdown menu
             for release in data:
@@ -3123,12 +3125,15 @@ class PredBat(hass.Hass):
                         self.download_predbat_version(latest_version)
                     else:
                         self.log("Autoupdate: There is an update pending {} - auto update is off".format(latest_version))
+                        new_version = True
 
             # Refresh the list
             self.expose_config("update", this_tag)
+            self.expose_config("version", new_version)
 
         else:
             self.log("WARN: Unable to download Predbat version information from github, return code: {}".format(data))
+            self.expose_config("version", False)
 
         return self.releases
 
@@ -10950,7 +10955,6 @@ class PredBat(hass.Hass):
 
         # Check our version
         self.download_predbat_releases()
-        self.expose_config("version", None)
 
         self.fetch_config_options()
         self.fetch_sensor_data()
@@ -11036,11 +11040,28 @@ class PredBat(hass.Hass):
                 extra=status_extra,
             )
 
-    def update_event(self, event, data, kwargs):
+    async def update_event(self, event, data, kwargs):
         """
-        Update event
+        Update event.
+
+        This function is called when an update event is triggered. It handles the logic for updating the application.
+
+        Parameters:
+        - event (str): The name of the event that triggered the update.
+        - data (dict): Additional data associated with the update event.
+        - kwargs (dict): Additional keyword arguments passed to the update event.
+
+        Returns:
+        None
         """
         self.log("Update event {} {} {}".format(event, data, kwargs))
+        if data and data.get("service", "") == "install":
+            latest = self.releases.get("latest", None)
+            if latest:
+                self.log("Requested install of latest version {}".format(latest))
+                # self.download_predbat_version(latest)
+        elif data and data.get("service", "") == "skip":
+            self.log("Requested to skip the update, this is not yet supported...")
 
     def download_predbat_file_from_github(self, tag, filename, new_filename):
         """
@@ -11326,13 +11347,14 @@ class PredBat(hass.Hass):
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
                                 "in_progress": False,
-                                "auto_update": True,
+                                "auto_update": self.get_arg("auto_update"),
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],
                                 "release_url": item["release_url"],
-                                "skipped_version": False,
                                 "release_summary": summary,
+                                "skipped_version": None,
+                                "supported_features": 1,
                             },
                         )
 
@@ -11616,6 +11638,8 @@ class PredBat(hass.Hass):
             self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
             self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
             self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
+            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
+            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
