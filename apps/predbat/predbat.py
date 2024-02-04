@@ -952,6 +952,10 @@ class Inverter:
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
         self.adjust_battery_target(99)
         self.adjust_battery_target(100)
+        self.adjust_charge_rate(215)
+        self.adjust_charge_rate(self.battery_rate_max_charge)
+        self.adjust_discharge_rate(220)
+        self.adjust_discharge_rate(self.battery_rate_max_discharge)
         self.adjust_reserve(100)
         self.adjust_reserve(6)
         self.adjust_reserve(4)
@@ -1002,6 +1006,7 @@ class Inverter:
         self.pv_power = 0
         self.load_power = 0
         self.rest_api = None
+        self.in_calibration = False
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False)
 
@@ -1052,6 +1057,10 @@ class Inverter:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
                         self.base.log("WARN: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
+                soc_force_adjust = self.rest_data["raw"]["invertor"]["soc_force_adjust"]
+                if soc_force_adjust and soc_force_adjust != "0" and soc_force_adjust != "7":
+                    self.in_calibration = True
+                    self.log("WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled")
             self.soc_max *= self.base.battery_scaling
 
             # Max battery rate
@@ -1856,7 +1865,7 @@ class Inverter:
                 else:
                     entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
                     # Write
-                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge / 25))
+                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 25))
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
 
@@ -1904,7 +1913,7 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
-                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge / 25))
+                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -2649,7 +2658,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
-            if abs(new - rate) < (self.battery_rate_max_charge / 25):
+            if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 25):
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -2669,7 +2678,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Discharge_Rate"]
-            if abs(new - rate) < (self.battery_rate_max_discharge / 25):
+            if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -9158,6 +9167,9 @@ class PredBat(hass.Hass):
         for id in range(num_inverters):
             inverter = Inverter(self, id, quiet=True)
             inverter.update_status(minutes_now, quiet=True)
+            if inverter.in_calibration:
+                self.log("Inverter {} is in calibration mode, not balancing".format(id))
+                return
             inverters.append(inverter)
 
         out_of_balance = False  # Are all the SOC % the same
@@ -9683,6 +9695,15 @@ class PredBat(hass.Hass):
             if self.set_read_only:
                 status = "Read-Only"
                 continue
+            # Inverter is in calibration mode
+            if inverter.in_calibration:
+                status = "Calibration"
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+                inverter.adjust_battery_target(100.0)
+                inverter.adjust_reserve(0)
+                self.log("Inverter is in calibration mode, not executing plan and enabling charge/discharge at full rate.")
+                break
 
             resetDischarge = False
             if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery):
