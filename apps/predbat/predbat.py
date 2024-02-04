@@ -4370,7 +4370,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+        return charge_window_optimised            
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4470,6 +4470,7 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
+
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -6473,12 +6474,11 @@ class PredBat(hass.Hass):
                 symbol = "?"
         return symbol
 
-    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
+    def get_html_plan_header(self, plan_debug):
         """
-        Publish the current plan in HTML format
+        Returns the header row for the HTML plan.
         """
-        plan_debug = self.get_arg("plan_debug")
-        html = "<table>"
+        html = ""
         html += "<tr>"
         html += "<td><b>Time</b></td>"
         if plan_debug:
@@ -6499,7 +6499,18 @@ class PredBat(hass.Hass):
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
         html += "</tr>"
+        return html
 
+    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
+        """
+        Publish the current plan in HTML format
+        """
+        plan_debug = self.get_arg("plan_debug")
+        html = "<table>"
+        html += "<tr>"
+        html += "<td colspan=10> last updated: {} </td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M:%S"))
+        html += "</tr>"
+        html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
         rowspan = 0
@@ -11097,9 +11108,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates.
-        It extracts the necessary information from the data and performs different actions based on the selected option.
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
