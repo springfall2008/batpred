@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.13"
+THIS_VERSION = "v7.15.14"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -10616,6 +10616,7 @@ class PredBat(hass.Hass):
         """
         item = self.config_index.get(config_item)
         values = item.get("value", "")
+        values = values.replace("+", "")
         values_list = []
         if values:
             values_list = values.split(",")
@@ -10628,7 +10629,10 @@ class PredBat(hass.Hass):
                 values_list.remove(value)
         else:
             values_list.append(value)
-        self.expose_config(config_item, ",".join(values_list))
+        item_value = ",".join(values_list)
+        if item_value:
+            item_value = "+" + item_value
+        self.expose_config(config_item, item_value)
         self.manual_times(config_item)
 
     def manual_times(self, config_item):
@@ -10642,6 +10646,7 @@ class PredBat(hass.Hass):
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
         values = item.get("value", "")
+        values = values.replace("+", "")
         values_list = []
         if values:
             values_list = values.split(",")
@@ -10663,6 +10668,8 @@ class PredBat(hass.Hass):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             values_list.append(minute_str)
         values = ",".join(values_list)
+        if values:
+            values = "+" + values
 
         # Create the new dropdown
         time_values = []
@@ -10671,14 +10678,14 @@ class PredBat(hass.Hass):
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
+
         if values not in time_values:
             time_values.append(values)
         time_values.append("reset")
         item["options"] = time_values
         if not values:
-            values = None
-        item["value"] = None  # Force update to expose
-        self.expose_config(config_item, values)
+            values = ""
+        self.expose_config(config_item, values, force=True)
 
         if time_overrides:
             time_txt = []
@@ -11259,7 +11266,7 @@ class PredBat(hass.Hass):
             return value, default
         return None, default
 
-    def expose_config(self, name, value, quiet=True, event=False):
+    def expose_config(self, name, value, quiet=True, event=False, force=False):
         """
         Share the config with HA
         """
@@ -11271,7 +11278,7 @@ class PredBat(hass.Hass):
                 item["value"] = None
             else:
                 entity = item.get("entity")
-                if entity and ((item.get("value") is None) or (value != item["value"])):
+                if entity and ((item.get("value") is None) or (value != item["value"]) or force):
                     if item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter on item {}".format(name))
