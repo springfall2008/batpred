@@ -307,10 +307,11 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
 - **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from Predbat's battery prediction plan.
 
-- **car_charging_energy** - Set in apps.yaml to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
-This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.<BR>
+- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
+This has been pre-defined to a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
+or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
-You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
+*TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
 
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
@@ -431,8 +432,10 @@ You can adjust the charge and discharge times written to the inverter by setting
 
 - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time
 
-- **battery_scaling** - Default value 1.0. This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is
-e.g. if you have an 80% depth of discharge battery that falsely reports its capacity, set this to 0.8 to report the real figure.<BR>
+- **battery_scaling** - Default value 1.0. This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+*TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
+so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
+*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
 rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up
 
