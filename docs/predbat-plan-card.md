@@ -43,6 +43,23 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 - The forecast cost for the half hour slot
 - A running total cost
 
+Rate symbols (import and export):
+
+- ? &#8518; - Rate that has been modified based on **input_number.predbat_metric_future_rate_offset_import** or **input_number.predbat_metric_future_rate_offset_export**
+- ? &#x2696; - Rate that has been estimated using future rate estimation data (e.g. Nordpool)
+- &#61; - Rate that has been overridden by the users apps.yaml
+- &#177; - Rate that has been adjusted with a rate offset in the users apps.yaml
+- &dollar; - Rate that has been adjusted for an Octopus Saving session
+- ? - Rate that has not yet been defined and the previous days data was used instead
+Battery SOC symbols:
+- &rarr; - Current SOC expected to remain level
+- &searr; - Current SOC expected to fall
+- &nearr; - Current SOC expected to rise
+Cost symbols:
+- &rarr; - Current cost expected to remain level
+- &searr; - Current cost expected to fall (due to export)
+- &nearr; - Current cost expected to rise (due to import or standing charge)
+
 Explaining each column in the Predbat plan in more detail:
 
 - **Time** - Predbat plans your home, solar and battery load in 30 minute slots, on the :00 and :30 minutes past each hour.
