@@ -9699,7 +9699,11 @@ class PredBat(hass.Hass):
             # Inverter is in calibration mode
             if inverter.in_calibration:
                 status = "Calibration"
-                self.log("Inverter is in calibration mode, not executing plan and waiting for it to finish.")
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+                inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+                inverter.adjust_battery_target(100.0)
+                inverter.adjust_reserve(0)
+                self.log("Inverter is in calibration mode, not executing plan and enabling charge/discharge at full rate.")
                 break
 
             resetDischarge = False
