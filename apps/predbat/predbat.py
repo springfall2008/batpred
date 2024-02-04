@@ -4379,7 +4379,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+        return charge_window_optimised            
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4479,6 +4479,7 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
+
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -10616,9 +10617,11 @@ class PredBat(hass.Hass):
         """
         item = self.config_index.get(config_item)
         values = item.get("value", "")
+        values = values.replace("+", "")
         values_list = []
         if values:
             values_list = values.split(",")
+        self.log("Selected {} from values list".format(values_list))
         if value == "reset":
             values_list = []
         elif "[" in value:
@@ -10628,7 +10631,10 @@ class PredBat(hass.Hass):
                 values_list.remove(value)
         else:
             values_list.append(value)
-        self.expose_config(config_item, ",".join(values_list))
+        item_value = ",".join(values_list)
+        if item_value:
+            item_value = "+" + item_value
+        self.expose_config(config_item, item_value)
         self.manual_times(config_item)
 
     def manual_times(self, config_item):
@@ -10642,6 +10648,7 @@ class PredBat(hass.Hass):
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
         values = item.get("value", "")
+        values = values.replace("+", "")
         values_list = []
         if values:
             values_list = values.split(",")
@@ -10663,6 +10670,8 @@ class PredBat(hass.Hass):
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
             values_list.append(minute_str)
         values = ",".join(values_list)
+        if values:
+            values = "+" + values
 
         # Create the new dropdown
         time_values = []
@@ -10671,14 +10680,14 @@ class PredBat(hass.Hass):
             if minute in time_overrides:
                 minute_str = "[" + minute_str + "]"
             time_values.append(minute_str)
+        
         if values not in time_values:
             time_values.append(values)
         time_values.append("reset")
         item["options"] = time_values
         if not values:
-            values = None
-        item["value"] = None  # Force update to expose
-        self.expose_config(config_item, values)
+            values = ""
+        self.expose_config(config_item, values, force=True)
 
         if time_overrides:
             time_txt = []
@@ -11128,9 +11137,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates.
-        It extracts the necessary information from the data and performs different actions based on the selected option.
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
@@ -11259,7 +11268,7 @@ class PredBat(hass.Hass):
             return value, default
         return None, default
 
-    def expose_config(self, name, value, quiet=True, event=False):
+    def expose_config(self, name, value, quiet=True, event=False, force=False):
         """
         Share the config with HA
         """
@@ -11271,7 +11280,7 @@ class PredBat(hass.Hass):
                 item["value"] = None
             else:
                 entity = item.get("entity")
-                if entity and ((item.get("value") is None) or (value != item["value"])):
+                if entity and ((item.get("value") is None) or (value != item["value"]) or force):
                     if item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter on item {}".format(name))
@@ -11305,6 +11314,7 @@ class PredBat(hass.Hass):
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
                             value = item.get("default", "")
+                        self.log("set_state entity {} state {}".format(entity, value))
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
                     elif item["type"] == "update":
                         summary = self.releases.get("this_body", "")
