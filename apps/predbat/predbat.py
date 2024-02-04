@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.12"
+THIS_VERSION = "v7.15.13"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -512,7 +512,7 @@ CONFIG_ITEMS = [
         "min": 5,
         "max": 60,
         "step": 5,
-        "unit": "kWh",
+        "unit": "minutes",
         "icon": "mdi:clock-end",
         "enable": "expert_mode",
         "default": 10,
