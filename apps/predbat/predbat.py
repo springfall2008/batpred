@@ -4370,7 +4370,7 @@ class PredBat(hass.Hass):
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+        return charge_window_optimised            
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
         """
@@ -4470,6 +4470,7 @@ class PredBat(hass.Hass):
                         charge_limit_n = soc
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n, self.reserve)
+
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -5441,6 +5442,7 @@ class PredBat(hass.Hass):
         # Add 48 extra hours to make sure the whole cycle repeats another day
         while minute < (self.forecast_minutes + 48 * 60):
             if minute not in rates:
+                adjust_type = "copy"
                 # Take 24-hours previous if missing rate
                 if (minute >= 24 * 60) and ((minute - 24 * 60) in rates):
                     minute_mod = minute - 24 * 60
@@ -5466,6 +5468,7 @@ class PredBat(hass.Hass):
                     ):
                         prev_rate = rate_offset
                         rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
+                        adjust_type = "future"
                     elif (
                         (not is_import)
                         and (not is_gas)
@@ -5474,18 +5477,22 @@ class PredBat(hass.Hass):
                         and (minute_mod in self.future_energy_rates_export)
                     ):
                         rate_offset = max(rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute], 0)
+                        adjust_type = "future"
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
+                        if self.metric_future_rate_offset_import:
+                            adjust_type = "offset"
                     elif (not is_import) and (not is_gas):
                         rate_offset = max(rate_offset + self.metric_future_rate_offset_export, 0)
+                        if self.metric_future_rate_offset_export:
+                            adjust_type = "offset"
 
                     adjusted_rates[minute] = True
 
                 rates[minute] = rate_offset
-                replicated_rates[minute] = True
+                replicated_rates[minute] = adjust_type
             else:
                 rate_last = rates[minute]
-                replicated_rates[minute] = False
             minute += 1
         return rates, replicated_rates
 
@@ -5553,7 +5560,7 @@ class PredBat(hass.Hass):
             rate_low_average = self.dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
-    def basic_rates(self, info, rtype, prev=None):
+    def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
@@ -5655,8 +5662,10 @@ class PredBat(hass.Hass):
                             while minute_index < max_minute:
                                 if rate_increment:
                                     rates[minute_index] = rates.get(minute_index, 0.0) + rate
+                                    rate_replicate[minute_index] = "increment"
                                 else:
                                     rates[minute_index] = rate
+                                    rate_replicate[minute_index] = "user"
                                 if load_scaling is not None:
                                     self.load_scaling_dynamic[minute_index] = load_scaling
                                 if date or not prev:
@@ -5782,7 +5791,7 @@ class PredBat(hass.Hass):
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_saving_slot(self, octopus_saving_slots, export=False):
+    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate={}):
         """
         Load octopus saving session slot
         """
@@ -5819,6 +5828,7 @@ class PredBat(hass.Hass):
                     else:
                         self.rate_import[minute] += rate
                         self.load_scaling_dynamic[minute] = self.load_scaling_saving
+                    rate_replicate[minute] = "saving"
 
     def load_octopus_slots(self, octopus_slots):
         """
@@ -6438,6 +6448,32 @@ class PredBat(hass.Hass):
                 attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
             )
 
+    def adjust_symbol(self, adjust_type):
+        """
+        Returns an HTML symbol based on the adjust rate type.
+
+        Parameters:
+        - adjust_type (str): The type of adjustment.
+
+        Returns:
+        - symbol (str): The symbol corresponding to the adjust_type.
+        """
+        symbol = ""
+        if adjust_type:
+            if adjust_type == "offset":
+                symbol = "? &#8518;"
+            elif adjust_type == "future":
+                symbol = "? &#x2696;"
+            elif adjust_type == "user":
+                symbol = "&#61;"
+            elif adjust_type == "increment":
+                symbol = "&#177;"
+            elif adjust_type == "saving":
+                symbol = "&dollar;"
+            else:
+                symbol = "?"
+        return symbol
+
     def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
         """
         Publish the current plan in HTML format
@@ -6630,10 +6666,12 @@ class PredBat(hass.Hass):
                     state += " &#8526;"
 
             # Import and export rates -> to string
-            if self.rate_import_replicated.get(minute, False):
-                rate_str_import = "<i>%02.02f ?</i>" % (rate_value_import)
+            adjust_type = self.rate_import_replicated.get(minute, None)
+            adjust_symbol = self.adjust_symbol(adjust_type)
+            if adjust_symbol:
+                rate_str_import = "<i>%02.02f %s</i>" % (rate_value_import, adjust_symbol)
             else:
-                rate_str_import = "%02.02f" % rate_value_import
+                rate_str_import = "%02.02f" % (rate_value_import)
 
             if plan_debug:
                 rate_str_import += " (%02.02f)" % (rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
@@ -6641,10 +6679,12 @@ class PredBat(hass.Hass):
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
-            if self.rate_export_replicated.get(minute, False):
-                rate_str_export = "<i>%02.02f ?</i>" % (rate_value_export)
+            adjust_type = self.rate_export_replicated.get(minute, None)
+            adjust_symbol = self.adjust_symbol(adjust_type)
+            if adjust_symbol:
+                rate_str_export = "<i>%02.02f %s</i>" % (rate_value_export, adjust_symbol)
             else:
-                rate_str_export = "%2.02f" % (rate_value_export)
+                rate_str_export = "%02.02f" % (rate_value_export)
 
             if plan_debug:
                 rate_str_export += " (%02.02f)" % (rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
@@ -10323,9 +10363,9 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.load_saving_slot(octopus_saving_slots, export=False)
+            self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             if "rates_import_override" in self.args:
-                self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import)
+                self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
@@ -10337,9 +10377,9 @@ class PredBat(hass.Hass):
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(octopus_saving_slots, export=True)
+                self.load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             if "rates_export_override" in self.args:
-                self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export)
+                self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export, self.rate_export_replicated)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -11058,9 +11098,9 @@ class PredBat(hass.Hass):
         None
 
         Description:
-        This method is used to handle Home Assistant input select updates.
-        It extracts the necessary information from the data and performs different actions based on the selected option.
-        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration.
+        This method is used to handle Home Assistant input select updates. 
+        It extracts the necessary information from the data and performs different actions based on the selected option. 
+        The actions include calling update service, saving and restoring settings, performing manual selection, and exposing configuration. 
         After performing the actions, it triggers an update by setting update_pending flag to True and plan_valid flag to False.
         """
         service_data = data.get("service_data", {})
