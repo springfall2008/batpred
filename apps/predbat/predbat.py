@@ -6473,12 +6473,11 @@ class PredBat(hass.Hass):
                 symbol = "?"
         return symbol
 
-    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
+    def get_html_plan_header(self, plan_debug):
         """
-        Publish the current plan in HTML format
+        Returns the header row for the HTML plan.
         """
-        plan_debug = self.get_arg("plan_debug")
-        html = "<table>"
+        html = ""
         html += "<tr>"
         html += "<td><b>Time</b></td>"
         if plan_debug:
@@ -6499,7 +6498,18 @@ class PredBat(hass.Hass):
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
         html += "</tr>"
+        return html
 
+    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
+        """
+        Publish the current plan in HTML format
+        """
+        plan_debug = self.get_arg("plan_debug")
+        html = "<table>"
+        html += "<tr>"
+        html += "<td colspan=10> last updated: {} </td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M:%S"))
+        html += "</tr>"
+        html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
         rowspan = 0
