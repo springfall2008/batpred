@@ -53,7 +53,6 @@ HAOS
 hass
 hassapi
 hassio
-sofar
 heatsink
 homeassistant
 houseb
@@ -112,6 +111,7 @@ searr
 Selfuse
 socb
 socs
+sofar
 SolarEdge
 Solax
 Solcast
