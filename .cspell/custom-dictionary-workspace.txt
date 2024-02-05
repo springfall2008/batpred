@@ -53,6 +53,7 @@ HAOS
 hass
 hassapi
 hassio
+sofar
 heatsink
 homeassistant
 houseb
