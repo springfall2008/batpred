@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.15"
+THIS_VERSION = "v7.15.16"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -11098,6 +11098,10 @@ class PredBat(hass.Hass):
         Returns:
             bool: True if the download and update were successful, False otherwise.
         """
+        if version == THIS_VERSION:
+            self.log("WARN: Predbat update requested for the same version as we are running ({}), no update required".format(version))
+            return
+
         self.expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
