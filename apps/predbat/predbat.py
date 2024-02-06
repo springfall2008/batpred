@@ -2449,10 +2449,10 @@ class Inverter:
         if self.inv_has_service_api:
             if target_soc > 0:
                 self.log("Inverter {} Starting charge to {} % via Service".format(self.id, target_soc))
-                self.base.call_service(self.base.get_arg("charge_start_service"), target_soc=target_soc)
+                self.base.call_service(self.base.get_arg("charge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
             else:
                 self.log("Inverter {} Stop charge via Service".format(self.id))
-                self.base.call_service(self.base.get_arg("charge_stop_service"))
+                self.base.call_service(self.base.get_arg("charge_stop_service"), device_id=self.base.get_arg("device_id", index=self.id))
 
     def adjust_discharge_immediate(self, target_soc):
         """
@@ -2461,10 +2461,10 @@ class Inverter:
         if self.inv_has_service_api:
             if target_soc > 0:
                 self.log("Inverter {} Starting discharge to {} % via Service".format(self.id, target_soc))
-                self.base.call_service(self.base.get_arg("discharge_start_service"), target_soc=target_soc)
+                self.base.call_service(self.base.get_arg("discharge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
             else:
                 self.log("Inverter {} Stop discharge via Service".format(self.id))
-                self.base.call_service(self.base.get_arg("charge_stop_service"))
+                self.base.call_service(self.base.get_arg("charge_stop_service", device_id=self.base.get_arg("device_id", index=self.id)))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -9985,10 +9985,9 @@ class PredBat(hass.Hass):
                                     status = "Hold for car"
                             break
 
-            # Charging/Discharging off
-            if not isCharging and not isDischarging:
+            # Charging/Discharging off via service
+            if not isCharging and not isDischarging and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
-                inverter.adjust_discharge_immediate(0)
 
             # Reset discharge rate?
             if resetDischarge:
