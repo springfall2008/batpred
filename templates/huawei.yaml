@@ -30,7 +30,7 @@ pred_bat:
   #     -sensor.pv_daily_yield
   pv_today:
     - sensor.energy_pv_daily
-    
+
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
   # Data must be in the format of 'last_updated' timestamp and 'energy' for incrementing kWh
@@ -83,7 +83,7 @@ pred_bat:
   charge_stop_service: huawei_solar/stop_forcible_charge
   discharge_start_service: huawei_solar/forcible_discharge_soc
   discharge_stop_service: huawei_solar/stop_forcible_charge
-  
+
   # Device_ID for the Huawei inverter device in home-assistant
   device_id: XXXXXX
 

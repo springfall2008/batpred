@@ -9920,7 +9920,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-                        
+
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
