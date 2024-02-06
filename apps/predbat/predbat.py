@@ -1009,7 +1009,7 @@ class Inverter:
         if self.base.restart_active:
             self.base.log("WARN: Inverter control auto restart already active, waiting...")
             return
-
+    
         # Trigger restart
         self.base.log("WARN: Inverter control auto restart trigger: {}".format(reason))
         restart_command = self.base.get_arg("auto_restart", [])
@@ -1037,6 +1037,7 @@ class Inverter:
                         self.base.call_service(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     time.sleep(15)
+            raise Exception("Auto-restart triggered")
 
     def __init__(self, base, id=0, quiet=False):
         self.id = id
@@ -1195,6 +1196,7 @@ class Inverter:
 
             tdiff = self.inverter_time - now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
+            tdiff = 99
             if not quiet:
                 self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 5:
@@ -9965,7 +9967,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-
+                        
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
@@ -11763,10 +11765,10 @@ class PredBat(hass.Hass):
                 else:
                     new_list.append(item_value)
             arg_value = new_list
-        elif isinstance(arg_value, list):
+        elif isinstance(arg_value, dict):
             new_dict = {}
             for item_name in arg_value:
-                item_value = new_dict[item_name]
+                item_value = arg_value[item_name]
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
                     self.log("WARN: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
