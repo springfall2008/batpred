@@ -83,6 +83,9 @@ pred_bat:
   charge_stop_service: huawei_solar/stop_forcible_charge
   discharge_start_service: huawei_solar/forcible_discharge_soc
   discharge_stop_service: huawei_solar/stop_forcible_charge
+  
+  # Device_ID for the Huawei inverter device in home-assistant
+  device_id: XXXXXX
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
