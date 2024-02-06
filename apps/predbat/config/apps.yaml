@@ -72,15 +72,15 @@ pred_bat:
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:           
+  #auto_restart:
   #  - service: switch/turn_on
   #    entity_id: switch.givtcp_{geserial}_reboot_addon
 
   # Alternative method to restart GivTCP add-on via HA
   #  - service: hassio/addon_restart
   #    addon: a6a2857d_givtcp
-  
-  # Example on how to restart the inverter via GivTCP 
+
+  # Example on how to restart the inverter via GivTCP
   #  - service: switch.turn_on
   #    entity_id: switch.givtcp_{geserial}_reboot_invertor
 
