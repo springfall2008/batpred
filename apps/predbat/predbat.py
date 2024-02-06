@@ -1002,6 +1002,42 @@ class Inverter:
             self.self_test(minutes_now)
         exit
 
+    def auto_restart(self, reason):
+        """
+        Attempt to restart the services required
+        """
+        if self.base.restart_active:
+            self.base.log("WARN: Inverter control auto restart already active, waiting...")
+            return
+    
+        # Trigger restart
+        self.base.log("WARN: Inverter control auto restart trigger: {}".format(reason))
+        restart_command = self.base.get_arg("auto_restart", [])
+        if restart_command:
+            self.base.restart_active = True
+            if isinstance(restart_command, dict):
+                restart_command = [restart_command]
+            for command in restart_command:
+                service = command.get("service", None)
+                addon = command.get("addon", None)
+                if addon:
+                    addon = self.base.resolve_arg(service, addon, indirect=False)
+                entity_id = command.get("entity_id", None)
+                if entity_id:
+                    entity_id = self.base.resolve_arg(service, entity_id, indirect=False)
+                if service:
+                    if addon:
+                        self.log("Calling restart service {} with addon {}".format(service, addon))
+                        self.base.call_service(service, addon=addon)
+                    elif entity_id:
+                        self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
+                        self.base.call_service(service, entity_id=entity_id)
+                    else:
+                        self.log("Calling restart service {}".format(service))
+                        self.base.call_service(service)
+                    self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
+                    time.sleep(15)
+
     def __init__(self, base, id=0, quiet=False):
         self.id = id
         self.base = base
@@ -1067,6 +1103,8 @@ class Inverter:
                 if not quiet:
                     self.base.log("Inverter {} using Rest API {}".format(self.id, self.rest_api))
                 self.rest_data = self.rest_readData()
+                if not self.rest_data:
+                    self.auto_restart("REST read failure")
 
         # Battery size, charge and discharge rates
         ivtime = None
@@ -1147,6 +1185,7 @@ class Inverter:
                     except (ValueError, TypeError):
                         self.base.log(f"Warn: Unable to read inverter time string {ivtime} using formats {[TIME_FORMAT, TIME_FORMAT_OCTOPUS, self.inv_clock_time_format]}")
                         self.inverter_time = None
+                        self.auto_restart("Unable to read inverter time")
 
         # Check inverter time and confirm skew
         if self.inverter_time:
@@ -1170,6 +1209,11 @@ class Inverter:
                     ),
                     had_errors=True,
                 )
+                # Bad enough to trigger restart?
+                if abs(tdiff) >= 15:
+                    self.auto_restart("Clock skew >=15 minutes")
+            else:
+                self.base.restart_active = False
 
         # Get current reserve value
         if self.rest_data:
@@ -7294,6 +7338,7 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
         self.manual_charge_times = []
@@ -9920,7 +9965,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-
+                        
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
@@ -11718,6 +11763,17 @@ class PredBat(hass.Hass):
                 else:
                     new_list.append(item_value)
             arg_value = new_list
+        elif isinstance(arg_value, list):
+            new_dict = {}
+            for item_name in arg_value:
+                item_value = new_dict[item_name]
+                item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
+                if not item_matched:
+                    self.log("WARN: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
+                    new_dict[item_name] = None
+                else:
+                    new_dict[item_name] = item_value
+            arg_value = new_dict
         elif isinstance(arg_value, str) and arg_value.startswith("re:"):
             matched = False
             my_re = "^" + arg_value[3:] + "$"
