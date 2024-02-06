@@ -1196,7 +1196,6 @@ class Inverter:
 
             tdiff = self.inverter_time - now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
-            tdiff = 99
             if not quiet:
                 self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 5:
