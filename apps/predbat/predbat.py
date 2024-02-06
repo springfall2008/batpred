@@ -1009,7 +1009,7 @@ class Inverter:
         if self.base.restart_active:
             self.base.log("WARN: Inverter control auto restart already active, waiting...")
             return
-    
+
         # Trigger restart
         self.base.log("WARN: Inverter control auto restart trigger: {}".format(reason))
         restart_command = self.base.get_arg("auto_restart", [])
@@ -9967,7 +9967,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-                        
+
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
