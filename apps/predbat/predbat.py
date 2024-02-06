@@ -44,7 +44,7 @@ BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
 
 # List of supported inverters
-INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF": "Sofar HYD"}
+INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF": "Sofar HYD", "HU": "Huawei Solar"}
 
 # Inverter modes
 PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
@@ -860,6 +860,7 @@ INVERTER_DEF = {
     "GE": {
         "has_rest_api": True,
         "has_mqtt_api": False,
+        "has_service_api": False,
         "output_charge_control": "power",
         "has_charge_enable_time": True,
         "has_discharge_enable_time": True,
@@ -879,6 +880,7 @@ INVERTER_DEF = {
     "GS": {
         "has_rest_api": False,
         "has_mqtt_api": False,
+        "has_service_api": False,
         "output_charge_control": "current",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
@@ -898,6 +900,7 @@ INVERTER_DEF = {
     "SX4": {
         "has_rest_api": False,
         "has_mqtt_api": False,
+        "has_service_api": False,
         "output_charge_control": "power",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
@@ -917,6 +920,27 @@ INVERTER_DEF = {
     "SF": {
         "has_rest_api": False,
         "has_mqtt_api": True,
+        "has_service_api": False,
+        "output_charge_control": "none",
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "has_reserve_soc": False,
+        "charge_time_format": "S",
+        "charge_time_entity_is_option": False,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_discharge_freeze": False,
+    },
+    "HU": {
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "has_service_api": True,
         "output_charge_control": "none",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
@@ -1015,6 +1039,7 @@ class Inverter:
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
         self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
+        self.inv_has_service_api = INVERTER_DEF[self.inverter_type]["has_service_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
@@ -2416,6 +2441,30 @@ class Inverter:
         new_current = round(power / self.battery_voltage, 1)
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
+
+    def adjust_charge_immediate(self, target_soc):
+        """
+        Adjust from charging or not charging based on passed target soc
+        """
+        if self.inv_has_service_api:
+            if target_soc > 0:
+                self.log("Inverter {} Starting charge to {} % via Service".format(self.id, target_soc))
+                self.base.call_service(self.base.get_arg("charge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
+            else:
+                self.log("Inverter {} Stop charge via Service".format(self.id))
+                self.base.call_service(self.base.get_arg("charge_stop_service"), device_id=self.base.get_arg("device_id", index=self.id))
+
+    def adjust_discharge_immediate(self, target_soc):
+        """
+        Adjust from discharging or not discharging based on passed target soc
+        """
+        if self.inv_has_service_api:
+            if target_soc > 0:
+                self.log("Inverter {} Starting discharge to {} % via Service".format(self.id, target_soc))
+                self.base.call_service(self.base.get_arg("discharge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
+            else:
+                self.log("Inverter {} Stop discharge via Service".format(self.id))
+                self.base.call_service(self.base.get_arg("charge_stop_service", device_id=self.base.get_arg("device_id", index=self.id)))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -9789,7 +9838,7 @@ class PredBat(hass.Hass):
                             else:
                                 status = "Charging"
                             status_extra = " target {}%".format(self.charge_limit_percent_best[0])
-
+                        inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
 
                     if not disabled_charge_window:
@@ -9871,6 +9920,9 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+
+                        # Immediate discharge mode
+                        inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
                         inverter.adjust_force_discharge(False)
                         if self.set_discharge_freeze:
@@ -9932,6 +9984,10 @@ class PredBat(hass.Hass):
                                 else:
                                     status = "Hold for car"
                             break
+
+            # Charging/Discharging off via service
+            if not isCharging and not isDischarging and self.set_charge_window:
+                inverter.adjust_charge_immediate(0)
 
             # Reset discharge rate?
             if resetDischarge:

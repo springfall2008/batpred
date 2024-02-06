@@ -13,6 +13,7 @@ autopep
 autoupdate
 Basepath
 Batpred
+batteri
 batteryb
 bierner
 chargedischarge
@@ -56,11 +57,14 @@ hassio
 heatsink
 homeassistant
 houseb
+husforbrukning
 iboost
+idag
 idetails
 inday
 isort
 ivtime
+kopt
 Krakenflex
 kwhb
 linebreak
