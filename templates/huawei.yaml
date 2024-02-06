@@ -1,5 +1,5 @@
-`# ------------------------------------------------------------------
-# Huawei Config - https://github.com/wlcrs/huawei_solar
+# ------------------------------------------------------------------
+# Huawei Solar Config example - https://github.com/wlcrs/huawei_solar
 # ------------------------------------------------------------------
 ---
 pred_bat:
@@ -10,7 +10,10 @@ pred_bat:
   prefix: predbat
 
   # Timezone to work in
-  timezone: Europe/Stockholm
+  timezone: Europe/London
+
+  # Template, please delete the next line once configured
+  template: True
 
   # Sensors, more than one can be specified and they will be summed up automatically
   #
@@ -25,9 +28,6 @@ pred_bat:
     - sensor.kopt_el_idag
   export_today:
     - sensor.export_today
-  # Vänta någon vecka tills sensorn under har historik.
-  #   pv_today:
-  #     -sensor.pv_daily_yield
   pv_today:
     - sensor.energy_pv_daily
 
