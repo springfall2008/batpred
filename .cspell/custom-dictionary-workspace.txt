@@ -13,8 +13,8 @@ autopep
 autoupdate
 Basepath
 Batpred
-batteryb
 batteri
+batteryb
 bierner
 chargedischarge
 Chrg
@@ -55,9 +55,9 @@ hass
 hassapi
 hassio
 heatsink
-husforbrukning
 homeassistant
 houseb
+husforbrukning
 iboost
 idag
 idetails
