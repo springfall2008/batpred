@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.16"
+THIS_VERSION = "v7.15.17"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1009,7 +1009,7 @@ class Inverter:
         if self.base.restart_active:
             self.base.log("WARN: Inverter control auto restart already active, waiting...")
             return
-    
+
         # Trigger restart
         self.base.log("WARN: Inverter control auto restart trigger: {}".format(reason))
         restart_command = self.base.get_arg("auto_restart", [])
@@ -1633,7 +1633,7 @@ class Inverter:
 
         # Scale charge and discharge rates with battery scaling
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
-        self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
+        self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
 
         if SIMULATE:
             self.soc_kw = self.base.sim_soc_kw
@@ -7464,6 +7464,8 @@ class PredBat(hass.Hass):
         self.battery_rate_max_charge_scaled = 0
         self.battery_rate_max_discharge_scaled = 0
         self.battery_rate_min = 0
+        self.battery_rate_max_scaling = 1.0
+        self.battery_rate_max_scaling_discharge = 1.0
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
@@ -9982,7 +9984,6 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-                        
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
@@ -10738,7 +10739,11 @@ class PredBat(hass.Hass):
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
+        if not item:
+            return
         values = item.get("value", "")
+        if not values:
+            values = ""
         values = values.replace("+", "")
         values_list = []
         if values:
