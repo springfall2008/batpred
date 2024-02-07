@@ -466,7 +466,7 @@ history will eventually not contain any full power charging data to compute the 
 
 NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
 
-If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in apps.yaml:
+If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in `apps.yaml`:
 
 ```yaml
   charge_rate:
@@ -505,6 +505,19 @@ You can also look at the automation power curve calculation in the AppDaemon/Pre
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
 the battery.
+
+In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
+
+If you are using REST mode to control your inverter then the following entries in `apps.yaml` will need to be uncommented :
+
+```yaml
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+```
 
 ## Triggers
 
