@@ -75,13 +75,15 @@ Green if the rate is less than the import rate threshold,
 Red if the rate is more than 1.5 times the import rate threshold,
 and Yellow if the rate is between 1 and 1.5 times the import rate threshold.<BR>
 See the [Predbat customisation guide](customisation.md#battery-margins-and-metrics-options) for explanation of the import rate threshold (and over-riding it), but in essence
-Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.
+Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.<BR>
+If battery charging is planned by Predbat for a particular slot, the import rate for that slot will be highlighted in bold text.
 
 - **Export** - Similarly, the export rate for that time slot in pence.<BR>
 The rate will be coloured White if the price is less than the export rate threshold,
 Yellow if it is more than the export rate threshold,
 and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
-So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.
+So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.<BR>
+If battery discharging is planned by Predbat for a particular slot, the export rate for that slot will be highlighted in bold text.
 
 - **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Eco mode),
 discharging and force exported, or being held at the current level.<BR>
