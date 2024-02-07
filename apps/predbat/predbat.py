@@ -2496,7 +2496,7 @@ class Inverter:
                 service = self.base.get_arg("charge_start_service", "")
                 if service:
                     self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
-                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
+                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT))
                 else:
                     self.log("WARN: Inverter {} unable to start charge as charge_start_service not set in apps.yaml".format(self.id))
             else:
