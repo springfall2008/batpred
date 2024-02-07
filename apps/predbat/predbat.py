@@ -2493,11 +2493,21 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                self.log("Inverter {} Starting charge to {} % via Service".format(self.id, target_soc))
-                self.base.call_service(self.base.get_arg("charge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
+                service = self.base.get_arg("charge_start_service", "")
+                if service:
+                    self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.call_service(
+                        service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
+                    )
+                else:
+                    self.log("WARN: Inverter {} unable to start charge as charge_start_service not set in apps.yaml".format(self.id))
             else:
-                self.log("Inverter {} Stop charge via Service".format(self.id))
-                self.base.call_service(self.base.get_arg("charge_stop_service"), device_id=self.base.get_arg("device_id", index=self.id))
+                service = self.base.get_arg("charge_stop_service", "")
+                if service:
+                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
+                else:
+                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
 
     def adjust_discharge_immediate(self, target_soc):
         """
@@ -2505,11 +2515,24 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                self.log("Inverter {} Starting discharge to {} % via Service".format(self.id, target_soc))
-                self.base.call_service(self.base.get_arg("discharge_start_service"), device_id=self.base.get_arg("device_id", index=self.id), target_soc=target_soc)
+                service = self.base.get_arg("discharge_start_service", "")
+                if service:
+                    self.log("Inverter {} Starting discharge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.call_service(
+                        service,
+                        device_id=self.base.get_arg("device_id", index=self.id, default=""),
+                        target_soc=target_soc,
+                        power=int(self.battery_rate_max_discharge * MINUTE_WATT),
+                    )
+                else:
+                    self.log("WARN: Inverter {} unable to start discharge as discharge_start_service not set in apps.yaml".format(self.id))
             else:
-                self.log("Inverter {} Stop discharge via Service".format(self.id))
-                self.base.call_service(self.base.get_arg("charge_stop_service", device_id=self.base.get_arg("device_id", index=self.id)))
+                service = self.base.get_arg("charge_stop_service", "")
+                if service:
+                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
+                else:
+                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -9968,7 +9991,6 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
-
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
