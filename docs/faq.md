@@ -36,6 +36,7 @@ a script that changes the reserve %, this will cause problems - please disable o
 ## I changed a config item but it made no difference?
 
 - You might have to wait a few minutes until the next update cycle. Depending on the speed of the computer that Predbat is running on, it can take 1-5 minutes for Predbat to run through.
+You can see the date/time that Predbat last completed a run at the start of the [Predbat HTML plan](predbat-plan-card.md).
 
 ## It's all running but I'm not getting very good results
 
@@ -89,12 +90,11 @@ and the battery will not be discharged to support the home unless the current im
 **input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
 as to whether to charge or discharge the battery so could be tweaked. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
-## Predbat is causing warning messages in the Home Assistant Core log
+## Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log
 
-- If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning
-messages in the Home Assistant Core log about the size of the predbat.plan_html entity.
-This is just a warning, the entity isn't stored in the database, but you can suppress it by adding the following
-to your `configuration.yaml` file:
+If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning messages in the Home Assistant Core log about the size of the predbat.plan_html entity,
+the message will be "State attributes for predbat.plan_html exceed maximum size of 16384 bytes".
+This is just a warning, the Predbat html plan entity isn't stored in the database anyway, but you can suppress the warning by adding the following to your `configuration.yaml` file:
 
 ```yaml
 # Filter out 'message too large' warnings from Predbat
@@ -147,11 +147,20 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
 ```yaml
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
   battery_power:
     - sensor.givtcp_{geserial}_battery_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
 ```
+
+## WARN, Inverter is in calibration mode
+
+If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
+then Predbat has identified that your inverter is currently calibrating your battery.
+Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
+and will not execute the plan nor enable battery charge or discharge. Once the inverter finishes calibrating the battery, Predbat will resume normal operations.
 
 ## I have another problem not listed above
 
