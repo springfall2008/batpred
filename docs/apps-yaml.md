@@ -445,6 +445,24 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
 - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
+## Automatic restarts
+
+If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. In this case you can tell Predbat
+how to restart the add-on using a service. 
+
+Right now only communication loss with GE inverters is detectable but in future other systems will be supported.
+
+When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restablish the connection. 
+This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.
+
+```yaml
+auto_restart:
+  - service: hassio/addon_restart
+    addon: a6a2857d_givtcp
+```
+
+## Battery charge/discharge curves
+
 - **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
 Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
 
