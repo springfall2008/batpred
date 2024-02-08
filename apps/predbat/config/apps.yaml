@@ -266,7 +266,7 @@ pred_bat:
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
-  #octopus_charge_limit: 'number.ohme_target_percent'  
+  #octopus_charge_limit: 'number.ohme_target_percent'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
