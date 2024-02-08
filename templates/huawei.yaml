@@ -60,9 +60,9 @@ pred_bat:
   soc_kw:
     - sensor.batteri_to_kw
   soc_max:
-    - number.battery_end_of_charge_soc
-  charge_limit:
    - 10
+  charge_limit:
+    - number.battery_end_of_charge_soc
   reserve:
     - 0.2
   scheduled_charge_enable:
