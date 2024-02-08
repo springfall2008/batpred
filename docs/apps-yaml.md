@@ -111,9 +111,9 @@ For other inverter brands, see [Other Inverters](other-inverters.md)
 Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.
 Unless you have a specific reason to not use the GivTCP data (e.g. you've lost your GivTCP data), its recommended to use GivTCP.
 
-### Data from GivTCP
+### Data from Home assistant
 
-The following configuration entries in `apps.yaml` are pre-configured to automatically use the appropriate GivTCP sensors.
+The following configuration entries in `apps.yaml` are pre-configured to automatically use the appropriate sensors.
 
 If you have a 3-phase electricity supply and one inverter (and battery) on each phase then you will need to add one line for the load, import, export and PV sensors
 for each of the 3 phases.
@@ -121,18 +121,18 @@ for each of the 3 phases.
 If you have a single phase electricity supply and multiple inverters on the phase then you will need to add one line for each of the load and PV sensors.
 You don't need multiple lines for the import or export sensors as each inverter will give the total import or export information.
 
-Edit if necessary if you have non-standard GivTCP sensor names:
+Edit if necessary if you have non-standard sensor names:
 
-- **load_today** - GivTCP Entity name for the house load in kWh today (must be incrementing)
-- **import_today** - GivTCP Imported energy today in kWh (incrementing)
-- **export_today** - GivTCP Exported energy today in kWh (incrementing)
-- **pv_today** - GivTCP PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
-If you have an AC-coupled GivEnergy inverter then enter the Home Assistant sensor for your PV inverter.<BR>
+- **load_today** - Entity name for the house load in kWh today (must be incrementing)
+- **import_today** - Imported energy today in kWh (incrementing)
+- **export_today** - Exported energy today in kWh (incrementing)
+- **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
+If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of apps.yaml.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
-If you have multiple inverters then you may find that the load_today figures from GivTCP are incorrect as the inverters share the house load between them.
+If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
 In this circumstance one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
 
 e.g.
