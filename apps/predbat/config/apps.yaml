@@ -76,7 +76,7 @@ pred_bat:
   #  - service: hassio/addon_restart
   #    addon: a6a2857d_givtcp
 
-  # Example on how to restart the inverter via GivTCP
+  #  Example on how to restart the inverter via GivTCP
   #  - service: switch.turn_on
   #    entity_id: switch.givtcp_{geserial}_reboot_invertor
 
