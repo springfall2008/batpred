@@ -448,11 +448,11 @@ AIO firmware versions refuse to be set to 100.  Comment the line out or set to 1
 ## Automatic restarts
 
 If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. In this case you can tell Predbat
-how to restart the add-on using a service. 
+how to restart the add-on using a service.
 
 Right now only communication loss with GE inverters is detectable but in future other systems will be supported.
 
-When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restablish the connection. 
+When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restablish the connection.
 This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.
 
 ```yaml
