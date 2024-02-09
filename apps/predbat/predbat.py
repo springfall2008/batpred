@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.18"
+THIS_VERSION = "v7.15.19"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -10199,6 +10199,7 @@ class PredBat(hass.Hass):
             if data_import:
                 data_all += data_import
             else:
+                data_import = self.get_state(entity_id=current_rate_id, attribute="raw_today")
                 self.log("WARN: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
 
             # Next rates
@@ -10212,6 +10213,11 @@ class PredBat(hass.Hass):
                     data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
+            else:
+                # Nordpool tomorrow
+                data_import =self.get_state(entity_id=current_rate_id, attribute="raw_tomorrow")
+                if data_import:
+                    data_all += data_import
 
         if data_all:
             rate_key = "rate"
@@ -11498,7 +11504,7 @@ class PredBat(hass.Hass):
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
                                 "in_progress": in_progress,
-                                "auto_update": True,
+                                "auto_update": False,
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],
