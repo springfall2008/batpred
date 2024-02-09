@@ -3343,13 +3343,14 @@ class PredBat(hass.Hass):
                 if "Name" in row:
                     rstart = row.get("StartTime", "") + now_offset
                     rend = row.get("EndTime", "") + now_offset
+                    rname = row.get("Name", "")
                 if "Columns" in row:
                     for column in row["Columns"]:
                         cname = column.get("Name", "")
                         cvalue = column.get("Value", "")
                         date_start, time_start = rstart.split("T")
                         date_end, time_end = rend.split("T")
-                        if "-" in cname and "," in cvalue and cname:
+                        if "-" in rname and "-" in cname and "," in cvalue and cname:
                             date_start = cname
                             date_end = cname
                             cvalue = cvalue.replace(",", ".")
@@ -3359,6 +3360,8 @@ class PredBat(hass.Hass):
                             TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
                             time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
                             time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
+                            if time_date_end < time_date_start:
+                                time_date_end += timedelta(days=1)
                             delta_start = time_date_start - self.midnight_utc
                             delta_end = time_date_end - self.midnight_utc
 
@@ -3382,10 +3385,12 @@ class PredBat(hass.Hass):
                             item["to"] = time_date_end.strftime(TIME_FORMAT)
                             item["rate_import"] = self.dp2(rate_import)
                             item["rate_export"] = self.dp2(rate_export)
-                            extracted_data[time_date_start] = item
 
                             if time_date_start not in extracted_keys:
                                 extracted_keys.append(time_date_start)
+                                extracted_data[time_date_start] = item
+                            else:
+                                self.log("WARN: Duplicate key {} in extracted_keys".format(time_date_start))
 
         if extracted_keys:
             extracted_keys.sort()
