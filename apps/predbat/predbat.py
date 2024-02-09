@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.17"
+THIS_VERSION = "v7.15.18"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1210,9 +1210,8 @@ class Inverter:
                     ),
                     had_errors=True,
                 )
-                # Bad enough to trigger restart?
-                if abs(tdiff) >= 15:
-                    self.auto_restart("Clock skew >=15 minutes")
+                # Trigger restart
+                self.auto_restart("Clock skew >=5 minutes")
             else:
                 self.base.restart_active = False
 
@@ -2496,6 +2495,11 @@ class Inverter:
                 service = self.base.get_arg("charge_start_service", "")
                 if service:
                     self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.log(
+                        "Call service {} device_id {} target_soc {} power {}".format(
+                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_charge * MINUTE_WATT)
+                        )
+                    )
                     self.base.call_service(
                         service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
                     )
@@ -2505,6 +2509,7 @@ class Inverter:
                 service = self.base.get_arg("charge_stop_service", "")
                 if service:
                     self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
                     self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
                 else:
                     self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
@@ -2518,6 +2523,11 @@ class Inverter:
                 service = self.base.get_arg("discharge_start_service", "")
                 if service:
                     self.log("Inverter {} Starting discharge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.log(
+                        "Call service {} device_id {} target_soc {} power {}".format(
+                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_discharge * MINUTE_WATT)
+                        )
+                    )
                     self.base.call_service(
                         service,
                         device_id=self.base.get_arg("device_id", index=self.id, default=""),
@@ -2530,6 +2540,7 @@ class Inverter:
                 service = self.base.get_arg("charge_stop_service", "")
                 if service:
                     self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
                     self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
                 else:
                     self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
