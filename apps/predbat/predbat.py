@@ -10199,7 +10199,6 @@ class PredBat(hass.Hass):
             if data_import:
                 data_all += data_import
             else:
-                data_import = self.get_state(entity_id=current_rate_id, attribute="raw_today")
                 self.log("WARN: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
 
             # Next rates
