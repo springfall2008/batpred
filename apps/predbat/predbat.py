@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.17"
+THIS_VERSION = "v7.15.18"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1210,9 +1210,8 @@ class Inverter:
                     ),
                     had_errors=True,
                 )
-                # Bad enough to trigger restart?
-                if abs(tdiff) >= 15:
-                    self.auto_restart("Clock skew >=15 minutes")
+                # Trigger restart
+                self.auto_restart("Clock skew >=5 minutes")
             else:
                 self.base.restart_active = False
 
@@ -2496,6 +2495,7 @@ class Inverter:
                 service = self.base.get_arg("charge_start_service", "")
                 if service:
                     self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.log("Call service {} device_id {} target_soc {} power {}".format(service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_charge * MINUTE_WATT)))
                     self.base.call_service(
                         service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
                     )
@@ -2505,6 +2505,7 @@ class Inverter:
                 service = self.base.get_arg("charge_stop_service", "")
                 if service:
                     self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
                     self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
                 else:
                     self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
@@ -2518,6 +2519,7 @@ class Inverter:
                 service = self.base.get_arg("discharge_start_service", "")
                 if service:
                     self.log("Inverter {} Starting discharge to {} % via Service {}".format(self.id, target_soc, service))
+                    self.base.log("Call service {} device_id {} target_soc {} power {}".format(service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_discharge * MINUTE_WATT)))
                     self.base.call_service(
                         service,
                         device_id=self.base.get_arg("device_id", index=self.id, default=""),
@@ -2530,6 +2532,7 @@ class Inverter:
                 service = self.base.get_arg("charge_stop_service", "")
                 if service:
                     self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
+                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
                     self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
                 else:
                     self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
@@ -3332,13 +3335,14 @@ class PredBat(hass.Hass):
                 if "Name" in row:
                     rstart = row.get("StartTime", "") + now_offset
                     rend = row.get("EndTime", "") + now_offset
+                    rname = row.get("Name", "")
                 if "Columns" in row:
                     for column in row["Columns"]:
                         cname = column.get("Name", "")
                         cvalue = column.get("Value", "")
                         date_start, time_start = rstart.split("T")
                         date_end, time_end = rend.split("T")
-                        if "-" in cname and "," in cvalue and cname:
+                        if "-" in rname and "-" in cname and "," in cvalue and cname:
                             date_start = cname
                             date_end = cname
                             cvalue = cvalue.replace(",", ".")
@@ -3348,6 +3352,8 @@ class PredBat(hass.Hass):
                             TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
                             time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
                             time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
+                            if time_date_end < time_date_start:
+                                time_date_end += timedelta(days=1)
                             delta_start = time_date_start - self.midnight_utc
                             delta_end = time_date_end - self.midnight_utc
 
@@ -3371,10 +3377,12 @@ class PredBat(hass.Hass):
                             item["to"] = time_date_end.strftime(TIME_FORMAT)
                             item["rate_import"] = self.dp2(rate_import)
                             item["rate_export"] = self.dp2(rate_export)
-                            extracted_data[time_date_start] = item
 
                             if time_date_start not in extracted_keys:
                                 extracted_keys.append(time_date_start)
+                                extracted_data[time_date_start] = item
+                            else:
+                                self.log("WARN: Duplicate key {} in extracted_keys".format(time_date_start))
 
         if extracted_keys:
             extracted_keys.sort()
