@@ -10214,7 +10214,7 @@ class PredBat(hass.Hass):
                         data_all += data_import
             else:
                 # Nordpool tomorrow
-                data_import =self.get_state(entity_id=current_rate_id, attribute="raw_tomorrow")
+                data_import = self.get_state(entity_id=current_rate_id, attribute="raw_tomorrow")
                 if data_import:
                     data_all += data_import
 
