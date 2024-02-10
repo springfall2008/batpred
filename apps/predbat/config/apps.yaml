@@ -73,6 +73,7 @@ pred_bat:
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
   #auto_restart:
+  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
   #  - service: hassio/addon_restart
   #    addon: a6a2857d_givtcp
 
