@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.19"
+THIS_VERSION = "v7.15.20"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
