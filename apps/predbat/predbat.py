@@ -21,7 +21,7 @@ import pytz
 import requests
 import yaml
 
-THIS_VERSION = "v7.15.19"
+THIS_VERSION = "v7.15.20"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1018,6 +1018,7 @@ class Inverter:
             if isinstance(restart_command, dict):
                 restart_command = [restart_command]
             for command in restart_command:
+                shell = command.get("shell", None)
                 service = command.get("service", None)
                 addon = command.get("addon", None)
                 if addon:
@@ -1025,6 +1026,9 @@ class Inverter:
                 entity_id = command.get("entity_id", None)
                 if entity_id:
                     entity_id = self.base.resolve_arg(service, entity_id, indirect=False)
+                if shell:
+                    self.log("Calling restart shell command: {}".format(shell))
+                    os.system(shell)
                 if service:
                     if addon:
                         self.log("Calling restart service {} with addon {}".format(service, addon))
@@ -10160,6 +10164,12 @@ class PredBat(hass.Hass):
         return status, status_extra
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
+        """
+        Fetch the Octopus rates from the sensor
+
+        :param entity_id: The entity_id of the sensor
+        :param adjust_key: The key use to find Octopus Intelligent adjusted rates
+        """
         data_all = []
         rate_data = {}
 

@@ -455,8 +455,14 @@ Right now only communication loss with GE inverters is detectable but in future 
 When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restart the connection.
 This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.
 
+The auto_restart itself is a list of commands to run to trigger a restart.
+
+- The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
+- The **service** command is used to call a service, and can contain arguments of **addon** and/or **entity_id**
+
 ```yaml
 auto_restart:
+  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
   - service: hassio/addon_restart
     addon: a6a2857d_givtcp
 ```
