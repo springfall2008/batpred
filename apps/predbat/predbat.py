@@ -10166,7 +10166,7 @@ class PredBat(hass.Hass):
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
         """
         Fetch the Octopus rates from the sensor
-        
+
         :param entity_id: The entity_id of the sensor
         :param adjust_key: The key use to find Octopus Intelliget adjusted rates
         """
