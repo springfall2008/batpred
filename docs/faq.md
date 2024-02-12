@@ -104,15 +104,9 @@ and the battery will not be discharged to support the home unless the current im
 as to [whether its cost beneficial to charge or discharge the battery](customisation.md#battery-margins-and-metrics-options)
 so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
-Finally, if you have a very low overnight rate (such as Octopus Go) and want to ensure your battery is discharged just before the low rate period,
-but you don't want to risk the battery running out too early, you can add a rate export override to `apps.yaml` to encourage Predbat to discharge just before the low rate period:
-
-```yaml
-rates_export_override:
-  - start: '21:00:00'
-    end: '23:00:00'
-    rate_increment: -10
-```
+Finally, it could be worth considering adding [import or export rate increments](energy-rates.md#manually-over-riding-energy-rates) to `apps.yaml` if you want to direct Predbat
+to avoid or encourage charging or discharging in certain time periods - e.g. avoiding exporting in the time period saving sessions normally fall in,
+or to encourage discharging just before import rates fall overnight.
 
 ## Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log
 

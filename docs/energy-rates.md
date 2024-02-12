@@ -171,7 +171,7 @@ You can also override the energy rates (regardless of whether they are set manua
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sunday's.
 
-Unfortunately there aren't any API's available to feed this information automatically into Predbat so you will have to edit apps.yaml manually
+Unfortunately there aren't any API's available to feed this information automatically into Predbat so you will have to edit `apps.yaml` manually
 to set the appropriate rate over-ride dates and times:
 
 ```yaml
@@ -198,7 +198,7 @@ rates_import_override:
      load_scaling: 0.8
 ```
 
-Would say that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
+This instructs Predbat that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
 
 You can also make relative adjustments to your energy rates, e.g. if you want to avoid exporting during peak periods to improve your energy
 saving session results you could make a relative adjustment to your export rates using **rate_increment**.
@@ -212,6 +212,19 @@ rates_export_override:
  -  start: '17:00:00'
     end: '19:00:00'
     rate_increment: -10
+```
+
+You can also use a similar but opposite approach of setting a positive export rate_increment to encourage Predbat to discharge the battery at certain time periods.
+
+If you have a very low overnight rate (such as Octopus Go) and want to ensure your battery is discharged just before the low rate period,
+but you don't want to risk the battery running out too early (and importing at a higher rate),
+you can add a rate export override for the period you want to discharge just before the low rate period:
+
+```yaml
+rates_export_override:
+  - start: '22:30:00'
+    end: '23:30:00'
+    rate_increment: 10
 ```
 
 You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
