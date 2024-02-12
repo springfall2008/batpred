@@ -344,11 +344,15 @@ whether you are within an Octopus Energy "smart charge" slot, and provides the l
 If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted,
 and there are a number of other apps.yaml configuration items that should be set:
 
-- **car_charging_planned** - Optional, can be set to a Home Assistant sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots.
-Or manually set it to 'False' to disable this feature, or 'True' to always enable.
+- **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
+which lets Predbat know the car is plugged in and planned to charge during low rate slots.
+Or manually set it to 'False' to disable this feature, or 'True' to always enable.<BR>
+The `apps.yaml` template supplied with Predbat comes pre-configured with a regular expression that should automatically match Zappi or Wallbox car chargers.
+If you have a different type of charger you will need to configure it manually.
 
-- **car_charging_planned_response** - An array of values for the above car_charging_planned sensor which indicate that the car is plugged in and will charge
-in the next low rate slot. Customise for your car charger sensor if it sets sensor values that are not in the pre-defined list.
+- **car_charging_planned_response** - An array of values for the above car_charging_planned sensor which indicate that the car is plugged in and will charge in the next low rate slot.
+The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
+Customise for your car charger sensor if it sets sensor values that are not in the list.
 
 - **car_charging_now** - For some cases finding details of planned car charging is difficult to obtain (e.g. Ohme with Intelligent doesn't report slots).<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
@@ -361,11 +365,14 @@ Useful if you have a sensor for your car charger that isn't binary.
 
 To make planned car charging more accurate, configure the following items in `apps.yaml`:
 
-- **car_charging_battery_size** - Set to the car's battery size in kWh, defaults to 100. It will be used to predict car charging stops.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100. It will be used to predict car charging stops.
 
-- **car_charging_limit** - Set to point to a sensor that specifies the % limit the car is set to charge to. Default is 100%
+- **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
+This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
+If you don't specify a sensor Predbat will default to 100%.
 
-- **car_charging_soc** - Set to point to a sensor that specifies the car's current % charge level. Default is 0%
+- **car_charging_soc** - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current % charge level.
+If not set, Predbat will default to 0%.
 
 ### Multiple Electric Cars
 
