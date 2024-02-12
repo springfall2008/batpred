@@ -60,9 +60,10 @@ The plan Predbat produces assumes that your average load and PV forecasts are ac
 Make sure you have setup your [Solcast solar forecast correctly](install.md#solcast-install) with the number of panels, orientation, output, etc.
 
 Projected daily load is determined from historical load information so make sure you have set [days_previous and days_previous_weight in apps.yaml](apps-yaml.md#basics)
-to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).<BR>
-You can adjust **input_number.predbat_load_scaling** to 1.2 so the plan will incorporate 20% more expected load if you want to be more pessimistic about historical load,
-and **input_number.predbat_pv_scaling** to similarly adjust the PV forecast - these and other adjustment options are described in the [Scaling and weight options](customisation.md#scaling-and-weight-options).
+to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).
+
+You could adjust **input_number.predbat_load_scaling** to 1.2 so the plan will incorporate 20% more expected load if you want to be more pessimistic about historical load,
+and **input_number.predbat_pv_scaling** to similarly adjust the PV forecast - these and other adjustment options are described in the [Scaling and Weight options](customisation.md#scaling-and-weight-options).
 
 It is very important to correctly set Predbat's [Battery Loss Options](customisation.md#battery-loss-options)
 and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as these can have a huge and critical impact on the plan that Predbat generates.
@@ -102,6 +103,16 @@ and the battery will not be discharged to support the home unless the current im
 **input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
 as to [whether its cost beneficial to charge or discharge the battery](customisation.md#battery-margins-and-metrics-options)
 so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.
+
+Finally, if you have a very low overnight rate (such as Octopus Go) and want to ensure your battery is discharged just before the low rate period,
+but you don't want to risk the battery running out too early, you can add a rate export override to `apps.yaml` to encourage Predbat to discharge just before the low rate period:
+
+```yaml
+rates_export_override:
+  - start: '21:00:00'
+    end: '23:00:00'
+    rate_increment: -10
+```
 
 ## Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log
 
