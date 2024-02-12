@@ -430,13 +430,13 @@ In summary:
 ## Manual control
 
 In some cases you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into
-read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
-control it yourself using GivTCP or the App.
+read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and you should then 
+control it yourself using GivTCP or the App appropriate to your inverter.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
 You can force the battery to be charged within a 30 minute slot by using the **select.predbat_manual_charge** selector.
-Pick the 30 minute slot you wish to charge in and Predbat will change the plan to charge in the selected slot.
+Pick the 30 minute slot you wish to charge in, and Predbat will change the plan to charge in the selected slot.
 You can select multiple slots by using the drop down menu more than once.
 When Predbat updates the plan you will see the slots picked to be charging slots in the current value of this selector,
 and annotated in the [Predbat HTML plan](predbat-plan-card.md#displaying-the-predbat-plan) with an upside down 'F' symbol.
@@ -448,11 +448,17 @@ You can cancel a force slot by selecting the slot time again (it will be shown i
 The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the manual force charge feature.
 The force discharge takes priority over force charging.
 
-The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
-battery will cover the house load (if there is enough charge).
+The **select.predbat_manual_idle** selector is used to force Predbat to idle mode during a 30 minute slot, this implies no forced grid charging or discharging of the battery.
+House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
+This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
+
+_NOTE: once you select a time slot from any of the **select.predbat_manual_** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
+Predbat still has to update the plan which it will be doing so in the background,
+and this can take a few minutes to run (depending on the speed and power of the PC you are running Home Assistant on) so don't be surprised why the
+[Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.
 
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 
