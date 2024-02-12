@@ -53,6 +53,17 @@ especially if you have a small battery. If you set it to zero then predbat may n
 
 ## The plan doesn't charge or discharge when I expect it to
 
+Predbat can only work on the information its given, although it does run every 5 minutes when it re-evaluates the plan and adjusts if necessary.
+
+The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.
+
+Make sure you have setup your [Solcast solar forecast correctly](install.md#solcast-install) with the number of panels, orientation, output, etc.
+
+Projected daily load is determined from historical load information so make sure you have set [days_previous and days_previous_weight in apps.yaml](apps-yaml.md#basics)
+to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).<BR>
+You can adjust **input_number.predbat_load_scaling** to 1.2 so the plan will incorporate 20% more expected load if you want to be more pessimistic about historical load,
+and **input_number.predbat_pv_scaling** to similarly adjust the PV forecast - these and other adjustment options are described in the [Scaling and weight options](customisation.md#scaling-and-weight-options).
+
 It is very important to correctly set Predbat's [Battery Loss Options](customisation.md#battery-loss-options)
 and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as these can have a huge and critical impact on the plan that Predbat generates.
 
@@ -62,6 +73,7 @@ it depends on many factors and your personal preferences. Many users will need t
 The SOC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
 and the absolute minimum SoC level **input_number.predbat_best_soc_min** are the first thing to check.
 If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
+Conversely if you find Predbat is letting the battery exhaust too early, set predbat_best_soc_keep to 1.0 so Predbat will aim to keep 1kWh available for unexpected load.
 
 Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery are the loss rates
 **input_number.predbat_battery_loss**, **input_number.predbat_battery_loss_discharge** and **input_number.predbat_inverter_loss**.
@@ -88,7 +100,8 @@ So if metric battery cycle is set to 1p, and continuing the example above, each 
 and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).
 
 **input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
-as to whether to charge or discharge the battery so could be tweaked. The defaults (0p and 0.1p respectively) should however give good results for most users.
+as to [whether its cost beneficial to charge or discharge the battery](customisation.md#battery-margins-and-metrics-options)
+so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
 ## Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log
 
