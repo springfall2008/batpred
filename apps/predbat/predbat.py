@@ -1119,35 +1119,42 @@ class Prediction:
         self.battery_loss_discharge = base.battery_loss_discharge
         self.best_soc_keep = base.best_soc_keep
         self.car_charging_battery_size = base.car_charging_battery_size
-        
-    def thread_run_prediction(self, item):
+
+    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record):
         """
         Run prediction in a thread
         """
-        try_soc = item["try_soc"]
-        window_n = item["window_n"]
-        try_charge_limit = copy.deepcopy(item["try_charge_limit"])
-        charge_window = item["charge_window"]
-        discharge_window = item["discharge_window"]
-        discharge_limits = item["discharge_limits"]
-        load_minutes_step = item["load_minutes_step"]
-        load_minutes_step10 = item["load_minutes_step10"]
-        pv_forecast_minute_step = item["pv_forecast_minute_step"]
-        pv_forecast_minute10_step = item["pv_forecast_minute10_step"]
-        all_n = item["all_n"]
-        end_record = item["end_record"]
+        try_charge_limit = charge_limit.copy()
         if all_n:
             for set_n in all_n:
                 try_charge_limit[set_n] = try_soc
         else:
             try_charge_limit[window_n] = try_soc
+    
         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
             try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
         )
-        metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = self.run_prediction(
-            try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
+
+    def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record):
+        """
+        Run prediction in a thread
+        """
+        # Store try value into the window
+        if all_n:
+            for window_id in all_n:
+                discharge_limits[window_id] = this_discharge_limit
+        else:
+            discharge_limits[window_n] = this_discharge_limit
+            # Adjust start
+            window = discharge_window[window_n]
+            start = min(start, window["end"] - 5)
+            discharge_window[window_n]["start"] = start
+
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+            charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
         )
-        return metricmid, soc, battery_cycle, metric_keep, final_iboost, soc_min, soc_min_minute, metric10, soc10, battery_cycle10, metric_keep10, final_iboost10, soc_min10, soc_min_minute10
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
     def get_charge_rate_curve(self, soc, charge_rate_setting):
         """
@@ -7715,6 +7722,7 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -8152,53 +8160,31 @@ class PredBat(hass.Hass):
             try_socs.append(best_soc_min)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
+        if 0 not in try_socs:
+            try_socs.append(0)
 
-        window_results = {}
-        first_window = True
+        # Run the simulations in parallel
+        results = []
+        results10 = []
         for try_soc in try_socs:
-            was_debug = self.debug_enable
-            self.debug_enable = False
+            hanres = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+            hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+            results.append(hanres)
+            results10.append(hanres10)
 
-            if not first_window and not all_n:
-                # If the SOC is already saturated then those values greater than what was achieved but not 100% won't do anything
-                if try_soc > (max_soc + loop_step):
-                    self.debug_enable = was_debug
-                    if self.debug_enable and 0:
-                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, min_soc, max_soc))
-                    continue
-                if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (min_soc - loop_step)):
-                    self.debug_enable = was_debug
-                    if self.debug_enable and 0:
-                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, max_soc, min_soc))
-                    continue
+        # Get results from sims
+        resultmid = {}
+        result10 = {}
+        for try_soc in try_socs:
+            hanres = results.pop(0)
+            hanres10 = results10.pop(0)
+            resultmid[try_soc] = hanres.get()
+            result10[try_soc] = hanres10.get()
+    
+        window_results = {}
+        for try_soc in try_socs:
 
-            # Get data for 'off' also
-            if first_window and not all_n:
-                try_charge_limit[window_n] = 0
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                    try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
-                )
-                predict_soc_nom = self.predict_soc.copy()
-                (
-                    metric10,
-                    import_kwh_battery10,
-                    import_kwh_house10,
-                    export_kwh10,
-                    soc_min10,
-                    soc10,
-                    soc_min_minute10,
-                    battery_cycle10,
-                    metric_keep10,
-                    final_iboost10,
-                ) = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
-
-                window = charge_window[window_n]
-                predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
-                predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    min_soc = min(
-                        self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end]
-                    )
+            window = charge_window[window_n]
 
             # Store try value into the window, either all or just this one
             if all_n:
@@ -8208,34 +8194,8 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
-            )
-            predict_soc_nom = self.predict_soc.copy()
-
-            # Simulate with 10% PV
-            (
-                metric10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-            ) = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
-
-            # Get data for fully on
-            if first_window and not all_n:
-                window = charge_window[window_n]
-                predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
-                predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    max_soc = max(
-                        self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end]
-                    )
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = resultmid[try_soc]
+            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10 = result10[try_soc]
 
             # Store simulated mid value
             metric = metricmid
@@ -8274,7 +8234,6 @@ class PredBat(hass.Hass):
             if (try_soc == self.soc_max) or (try_soc == 0):
                 metric -= 0.01
 
-            self.debug_enable = was_debug
             if self.debug_enable and 0:
                 self.log(
                     "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
@@ -8305,8 +8264,6 @@ class PredBat(hass.Hass):
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
-
-            first_window = False
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -8375,7 +8332,10 @@ class PredBat(hass.Hass):
         else:
             loop_options = [100, 0]
 
-        window_results = {}
+        # Collect all options
+        results = []
+        results10 = []
+        try_options = []
         for loop_limit in loop_options:
             # Loop on window size
             loop_start = window["end"] - 10  # Minimum discharge window size 10 minutes
@@ -8396,116 +8356,104 @@ class PredBat(hass.Hass):
 
                 # Never go below the minimum level
                 this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
+                try_options.append([start, this_discharge_limit])
 
-                # Store try value into the window
-                if all_n:
-                    for window_id in all_n:
-                        try_discharge[window_id] = this_discharge_limit
-                else:
-                    try_discharge[window_n] = this_discharge_limit
-                    # Adjust start
-                    start = min(start, window["end"] - 5)
-                    try_discharge_window[window_n]["start"] = start
+                hanres = self.pool.apply_async(self.prediction.thread_run_prediction_discharge,   (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+                hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+                results.append(hanres)
+                results10.append(hanres10)
 
-                was_debug = self.debug_enable
-                self.debug_enable = False
+        # Get results from sims
+        try_results = []
+        for try_option in try_options:
+            hanres = results.pop(0)
+            hanres10 = results10.pop(0)
+            result = hanres.get()
+            result10 = hanres10.get()
+            try_results.append(try_option + [result, result10]) 
 
-                # Simulate with medium PV
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                    try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
-                )
+        window_results = {}
+        for try_option in try_results:
+            start, this_discharge_limit, hanres, hanres10 = try_option
 
-                # Simulate with 10% PV
-                (
-                    metric10,
-                    import_kwh_battery10,
-                    import_kwh_house10,
-                    export_kwh10,
-                    soc_min10,
-                    soc10,
-                    soc_min_minute10,
-                    battery_cycle10,
-                    metric_keep10,
-                    final_iboost10,
-                ) = self.run_prediction(try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
+            # Simulate with medium PV
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = hanres
+            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = hanres10
 
-                # Put back debug enable
-                self.debug_enable = was_debug
+            # Store simulated mid value
+            metric = metricmid
+            cost = metricmid
 
-                # Store simulated mid value
-                metric = metricmid
-                cost = metricmid
+            # Balancing payment to account for battery left over
+            # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+            rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+            metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+            metric10 -= (
+                (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+            )
 
-                # Balancing payment to account for battery left over
-                # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-                metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-                metric10 -= (
-                    (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-                )
+            # Metric adjustment based on 10% outcome weighting
+            if metric10 > metric:
+                metric_diff = metric10 - metric
+                metric_diff *= self.pv_metric10_weight
+                metric += metric_diff
+                metric = self.dp2(metric)
 
-                # Metric adjustment based on 10% outcome weighting
-                if metric10 > metric:
-                    metric_diff = metric10 - metric
-                    metric_diff *= self.pv_metric10_weight
-                    metric += metric_diff
-                    metric = self.dp2(metric)
+            # Adjustment for battery cycles metric
+            metric += battery_cycle * self.metric_battery_cycle + metric_keep
+            metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
-                # Adjustment for battery cycles metric
-                metric += battery_cycle * self.metric_battery_cycle + metric_keep
-                metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
+            # Adjust to try to keep existing windows
+            if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
+                pwindow = discharge_window[window_n]
+                dwindow = self.discharge_window[0]
+                if (
+                    self.minutes_now >= pwindow["start"]
+                    and self.minutes_now < pwindow["end"]
+                    and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]))
+                ):
+                    metric -= max(0.5, self.metric_min_improvement_discharge)
 
-                # Adjust to try to keep existing windows
-                if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
-                    pwindow = discharge_window[window_n]
-                    dwindow = self.discharge_window[0]
-                    if (
-                        self.minutes_now >= pwindow["start"]
-                        and self.minutes_now < pwindow["end"]
-                        and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]))
-                    ):
-                        metric -= max(0.5, self.metric_min_improvement_discharge)
-
-                if self.debug_enable:
-                    self.log(
-                        "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
-                            this_discharge_limit,
-                            window_n,
-                            self.time_abs_str(try_discharge_window[window_n]["start"]),
-                            self.time_abs_str(try_discharge_window[window_n]["end"]),
-                            self.dp2(import_kwh_battery),
-                            self.dp2(import_kwh_house),
-                            self.dp2(export_kwh),
-                            self.dp2(soc_min),
-                            self.time_abs_str(soc_min_minute),
-                            self.dp2(soc),
-                            self.dp2(cost),
-                            self.dp2(metric),
-                            self.dp2(metricmid),
-                            self.dp2(metric10),
-                            self.dp2(battery_cycle * self.metric_battery_cycle),
-                            end_record,
-                        )
+            if self.debug_enable:
+                self.log(
+                    "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
+                        this_discharge_limit,
+                        window_n,
+                        self.time_abs_str(try_discharge_window[window_n]["start"]),
+                        self.time_abs_str(try_discharge_window[window_n]["end"]),
+                        self.dp2(import_kwh_battery),
+                        self.dp2(import_kwh_house),
+                        self.dp2(export_kwh),
+                        self.dp2(soc_min),
+                        self.time_abs_str(soc_min_minute),
+                        self.dp2(soc),
+                        self.dp2(cost),
+                        self.dp2(metric),
+                        self.dp2(metricmid),
+                        self.dp2(metric10),
+                        self.dp2(battery_cycle * self.metric_battery_cycle),
+                        end_record,
                     )
+                )
 
-                window_size = try_discharge_window[window_n]["end"] - start
-                window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
-                window_results[window_key] = self.dp2(metric)
+            window_size = try_discharge_window[window_n]["end"] - start
+            window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
+            window_results[window_key] = self.dp2(metric)
 
-                # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-                if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
-                    best_metric = metric
-                    best_discharge = this_discharge_limit
-                    best_cost = cost
-                    best_soc_min = soc_min
-                    best_soc_min_minute = soc_min_minute
-                    best_start = start
-                    best_size = window_size
-                    best_keep = metric_keep
+            # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
+            if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
+                best_metric = metric
+                best_discharge = this_discharge_limit
+                best_cost = cost
+                best_soc_min = soc_min
+                best_soc_min_minute = soc_min_minute
+                best_start = start
+                best_size = window_size
+                best_keep = metric_keep
 
-                # Store the metric for discharge off
-                if off_metric == 9999999:
-                    off_metric = metric
+            # Store the metric for discharge off
+            if off_metric == 9999999:
+                off_metric = metric
 
         if self.debug_enable:
             if not all_n:
@@ -9809,6 +9757,8 @@ class PredBat(hass.Hass):
 
         # Creation prediction object
         self.prediction = Prediction(self)
+        if not self.pool:
+            self.pool = Pool(processes=8)
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
