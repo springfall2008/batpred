@@ -64,7 +64,7 @@ pred_bat:
   charge_limit:
     - number.battery_end_of_charge_soc
   reserve:
-    - 0.2
+    - 12
   scheduled_charge_enable:
   - off
   scheduled_discharge_enable:
