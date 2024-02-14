@@ -15,7 +15,8 @@ Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-
 
 *NB: Do not install the very similarly named 'Lovelace Html card', it won't work!  You must install 'HTML Jinja2 Template card'.*
 
-Next, on a Home Assistant dashboard create a new card with the following configuration to display the Predbat plan:
+Next, on a Home Assistant dashboard, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following to display the Predbat plan:
 
 ```yaml
 type: custom:html-template-card
