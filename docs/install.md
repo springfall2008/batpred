@@ -41,7 +41,7 @@ If you do not have one of these file editors already installed in Home Assistant
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
 
-Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / <editor_you_chose_to_use> / 'OPEN WEB UI'
+Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / *editor_you_chose_to_use* / 'OPEN WEB UI'
 
 If you are using the File Editor to edit Predbat's configuration files, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory:
 
