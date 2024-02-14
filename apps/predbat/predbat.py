@@ -1053,7 +1053,7 @@ def calc_percent_limit(charge_limit, soc_max):
 
 
 class Prediction:
-    def __init__(self, base):
+    def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
 
         self.minutes_now = base.minutes_now
         self.forecast_minutes = base.forecast_minutes
@@ -1119,11 +1119,16 @@ class Prediction:
         self.battery_loss_discharge = base.battery_loss_discharge
         self.best_soc_keep = base.best_soc_keep
         self.car_charging_battery_size = base.car_charging_battery_size
+        self.pv_forecast_minute_step = pv_forecast_minute_step
+        self.pv_forecast_minute10_step = pv_forecast_minute10_step
+        self.load_minutes_step = load_minutes_step
+        self.load_minutes_step10 = load_minutes_step10
 
-    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record):
+    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
         Run prediction in a thread
         """
+
         try_charge_limit = charge_limit.copy()
         if all_n:
             for set_n in all_n:
@@ -1132,11 +1137,11 @@ class Prediction:
             try_charge_limit[window_n] = try_soc
     
         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
+            try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
-    def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record):
+    def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
         Run prediction in a thread
         """
@@ -1152,7 +1157,7 @@ class Prediction:
             discharge_window[window_n]["start"] = start
 
         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
+            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
@@ -1256,10 +1261,17 @@ class Prediction:
                         break
         return load_amount
 
-    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, return the results
         """
+        if pv10:
+            pv_forecast_minute_step = self.pv_forecast_minute10_step
+            load_minutes_step = self.load_minutes_step10
+        else:
+            pv_forecast_minute_step = self.pv_forecast_minute_step
+            load_minutes_step = self.load_minutes_step
+
         predict_export = {}
         predict_battery_power = {}
         predict_battery_cycle = {}
@@ -5290,7 +5302,7 @@ class PredBat(hass.Hass):
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -5298,7 +5310,7 @@ class PredBat(hass.Hass):
         # Call the prediction model
         pred = self.prediction
         final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh = pred.run_prediction(
-            charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save, step
+            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save, step
         )
         self.predict_soc = pred.predict_soc
         self.car_charging_soc_next = pred.car_charging_soc_next
@@ -7892,10 +7904,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limits,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         end_record=None,
         region_start=None,
         region_end=None,
@@ -8033,8 +8041,7 @@ class PredBat(hass.Hass):
                             charge_window,
                             discharge_window,
                             try_discharge,
-                            load_minutes_step,
-                            pv_forecast_minute_step,
+                            False,
                             end_record=end_record,
                             step=step,
                         )
@@ -8110,10 +8117,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limits,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         all_n=None,
         end_record=None,
     ):
@@ -8165,8 +8168,8 @@ class PredBat(hass.Hass):
         results = []
         results10 = []
         for try_soc in try_socs:
-            hanres = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
-            hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+            hanres = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
+            hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
             results.append(hanres)
             results10.append(hanres10)
 
@@ -8298,10 +8301,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limit,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         all_n=None,
         end_record=None,
     ):
@@ -8356,8 +8355,8 @@ class PredBat(hass.Hass):
                 this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
                 try_options.append([start, this_discharge_limit])
 
-                hanres = self.pool.apply_async(self.prediction.thread_run_prediction_discharge,   (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
-                hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, all_n, end_record))
+                hanres = self.pool.apply_async(self.prediction.thread_run_prediction_discharge,   (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record))
+                hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record))
                 results.append(hanres)
                 results10.append(hanres10)
 
@@ -8864,7 +8863,7 @@ class PredBat(hass.Hass):
 
         return new_enable, new_best
 
-    def tweak_plan(self, end_record, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, best_metric, metric_keep):
+    def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
         """
@@ -8889,10 +8888,6 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        load_minutes_step10,
-                        pv_forecast_minute_step,
-                        pv_forecast_minute10_step,
                         end_record=end_record,
                     )
                     self.charge_limit_best[window_n] = best_soc
@@ -8910,10 +8905,6 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        load_minutes_step10,
-                        pv_forecast_minute_step,
-                        pv_forecast_minute10_step,
                         end_record=end_record,
                     )
                     self.discharge_limits_best[window_n] = best_soc
@@ -8924,7 +8915,7 @@ class PredBat(hass.Hass):
 
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {}".format(self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep)))
 
-    def optimise_all_windows(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, best_metric, metric_keep):
+    def optimise_all_windows(self, best_metric, metric_keep):
         """
         Optimise all windows, both charge and discharge in rate order
         """
@@ -8954,10 +8945,6 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step,
-                load_minutes_step10,
-                pv_forecast_minute_step,
-                pv_forecast_minute10_step,
                 end_record=self.end_record,
                 fast=fast_mode,
                 quiet=True,
@@ -8978,10 +8965,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                             region_start=region + self.minutes_now,
                             region_end=region_end + self.minutes_now,
@@ -9062,10 +9045,6 @@ class PredBat(hass.Hass):
                                 self.charge_window_best,
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
-                                load_minutes_step,
-                                load_minutes_step10,
-                                pv_forecast_minute_step,
-                                pv_forecast_minute10_step,
                                 end_record=self.end_record,
                             )
                             self.charge_limit_best[window_n] = best_soc
@@ -9131,10 +9110,6 @@ class PredBat(hass.Hass):
                                 self.charge_window_best,
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
-                                load_minutes_step,
-                                load_minutes_step10,
-                                pv_forecast_minute_step,
-                                pv_forecast_minute10_step,
                                 end_record=self.end_record,
                             )
                             self.discharge_limits_best[window_n] = best_soc
@@ -9197,10 +9172,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                         )
                         self.charge_limit_best[window_n] = best_soc
@@ -9219,10 +9190,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                         )
                         self.discharge_limits_best[window_n] = best_soc
@@ -9753,8 +9720,7 @@ class PredBat(hass.Hass):
            self.discharge_limits_best
         """
 
-        # Creation prediction object
-        self.prediction = Prediction(self)
+        # Create pool
         if not self.pool:
             self.pool = Pool()
 
@@ -9837,9 +9803,12 @@ class PredBat(hass.Hass):
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
+        # Creation prediction object
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=self.end_record
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record
         )
 
         # Try different battery SOCs to get the best result
@@ -9852,11 +9821,11 @@ class PredBat(hass.Hass):
             self.log_option_best()
 
             # Full plan
-            self.optimise_all_windows(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+            self.optimise_all_windows(metric, metric_keep)
 
             # Tweak plan
             if self.calculate_tweak_plan:
-                self.tweak_plan(self.end_record, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+                self.tweak_plan(self.end_record, metric, metric_keep)
 
             # Remove charge windows that overlap with discharge windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(
@@ -9876,8 +9845,7 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        pv_forecast_minute_step,
+                        False,
                         end_record=self.end_record,
                     )
 
@@ -9901,8 +9869,7 @@ class PredBat(hass.Hass):
                     self.charge_window_best,
                     self.discharge_window_best,
                     self.discharge_limits_best,
-                    load_minutes_step,
-                    pv_forecast_minute_step,
+                    False,
                     end_record=self.end_record,
                 )
                 # Initial charge slot filter
@@ -9931,7 +9898,7 @@ class PredBat(hass.Hass):
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save="base", end_record=self.end_record
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, save="base", end_record=self.end_record
         )
         (
             metricb10,
@@ -9949,8 +9916,7 @@ class PredBat(hass.Hass):
             self.charge_window,
             self.discharge_window,
             self.discharge_limits,
-            load_minutes_step10,
-            pv_forecast_minute10_step,
+            True,
             save="base10",
             end_record=self.end_record,
         )
@@ -9973,8 +9939,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step10,
-                pv_forecast_minute10_step,
+                True,
                 save="best10",
                 end_record=self.end_record,
             )
@@ -9983,8 +9948,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step,
-                pv_forecast_minute_step,
+                False,
                 save="best",
                 end_record=self.end_record,
             )
