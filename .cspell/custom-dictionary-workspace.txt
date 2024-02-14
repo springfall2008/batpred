@@ -51,6 +51,7 @@ givtcp
 HACS
 hadashboard
 HAOS
+hanres
 hass
 hassapi
 hassio
@@ -106,6 +107,7 @@ pyproject
 pytz
 rarr
 Redownload
+resultmid
 rname
 rowspan
 rstart
