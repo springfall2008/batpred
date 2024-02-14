@@ -1,6 +1,10 @@
 # Creating the charts
 
-To create the fancy charts:
+There are a number of fancy Apex charts that can be produced from Predbat data - things like Home Battery SoC prediction, Cost prediction, Energy Rates, etc.
+
+There's a [Video Guide to the different charts](https://www.youtube.com/watch?v=KXiRzMyRZyM) available on YouTube.
+
+To install the charts:
 
 - Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card):
     - In HACS, click on Frontend
@@ -15,7 +19,7 @@ create a new apexcharts card and copy the YAML into it:
     - Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Custom: ApexCharts card'
     - Delete the template card configuration and copy/paste ONE Apex chart from the example file
     - Click 'Save'
-    - Reapeat (adding Apex chart card, copy paste card config) for all of the charts you want to see
+    - Repeat (adding Apex chart card, copy paste card config) for all of the charts you want to see
 - Customise as you like
 
 If you get an error 'Custom element doesn't exist: apexcharts-card' then you've not installed the Apex Charts card correctly from HACS.
