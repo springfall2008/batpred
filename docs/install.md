@@ -43,9 +43,10 @@ If you do not have one of these file editors already installed in Home Assistant
 
 Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / *editor_you_chose_to_use* / 'OPEN WEB UI'
 
-If you are using the File Editor to edit Predbat's configuration files, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory:
+If you are using the File Editor to edit Predbat's configuration files, you will need to turn **OFF** the **Enforce Basepath** option
+in order to access files in different directories (i.e. within the appdaemon directory):
 
-- From the File editor add-on page, click on the 'Configuration' tab to change this setting):<BR>
+- From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
 ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 
 ## AppDaemon-Predbat combined install
