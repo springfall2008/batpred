@@ -22,7 +22,7 @@ import requests
 import yaml
 from multiprocessing import Pool
 
-THIS_VERSION = "v7.15.21"
+THIS_VERSION = "v7.16.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
