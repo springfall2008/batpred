@@ -8160,8 +8160,6 @@ class PredBat(hass.Hass):
             try_socs.append(best_soc_min)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
-        if 0 not in try_socs:
-            try_socs.append(0)
 
         # Run the simulations in parallel
         results = []
@@ -8220,7 +8218,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
-                try_percent = self.calc_percent_limit(try_soc)
+                try_percent = calc_percent_limit(try_soc)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
@@ -9758,7 +9756,7 @@ class PredBat(hass.Hass):
         # Creation prediction object
         self.prediction = Prediction(self)
         if not self.pool:
-            self.pool = Pool(processes=8)
+            self.pool = Pool()
 
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
