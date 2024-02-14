@@ -9,9 +9,11 @@ At a glance the Predbat plan shows you the plan going forward of home demand, EV
 Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) in HACS:
 
 - In HACS, click on Frontend
-- Click in the *Search for downloaded or new repositories* and type 'HTML'
-- Click on 'HTML Jinja2 Template card', then click 'Download' to install it
+- Click the blue *Explore and download repositories* button and type 'HTML'
+- Click on 'HTML Jinja2 Template card', then click the blue 'Download', then 'Download' again to install it
 - When prompted to 'reload your browser', click 'Reload'
+
+*NB: Do not install the very similarly named 'Lovelace Html card', it won't work!  You must install 'HTML Jinja2 Template card'.*
 
 Next, on a Home Assistant dashboard create a new card with the following configuration to display the Predbat plan:
 
@@ -26,6 +28,8 @@ content: |
 You should see something like this:
 
 ![image](images/predbat-html-plan.png)
+
+If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from HACS.
 
 ## Understanding the Predbat plan
 

@@ -2,11 +2,18 @@
 
 To create the fancy charts:
 
-- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card)
+- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card):
+    - In HACS, click on Frontend
+    - Click the blue *Explore and download repositories* button and type 'apex'
+    - Click on 'apexcharts-card', then click the blue 'Download', then 'Download' again to install it
+    - When prompted to 'reload your browser', click 'Reload'
+
 - There are multiple charts, for each section of the
 [example chart yaml file](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/example_chart.yml),
 create a new apexcharts card and copy the YAML into it.
 - Customise as you like
+
+If you get an error 'Custom element doesn't exist: apexcharts-card' then you've not installed the Apex Charts card correctly from HACS.
 
 See the [video guides](video-guides.md) for a walkthrough of what the different charts show.
 
