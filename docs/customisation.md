@@ -264,14 +264,15 @@ This can help to slightly improve the plan for tariffs like Agile but can make i
 
 ## Battery margins and metrics options
 
-**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep above during the whole period of the simulation time.
-This is a soft constraint only so it is possible for your SoC to drop below this - use **input_number.predbat_best_soc_min** for a hard SoC constraint that will always be maintained.
-It's usually good to have best_soc_keep set to a value above 0 to allow some margin
-in case you use more energy than planned between charge slots.
+**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
+This is a soft constraint only that's used for longer term planning and is ignored for the forthcoming first 4 hours of the plan.
+As this is not used for short-term planning it's possible for your SoC to drop below this - use **input_number.predbat_best_soc_min**
+if you need a hard SoC constraint that will always be maintained.
+It's usually good to have best_soc_keep set to a value above 0 to allow some margin in case you use more energy than planned between charge slots.
 
 **input_number.predbat_best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
-minimum discharge level also (set to 0 if you want to skip some slots). If you set this to a non-zero value you will need
-to use the low rate threshold to control which slots you charge from or you may charge all the time.
+minimum discharge level also (set to 0 if you want to skip some slots).
+If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
