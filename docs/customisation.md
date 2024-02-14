@@ -334,9 +334,14 @@ in the charts template in Github).
 **switch.predbat_set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
 Off by default.
 
-**switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be limited to the
-lowest possible to meet the charge target. Only really effective for charge windows >30 minutes.
-Off by default.
+**switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be automatically determined by Predbat  to be the
+lowest possible rate to meet the charge target. This is only really effective for charge windows >30 minutes.
+If this setting is turned on, its strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#workarounds)
+as otherwise the low power charge may not reach the charge target in time.
+This setting is off by default.
+
+The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+explains how the low power charging works and shows how Predbat automatically creates it.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
@@ -431,7 +436,7 @@ In summary:
 ## Manual control
 
 In some cases you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into
-read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and you should then 
+read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and you should then
 control it yourself using GivTCP or the App appropriate to your inverter.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:

@@ -464,11 +464,14 @@ Modelling the charge curve becomes important if you have limited charging slots 
 low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
-when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
+when battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
 You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 This will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
 
-Setting This option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
+The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+explains how the curve works and shows how Predbat automatically creates it.
+
+Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
 history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually save the data.
 
 NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
