@@ -50,8 +50,8 @@ GivEnergy
 givtcp
 HACS
 hadashboard
-HAOS
 hanres
+HAOS
 hass
 hassapi
 hassio
