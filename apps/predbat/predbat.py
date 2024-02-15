@@ -972,6 +972,7 @@ SOLAX_SOLIS_MODES = {
     "Backup/Reserve": 51,
 }
 
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
     Filters and removes intersecting charge windows
@@ -1036,6 +1037,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge
 
     return new_limit_best, new_window_best
 
+
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -1056,6 +1058,7 @@ class Prediction:
     """
     Class to hold prediction input and output data and the run funtion
     """
+
     def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
         self.minutes_now = base.minutes_now
         self.forecast_minutes = base.forecast_minutes
@@ -1138,7 +1141,7 @@ class Prediction:
                 try_charge_limit[set_n] = try_soc
         else:
             try_charge_limit[window_n] = try_soc
-    
+
         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
             try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
@@ -5312,9 +5315,18 @@ class PredBat(hass.Hass):
 
         # Call the prediction model
         pred = self.prediction
-        final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh = pred.run_prediction(
-            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save, step
-        )
+        (
+            final_metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            final_battery_cycle,
+            final_metric_keep,
+            final_iboost_kwh,
+        ) = pred.run_prediction(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save, step)
         self.predict_soc = pred.predict_soc
         self.car_charging_soc_next = pred.car_charging_soc_next
         self.iboost_next = pred.iboost_next
@@ -5448,7 +5460,13 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".pv_power",
                     state=self.dp3(0),
-                    attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:battery"},
+                    attributes={
+                        "results": predict_pv_power,
+                        "friendly_name": "Predicted PV Power",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power",
@@ -5545,7 +5563,12 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".import_energy_battery",
                     state=self.dp3(final_import_kwh_battery),
-                    attributes={"friendly_name": "Predicted import to battery", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
+                    attributes={
+                        "friendly_name": "Predicted import to battery",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".import_energy_house",
@@ -5710,7 +5733,13 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".best_pv_energy",
                     state=self.dp3(final_pv_kwh),
-                    attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
+                    attributes={
+                        "results": pv_kwh_time,
+                        "friendly_name": "Predicted PV best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".best_import_energy",
@@ -5736,7 +5765,12 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".best_import_energy_house",
                     state=self.dp3(final_import_kwh_house),
-                    attributes={"friendly_name": "Predicted import to house best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
+                    attributes={
+                        "friendly_name": "Predicted import to house best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".best_metric",
@@ -5942,7 +5976,6 @@ class PredBat(hass.Hass):
                 )
 
         return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
-
 
     def time_now_str(self):
         """
@@ -8111,7 +8144,7 @@ class PredBat(hass.Hass):
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost
-    
+
     def optimise_charge_limit(
         self,
         window_n,
@@ -8171,8 +8204,12 @@ class PredBat(hass.Hass):
         results = []
         results10 = []
         for try_soc in try_socs:
-            hanres = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
-            hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
+            hanres = self.pool.apply_async(
+                self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
+            )
+            hanres10 = self.pool.apply_async(
+                self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+            )
             results.append(hanres)
             results10.append(hanres10)
 
@@ -8184,10 +8221,9 @@ class PredBat(hass.Hass):
             hanres10 = results10.pop(0)
             resultmid[try_soc] = hanres.get()
             result10[try_soc] = hanres10.get()
-    
+
         window_results = {}
         for try_soc in try_socs:
-
             window = charge_window[window_n]
 
             # Store try value into the window, either all or just this one
@@ -8332,7 +8368,7 @@ class PredBat(hass.Hass):
         else:
             loop_options = [100, 0]
 
-        # Collect all options
+        # Collect all options
         results = []
         results10 = []
         try_options = []
@@ -8358,8 +8394,14 @@ class PredBat(hass.Hass):
                 this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
                 try_options.append([start, this_discharge_limit])
 
-                hanres = self.pool.apply_async(self.prediction.thread_run_prediction_discharge,   (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record))
-                hanres10 = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record))
+                hanres = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_discharge,
+                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record),
+                )
+                hanres10 = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_discharge,
+                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record),
+                )
                 results.append(hanres)
                 results10.append(hanres10)
 
@@ -8370,7 +8412,7 @@ class PredBat(hass.Hass):
             hanres10 = results10.pop(0)
             result = hanres.get()
             result10 = hanres10.get()
-            try_results.append(try_option + [result, result10]) 
+            try_results.append(try_option + [result, result10])
 
         window_results = {}
         for try_option in try_results:
@@ -8388,9 +8430,7 @@ class PredBat(hass.Hass):
             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
             rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
             metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-            metric10 -= (
-                (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-            )
+            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
 
             # Metric adjustment based on 10% outcome weighting
             if metric10 > metric:
