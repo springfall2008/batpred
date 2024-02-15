@@ -1056,7 +1056,7 @@ def calc_percent_limit(charge_limit, soc_max):
 
 class Prediction:
     """
-    Class to hold prediction input and output data and the run funtion
+    Class to hold prediction input and output data and the run function
     """
 
     def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
