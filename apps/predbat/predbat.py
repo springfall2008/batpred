@@ -1053,7 +1053,6 @@ def calc_percent_limit(charge_limit, soc_max):
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
-
 def get_charge_rate_curve(model, soc, charge_rate_setting):
     """
     Compute true charging rate from SOC and charge rate setting
@@ -1062,7 +1061,6 @@ def get_charge_rate_curve(model, soc, charge_rate_setting):
     max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
     return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
 
-
 def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     """
     Compute true discharging rate from SOC and charge rate setting
@@ -1070,7 +1068,6 @@ def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     soc_percent = calc_percent_limit(soc, model.soc_max)
     max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
     return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
-
 
 def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
     """
@@ -1118,6 +1115,8 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
     else:
         return max_rate
 
+if not 'PRED_GLOBAL' in globals():
+    PRED_GLOBAL = {}
 
 class Prediction:
     """
@@ -1125,6 +1124,7 @@ class Prediction:
     """
 
     def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
+        global PRED_GLOBAL
         self.minutes_now = base.minutes_now
         self.forecast_minutes = base.forecast_minutes
         self.midnight_utc = base.midnight_utc
@@ -1190,10 +1190,14 @@ class Prediction:
         self.battery_loss_discharge = base.battery_loss_discharge
         self.best_soc_keep = base.best_soc_keep
         self.car_charging_battery_size = base.car_charging_battery_size
-        self.pv_forecast_minute_step = pv_forecast_minute_step
-        self.pv_forecast_minute10_step = pv_forecast_minute10_step
-        self.load_minutes_step = load_minutes_step
-        self.load_minutes_step10 = load_minutes_step10
+        PRED_GLOBAL['pv_forecast_minute_step'] = pv_forecast_minute_step
+        PRED_GLOBAL['pv_forecast_minute10_step'] = pv_forecast_minute10_step
+        PRED_GLOBAL['load_minutes_step'] = load_minutes_step
+        PRED_GLOBAL['load_minutes_step10'] = load_minutes_step10
+        #self.pv_forecast_minute_step = pv_forecast_minute_step
+        #self.pv_forecast_minute10_step = pv_forecast_minute10_step
+        #self.load_minutes_step = load_minutes_step
+        #self.load_minutes_step10 = load_minutes_step10
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1243,6 +1247,7 @@ class Prediction:
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
+
     def find_charge_window_optimised(self, charge_windows):
         """
         Takes in an array of charge windows
@@ -1279,12 +1284,17 @@ class Prediction:
         """
         Run a prediction scenario given a charge limit, return the results
         """
+        global PRED_GLOBAL
         if pv10:
-            pv_forecast_minute_step = self.pv_forecast_minute10_step
-            load_minutes_step = self.load_minutes_step10
+            #pv_forecast_minute_step = self.pv_forecast_minute10_step
+            #load_minutes_step = self.load_minutes_step10
+            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute10_step']
+            load_minutes_step = PRED_GLOBAL['load_minutes_step10']
         else:
-            pv_forecast_minute_step = self.pv_forecast_minute_step
-            load_minutes_step = self.load_minutes_step
+            #pv_forecast_minute_step = self.pv_forecast_minute_step
+            #load_minutes_step = self.load_minutes_step
+            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute_step']
+            load_minutes_step = PRED_GLOBAL['load_minutes_step']
 
         predict_export = {}
         predict_battery_power = {}
@@ -9812,10 +9822,6 @@ class PredBat(hass.Hass):
            self.discharge_limits_best
         """
 
-        # Create pool
-        if not self.pool:
-            self.pool = Pool()
-
         # Re-compute plan due to time wrap
         if self.plan_last_updated_minutes > self.minutes_now:
             self.log("Force recompute due to start of day")
@@ -9897,6 +9903,8 @@ class PredBat(hass.Hass):
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+        # Create pool
+        self.pool = Pool()
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
@@ -10068,6 +10076,11 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
+        # Destroy pool
+        if self.pool:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
         # Return if we recomputed or not
         return recompute
 
@@ -10175,13 +10188,7 @@ class PredBat(hass.Hass):
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         charge_rate = find_charge_rate(
-                            self,
-                            self.minutes_now,
-                            inverter.soc_kw,
-                            window,
-                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
-                            inverter.battery_rate_max_charge,
-                            quiet=False,
+                            self, self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
@@ -12286,7 +12293,7 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         global SIMULATE
-        self.log("Predbat: Startup")
+        self.log("Predbat: Startup {}".format(__name__))
 
         try:
             self.reset()
