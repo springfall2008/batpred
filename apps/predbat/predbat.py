@@ -1155,7 +1155,7 @@ class Prediction:
                 min_soc = min(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
             if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
                 max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
-        
+
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc
 
     def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
@@ -8201,31 +8201,92 @@ class PredBat(hass.Hass):
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
-            hans.append(self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-            ))
-            hans.append(self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-            ))
-            hans.append(self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-            ))
-            hans.append(self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-            ))
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge,
+                    (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record),
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+                )
+            )
             id = 0
             for han in hans:
                 metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = han.get()
                 all_min_soc = min(all_min_soc, min_soc)
                 all_max_soc = max(all_max_soc, max_soc)
                 if id == 0:
-                    resultmid[loop_soc] = [metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc]
+                    resultmid[loop_soc] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
                 elif id == 1:
-                    result10[loop_soc] = [metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc]
+                    result10[loop_soc] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
                 elif id == 2:
-                    resultmid[best_soc_min] = [metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc]
+                    resultmid[best_soc_min] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
                 elif id == 3:
-                    result10[best_soc_min] = [metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc]
+                    result10[best_soc_min] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
                 id += 1
 
         # Assemble list of SOCs to try
@@ -8239,7 +8300,7 @@ class PredBat(hass.Hass):
             try_soc = max(best_soc_min, loop_soc)
             try_soc = self.dp2(min(try_soc, self.soc_max))
             if try_soc > (all_max_soc + loop_step):
-                skip = True    
+                skip = True
             if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (all_min_soc - loop_step)):
                 skip = True
             # Keep those we already simulated
@@ -8289,8 +8350,12 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = resultmid[try_soc]
-            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[try_soc]
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = resultmid[
+                try_soc
+            ]
+            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[
+                try_soc
+            ]
 
             # Store simulated mid value
             metric = metricmid
