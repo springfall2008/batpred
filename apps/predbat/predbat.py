@@ -1053,6 +1053,68 @@ def calc_percent_limit(charge_limit, soc_max):
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
+def get_charge_rate_curve(model, soc, charge_rate_setting):
+    """
+    Compute true charging rate from SOC and charge rate setting
+    """
+    soc_percent = calc_percent_limit(soc, model.soc_max)
+    max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
+    return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
+
+def get_discharge_rate_curve(model, soc, discharge_rate_setting):
+    """
+    Compute true discharging rate from SOC and charge rate setting
+    """
+    soc_percent = calc_percent_limit(soc, model.soc_max)
+    max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
+    return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
+
+def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
+    """
+    Find the lowest charge rate that fits the charge slow
+    """
+    margin = 10
+    if model.set_charge_low_power:
+        minutes_left = window["end"] - minutes_now - margin
+
+        # If we don't have enough minutes left go to max
+        if minutes_left < 0:
+            return max_rate
+
+        # If we already have reached target go back to max
+        if soc >= target_soc:
+            return max_rate
+
+        # Work out the charge left in kw
+        charge_left = target_soc - soc
+
+        # If we can never hit the target then go to max
+        if max_rate * minutes_left < charge_left:
+            return max_rate
+
+        # What's the lowest we could go?
+        min_rate = charge_left / minutes_left
+
+        # Apply the curve at each rate to pick one that works
+        rate_w = max_rate * MINUTE_WATT
+        best_rate = max_rate
+        while rate_w >= 400:
+            rate = rate_w / MINUTE_WATT
+            if rate >= min_rate:
+                charge_now = soc
+                minute = 0
+                for minute in range(0, minutes_left, PREDICT_STEP):
+                    rate_scale = get_charge_rate_curve(model, charge_now, rate)
+                    charge_amount = rate_scale * PREDICT_STEP * model.battery_loss
+                    charge_now += charge_amount
+                    if charge_now >= target_soc:
+                        best_rate = rate
+                        break
+            rate_w -= 125.0
+        return best_rate
+    else:
+        return max_rate
+
 
 class Prediction:
     """
@@ -1178,73 +1240,6 @@ class Prediction:
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
-    def get_charge_rate_curve(self, soc, charge_rate_setting):
-        """
-        Compute true charging rate from SOC and charge rate setting
-        """
-        soc_percent = calc_percent_limit(soc, self.soc_max)
-        max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
-        return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
-
-    def get_discharge_rate_curve(self, soc, discharge_rate_setting):
-        """
-        Compute true discharging rate from SOC and charge rate setting
-        """
-        soc_percent = calc_percent_limit(soc, self.soc_max)
-        max_discharge_rate = self.battery_rate_max_discharge * self.battery_discharge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling_discharge
-        return max(min(discharge_rate_setting, max_discharge_rate), self.battery_rate_min)
-
-    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate, quiet=True):
-        """
-        Find the lowest charge rate that fits the charge slow
-        """
-        margin = 10
-        if self.set_charge_low_power:
-            minutes_left = window["end"] - minutes_now - margin
-
-            # If we don't have enough minutes left go to max
-            if minutes_left < 0:
-                return max_rate
-
-            # If we already have reached target go back to max
-            if soc >= target_soc:
-                return max_rate
-
-            # Work out the charge left in kw
-            charge_left = target_soc - soc
-
-            # If we can never hit the target then go to max
-            if max_rate * minutes_left < charge_left:
-                return max_rate
-
-            # What's the lowest we could go?
-            min_rate = charge_left / minutes_left
-
-            # Apply the curve at each rate to pick one that works
-            rate_w = max_rate * MINUTE_WATT
-            best_rate = max_rate
-            while rate_w >= 400:
-                rate = rate_w / MINUTE_WATT
-                if rate >= min_rate:
-                    charge_now = soc
-                    minute = 0
-                    for minute in range(0, minutes_left, PREDICT_STEP):
-                        rate_scale = self.get_charge_rate_curve(charge_now, rate)
-                        charge_amount = rate_scale * PREDICT_STEP * self.battery_loss
-                        charge_now += charge_amount
-                        if charge_now >= target_soc:
-                            best_rate = rate
-                            break
-                rate_w -= 125.0
-            if not quiet:
-                self.log(
-                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
-                        minutes_now, soc, window, target_soc, int(max_rate * MINUTE_WATT), int(min_rate * MINUTE_WATT), int(best_rate * MINUTE_WATT)
-                    )
-                )
-            return best_rate
-        else:
-            return max_rate
 
     def find_charge_window_optimised(self, charge_windows):
         """
@@ -1518,8 +1513,8 @@ class Prediction:
 
             # Battery behaviour
             battery_draw = 0
-            charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
-            discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
+            charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
+            discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
@@ -1528,7 +1523,7 @@ class Prediction:
             ):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
+                discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
@@ -1554,13 +1549,13 @@ class Prediction:
                 if save in ["best", "best10"]:
                     # Only tune charge rate on final plan not every simulation
                     charge_rate_now = (
-                        self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
+                        find_charge_rate(self, minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
                     )
                 else:
                     charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
 
                 # Apply the charging curve
-                charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
+                charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
 
                 # If the battery is charging then solar will be used to charge as a priority
                 # So move more of the PV into PV DC
@@ -5291,22 +5286,6 @@ class PredBat(hass.Hass):
                     cloud_diff = 0
 
         return values
-
-    def get_charge_rate_curve(self, soc, charge_rate_setting):
-        """
-        Compute true charging rate from SOC and charge rate setting
-        """
-        soc_percent = calc_percent_limit(soc, self.soc_max)
-        max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
-        return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
-
-    def get_discharge_rate_curve(self, soc, discharge_rate_setting):
-        """
-        Compute true discharging rate from SOC and charge rate setting
-        """
-        soc_percent = calc_percent_limit(soc, self.soc_max)
-        max_discharge_rate = self.battery_rate_max_discharge * self.battery_discharge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling_discharge
-        return max(min(discharge_rate_setting, max_discharge_rate), self.battery_rate_min)
 
     def find_charge_window_optimised(self, charge_windows):
         """
@@ -9795,58 +9774,6 @@ class PredBat(hass.Hass):
 
         self.log("BALANCE: Completed this run")
 
-    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate, quiet=True):
-        """
-        Find the lowest charge rate that fits the charge slow
-        """
-        margin = 10
-        if self.set_charge_low_power:
-            minutes_left = window["end"] - minutes_now - margin
-
-            # If we don't have enough minutes left go to max
-            if minutes_left < 0:
-                return max_rate
-
-            # If we already have reached target go back to max
-            if soc >= target_soc:
-                return max_rate
-
-            # Work out the charge left in kw
-            charge_left = target_soc - soc
-
-            # If we can never hit the target then go to max
-            if max_rate * minutes_left < charge_left:
-                return max_rate
-
-            # What's the lowest we could go?
-            min_rate = charge_left / minutes_left
-
-            # Apply the curve at each rate to pick one that works
-            rate_w = max_rate * MINUTE_WATT
-            best_rate = max_rate
-            while rate_w >= 400:
-                rate = rate_w / MINUTE_WATT
-                if rate >= min_rate:
-                    charge_now = soc
-                    minute = 0
-                    for minute in range(0, minutes_left, PREDICT_STEP):
-                        rate_scale = self.get_charge_rate_curve(charge_now, rate)
-                        charge_amount = rate_scale * PREDICT_STEP * self.battery_loss
-                        charge_now += charge_amount
-                        if charge_now >= target_soc:
-                            best_rate = rate
-                            break
-                rate_w -= 125.0
-            if not quiet:
-                self.log(
-                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
-                        minutes_now, soc, window, target_soc, int(max_rate * MINUTE_WATT), int(min_rate * MINUTE_WATT), int(best_rate * MINUTE_WATT)
-                    )
-                )
-            return best_rate
-        else:
-            return max_rate
-
     def log_option_best(self):
         """
         Log options
@@ -10245,8 +10172,8 @@ class PredBat(hass.Hass):
                     )
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        charge_rate = self.find_charge_rate(
-                            self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
+                        charge_rate = find_charge_rate(
+                            self, self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
