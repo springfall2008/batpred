@@ -8260,7 +8260,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
-                try_percent = calc_percent_limit(try_soc)
+                try_percent = calc_percent_limit(try_soc, self.soc_max)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
