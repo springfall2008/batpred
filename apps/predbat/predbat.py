@@ -1053,6 +1053,7 @@ def calc_percent_limit(charge_limit, soc_max):
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
+
 def get_charge_rate_curve(model, soc, charge_rate_setting):
     """
     Compute true charging rate from SOC and charge rate setting
@@ -1061,6 +1062,7 @@ def get_charge_rate_curve(model, soc, charge_rate_setting):
     max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
     return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
 
+
 def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     """
     Compute true discharging rate from SOC and charge rate setting
@@ -1068,6 +1070,7 @@ def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     soc_percent = calc_percent_limit(soc, model.soc_max)
     max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
     return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
+
 
 def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
     """
@@ -1239,7 +1242,6 @@ class Prediction:
             charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
-
 
     def find_charge_window_optimised(self, charge_windows):
         """
@@ -10173,7 +10175,13 @@ class PredBat(hass.Hass):
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         charge_rate = find_charge_rate(
-                            self, self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
+                            self,
+                            self.minutes_now,
+                            inverter.soc_kw,
+                            window,
+                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
+                            inverter.battery_rate_max_charge,
+                            quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
