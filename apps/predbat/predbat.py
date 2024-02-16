@@ -11527,10 +11527,12 @@ class PredBat(hass.Hass):
         """
         self.log("Update event {} {} {}".format(event, data, kwargs))
         if data and data.get("service", "") == "install":
-            latest = self.releases.get("latest", None)
-            if latest:
-                self.log("Requested install of latest version {}".format(latest))
-                self.download_predbat_version(latest)
+            service_data = data.get("service_data", {})
+            if service_data.get("entity_id", "") == "update.predbat_version":
+                latest = self.releases.get("latest", None)
+                if latest:
+                    self.log("Requested install of latest version {}".format(latest))
+                    self.download_predbat_version(latest)
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")
 
