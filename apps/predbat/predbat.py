@@ -11825,7 +11825,7 @@ class PredBat(hass.Hass):
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
                                 "in_progress": in_progress,
-                                "auto_update": False,
+                                "auto_update": True,
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],
