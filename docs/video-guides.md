@@ -46,5 +46,5 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Intelligent Octopus import + Agile export](https://www.youtube.com/watch?v=o1CZrM3S2w0)
 - [Intelligent Octopus import + Fixed export](https://www.youtube.com/watch?v=USyzJfIa0iQ)
-- [Octopus Agile import + Agile export](https://www.loom.com/share/5f007eff9d984dc8bdb03df708fde711?sid=4ae133c4-c7e5-4307-8c50-8737d1ca1593)
+- [Octopus Agile import + Agile export](https://youtu.be/USyzJfIa0iQ?si=te3DaYFh4SJLITZ8)
 - [Octopus Flux](https://www.youtube.com/watch?v=NkoJtvS5Lok)
