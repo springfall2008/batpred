@@ -330,7 +330,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
-        "default": 1.0,
+        "default": 0.5,
     },
     {
         "name": "metric_battery_value_scaling",
@@ -7828,6 +7828,7 @@ class PredBat(hass.Hass):
         self.metric_inday_adjust_damping = 1.0
         self.rate_import = {}
         self.rate_export = {}
+        self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
         self.high_export_rates = []
