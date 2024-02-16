@@ -22,955 +22,958 @@ import requests
 import yaml
 from multiprocessing import Pool
 
-THIS_VERSION = "v7.16.0"
-PREDBAT_FILES = ["predbat.py"]
-TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
-TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
-TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
-TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
-PREDICT_STEP = 5
-RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
+# Only assign globals once to avoid re-creating them with processes are forked
+if not 'THIS_VERSION' in globals():
+    PRED_GLOBAL = {}
+    THIS_VERSION = "v7.16.0"
+    PREDBAT_FILES = ["predbat.py"]
+    TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
+    TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
+    TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
+    TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
+    PREDICT_STEP = 5
+    RUN_EVERY = 5
+    CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 
-# 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
-MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
-MINUTE_WATT = 60 * 1000
+    # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
+    MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
+    MINUTE_WATT = 60 * 1000
 
-SIMULATE = False  # Debug option, when set don't write to entities but simulate each 30 min period
-SIMULATE_LENGTH = 23 * 60  # How many periods to simulate, set to 0 for just current
-INVERTER_TEST = False  # Run inverter control self test
+    SIMULATE = False  # Debug option, when set don't write to entities but simulate each 30 min period
+    SIMULATE_LENGTH = 23 * 60  # How many periods to simulate, set to 0 for just current
+    INVERTER_TEST = False  # Run inverter control self test
 
-# Create an array of times in the day in 5-minute intervals
-BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
-OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
+    # Create an array of times in the day in 5-minute intervals
+    BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
+    OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
 
-# List of supported inverters
-INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF": "Sofar HYD", "HU": "Huawei Solar"}
+    # List of supported inverters
+    INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF": "Sofar HYD", "HU": "Huawei Solar"}
 
-# Inverter modes
-PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
-PREDBAT_MODE_MONITOR = 0
-PREDBAT_MODE_CONTROL_SOC = 1
-PREDBAT_MODE_CONTROL_CHARGE = 2
-PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
+    # Inverter modes
+    PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
+    PREDBAT_MODE_MONITOR = 0
+    PREDBAT_MODE_CONTROL_SOC = 1
+    PREDBAT_MODE_CONTROL_CHARGE = 2
+    PREDBAT_MODE_CONTROL_CHARGEDISCHARGE = 3
 
-# Predbat update options
-PREDBAT_UPDATE_OPTIONS = [f"{THIS_VERSION} Loading..."]
-PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
+    # Predbat update options
+    PREDBAT_UPDATE_OPTIONS = [f"{THIS_VERSION} Loading..."]
+    PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
 
-# Configuration options inside HA
-CONFIG_ITEMS = [
-    {
-        "name": "version",
-        "friendly_name": "Predbat Core Update",
-        "type": "update",
-        "title": "Predbat",
-        "installed_version": THIS_VERSION,
-        "release_url": f"https://github.com/springfall2008/batpred/releases/tag/{THIS_VERSION}",
-        "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
-        "restore": False,
-        "default": False,
-    },
-    {
-        "name": "expert_mode",
-        "friendly_name": "Expert Mode",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "pv_metric10_weight",
-        "friendly_name": "Metric 10 Weight",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 0.15,
-    },
-    {
-        "name": "pv_scaling",
-        "friendly_name": "PV Scaling",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "load_scaling",
-        "friendly_name": "Load Scaling",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "load_scaling10",
-        "friendly_name": "Load Scaling PV10%",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.1,
-    },
-    {
-        "name": "load_scaling_saving",
-        "friendly_name": "Load Scaling for saving sessions",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "battery_rate_max_scaling",
-        "friendly_name": "Battery rate max scaling charge",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "battery_rate_max_scaling_discharge",
-        "friendly_name": "Battery rate max scaling discharge",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "battery_loss",
-        "friendly_name": "Battery loss charge ",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:call-split",
-        "default": 0.03,
-    },
-    {
-        "name": "battery_loss_discharge",
-        "friendly_name": "Battery loss discharge",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:call-split",
-        "default": 0.03,
-    },
-    {
-        "name": "inverter_loss",
-        "friendly_name": "Inverter Loss",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:call-split",
-        "default": 0.04,
-    },
-    {
-        "name": "inverter_hybrid",
-        "friendly_name": "Inverter Hybrid",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "inverter_soc_reset",
-        "friendly_name": "Inverter SOC Reset",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "battery_capacity_nominal",
-        "friendly_name": "Use the Battery Capacity Nominal size",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "car_charging_energy_scale",
-        "friendly_name": "Car charging energy scale",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "default": 1.0,
-    },
-    {
-        "name": "car_charging_threshold",
-        "friendly_name": "Car charging threshold",
-        "type": "input_number",
-        "min": 4,
-        "max": 8.5,
-        "step": 0.10,
-        "unit": "kW",
-        "icon": "mdi:ev-station",
-        "default": 6.0,
-    },
-    {
-        "name": "car_charging_rate",
-        "friendly_name": "Car charging rate",
-        "type": "input_number",
-        "min": 1,
-        "max": 8.5,
-        "step": 0.10,
-        "unit": "kW",
-        "icon": "mdi:ev-station",
-        "default": 7.4,
-    },
-    {
-        "name": "car_charging_loss",
-        "friendly_name": "Car charging loss",
-        "type": "input_number",
-        "min": 0,
-        "max": 1.0,
-        "step": 0.01,
-        "unit": "*",
-        "icon": "mdi:call-split",
-        "default": 0.08,
-    },
-    {
-        "name": "best_soc_min",
-        "friendly_name": "Best SOC Min",
-        "type": "input_number",
-        "min": 0,
-        "max": 30.0,
-        "step": 0.10,
-        "unit": "kWh",
-        "icon": "mdi:battery-50",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "best_soc_max",
-        "friendly_name": "Best SOC Max",
-        "type": "input_number",
-        "min": 0,
-        "max": 30.0,
-        "step": 0.10,
-        "unit": "kWh",
-        "icon": "mdi:battery-50",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "best_soc_keep",
-        "friendly_name": "Best SOC Keep",
-        "type": "input_number",
-        "min": 0,
-        "max": 30.0,
-        "step": 0.10,
-        "unit": "kWh",
-        "icon": "mdi:battery-50",
-        "default": 0.5,
-    },
-    {
-        "name": "metric_min_improvement",
-        "friendly_name": "Metric Min Improvement",
-        "type": "input_number",
-        "min": -50,
-        "max": 50.0,
-        "step": 0.1,
-        "unit": "p",
-        "icon": "mdi:currency-usd",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "metric_min_improvement_discharge",
-        "friendly_name": "Metric Min Improvement Discharge",
-        "type": "input_number",
-        "min": -50,
-        "max": 50.0,
-        "step": 0.1,
-        "unit": "p",
-        "icon": "mdi:currency-usd",
-        "enable": "expert_mode",
-        "default": 0.1,
-    },
-    {
-        "name": "metric_battery_cycle",
-        "friendly_name": "Metric Battery Cycle Cost",
-        "type": "input_number",
-        "min": -50,
-        "max": 50.0,
-        "step": 0.1,
-        "unit": "p/kWh",
-        "icon": "mdi:currency-usd",
-        "enable": "expert_mode",
-        "default": 1.0,
-    },
-    {
-        "name": "metric_battery_value_scaling",
-        "friendly_name": "Metric Battery Value Scaling",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.1,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "enable": "expert_mode",
-        "default": 1.0,
-    },
-    {
-        "name": "metric_future_rate_offset_import",
-        "friendly_name": "Metric Future Rate Offset Import",
-        "type": "input_number",
-        "min": -50,
-        "max": 50.0,
-        "step": 0.1,
-        "unit": "p/kWh",
-        "icon": "mdi:currency-usd",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "metric_future_rate_offset_export",
-        "friendly_name": "Metric Future Rate Offset Export",
-        "type": "input_number",
-        "min": -50,
-        "max": 50.0,
-        "step": 0.1,
-        "unit": "p/kWh",
-        "icon": "mdi:currency-usd",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "metric_inday_adjust_damping",
-        "friendly_name": "In-day adjustment damping factor",
-        "type": "input_number",
-        "min": 0.5,
-        "max": 2.0,
-        "step": 0.05,
-        "unit": "*",
-        "icon": "mdi:call-split",
-        "enable": "expert_mode",
-        "default": 0.95,
-    },
-    {
-        "name": "metric_cloud_enable",
-        "friendly_name": "Enable Cloud Model",
-        "type": "switch",
-        "default": True,
-        "enable": "expert_mode",
-    },
-    {
-        "name": "set_reserve_min",
-        "friendly_name": "Set Reserve Min",
-        "type": "input_number",
-        "min": 4,
-        "max": 100,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
-        "default": 4.0,
-        "reset_inverter": True,
-    },
-    {
-        "name": "rate_low_threshold",
-        "friendly_name": "Rate Low Threshold",
-        "type": "input_number",
-        "min": 0.00,
-        "max": 2.00,
-        "step": 0.05,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "rate_high_threshold",
-        "friendly_name": "Rate High Threshold",
-        "type": "input_number",
-        "min": 0.00,
-        "max": 2.00,
-        "step": 0.05,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "enable": "expert_mode",
-        "default": 0.0,
-    },
-    {
-        "name": "car_charging_hold",
-        "friendly_name": "Car charging hold",
-        "type": "switch",
-        "default": True,
-        "reset_inverter": True,
-    },
-    {
-        "name": "car_charging_manual_soc",
-        "friendly_name": "Car charging manual SOC",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "car_charging_manual_soc_kwh",
-        "friendly_name": "Car manual SOC kWh",
-        "type": "input_number",
-        "min": 0,
-        "max": 100,
-        "step": 0.01,
-        "unit": "kWh",
-        "icon": "mdi:ev-station",
-        "enable": "car_charging_manual_soc",
-        "default": 0.0,
-        "restore": False,
-    },
-    {
-        "name": "octopus_intelligent_charging",
-        "friendly_name": "Octopus Intelligent Charging",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "octopus_intelligent_ignore_unplugged",
-        "friendly_name": "Ignore Intelligent slots when car is unplugged",
-        "type": "switch",
-        "default": False,
-        "enable": "expert_mode",
-    },
-    {
-        "name": "car_charging_plan_smart",
-        "friendly_name": "Car Charging Plan Smart",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "car_charging_from_battery",
-        "friendly_name": "Allow car to charge from battery",
-        "type": "switch",
-        "default": False,
-        "reset_inverter": True,
-    },
-    {
-        "name": "calculate_discharge_oncharge",
-        "friendly_name": "Calculate Discharge on charge slots",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-    },
-    {
-        "name": "calculate_fast_plan",
-        "friendly_name": "Calculate plan faster (less accurate)",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "calculate_second_pass",
-        "friendly_name": "Calculate full second pass (slower)",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "calculate_tweak_plan",
-        "friendly_name": "Calculate tweak second pass",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "calculate_regions",
-        "friendly_name": "Calculate region optimisation",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-    },
-    {
-        "name": "calculate_inday_adjustment",
-        "friendly_name": "Calculate in-day adjustment",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-    },
-    {
-        "name": "calculate_plan_every",
-        "friendly_name": "Calculate plan every N minutes",
-        "type": "input_number",
-        "min": 5,
-        "max": 60,
-        "step": 5,
-        "unit": "minutes",
-        "icon": "mdi:clock-end",
-        "enable": "expert_mode",
-        "default": 10,
-    },
-    {
-        "name": "combine_charge_slots",
-        "friendly_name": "Combine Charge Slots",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "combine_discharge_slots",
-        "friendly_name": "Combine Discharge Slots",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
-        "name": "set_status_notify",
-        "friendly_name": "Set Status Notify",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "set_inverter_notify",
-        "friendly_name": "Set Inverter Notify",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "set_charge_freeze",
-        "friendly_name": "Set Charge Freeze",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-        "reset_inverter": True,
-    },
-    {
-        "name": "set_charge_low_power",
-        "friendly_name": "Set Charge Low Power Mode",
-        "type": "switch",
-        "default": False,
-        "reset_inverter": True,
-    },
-    {
-        "name": "set_reserve_enable",
-        "friendly_name": "Set Reserve Enable",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-        "reset_inverter": True,
-    },
-    {
-        "name": "set_discharge_freeze_only",
-        "friendly_name": "Set Discharge Freeze Only",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-        "reset_inverter": True,
-    },
-    {
-        "name": "set_discharge_during_charge",
-        "friendly_name": "Set Discharge During Charge",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "set_read_only",
-        "friendly_name": "Read Only mode",
-        "type": "switch",
-        "default": False,
-        "reset_inverter_force": True,
-    },
-    {
-        "name": "balance_inverters_enable",
-        "friendly_name": "Balance Inverters Enable (Beta)",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "balance_inverters_charge",
-        "friendly_name": "Balance Inverters for charging",
-        "type": "switch",
-        "enable": "balance_inverters_enable",
-        "default": True,
-    },
-    {
-        "name": "balance_inverters_discharge",
-        "friendly_name": "Balance Inverters for discharge",
-        "type": "switch",
-        "enable": "balance_inverters_enable",
-        "default": True,
-    },
-    {
-        "name": "balance_inverters_crosscharge",
-        "friendly_name": "Balance Inverters for cross-charging",
-        "type": "switch",
-        "enable": "balance_inverters_enable",
-        "default": True,
-    },
-    {
-        "name": "balance_inverters_threshold_charge",
-        "friendly_name": "Balance Inverters threshold charge",
-        "type": "input_number",
-        "min": 1,
-        "max": 20,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
-        "enable": "balance_inverters_enable",
-        "default": 1.0,
-    },
-    {
-        "name": "balance_inverters_threshold_discharge",
-        "friendly_name": "Balance Inverters threshold discharge",
-        "type": "input_number",
-        "min": 1,
-        "max": 20,
-        "step": 1,
-        "unit": "%",
-        "icon": "mdi:percent",
-        "enable": "balance_inverters_enable",
-        "default": 1.0,
-    },
-    {
-        "name": "debug_enable",
-        "friendly_name": "Debug Enable",
-        "type": "switch",
-        "icon": "mdi:bug-outline",
-        "default": False,
-    },
-    {
-        "name": "car_charging_plan_time",
-        "friendly_name": "Car charging planned ready time",
-        "type": "select",
-        "options": OPTIONS_TIME,
-        "icon": "mdi:clock-end",
-        "default": "07:00:00",
-    },
-    {
-        "name": "mode",
-        "friendly_name": "Predbat mode",
-        "type": "select",
-        "options": PREDBAT_MODE_OPTIONS,
-        "icon": "mdi:state-machine",
-        "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
-        "reset_inverter_force": True,
-    },
-    {
-        "name": "update",
-        "friendly_name": "Predbat update",
-        "type": "select",
-        "options": PREDBAT_UPDATE_OPTIONS,
-        "icon": "mdi:state-machine",
-        "default": None,
-        "restore": False,
-    },
-    {
-        "name": "manual_charge",
-        "friendly_name": "Manual force charge",
-        "type": "select",
-        "options": [],
-        "icon": "mdi:state-machine",
-        "default": "",
-        "restore": False,
-        "manual": True,
-    },
-    {
-        "name": "manual_discharge",
-        "friendly_name": "Manual force discharge",
-        "type": "select",
-        "options": [],
-        "icon": "mdi:state-machine",
-        "default": "",
-        "restore": False,
-        "manual": True,
-    },
-    {
-        "name": "manual_idle",
-        "friendly_name": "Manual force idle",
-        "type": "select",
-        "options": [],
-        "icon": "mdi:state-machine",
-        "default": "",
-        "restore": False,
-        "manual": True,
-    },
-    {
-        "name": "saverestore",
-        "friendly_name": "Save/restore settings",
-        "type": "select",
-        "options": PREDBAT_SAVE_RESTORE,
-        "icon": "mdi:state-machine",
-        "default": "",
-        "restore": False,
-    },
-    {
-        "name": "auto_update",
-        "friendly_name": "Predbat automatic update enable",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "load_filter_modal",
-        "friendly_name": "Apply modal filter historical load",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-    },
-    {
-        "name": "iboost_enable",
-        "friendly_name": "IBoost enable",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "iboost_solar",
-        "friendly_name": "IBoost on solar power",
-        "type": "switch",
-        "default": True,
-    },
-    {
-        "name": "iboost_gas",
-        "friendly_name": "IBoost when cheaper than gas",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "iboost_charging",
-        "friendly_name": "IBoost when battery charging",
-        "type": "switch",
-        "default": False,
-    },
-    {
-        "name": "iboost_gas_scale",
-        "friendly_name": "IBoost gas price scaling",
-        "type": "input_number",
-        "min": 0,
-        "max": 2.0,
-        "step": 0.1,
-        "unit": "*",
-        "icon": "mdi:multiplication",
-        "enable": "iboost_enable",
-        "default": 1.0,
-    },
-    {
-        "name": "iboost_max_energy",
-        "friendly_name": "IBoost max energy",
-        "type": "input_number",
-        "min": 0,
-        "max": 5,
-        "step": 0.1,
-        "unit": "kWh",
-        "enable": "iboost_enable",
-        "default": 3.0,
-    },
-    {
-        "name": "iboost_today",
-        "friendly_name": "IBoost today",
-        "type": "input_number",
-        "min": 0,
-        "max": 5,
-        "step": 0.1,
-        "unit": "kWh",
-        "enable": "iboost_enable",
-        "default": 0.0,
-    },
-    {
-        "name": "iboost_max_power",
-        "friendly_name": "IBoost max power",
-        "type": "input_number",
-        "min": 0,
-        "max": 3500,
-        "step": 100,
-        "unit": "W",
-        "enable": "iboost_enable",
-        "default": 2400,
-        "restore": False,
-    },
-    {
-        "name": "iboost_min_power",
-        "friendly_name": "IBoost min power",
-        "type": "input_number",
-        "min": 0,
-        "max": 3500,
-        "step": 100,
-        "unit": "W",
-        "enable": "iboost_enable",
-        "default": 500,
-    },
-    {
-        "name": "iboost_min_soc",
-        "friendly_name": "IBoost min soc",
-        "type": "input_number",
-        "min": 0,
-        "max": 100,
-        "step": 5,
-        "unit": "%",
-        "icon": "mdi:percent",
-        "enable": "iboost_enable",
-        "default": 0.0,
-    },
-    {
-        "name": "holiday_days_left",
-        "friendly_name": "Holiday days left",
-        "type": "input_number",
-        "min": 0,
-        "max": 28,
-        "step": 1,
-        "unit": "days",
-        "icon": "mdi:clock-end",
-        "default": 0,
-        "restore": False,
-    },
-    {
-        "name": "forecast_plan_hours",
-        "friendly_name": "Plan forecast hours",
-        "type": "input_number",
-        "min": 8,
-        "max": 96,
-        "step": 1,
-        "unit": "hours",
-        "icon": "mdi:clock-end",
-        "enable": "expert_mode",
-        "default": 24,
-    },
-    {
-        "name": "plan_debug",
-        "friendly_name": "HTML Plan Debug",
-        "type": "switch",
-        "default": False,
-        "enable": "expert_mode",
-    },
-]
+    # Configuration options inside HA
+    CONFIG_ITEMS = [
+        {
+            "name": "version",
+            "friendly_name": "Predbat Core Update",
+            "type": "update",
+            "title": "Predbat",
+            "installed_version": THIS_VERSION,
+            "release_url": f"https://github.com/springfall2008/batpred/releases/tag/{THIS_VERSION}",
+            "entity_picture": "https://user-images.githubusercontent.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png",
+            "restore": False,
+            "default": False,
+        },
+        {
+            "name": "expert_mode",
+            "friendly_name": "Expert Mode",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "pv_metric10_weight",
+            "friendly_name": "Metric 10 Weight",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 0.15,
+        },
+        {
+            "name": "pv_scaling",
+            "friendly_name": "PV Scaling",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "load_scaling",
+            "friendly_name": "Load Scaling",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "load_scaling10",
+            "friendly_name": "Load Scaling PV10%",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.1,
+        },
+        {
+            "name": "load_scaling_saving",
+            "friendly_name": "Load Scaling for saving sessions",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "battery_rate_max_scaling",
+            "friendly_name": "Battery rate max scaling charge",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "battery_rate_max_scaling_discharge",
+            "friendly_name": "Battery rate max scaling discharge",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "battery_loss",
+            "friendly_name": "Battery loss charge ",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:call-split",
+            "default": 0.03,
+        },
+        {
+            "name": "battery_loss_discharge",
+            "friendly_name": "Battery loss discharge",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:call-split",
+            "default": 0.03,
+        },
+        {
+            "name": "inverter_loss",
+            "friendly_name": "Inverter Loss",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:call-split",
+            "default": 0.04,
+        },
+        {
+            "name": "inverter_hybrid",
+            "friendly_name": "Inverter Hybrid",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "inverter_soc_reset",
+            "friendly_name": "Inverter SOC Reset",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "battery_capacity_nominal",
+            "friendly_name": "Use the Battery Capacity Nominal size",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "car_charging_energy_scale",
+            "friendly_name": "Car charging energy scale",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "default": 1.0,
+        },
+        {
+            "name": "car_charging_threshold",
+            "friendly_name": "Car charging threshold",
+            "type": "input_number",
+            "min": 4,
+            "max": 8.5,
+            "step": 0.10,
+            "unit": "kW",
+            "icon": "mdi:ev-station",
+            "default": 6.0,
+        },
+        {
+            "name": "car_charging_rate",
+            "friendly_name": "Car charging rate",
+            "type": "input_number",
+            "min": 1,
+            "max": 8.5,
+            "step": 0.10,
+            "unit": "kW",
+            "icon": "mdi:ev-station",
+            "default": 7.4,
+        },
+        {
+            "name": "car_charging_loss",
+            "friendly_name": "Car charging loss",
+            "type": "input_number",
+            "min": 0,
+            "max": 1.0,
+            "step": 0.01,
+            "unit": "*",
+            "icon": "mdi:call-split",
+            "default": 0.08,
+        },
+        {
+            "name": "best_soc_min",
+            "friendly_name": "Best SOC Min",
+            "type": "input_number",
+            "min": 0,
+            "max": 30.0,
+            "step": 0.10,
+            "unit": "kWh",
+            "icon": "mdi:battery-50",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "best_soc_max",
+            "friendly_name": "Best SOC Max",
+            "type": "input_number",
+            "min": 0,
+            "max": 30.0,
+            "step": 0.10,
+            "unit": "kWh",
+            "icon": "mdi:battery-50",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "best_soc_keep",
+            "friendly_name": "Best SOC Keep",
+            "type": "input_number",
+            "min": 0,
+            "max": 30.0,
+            "step": 0.10,
+            "unit": "kWh",
+            "icon": "mdi:battery-50",
+            "default": 0.5,
+        },
+        {
+            "name": "metric_min_improvement",
+            "friendly_name": "Metric Min Improvement",
+            "type": "input_number",
+            "min": -50,
+            "max": 50.0,
+            "step": 0.1,
+            "unit": "p",
+            "icon": "mdi:currency-usd",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "metric_min_improvement_discharge",
+            "friendly_name": "Metric Min Improvement Discharge",
+            "type": "input_number",
+            "min": -50,
+            "max": 50.0,
+            "step": 0.1,
+            "unit": "p",
+            "icon": "mdi:currency-usd",
+            "enable": "expert_mode",
+            "default": 0.1,
+        },
+        {
+            "name": "metric_battery_cycle",
+            "friendly_name": "Metric Battery Cycle Cost",
+            "type": "input_number",
+            "min": -50,
+            "max": 50.0,
+            "step": 0.1,
+            "unit": "p/kWh",
+            "icon": "mdi:currency-usd",
+            "enable": "expert_mode",
+            "default": 1.0,
+        },
+        {
+            "name": "metric_battery_value_scaling",
+            "friendly_name": "Metric Battery Value Scaling",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.1,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "enable": "expert_mode",
+            "default": 1.0,
+        },
+        {
+            "name": "metric_future_rate_offset_import",
+            "friendly_name": "Metric Future Rate Offset Import",
+            "type": "input_number",
+            "min": -50,
+            "max": 50.0,
+            "step": 0.1,
+            "unit": "p/kWh",
+            "icon": "mdi:currency-usd",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "metric_future_rate_offset_export",
+            "friendly_name": "Metric Future Rate Offset Export",
+            "type": "input_number",
+            "min": -50,
+            "max": 50.0,
+            "step": 0.1,
+            "unit": "p/kWh",
+            "icon": "mdi:currency-usd",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "metric_inday_adjust_damping",
+            "friendly_name": "In-day adjustment damping factor",
+            "type": "input_number",
+            "min": 0.5,
+            "max": 2.0,
+            "step": 0.05,
+            "unit": "*",
+            "icon": "mdi:call-split",
+            "enable": "expert_mode",
+            "default": 0.95,
+        },
+        {
+            "name": "metric_cloud_enable",
+            "friendly_name": "Enable Cloud Model",
+            "type": "switch",
+            "default": True,
+            "enable": "expert_mode",
+        },
+        {
+            "name": "set_reserve_min",
+            "friendly_name": "Set Reserve Min",
+            "type": "input_number",
+            "min": 4,
+            "max": 100,
+            "step": 1,
+            "unit": "%",
+            "icon": "mdi:percent",
+            "default": 4.0,
+            "reset_inverter": True,
+        },
+        {
+            "name": "rate_low_threshold",
+            "friendly_name": "Rate Low Threshold",
+            "type": "input_number",
+            "min": 0.00,
+            "max": 2.00,
+            "step": 0.05,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "rate_high_threshold",
+            "friendly_name": "Rate High Threshold",
+            "type": "input_number",
+            "min": 0.00,
+            "max": 2.00,
+            "step": 0.05,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "enable": "expert_mode",
+            "default": 0.0,
+        },
+        {
+            "name": "car_charging_hold",
+            "friendly_name": "Car charging hold",
+            "type": "switch",
+            "default": True,
+            "reset_inverter": True,
+        },
+        {
+            "name": "car_charging_manual_soc",
+            "friendly_name": "Car charging manual SOC",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "car_charging_manual_soc_kwh",
+            "friendly_name": "Car manual SOC kWh",
+            "type": "input_number",
+            "min": 0,
+            "max": 100,
+            "step": 0.01,
+            "unit": "kWh",
+            "icon": "mdi:ev-station",
+            "enable": "car_charging_manual_soc",
+            "default": 0.0,
+            "restore": False,
+        },
+        {
+            "name": "octopus_intelligent_charging",
+            "friendly_name": "Octopus Intelligent Charging",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "octopus_intelligent_ignore_unplugged",
+            "friendly_name": "Ignore Intelligent slots when car is unplugged",
+            "type": "switch",
+            "default": False,
+            "enable": "expert_mode",
+        },
+        {
+            "name": "car_charging_plan_smart",
+            "friendly_name": "Car Charging Plan Smart",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "car_charging_from_battery",
+            "friendly_name": "Allow car to charge from battery",
+            "type": "switch",
+            "default": False,
+            "reset_inverter": True,
+        },
+        {
+            "name": "calculate_discharge_oncharge",
+            "friendly_name": "Calculate Discharge on charge slots",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+        },
+        {
+            "name": "calculate_fast_plan",
+            "friendly_name": "Calculate plan faster (less accurate)",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "calculate_second_pass",
+            "friendly_name": "Calculate full second pass (slower)",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "calculate_tweak_plan",
+            "friendly_name": "Calculate tweak second pass",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "calculate_regions",
+            "friendly_name": "Calculate region optimisation",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+        },
+        {
+            "name": "calculate_inday_adjustment",
+            "friendly_name": "Calculate in-day adjustment",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+        },
+        {
+            "name": "calculate_plan_every",
+            "friendly_name": "Calculate plan every N minutes",
+            "type": "input_number",
+            "min": 5,
+            "max": 60,
+            "step": 5,
+            "unit": "minutes",
+            "icon": "mdi:clock-end",
+            "enable": "expert_mode",
+            "default": 10,
+        },
+        {
+            "name": "combine_charge_slots",
+            "friendly_name": "Combine Charge Slots",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "combine_discharge_slots",
+            "friendly_name": "Combine Discharge Slots",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+        },
+        {
+            "name": "set_status_notify",
+            "friendly_name": "Set Status Notify",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "set_inverter_notify",
+            "friendly_name": "Set Inverter Notify",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "set_charge_freeze",
+            "friendly_name": "Set Charge Freeze",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+            "reset_inverter": True,
+        },
+        {
+            "name": "set_charge_low_power",
+            "friendly_name": "Set Charge Low Power Mode",
+            "type": "switch",
+            "default": False,
+            "reset_inverter": True,
+        },
+        {
+            "name": "set_reserve_enable",
+            "friendly_name": "Set Reserve Enable",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+            "reset_inverter": True,
+        },
+        {
+            "name": "set_discharge_freeze_only",
+            "friendly_name": "Set Discharge Freeze Only",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": False,
+            "reset_inverter": True,
+        },
+        {
+            "name": "set_discharge_during_charge",
+            "friendly_name": "Set Discharge During Charge",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "set_read_only",
+            "friendly_name": "Read Only mode",
+            "type": "switch",
+            "default": False,
+            "reset_inverter_force": True,
+        },
+        {
+            "name": "balance_inverters_enable",
+            "friendly_name": "Balance Inverters Enable (Beta)",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "balance_inverters_charge",
+            "friendly_name": "Balance Inverters for charging",
+            "type": "switch",
+            "enable": "balance_inverters_enable",
+            "default": True,
+        },
+        {
+            "name": "balance_inverters_discharge",
+            "friendly_name": "Balance Inverters for discharge",
+            "type": "switch",
+            "enable": "balance_inverters_enable",
+            "default": True,
+        },
+        {
+            "name": "balance_inverters_crosscharge",
+            "friendly_name": "Balance Inverters for cross-charging",
+            "type": "switch",
+            "enable": "balance_inverters_enable",
+            "default": True,
+        },
+        {
+            "name": "balance_inverters_threshold_charge",
+            "friendly_name": "Balance Inverters threshold charge",
+            "type": "input_number",
+            "min": 1,
+            "max": 20,
+            "step": 1,
+            "unit": "%",
+            "icon": "mdi:percent",
+            "enable": "balance_inverters_enable",
+            "default": 1.0,
+        },
+        {
+            "name": "balance_inverters_threshold_discharge",
+            "friendly_name": "Balance Inverters threshold discharge",
+            "type": "input_number",
+            "min": 1,
+            "max": 20,
+            "step": 1,
+            "unit": "%",
+            "icon": "mdi:percent",
+            "enable": "balance_inverters_enable",
+            "default": 1.0,
+        },
+        {
+            "name": "debug_enable",
+            "friendly_name": "Debug Enable",
+            "type": "switch",
+            "icon": "mdi:bug-outline",
+            "default": False,
+        },
+        {
+            "name": "car_charging_plan_time",
+            "friendly_name": "Car charging planned ready time",
+            "type": "select",
+            "options": OPTIONS_TIME,
+            "icon": "mdi:clock-end",
+            "default": "07:00:00",
+        },
+        {
+            "name": "mode",
+            "friendly_name": "Predbat mode",
+            "type": "select",
+            "options": PREDBAT_MODE_OPTIONS,
+            "icon": "mdi:state-machine",
+            "default": PREDBAT_MODE_OPTIONS[PREDBAT_MODE_CONTROL_CHARGEDISCHARGE],
+            "reset_inverter_force": True,
+        },
+        {
+            "name": "update",
+            "friendly_name": "Predbat update",
+            "type": "select",
+            "options": PREDBAT_UPDATE_OPTIONS,
+            "icon": "mdi:state-machine",
+            "default": None,
+            "restore": False,
+        },
+        {
+            "name": "manual_charge",
+            "friendly_name": "Manual force charge",
+            "type": "select",
+            "options": [],
+            "icon": "mdi:state-machine",
+            "default": "",
+            "restore": False,
+            "manual": True,
+        },
+        {
+            "name": "manual_discharge",
+            "friendly_name": "Manual force discharge",
+            "type": "select",
+            "options": [],
+            "icon": "mdi:state-machine",
+            "default": "",
+            "restore": False,
+            "manual": True,
+        },
+        {
+            "name": "manual_idle",
+            "friendly_name": "Manual force idle",
+            "type": "select",
+            "options": [],
+            "icon": "mdi:state-machine",
+            "default": "",
+            "restore": False,
+            "manual": True,
+        },
+        {
+            "name": "saverestore",
+            "friendly_name": "Save/restore settings",
+            "type": "select",
+            "options": PREDBAT_SAVE_RESTORE,
+            "icon": "mdi:state-machine",
+            "default": "",
+            "restore": False,
+        },
+        {
+            "name": "auto_update",
+            "friendly_name": "Predbat automatic update enable",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "load_filter_modal",
+            "friendly_name": "Apply modal filter historical load",
+            "type": "switch",
+            "enable": "expert_mode",
+            "default": True,
+        },
+        {
+            "name": "iboost_enable",
+            "friendly_name": "IBoost enable",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "iboost_solar",
+            "friendly_name": "IBoost on solar power",
+            "type": "switch",
+            "default": True,
+        },
+        {
+            "name": "iboost_gas",
+            "friendly_name": "IBoost when cheaper than gas",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "iboost_charging",
+            "friendly_name": "IBoost when battery charging",
+            "type": "switch",
+            "default": False,
+        },
+        {
+            "name": "iboost_gas_scale",
+            "friendly_name": "IBoost gas price scaling",
+            "type": "input_number",
+            "min": 0,
+            "max": 2.0,
+            "step": 0.1,
+            "unit": "*",
+            "icon": "mdi:multiplication",
+            "enable": "iboost_enable",
+            "default": 1.0,
+        },
+        {
+            "name": "iboost_max_energy",
+            "friendly_name": "IBoost max energy",
+            "type": "input_number",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "unit": "kWh",
+            "enable": "iboost_enable",
+            "default": 3.0,
+        },
+        {
+            "name": "iboost_today",
+            "friendly_name": "IBoost today",
+            "type": "input_number",
+            "min": 0,
+            "max": 5,
+            "step": 0.1,
+            "unit": "kWh",
+            "enable": "iboost_enable",
+            "default": 0.0,
+        },
+        {
+            "name": "iboost_max_power",
+            "friendly_name": "IBoost max power",
+            "type": "input_number",
+            "min": 0,
+            "max": 3500,
+            "step": 100,
+            "unit": "W",
+            "enable": "iboost_enable",
+            "default": 2400,
+            "restore": False,
+        },
+        {
+            "name": "iboost_min_power",
+            "friendly_name": "IBoost min power",
+            "type": "input_number",
+            "min": 0,
+            "max": 3500,
+            "step": 100,
+            "unit": "W",
+            "enable": "iboost_enable",
+            "default": 500,
+        },
+        {
+            "name": "iboost_min_soc",
+            "friendly_name": "IBoost min soc",
+            "type": "input_number",
+            "min": 0,
+            "max": 100,
+            "step": 5,
+            "unit": "%",
+            "icon": "mdi:percent",
+            "enable": "iboost_enable",
+            "default": 0.0,
+        },
+        {
+            "name": "holiday_days_left",
+            "friendly_name": "Holiday days left",
+            "type": "input_number",
+            "min": 0,
+            "max": 28,
+            "step": 1,
+            "unit": "days",
+            "icon": "mdi:clock-end",
+            "default": 0,
+            "restore": False,
+        },
+        {
+            "name": "forecast_plan_hours",
+            "friendly_name": "Plan forecast hours",
+            "type": "input_number",
+            "min": 8,
+            "max": 96,
+            "step": 1,
+            "unit": "hours",
+            "icon": "mdi:clock-end",
+            "enable": "expert_mode",
+            "default": 24,
+        },
+        {
+            "name": "plan_debug",
+            "friendly_name": "HTML Plan Debug",
+            "type": "switch",
+            "default": False,
+            "enable": "expert_mode",
+        },
+    ]
 
-"""
-GE Inverters are the default but not all inverters have the same parameters so this constant
-maps the parameters that are different between brands.
+    """
+    GE Inverters are the default but not all inverters have the same parameters so this constant
+    maps the parameters that are different between brands.
 
-The approach is to attempt to mimic the GE model with dummy entities in HA so that predbat GE
-code can be used with minimal modification.
-"""
-INVERTER_DEF = {
-    "GE": {
-        "has_rest_api": True,
-        "has_mqtt_api": False,
-        "has_service_api": False,
-        "output_charge_control": "power",
-        "has_charge_enable_time": True,
-        "has_discharge_enable_time": True,
-        "has_target_soc": True,
-        "has_reserve_soc": True,
-        "charge_time_format": "HH:MM:SS",
-        "charge_time_entity_is_option": True,
-        "soc_units": "kWh",
-        "num_load_entities": 1,
-        "has_ge_inverter_mode": True,
-        "time_button_press": False,
-        "clock_time_format": "%H:%M:%S",
-        "write_and_poll_sleep": 10,
-        "has_time_window": True,
-        "support_discharge_freeze": True,
-    },
-    "GS": {
-        "has_rest_api": False,
-        "has_mqtt_api": False,
-        "has_service_api": False,
-        "output_charge_control": "current",
-        "has_charge_enable_time": False,
-        "has_discharge_enable_time": False,
-        "has_target_soc": False,
-        "has_reserve_soc": True,
-        "charge_time_format": "H M",
-        "charge_time_entity_is_option": False,
-        "soc_units": "%",
-        "num_load_entities": 2,
-        "has_ge_inverter_mode": False,
-        "time_button_press": True,
-        "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
-        "has_time_window": True,
-        "support_discharge_freeze": False,
-    },
-    "SX4": {
-        "has_rest_api": False,
-        "has_mqtt_api": False,
-        "has_service_api": False,
-        "output_charge_control": "power",
-        "has_charge_enable_time": False,
-        "has_discharge_enable_time": False,
-        "has_target_soc": False,
-        "has_reserve_soc": False,
-        "charge_time_format": "S",
-        "charge_time_entity_is_option": False,
-        "soc_units": "%",
-        "num_load_entities": 1,
-        "has_ge_inverter_mode": False,
-        "time_button_press": True,
-        "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
-        "has_time_window": False,
-        "support_discharge_freeze": False,
-    },
-    "SF": {
-        "has_rest_api": False,
-        "has_mqtt_api": True,
-        "has_service_api": False,
-        "output_charge_control": "none",
-        "has_charge_enable_time": False,
-        "has_discharge_enable_time": False,
-        "has_target_soc": False,
-        "has_reserve_soc": False,
-        "charge_time_format": "S",
-        "charge_time_entity_is_option": False,
-        "soc_units": "%",
-        "num_load_entities": 1,
-        "has_ge_inverter_mode": False,
-        "time_button_press": False,
-        "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
-        "has_time_window": False,
-        "support_discharge_freeze": False,
-    },
-    "HU": {
-        "has_rest_api": False,
-        "has_mqtt_api": False,
-        "has_service_api": True,
-        "output_charge_control": "none",
-        "has_charge_enable_time": False,
-        "has_discharge_enable_time": False,
-        "has_target_soc": False,
-        "has_reserve_soc": False,
-        "charge_time_format": "S",
-        "charge_time_entity_is_option": False,
-        "soc_units": "%",
-        "num_load_entities": 1,
-        "has_ge_inverter_mode": False,
-        "time_button_press": False,
-        "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
-        "has_time_window": False,
-        "support_discharge_freeze": False,
-    },
-}
+    The approach is to attempt to mimic the GE model with dummy entities in HA so that predbat GE
+    code can be used with minimal modification.
+    """
+    INVERTER_DEF = {
+        "GE": {
+            "has_rest_api": True,
+            "has_mqtt_api": False,
+            "has_service_api": False,
+            "output_charge_control": "power",
+            "has_charge_enable_time": True,
+            "has_discharge_enable_time": True,
+            "has_target_soc": True,
+            "has_reserve_soc": True,
+            "charge_time_format": "HH:MM:SS",
+            "charge_time_entity_is_option": True,
+            "soc_units": "kWh",
+            "num_load_entities": 1,
+            "has_ge_inverter_mode": True,
+            "time_button_press": False,
+            "clock_time_format": "%H:%M:%S",
+            "write_and_poll_sleep": 10,
+            "has_time_window": True,
+            "support_discharge_freeze": True,
+        },
+        "GS": {
+            "has_rest_api": False,
+            "has_mqtt_api": False,
+            "has_service_api": False,
+            "output_charge_control": "current",
+            "has_charge_enable_time": False,
+            "has_discharge_enable_time": False,
+            "has_target_soc": False,
+            "has_reserve_soc": True,
+            "charge_time_format": "H M",
+            "charge_time_entity_is_option": False,
+            "soc_units": "%",
+            "num_load_entities": 2,
+            "has_ge_inverter_mode": False,
+            "time_button_press": True,
+            "clock_time_format": "%Y-%m-%d %H:%M:%S",
+            "write_and_poll_sleep": 2,
+            "has_time_window": True,
+            "support_discharge_freeze": False,
+        },
+        "SX4": {
+            "has_rest_api": False,
+            "has_mqtt_api": False,
+            "has_service_api": False,
+            "output_charge_control": "power",
+            "has_charge_enable_time": False,
+            "has_discharge_enable_time": False,
+            "has_target_soc": False,
+            "has_reserve_soc": False,
+            "charge_time_format": "S",
+            "charge_time_entity_is_option": False,
+            "soc_units": "%",
+            "num_load_entities": 1,
+            "has_ge_inverter_mode": False,
+            "time_button_press": True,
+            "clock_time_format": "%Y-%m-%d %H:%M:%S",
+            "write_and_poll_sleep": 2,
+            "has_time_window": False,
+            "support_discharge_freeze": False,
+        },
+        "SF": {
+            "has_rest_api": False,
+            "has_mqtt_api": True,
+            "has_service_api": False,
+            "output_charge_control": "none",
+            "has_charge_enable_time": False,
+            "has_discharge_enable_time": False,
+            "has_target_soc": False,
+            "has_reserve_soc": False,
+            "charge_time_format": "S",
+            "charge_time_entity_is_option": False,
+            "soc_units": "%",
+            "num_load_entities": 1,
+            "has_ge_inverter_mode": False,
+            "time_button_press": False,
+            "clock_time_format": "%Y-%m-%d %H:%M:%S",
+            "write_and_poll_sleep": 2,
+            "has_time_window": False,
+            "support_discharge_freeze": False,
+        },
+        "HU": {
+            "has_rest_api": False,
+            "has_mqtt_api": False,
+            "has_service_api": True,
+            "output_charge_control": "none",
+            "has_charge_enable_time": False,
+            "has_discharge_enable_time": False,
+            "has_target_soc": False,
+            "has_reserve_soc": False,
+            "charge_time_format": "S",
+            "charge_time_entity_is_option": False,
+            "soc_units": "%",
+            "num_load_entities": 1,
+            "has_ge_inverter_mode": False,
+            "time_button_press": False,
+            "clock_time_format": "%Y-%m-%d %H:%M:%S",
+            "write_and_poll_sleep": 2,
+            "has_time_window": False,
+            "support_discharge_freeze": False,
+        },
+    }
 
 
-SOLAX_SOLIS_MODES = {
-    "Selfuse - No Grid Charging": 1,
-    "Timed Charge/Discharge - No Grid Charging": 3,
-    "Selfuse": 33,
-    "Timed Charge/Discharge": 35,
-    "Off-Grid Mode": 37,
-    "Battery Awaken": 41,
-    "Battery Awaken + Timed Charge/Discharge": 43,
-    "Backup/Reserve": 51,
-}
+    SOLAX_SOLIS_MODES = {
+        "Selfuse - No Grid Charging": 1,
+        "Timed Charge/Discharge - No Grid Charging": 3,
+        "Selfuse": 33,
+        "Timed Charge/Discharge": 35,
+        "Off-Grid Mode": 37,
+        "Battery Awaken": 41,
+        "Battery Awaken + Timed Charge/Discharge": 43,
+        "Backup/Reserve": 51,
+    }
 
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
@@ -1053,7 +1056,6 @@ def calc_percent_limit(charge_limit, soc_max):
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
-
 def get_charge_rate_curve(model, soc, charge_rate_setting):
     """
     Compute true charging rate from SOC and charge rate setting
@@ -1062,7 +1064,6 @@ def get_charge_rate_curve(model, soc, charge_rate_setting):
     max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
     return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
 
-
 def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     """
     Compute true discharging rate from SOC and charge rate setting
@@ -1070,7 +1071,6 @@ def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     soc_percent = calc_percent_limit(soc, model.soc_max)
     max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
     return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
-
 
 def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
     """
@@ -1118,11 +1118,6 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
     else:
         return max_rate
 
-
-if not "PRED_GLOBAL" in globals():
-    PRED_GLOBAL = {}
-
-
 class Prediction:
     """
     Class to hold prediction input and output data and the run function
@@ -1159,17 +1154,10 @@ class Prediction:
         self.set_charge_low_power = base.set_charge_low_power
         self.car_charging_slots = base.car_charging_slots
         self.car_charging_limit = base.car_charging_limit
-        self.predict_soc = {}
-        self.predict_soc_best = {}
-        self.predict_metric_best = {}
-        self.predict_iboost_best = {}
         self.car_charging_from_battery = base.car_charging_from_battery
         self.iboost_enable = base.iboost_enable
         self.iboost_next = base.iboost_next
         self.iboost_max_energy = base.iboost_max_energy
-        self.rate_gas = base.rate_gas
-        self.rate_import = base.rate_import
-        self.rate_export = base.rate_export
         self.iboost_gas = base.iboost_gas
         self.iboost_gas_scale = base.iboost_gas_scale
         self.iboost_max_power = base.iboost_max_power
@@ -1195,14 +1183,15 @@ class Prediction:
         self.battery_loss_discharge = base.battery_loss_discharge
         self.best_soc_keep = base.best_soc_keep
         self.car_charging_battery_size = base.car_charging_battery_size
-        PRED_GLOBAL["pv_forecast_minute_step"] = pv_forecast_minute_step
-        PRED_GLOBAL["pv_forecast_minute10_step"] = pv_forecast_minute10_step
-        PRED_GLOBAL["load_minutes_step"] = load_minutes_step
-        PRED_GLOBAL["load_minutes_step10"] = load_minutes_step10
-        # self.pv_forecast_minute_step = pv_forecast_minute_step
-        # self.pv_forecast_minute10_step = pv_forecast_minute10_step
-        # self.load_minutes_step = load_minutes_step
-        # self.load_minutes_step10 = load_minutes_step10
+
+        # Store the larger structures in globals to avoid passing them to threads
+        PRED_GLOBAL['pv_forecast_minute_step'] = pv_forecast_minute_step
+        PRED_GLOBAL['pv_forecast_minute10_step'] = pv_forecast_minute10_step
+        PRED_GLOBAL['load_minutes_step'] = load_minutes_step
+        PRED_GLOBAL['load_minutes_step10'] = load_minutes_step10
+        PRED_GLOBAL['rate_gas'] = base.rate_gas
+        PRED_GLOBAL['rate_import'] = base.rate_import
+        PRED_GLOBAL['rate_export'] = base.rate_export
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1252,6 +1241,7 @@ class Prediction:
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
+
     def find_charge_window_optimised(self, charge_windows):
         """
         Takes in an array of charge windows
@@ -1288,17 +1278,24 @@ class Prediction:
         """
         Run a prediction scenario given a charge limit, return the results
         """
+
+        # Fetch data from globals, optimised away from class to avoid passing it between threads
         global PRED_GLOBAL
         if pv10:
-            # pv_forecast_minute_step = self.pv_forecast_minute10_step
-            # load_minutes_step = self.load_minutes_step10
-            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute10_step"]
-            load_minutes_step = PRED_GLOBAL["load_minutes_step10"]
+            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute10_step']
+            load_minutes_step = PRED_GLOBAL['load_minutes_step10']
         else:
-            # pv_forecast_minute_step = self.pv_forecast_minute_step
-            # load_minutes_step = self.load_minutes_step
-            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute_step"]
-            load_minutes_step = PRED_GLOBAL["load_minutes_step"]
+            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute_step']
+            load_minutes_step = PRED_GLOBAL['load_minutes_step']
+        rate_gas = PRED_GLOBAL['rate_gas']
+        rate_import = PRED_GLOBAL['rate_import']
+        rate_export = PRED_GLOBAL['rate_export']
+
+        # Data structures creating during the prediction
+        self.predict_soc = {}
+        self.predict_soc_best = {}
+        self.predict_metric_best = {}
+        self.predict_iboost_best = {}
 
         predict_export = {}
         predict_battery_power = {}
@@ -1461,10 +1458,10 @@ class Prediction:
                 iboost_amount = 0
                 if iboost_today_kwh < self.iboost_max_energy:
                     if self.iboost_gas:
-                        if self.rate_gas:
+                        if rate_gas:
                             # Iboost on cheap electric rates
-                            gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                            electric_rate = self.rate_import.get(minute_absolute, 0)
+                            gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                            electric_rate = rate_import.get(minute_absolute, 0)
                             if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
                                 iboost_amount = self.iboost_max_power * step
                                 load_yesterday += iboost_amount
@@ -1655,14 +1652,14 @@ class Prediction:
                 # Weight to 50% chance of the scenario
                 if battery_draw > 0:
                     minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
-                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
+                    metric_keep += rate_import[minute_absolute] * battery_draw * minute_scaling
             elif soc < self.best_soc_keep:
                 # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
                 # and end up forcing it all to zero
                 minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
                 keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
                 if keep_diff > 0:
-                    metric_keep += self.rate_import[minute_absolute] * keep_diff * minute_scaling
+                    metric_keep += rate_import[minute_absolute] * keep_diff * minute_scaling
 
             if diff > 0:
                 # Import
@@ -1675,14 +1672,14 @@ class Prediction:
                     # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
                     import_kwh_house += diff
 
-                metric += self.rate_import[minute_absolute] * diff
+                metric += rate_import[minute_absolute] * diff
                 grid_state = "<"
             else:
                 # Export
                 energy = -diff
                 export_kwh += energy
-                if minute_absolute in self.rate_export:
-                    metric -= self.rate_export[minute_absolute] * energy
+                if minute_absolute in rate_export:
+                    metric -= rate_export[minute_absolute] * energy
                 if diff != 0:
                     grid_state = ">"
                 else:
@@ -9907,8 +9904,10 @@ class PredBat(hass.Hass):
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+
         # Create pool
-        self.pool = Pool()
+        if not self.pool:
+            self.pool = Pool(processes=8)
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
@@ -10192,13 +10191,7 @@ class PredBat(hass.Hass):
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         charge_rate = find_charge_rate(
-                            self,
-                            self.minutes_now,
-                            inverter.soc_kw,
-                            window,
-                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
-                            inverter.battery_rate_max_charge,
-                            quiet=False,
+                            self, self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
