@@ -20,8 +20,13 @@ import appdaemon.plugins.hass.hassapi as hass
 import pytz
 import requests
 import yaml
+from multiprocessing import Pool
 
-THIS_VERSION = "v7.15.21"
+# Only assign globals once to avoid re-creating them with processes are forked
+if not "PRED_GLOBAL" in globals():
+    PRED_GLOBAL = {}
+
+THIS_VERSION = "v7.16.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -73,6 +78,12 @@ CONFIG_ITEMS = [
     {
         "name": "expert_mode",
         "friendly_name": "Expert Mode",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "active",
+        "friendly_name": "Predbat Active",
         "type": "switch",
         "default": False,
     },
@@ -970,6 +981,824 @@ SOLAX_SOLIS_MODES = {
     "Battery Awaken + Timed Charge/Discharge": 43,
     "Backup/Reserve": 51,
 }
+
+
+def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
+    """
+    Filters and removes intersecting charge windows
+    """
+    clip_again = True
+
+    # For each charge window
+    while clip_again:
+        clip_again = False
+        new_limit_best = []
+        new_window_best = []
+        for window_n in range(len(charge_limit_best)):
+            window = charge_window_best[window_n]
+            start = window["start"]
+            end = window["end"]
+            average = window["average"]
+            limit = charge_limit_best[window_n]
+            clipped = False
+
+            # For each discharge window
+            for dwindow_n in range(len(discharge_limit_best)):
+                dwindow = discharge_window_best[dwindow_n]
+                dlimit = discharge_limit_best[dwindow_n]
+                dstart = dwindow["start"]
+                dend = dwindow["end"]
+
+                # Overlapping window with enabled discharge?
+                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+                    if dstart <= start:
+                        if start != dend:
+                            start = dend
+                            clipped = True
+                    elif dend >= end:
+                        if end != dstart:
+                            end = dstart
+                            clipped = True
+                    else:
+                        # Two segments
+                        if (dstart - start) >= 5:
+                            new_window = {}
+                            new_window["start"] = start
+                            new_window["end"] = dstart
+                            new_window["average"] = average
+                            new_window_best.append(new_window)
+                            new_limit_best.append(limit)
+                        start = dend
+                        clipped = True
+                        if (end - start) >= 5:
+                            clip_again = True
+
+            if not clipped or ((end - start) >= 5):
+                new_window = {}
+                new_window["start"] = start
+                new_window["end"] = end
+                new_window["average"] = average
+                new_window_best.append(new_window)
+                new_limit_best.append(limit)
+
+        if clip_again:
+            charge_window_best = new_window_best.copy()
+            charge_limit_best = new_limit_best.copy()
+
+    return new_limit_best, new_window_best
+
+
+def calc_percent_limit(charge_limit, soc_max):
+    """
+    Calculate a charge limit in percent
+    """
+    if isinstance(charge_limit, list):
+        if soc_max <= 0:
+            return [0 for i in range(len(charge_limit))]
+        else:
+            return [min(int((float(charge_limit[i]) / soc_max * 100.0) + 0.5), 100) for i in range(len(charge_limit))]
+    else:
+        if soc_max <= 0:
+            return 0
+        else:
+            return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
+
+def get_charge_rate_curve(model, soc, charge_rate_setting):
+    """
+    Compute true charging rate from SOC and charge rate setting
+    """
+    soc_percent = calc_percent_limit(soc, model.soc_max)
+    max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
+    return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
+
+
+def get_discharge_rate_curve(model, soc, discharge_rate_setting):
+    """
+    Compute true discharging rate from SOC and charge rate setting
+    """
+    soc_percent = calc_percent_limit(soc, model.soc_max)
+    max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
+    return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
+
+
+def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
+    """
+    Find the lowest charge rate that fits the charge slow
+    """
+    margin = 10
+    if model.set_charge_low_power:
+        minutes_left = window["end"] - minutes_now - margin
+
+        # If we don't have enough minutes left go to max
+        if minutes_left < 0:
+            return max_rate
+
+        # If we already have reached target go back to max
+        if soc >= target_soc:
+            return max_rate
+
+        # Work out the charge left in kw
+        charge_left = target_soc - soc
+
+        # If we can never hit the target then go to max
+        if max_rate * minutes_left < charge_left:
+            return max_rate
+
+        # What's the lowest we could go?
+        min_rate = charge_left / minutes_left
+
+        # Apply the curve at each rate to pick one that works
+        rate_w = max_rate * MINUTE_WATT
+        best_rate = max_rate
+        while rate_w >= 400:
+            rate = rate_w / MINUTE_WATT
+            if rate >= min_rate:
+                charge_now = soc
+                minute = 0
+                for minute in range(0, minutes_left, PREDICT_STEP):
+                    rate_scale = get_charge_rate_curve(model, charge_now, rate)
+                    charge_amount = rate_scale * PREDICT_STEP * model.battery_loss
+                    charge_now += charge_amount
+                    if charge_now >= target_soc:
+                        best_rate = rate
+                        break
+            rate_w -= 125.0
+        return best_rate
+    else:
+        return max_rate
+
+
+class Prediction:
+    """
+    Class to hold prediction input and output data and the run function
+    """
+
+    def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
+        global PRED_GLOBAL
+        self.minutes_now = base.minutes_now
+        self.forecast_minutes = base.forecast_minutes
+        self.midnight_utc = base.midnight_utc
+        self.soc_kw = base.soc_kw
+        self.soc_max = base.soc_max
+        self.export_today_now = base.export_today_now
+        self.import_today_now = base.import_today_now
+        self.load_minutes_now = base.load_minutes_now
+        self.pv_today_now = base.pv_today_now
+        self.iboost_today = base.iboost_today
+        self.charge_rate_now = base.charge_rate_now
+        self.discharge_rate_now = base.discharge_rate_now
+        self.cost_today_sofar = base.cost_today_sofar
+        self.debug_enable = base.debug_enable
+        self.num_cars = base.num_cars
+        self.car_charging_soc = base.car_charging_soc
+        self.car_charging_soc_next = base.car_charging_soc_next
+        self.car_charging_loss = base.car_charging_loss
+        self.reserve = base.reserve
+        self.metric_standing_charge = base.metric_standing_charge
+        self.set_charge_freeze = base.set_charge_freeze
+        self.set_reserve_enable = base.set_reserve_enable
+        self.set_discharge_freeze = base.set_discharge_freeze
+        self.set_discharge_freeze_only = base.set_discharge_freeze_only
+        self.set_discharge_during_charge = base.set_discharge_during_charge
+        self.set_read_only = base.set_read_only
+        self.set_charge_low_power = base.set_charge_low_power
+        self.car_charging_slots = base.car_charging_slots
+        self.car_charging_limit = base.car_charging_limit
+        self.car_charging_from_battery = base.car_charging_from_battery
+        self.iboost_enable = base.iboost_enable
+        self.iboost_next = base.iboost_next
+        self.iboost_max_energy = base.iboost_max_energy
+        self.iboost_gas = base.iboost_gas
+        self.iboost_gas_scale = base.iboost_gas_scale
+        self.iboost_max_power = base.iboost_max_power
+        self.iboost_min_power = base.iboost_min_power
+        self.iboost_min_soc = base.iboost_min_soc
+        self.iboost_solar = base.iboost_solar
+        self.iboost_charging = base.iboost_charging
+        self.iboost_running = base.iboost_running
+        self.inverter_loss = base.inverter_loss
+        self.inverter_hybrid = base.inverter_hybrid
+        self.inverter_limit = base.inverter_limit
+        self.export_limit = base.export_limit
+        self.battery_rate_min = base.battery_rate_min
+        self.battery_rate_max_charge = base.battery_rate_max_charge
+        self.battery_rate_max_discharge = base.battery_rate_max_discharge
+        self.battery_rate_max_charge_scaled = base.battery_rate_max_charge_scaled
+        self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
+        self.battery_charge_power_curve = base.battery_charge_power_curve
+        self.battery_discharge_power_curve = base.battery_discharge_power_curve
+        self.battery_rate_max_scaling = base.battery_rate_max_scaling
+        self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
+        self.battery_loss = base.battery_loss
+        self.battery_loss_discharge = base.battery_loss_discharge
+        self.best_soc_keep = base.best_soc_keep
+        self.car_charging_battery_size = base.car_charging_battery_size
+
+        # Store the larger structures in globals to avoid passing them to threads
+        PRED_GLOBAL["pv_forecast_minute_step"] = pv_forecast_minute_step
+        PRED_GLOBAL["pv_forecast_minute10_step"] = pv_forecast_minute10_step
+        PRED_GLOBAL["load_minutes_step"] = load_minutes_step
+        PRED_GLOBAL["load_minutes_step10"] = load_minutes_step10
+        PRED_GLOBAL["rate_gas"] = base.rate_gas
+        PRED_GLOBAL["rate_import"] = base.rate_import
+        PRED_GLOBAL["rate_export"] = base.rate_export
+
+    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+        """
+        Run prediction in a thread
+        """
+
+        try_charge_limit = charge_limit.copy()
+        if all_n:
+            for set_n in all_n:
+                try_charge_limit[set_n] = try_soc
+        else:
+            try_charge_limit[window_n] = try_soc
+
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+            try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
+        )
+        min_soc = 0
+        max_soc = self.soc_max
+        if not all_n:
+            window = charge_window[window_n]
+            predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
+            predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
+            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                min_soc = min(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
+            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
+                max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
+
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc
+
+    def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+        """
+        Run prediction in a thread
+        """
+        # Store try value into the window
+        if all_n:
+            for window_id in all_n:
+                discharge_limits[window_id] = this_discharge_limit
+        else:
+            discharge_limits[window_n] = this_discharge_limit
+            # Adjust start
+            window = discharge_window[window_n]
+            start = min(start, window["end"] - 5)
+            discharge_window[window_n]["start"] = start
+
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
+        )
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
+
+    def find_charge_window_optimised(self, charge_windows):
+        """
+        Takes in an array of charge windows
+        Returns a dictionary defining for each minute that is in the charge window will contain the window number
+        """
+        charge_window_optimised = {}
+        for window_n in range(len(charge_windows)):
+            for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
+                charge_window_optimised[minute] = window_n
+        return charge_window_optimised
+
+    def in_car_slot(self, minute):
+        """
+        Is the given minute inside a car slot
+        """
+        load_amount = [0 for car_n in range(self.num_cars)]
+
+        for car_n in range(self.num_cars):
+            if self.car_charging_slots[car_n]:
+                for slot in self.car_charging_slots[car_n]:
+                    start_minutes = slot["start"]
+                    end_minutes = slot["end"]
+                    kwh = slot["kwh"]
+                    slot_minutes = end_minutes - start_minutes
+                    slot_hours = slot_minutes / 60.0
+
+                    # Return the load in that slot
+                    if minute >= start_minutes and minute < end_minutes:
+                        load_amount[car_n] = abs(kwh / slot_hours)
+                        break
+        return load_amount
+
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
+        """
+        Run a prediction scenario given a charge limit, return the results
+        """
+
+        # Fetch data from globals, optimised away from class to avoid passing it between threads
+        global PRED_GLOBAL
+        if pv10:
+            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute10_step"]
+            load_minutes_step = PRED_GLOBAL["load_minutes_step10"]
+        else:
+            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute_step"]
+            load_minutes_step = PRED_GLOBAL["load_minutes_step"]
+        rate_gas = PRED_GLOBAL["rate_gas"]
+        rate_import = PRED_GLOBAL["rate_import"]
+        rate_export = PRED_GLOBAL["rate_export"]
+
+        # Data structures creating during the prediction
+        self.predict_soc = {}
+        self.predict_soc_best = {}
+        self.predict_metric_best = {}
+        self.predict_iboost_best = {}
+
+        predict_export = {}
+        predict_battery_power = {}
+        predict_battery_cycle = {}
+        predict_soc_time = {}
+        predict_car_soc_time = [{} for car_n in range(self.num_cars)]
+        predict_pv_power = {}
+        predict_state = {}
+        predict_grid_power = {}
+        predict_load_power = {}
+        predict_iboost = {}
+        minute = 0
+        minute_left = self.forecast_minutes
+        soc = self.soc_kw
+        soc_min = self.soc_max
+        soc_min_minute = self.minutes_now
+        charge_has_run = False
+        charge_has_started = False
+        discharge_has_run = False
+        export_kwh = self.export_today_now
+        export_kwh_h0 = export_kwh
+        import_kwh = self.import_today_now
+        import_kwh_h0 = import_kwh
+        load_kwh = self.load_minutes_now
+        load_kwh_h0 = load_kwh
+        pv_kwh = self.pv_today_now
+        pv_kwh_h0 = pv_kwh
+        iboost_today_kwh = self.iboost_today
+        import_kwh_house = 0
+        import_kwh_battery = 0
+        battery_cycle = 0
+        metric_keep = 0
+        final_export_kwh = export_kwh
+        final_import_kwh = import_kwh
+        final_load_kwh = load_kwh
+        final_pv_kwh = pv_kwh
+        final_iboost_kwh = iboost_today_kwh
+        final_import_kwh_house = import_kwh_house
+        final_import_kwh_battery = import_kwh_battery
+        final_battery_cycle = battery_cycle
+        final_metric_keep = metric_keep
+        metric = self.cost_today_sofar
+        final_soc = soc
+        first_charge_soc = soc
+        prev_soc = soc
+        final_metric = metric
+        metric_time = {}
+        load_kwh_time = {}
+        pv_kwh_time = {}
+        export_kwh_time = {}
+        import_kwh_time = {}
+        record_time = {}
+        car_soc = self.car_charging_soc[:]
+        final_car_soc = car_soc[:]
+        charge_rate_now = self.charge_rate_now
+        discharge_rate_now = self.discharge_rate_now
+        battery_state = "-"
+        grid_state = "-"
+        first_charge = end_record
+        export_to_first_charge = 0
+
+        # Remove intersecting windows and optimise the data format of the charge/discharge window
+        charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
+        charge_window_optimised = self.find_charge_window_optimised(charge_window)
+        discharge_window_optimised = self.find_charge_window_optimised(discharge_window)
+
+        # For the SOC calculation we need to stop 24 hours after the first charging window starts
+        # to avoid wrapping into the next day
+        record = True
+
+        # Simulate each forward minute
+        while minute < self.forecast_minutes:
+            # Minute yesterday can wrap if days_previous is only 1
+            minute_absolute = minute + self.minutes_now
+            minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
+            prev_soc = soc
+            reserve_expected = self.reserve
+
+            # Find charge & discharge windows
+            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
+            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
+
+            # Find charge limit
+            charge_limit_n = 0
+            if charge_window_n >= 0:
+                charge_limit_n = charge_limit[charge_window_n]
+                if charge_limit_n == 0:
+                    charge_window_n = -1
+                else:
+                    if self.set_charge_freeze and (charge_limit_n == self.reserve):
+                        # Charge freeze via reserve
+                        charge_limit_n = soc
+                    if self.set_reserve_enable:
+                        reserve_expected = max(charge_limit_n, self.reserve)
+
+            # Add in standing charge, only for the final plan when we save the results
+            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
+                metric += self.metric_standing_charge
+
+            # Outside the recording window?
+            if minute >= end_record and record:
+                record = False
+
+            # Store data before the next simulation step to align timestamps
+            stamp = minute_timestamp.strftime(TIME_FORMAT)
+            if ((minute % 10) == 0) and (self.debug_enable or save):
+                predict_soc_time[stamp] = round(soc, 3)
+                metric_time[stamp] = round(metric, 2)
+                load_kwh_time[stamp] = round(load_kwh, 3)
+                pv_kwh_time[stamp] = round(pv_kwh, 2)
+                import_kwh_time[stamp] = round(import_kwh, 2)
+                export_kwh_time[stamp] = round(export_kwh, 2)
+                for car_n in range(self.num_cars):
+                    predict_car_soc_time[car_n][stamp] = round(car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0, 2)
+                record_time[stamp] = 0 if record else self.soc_max
+                predict_iboost[stamp] = iboost_today_kwh
+
+            # Save Soc prediction data as minutes for later use
+            self.predict_soc[minute] = round(soc, 3)
+            if save and save == "best":
+                self.predict_soc_best[minute] = round(soc, 3)
+                self.predict_metric_best[minute] = round(metric, 2)
+                self.predict_iboost_best[minute] = iboost_today_kwh
+
+            # Get load and pv forecast, total up for all values in the step
+            pv_now = 0
+            load_yesterday = 0
+            for offset in range(0, step, PREDICT_STEP):
+                pv_now += pv_forecast_minute_step[minute + offset]
+                load_yesterday += load_minutes_step[minute + offset]
+
+            # Count PV kWh
+            pv_kwh += pv_now
+            if record:
+                final_pv_kwh = pv_kwh
+
+            # Simulate car charging
+            car_load = self.in_car_slot(minute_absolute)
+
+            # Car charging?
+            car_freeze = False
+            for car_n in range(self.num_cars):
+                if car_load[car_n] > 0.0:
+                    car_load_scale = car_load[car_n] * step / 60.0
+                    car_load_scale = car_load_scale * self.car_charging_loss
+                    car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
+                    car_soc[car_n] += car_load_scale
+                    load_yesterday += car_load_scale / self.car_charging_loss
+                    # Model not allowing the car to charge from the battery
+                    if not self.car_charging_from_battery:
+                        discharge_rate_now = self.battery_rate_min  # 0
+                        car_freeze = True
+
+            # Reset modelled discharge rate if no car is charging
+            if not self.car_charging_from_battery and not car_freeze:
+                discharge_rate_now = self.battery_rate_max_discharge
+
+            # IBoost on load
+            if self.iboost_enable:
+                iboost_amount = 0
+                if iboost_today_kwh < self.iboost_max_energy:
+                    if self.iboost_gas:
+                        if rate_gas:
+                            # Iboost on cheap electric rates
+                            gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                            electric_rate = rate_import.get(minute_absolute, 0)
+                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
+                                iboost_amount = self.iboost_max_power * step
+                                load_yesterday += iboost_amount
+                    elif self.iboost_charging:
+                        if charge_window_n >= 0:
+                            iboost_amount = self.iboost_max_power * step
+                            load_yesterday += iboost_amount
+
+            # Count load
+            load_kwh += load_yesterday
+            if record:
+                final_load_kwh = load_kwh
+
+            # Work out how much PV is used to satisfy home demand
+            pv_ac = min(load_yesterday / self.inverter_loss, pv_now, self.inverter_limit * step)
+
+            # And hence how much maybe left for DC charging
+            pv_dc = pv_now - pv_ac
+
+            # Scale down PV AC and DC for inverter loss (if hybrid we will reverse the DC loss later)
+            pv_ac *= self.inverter_loss
+            pv_dc *= self.inverter_loss
+
+            # IBoost model
+            if self.iboost_enable:
+                if iboost_today_kwh < self.iboost_max_energy and (
+                    self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
+                ):
+                    iboost_amount = min(pv_dc, self.iboost_max_power * step)
+                    pv_dc -= iboost_amount
+
+                # Cumulative energy
+                iboost_today_kwh += iboost_amount
+
+                # Model Iboost reset
+                if (minute_absolute % (24 * 60)) >= (23 * 60 + 30):
+                    iboost_today_kwh = 0
+
+                # Save Iboost next prediction
+                if minute == 0 and save == "best":
+                    scaled_boost = (iboost_amount / step) * RUN_EVERY
+                    self.iboost_next = round(self.iboost_today + scaled_boost, 3)
+                    if iboost_amount > 0:
+                        self.iboost_running = True
+                    else:
+                        self.iboost_running = False
+
+            # discharge freeze?
+            if self.set_discharge_freeze:
+                charge_rate_now = self.battery_rate_max_charge
+                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
+                    # Freeze mode
+                    charge_rate_now = self.battery_rate_min  # 0
+
+            # Set discharge during charge?
+            if not self.set_discharge_during_charge:
+                if (charge_window_n >= 0) and (soc >= charge_limit_n):
+                    discharge_rate_now = self.battery_rate_min  # 0
+                elif not car_freeze:
+                    # Reset discharge rate
+                    discharge_rate_now = self.battery_rate_max_discharge
+
+            # Battery behaviour
+            battery_draw = 0
+            charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
+            discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
+            if (
+                not self.set_discharge_freeze_only
+                and (discharge_window_n >= 0)
+                and discharge_limits[discharge_window_n] < 100.0
+                and (soc - step * self.battery_rate_max_discharge_scaled) > (self.soc_max * discharge_limits[discharge_window_n] / 100.0)
+            ):
+                # Discharge enable
+                discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
+                discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
+
+                # It's assumed if SOC hits the expected reserve then it's terminated
+                reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
+                battery_draw = discharge_rate_now_curve * step
+                if (soc - reserve_expected) < battery_draw:
+                    battery_draw = max(soc - reserve_expected, 0)
+
+                # Account for export limit, clip battery draw if possible to avoid going over
+                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
+                if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
+                    above_limit = abs(diff_tmp + self.export_limit * step)
+                    battery_draw = max(0, battery_draw - above_limit)
+
+                # Account for inverter limit, clip battery draw if possible to avoid going over
+                total_inverted = pv_ac + pv_dc + battery_draw
+                if total_inverted > self.inverter_limit * step:
+                    reduce_by = total_inverted - (self.inverter_limit * step)
+                    battery_draw = max(0, battery_draw - reduce_by)
+
+                battery_state = "f-"
+            elif (charge_window_n >= 0) and soc < charge_limit_n:
+                # Charge enable
+                if save in ["best", "best10"]:
+                    # Only tune charge rate on final plan not every simulation
+                    charge_rate_now = (
+                        find_charge_rate(self, minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
+                    )
+                else:
+                    charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
+
+                # Apply the charging curve
+                charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
+
+                # If the battery is charging then solar will be used to charge as a priority
+                # So move more of the PV into PV DC
+                if pv_dc < charge_rate_now_curve * step:
+                    extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
+                    pv_ac -= extra_pv
+                    pv_dc += extra_pv
+
+                # Remove inverter loss as it will be added back in again when calculating the SOC change
+                charge_rate_now_curve /= self.inverter_loss
+                battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
+                battery_state = "f+"
+                first_charge = min(first_charge, minute)
+            else:
+                # ECO Mode
+                if load_yesterday - pv_ac - pv_dc > 0:
+                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac)
+                    battery_state = "e-"
+                else:
+                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step)
+                    if battery_draw < 0:
+                        battery_state = "e+"
+                    else:
+                        battery_state = "e~"
+
+            # Clamp battery at reserve for discharge
+            if battery_draw > 0:
+                # All battery discharge must go through the inverter too
+                soc -= battery_draw / (self.battery_loss_discharge * self.inverter_loss)
+                if soc < reserve_expected:
+                    battery_draw -= (reserve_expected - soc) * self.battery_loss_discharge * self.inverter_loss
+                    soc = reserve_expected
+
+            # Clamp battery at max when charging
+            if battery_draw < 0:
+                battery_draw_dc = max(-pv_dc, battery_draw)
+                battery_draw_ac = battery_draw - battery_draw_dc
+
+                if self.inverter_hybrid:
+                    inverter_loss = self.inverter_loss
+                else:
+                    inverter_loss = 1.0
+
+                # In the hybrid case only we remove the inverter loss for PV charging (as it's DC to DC), and inverter loss was already applied
+                soc -= battery_draw_dc * self.battery_loss / inverter_loss
+                if soc > self.soc_max:
+                    battery_draw_dc += ((soc - self.soc_max) / self.battery_loss) * inverter_loss
+                    soc = self.soc_max
+
+                # The rest of this charging must be from the grid (pv_dc was the left over PV)
+                soc -= battery_draw_ac * self.battery_loss * self.inverter_loss
+                if soc > self.soc_max:
+                    battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
+                    soc = self.soc_max
+
+                # if (minute % 30) == 0:
+                #    self.log("Minute {} pv_ac {} pv_dc {} battery_ac {} battery_dc {} battery b4 {} after {} soc {}".format(minute, pv_ac, pv_dc, battery_draw_ac, battery_draw_dc, battery_draw, battery_draw_ac + battery_draw_dc, soc))
+
+                battery_draw = battery_draw_ac + battery_draw_dc
+
+            # Count battery cycles
+            battery_cycle += abs(battery_draw)
+
+            # Work out left over energy after battery adjustment
+            diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
+            if diff < 0:
+                # Can not export over inverter limit, load must be taken out first from the inverter limit
+                # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
+                inverter_left = self.inverter_limit * step - load_yesterday
+                if inverter_left < 0:
+                    diff += -inverter_left
+                else:
+                    diff = max(diff, -inverter_left)
+            if diff < 0:
+                # Can not export over export limit, so cap at that
+                diff = max(diff, -self.export_limit * step)
+
+            # Metric keep - pretend the battery is empty and you have to import instead of using the battery
+            if (soc < self.best_soc_keep) and (soc > self.reserve):
+                # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
+                # Weight to 50% chance of the scenario
+                if battery_draw > 0:
+                    minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+                    metric_keep += rate_import[minute_absolute] * battery_draw * minute_scaling
+            elif soc < self.best_soc_keep:
+                # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
+                # and end up forcing it all to zero
+                minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+                keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
+                if keep_diff > 0:
+                    metric_keep += rate_import[minute_absolute] * keep_diff * minute_scaling
+
+            if diff > 0:
+                # Import
+                # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
+                import_kwh += diff
+                if charge_window_n >= 0:
+                    # If the battery is on charge anyhow then imports are at battery charging rate
+                    import_kwh_battery += diff
+                else:
+                    # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
+                    import_kwh_house += diff
+
+                metric += rate_import[minute_absolute] * diff
+                grid_state = "<"
+            else:
+                # Export
+                energy = -diff
+                export_kwh += energy
+                if minute_absolute in rate_export:
+                    metric -= rate_export[minute_absolute] * energy
+                if diff != 0:
+                    grid_state = ">"
+                else:
+                    grid_state = "~"
+
+            # Store the number of minutes until the battery runs out
+            if record and soc <= self.reserve:
+                minute_left = min(minute, minute_left)
+
+            # Record final soc & metric
+            if record:
+                final_soc = soc
+                for car_n in range(self.num_cars):
+                    final_car_soc[car_n] = car_soc[car_n]
+                    if minute == 0:
+                        # Next car SOC
+                        self.car_charging_soc_next[car_n] = car_soc[car_n]
+
+                final_metric = metric
+                final_import_kwh = import_kwh
+                final_import_kwh_battery = import_kwh_battery
+                final_import_kwh_house = import_kwh_house
+                final_export_kwh = export_kwh
+                final_iboost_kwh = iboost_today_kwh
+                final_battery_cycle = battery_cycle
+                final_metric_keep = metric_keep
+
+                # Store export data
+                if diff < 0:
+                    predict_export[minute] = energy
+                    if minute <= first_charge:
+                        export_to_first_charge += energy
+                else:
+                    predict_export[minute] = 0
+
+                # Soc at next charge start
+                if minute <= first_charge:
+                    first_charge_soc = prev_soc
+
+            # Have we past the charging or discharging time?
+            if charge_window_n >= 0:
+                charge_has_started = True
+            if charge_has_started and (charge_window_n < 0):
+                charge_has_run = True
+            if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
+                discharge_has_run = True
+
+            # Record soc min
+            if record and (discharge_has_run or charge_has_run or not charge_window):
+                if soc < soc_min:
+                    soc_min_minute = minute_absolute
+                soc_min = min(soc_min, soc)
+
+            # Record state
+            if ((minute % 10) == 0) and (self.debug_enable or save):
+                predict_state[stamp] = "g" + grid_state + "b" + battery_state
+                predict_battery_power[stamp] = round(battery_draw * (60 / step), 3)
+                predict_battery_cycle[stamp] = round(battery_cycle, 3)
+                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (30 / step), 3)
+                predict_grid_power[stamp] = round(diff * (60 / step), 3)
+                predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
+
+            minute += step
+
+        hours_left = minute_left / 60.0
+
+        self.hours_left = hours_left
+        self.final_car_soc = final_car_soc
+        self.predict_car_soc_time = predict_car_soc_time
+        self.final_soc = final_soc
+        self.final_metric = final_metric
+        self.final_metric_keep = final_metric_keep
+        self.final_import_kwh = final_import_kwh
+        self.final_import_kwh_battery = final_import_kwh_battery
+        self.final_import_kwh_house = final_import_kwh_house
+        self.final_export_kwh = final_export_kwh
+        self.final_load_kwh = final_load_kwh
+        self.final_pv_kwh = final_pv_kwh
+        self.final_iboost_kwh = final_iboost_kwh
+        self.final_battery_cycle = final_battery_cycle
+        self.final_soc_min = soc_min
+        self.final_soc_min_minute = soc_min_minute
+        self.export_to_first_charge = export_to_first_charge
+        self.predict_soc_time = predict_soc_time
+        self.first_charge = first_charge
+        self.first_charge_soc = first_charge_soc
+        self.predict_state = predict_state
+        self.predict_battery_power = predict_battery_power
+        self.predict_battery_power = predict_battery_power
+        self.predict_pv_power = predict_pv_power
+        self.predict_grid_power = predict_grid_power
+        self.predict_load_power = predict_load_power
+        self.predict_iboost_best = predict_iboost
+        self.predict_iboost = predict_iboost
+        self.predict_export = predict_export
+        self.metric_time = metric_time
+        self.record_time = record_time
+        self.predict_battery_cycle = predict_battery_cycle
+        self.predict_battery_power = predict_battery_power
+        self.pv_kwh_h0 = pv_kwh_h0
+        self.import_kwh_h0 = import_kwh_h0
+        self.export_kwh_h0 = export_kwh_h0
+        self.load_kwh_h0 = load_kwh_h0
+        self.load_kwh_time = load_kwh_time
+        self.pv_kwh_time = pv_kwh_time
+        self.import_kwh_time = import_kwh_time
+        self.export_kwh_time = export_kwh_time
+
+        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
 
 
 class Inverter:
@@ -1939,7 +2768,7 @@ class Inverter:
                 else:
                     entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
                     # Write
-                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 25))
+                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
 
@@ -2791,7 +3620,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = self.rest_data["Control"]["Battery_Charge_Rate"]
-            if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 25):
+            if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -4481,37 +5310,6 @@ class PredBat(hass.Hass):
 
         return values
 
-    def calc_percent_limit(self, charge_limit):
-        """
-        Calculate a charge limit in percent
-        """
-        if isinstance(charge_limit, list):
-            if self.soc_max <= 0:
-                return [0 for i in range(len(charge_limit))]
-            else:
-                return [min(int((float(charge_limit[i]) / self.soc_max * 100.0) + 0.5), 100) for i in range(len(charge_limit))]
-        else:
-            if self.soc_max <= 0:
-                return 0
-            else:
-                return min(int((float(charge_limit) / self.soc_max * 100.0) + 0.5), 100)
-
-    def get_charge_rate_curve(self, soc, charge_rate_setting):
-        """
-        Compute true charging rate from SOC and charge rate setting
-        """
-        soc_percent = self.calc_percent_limit(soc)
-        max_charge_rate = self.battery_rate_max_charge * self.battery_charge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling
-        return max(min(charge_rate_setting, max_charge_rate), self.battery_rate_min)
-
-    def get_discharge_rate_curve(self, soc, discharge_rate_setting):
-        """
-        Compute true discharging rate from SOC and charge rate setting
-        """
-        soc_percent = self.calc_percent_limit(soc)
-        max_discharge_rate = self.battery_rate_max_discharge * self.battery_discharge_power_curve.get(soc_percent, 1.0) * self.battery_rate_max_scaling_discharge
-        return max(min(discharge_rate_setting, max_discharge_rate), self.battery_rate_min)
-
     def find_charge_window_optimised(self, charge_windows):
         """
         Takes in an array of charge windows
@@ -4523,1048 +5321,672 @@ class PredBat(hass.Hass):
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
-        predict_soc = {}
-        predict_export = {}
-        predict_battery_power = {}
-        predict_battery_cycle = {}
-        predict_soc_time = {}
-        predict_car_soc_time = [{} for car_n in range(self.num_cars)]
-        predict_pv_power = {}
-        predict_state = {}
-        predict_grid_power = {}
-        predict_load_power = {}
-        predict_iboost = {}
-        minute = 0
-        minute_left = self.forecast_minutes
-        soc = self.soc_kw
-        soc_min = self.soc_max
-        soc_min_minute = self.minutes_now
-        charge_has_run = False
-        charge_has_started = False
-        discharge_has_run = False
-        export_kwh = self.export_today_now
-        export_kwh_h0 = export_kwh
-        import_kwh = self.import_today_now
-        import_kwh_h0 = import_kwh
-        load_kwh = self.load_minutes_now
-        load_kwh_h0 = load_kwh
-        pv_kwh = self.pv_today_now
-        pv_kwh_h0 = pv_kwh
-        iboost_today_kwh = self.iboost_today
-        import_kwh_house = 0
-        import_kwh_battery = 0
-        battery_cycle = 0
-        metric_keep = 0
-        final_export_kwh = export_kwh
-        final_import_kwh = import_kwh
-        final_load_kwh = load_kwh
-        final_pv_kwh = pv_kwh
-        final_iboost_kwh = iboost_today_kwh
-        final_import_kwh_house = import_kwh_house
-        final_import_kwh_battery = import_kwh_battery
-        final_battery_cycle = battery_cycle
-        final_metric_keep = metric_keep
-        metric = self.cost_today_sofar
-        final_soc = soc
-        first_charge_soc = soc
-        prev_soc = soc
-        final_metric = metric
-        metric_time = {}
-        load_kwh_time = {}
-        pv_kwh_time = {}
-        export_kwh_time = {}
-        import_kwh_time = {}
-        record_time = {}
-        car_soc = self.car_charging_soc[:]
-        final_car_soc = car_soc[:]
-        charge_rate_now = self.charge_rate_now
-        discharge_rate_now = self.discharge_rate_now
-        battery_state = "-"
-        grid_state = "-"
-        first_charge = end_record
-        export_to_first_charge = 0
 
-        # Remove intersecting windows and optimise the data format of the charge/discharge window
-        charge_limit, charge_window = self.remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
-        charge_window_optimised = self.find_charge_window_optimised(charge_window)
-        discharge_window_optimised = self.find_charge_window_optimised(discharge_window)
+        # Call the prediction model
+        pred = self.prediction
+        (
+            final_metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            final_battery_cycle,
+            final_metric_keep,
+            final_iboost_kwh,
+        ) = pred.run_prediction(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save, step)
+        self.predict_soc = pred.predict_soc
+        self.car_charging_soc_next = pred.car_charging_soc_next
+        self.iboost_next = pred.iboost_next
+        self.iboost_running = pred.iboost_running
+        if save or self.debug_enable:
+            predict_soc_time = pred.predict_soc_time
+            first_charge = pred.first_charge
+            first_charge_soc = pred.first_charge_soc
+            predict_car_soc_time = pred.predict_car_soc_time
+            predict_battery_power = pred.predict_battery_power
+            predict_state = pred.predict_state
+            predict_battery_cycle = pred.predict_battery_cycle
+            predict_pv_power = pred.predict_pv_power
+            predict_grid_power = pred.predict_grid_power
+            predict_load_power = pred.predict_load_power
+            final_export_kwh = pred.final_export_kwh
+            export_kwh_h0 = pred.export_kwh_h0
+            final_load_kwh = pred.final_load_kwh
+            load_kwh_h0 = pred.load_kwh_h0
+            metric_time = pred.metric_time
+            record_time = pred.record_time
+            predict_iboost = pred.predict_iboost
+            load_kwh_time = pred.load_kwh_time
+            pv_kwh_time = pred.pv_kwh_time
+            import_kwh_time = pred.import_kwh_time
+            export_kwh_time = pred.export_kwh_time
+            final_pv_kwh = pred.final_pv_kwh
+            export_to_first_charge = pred.export_to_first_charge
+            pv_kwh_h0 = pred.pv_kwh_h0
+            final_import_kwh = pred.final_import_kwh
+            final_import_kwh_house = pred.final_import_kwh_house
+            final_import_kwh_battery = pred.final_import_kwh_battery
+            hours_left = pred.hours_left
+            final_car_soc = pred.final_car_soc
+            import_kwh_h0 = pred.import_kwh_h0
+            predict_export = pred.predict_export
 
-        # For the SOC calculation we need to stop 24 hours after the first charging window starts
-        # to avoid wrapping into the next day
-        record = True
+            if save == "best":
+                self.predict_soc_best = pred.predict_soc_best
+                self.predict_iboost_best = pred.predict_iboost_best
+                self.predict_metric_best = pred.predict_metric_best
 
-        # Simulate each forward minute
-        while minute < self.forecast_minutes:
-            # Minute yesterday can wrap if days_previous is only 1
-            minute_absolute = minute + self.minutes_now
-            minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
-            prev_soc = soc
-            reserve_expected = self.reserve
-
-            # Find charge & discharge windows
-            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
-            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
-
-            # Find charge limit
-            charge_limit_n = 0
-            if charge_window_n >= 0:
-                charge_limit_n = charge_limit[charge_window_n]
-                if charge_limit_n == 0:
-                    charge_window_n = -1
-                else:
-                    if self.set_charge_freeze and (charge_limit_n == self.reserve):
-                        # Charge freeze via reserve
-                        charge_limit_n = soc
-                    if self.set_reserve_enable:
-                        reserve_expected = max(charge_limit_n, self.reserve)
-
-            # Add in standing charge, only for the final plan when we save the results
-            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
-                metric += self.metric_standing_charge
-
-            # Outside the recording window?
-            if minute >= end_record and record:
-                record = False
-
-            # Store data before the next simulation step to align timestamps
-            stamp = minute_timestamp.strftime(TIME_FORMAT)
-            if ((minute % 10) == 0) and (self.debug_enable or save):
-                predict_soc_time[stamp] = self.dp3(soc)
-                metric_time[stamp] = self.dp2(metric)
-                load_kwh_time[stamp] = self.dp3(load_kwh)
-                pv_kwh_time[stamp] = self.dp2(pv_kwh)
-                import_kwh_time[stamp] = self.dp2(import_kwh)
-                export_kwh_time[stamp] = self.dp2(export_kwh)
-                for car_n in range(self.num_cars):
-                    predict_car_soc_time[car_n][stamp] = self.dp2(car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0)
-                record_time[stamp] = 0 if record else self.soc_max
-                predict_iboost[stamp] = iboost_today_kwh
-
-            # Save Soc prediction data as minutes for later use
-            self.predict_soc[minute] = self.dp3(soc)
-            if save and save == "best":
-                self.predict_soc_best[minute] = self.dp3(soc)
-                self.predict_metric_best[minute] = self.dp2(metric)
-                self.predict_iboost_best[minute] = iboost_today_kwh
-
-            # Get load and pv forecast, total up for all values in the step
-            pv_now = 0
-            load_yesterday = 0
-            for offset in range(0, step, PREDICT_STEP):
-                pv_now += pv_forecast_minute_step[minute + offset]
-                load_yesterday += load_minutes_step[minute + offset]
-
-            # Count PV kWh
-            pv_kwh += pv_now
-            if record:
-                final_pv_kwh = pv_kwh
-
-            # Simulate car charging
-            car_load = self.in_car_slot(minute_absolute)
-
-            # Car charging?
-            car_freeze = False
-            for car_n in range(self.num_cars):
-                if car_load[car_n] > 0.0:
-                    car_load_scale = car_load[car_n] * step / 60.0
-                    car_load_scale = car_load_scale * self.car_charging_loss
-                    car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
-                    car_soc[car_n] += car_load_scale
-                    load_yesterday += car_load_scale / self.car_charging_loss
-                    # Model not allowing the car to charge from the battery
-                    if not self.car_charging_from_battery:
-                        discharge_rate_now = self.battery_rate_min  # 0
-                        car_freeze = True
-
-            # Reset modelled discharge rate if no car is charging
-            if not self.car_charging_from_battery and not car_freeze:
-                discharge_rate_now = self.battery_rate_max_discharge
-
-            # IBoost on load
-            if self.iboost_enable:
-                iboost_amount = 0
-                if iboost_today_kwh < self.iboost_max_energy:
-                    if self.iboost_gas:
-                        if self.rate_gas:
-                            # Iboost on cheap electric rates
-                            gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                            electric_rate = self.rate_import.get(minute_absolute, 0)
-                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
-                                iboost_amount = self.iboost_max_power * step
-                                load_yesterday += iboost_amount
-                    elif self.iboost_charging:
-                        if charge_window_n >= 0:
-                            iboost_amount = self.iboost_max_power * step
-                            load_yesterday += iboost_amount
-
-            # Count load
-            load_kwh += load_yesterday
-            if record:
-                final_load_kwh = load_kwh
-
-            # Work out how much PV is used to satisfy home demand
-            pv_ac = min(load_yesterday / self.inverter_loss, pv_now, self.inverter_limit * step)
-
-            # And hence how much maybe left for DC charging
-            pv_dc = pv_now - pv_ac
-
-            # Scale down PV AC and DC for inverter loss (if hybrid we will reverse the DC loss later)
-            pv_ac *= self.inverter_loss
-            pv_dc *= self.inverter_loss
-
-            # IBoost model
-            if self.iboost_enable:
-                if iboost_today_kwh < self.iboost_max_energy and (
-                    self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
-                ):
-                    iboost_amount = min(pv_dc, self.iboost_max_power * step)
-                    pv_dc -= iboost_amount
-
-                # Cumulative energy
-                iboost_today_kwh += iboost_amount
-
-                # Model Iboost reset
-                if (minute_absolute % (24 * 60)) >= (23 * 60 + 30):
-                    iboost_today_kwh = 0
-
-                # Save Iboost next prediction
-                if minute == 0 and save == "best":
-                    scaled_boost = (iboost_amount / step) * RUN_EVERY
-                    self.iboost_next = self.dp3(self.iboost_today + scaled_boost)
-                    if iboost_amount > 0:
-                        self.iboost_running = True
-                    else:
-                        self.iboost_running = False
-                    self.log(
-                        "IBoost model predicts usage {} in this run period taking total to {} solar {} gas {} charging {}".format(
-                            self.dp2(scaled_boost), self.iboost_next, self.iboost_solar, self.iboost_gas, self.iboost_charging
-                        )
+            if self.debug_enable or save:
+                self.log(
+                    "predict {} end_record {} final soc {} kWh metric {} p metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
+                        save,
+                        self.time_abs_str(end_record + self.minutes_now),
+                        round(final_soc, 2),
+                        round(final_metric, 2),
+                        round(final_metric_keep, 2),
+                        round(soc_min, 2),
+                        self.time_abs_str(soc_min_minute),
+                        round(final_load_kwh, 2),
+                        round(final_pv_kwh, 2),
                     )
-
-            # discharge freeze?
-            if self.set_discharge_freeze:
-                charge_rate_now = self.battery_rate_max_charge
-                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
-                    # Freeze mode
-                    charge_rate_now = self.battery_rate_min  # 0
-
-            # Set discharge during charge?
-            if not self.set_discharge_during_charge:
-                if (charge_window_n >= 0) and (soc >= charge_limit_n):
-                    discharge_rate_now = self.battery_rate_min  # 0
-                elif not car_freeze:
-                    # Reset discharge rate
-                    discharge_rate_now = self.battery_rate_max_discharge
-
-            # Battery behaviour
-            battery_draw = 0
-            charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
-            discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
-            if (
-                not self.set_discharge_freeze_only
-                and (discharge_window_n >= 0)
-                and discharge_limits[discharge_window_n] < 100.0
-                and (soc - step * self.battery_rate_max_discharge_scaled) > (self.soc_max * discharge_limits[discharge_window_n] / 100.0)
-            ):
-                # Discharge enable
-                discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = self.get_discharge_rate_curve(soc, discharge_rate_now)
-
-                # It's assumed if SOC hits the expected reserve then it's terminated
-                reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
-                battery_draw = discharge_rate_now_curve * step
-                if (soc - reserve_expected) < battery_draw:
-                    battery_draw = max(soc - reserve_expected, 0)
-
-                # Account for export limit, clip battery draw if possible to avoid going over
-                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
-                if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
-                    above_limit = abs(diff_tmp + self.export_limit * step)
-                    battery_draw = max(0, battery_draw - above_limit)
-
-                # Account for inverter limit, clip battery draw if possible to avoid going over
-                total_inverted = pv_ac + pv_dc + battery_draw
-                if total_inverted > self.inverter_limit * step:
-                    reduce_by = total_inverted - (self.inverter_limit * step)
-                    battery_draw = max(0, battery_draw - reduce_by)
-
-                battery_state = "f-"
-            elif (charge_window_n >= 0) and soc < charge_limit_n:
-                # Charge enable
-                if save in ["best", "best10"]:
-                    # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = (
-                        self.find_charge_rate(minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
-                    )
-                else:
-                    charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
-
-                # Apply the charging curve
-                charge_rate_now_curve = self.get_charge_rate_curve(soc, charge_rate_now)
-
-                # If the battery is charging then solar will be used to charge as a priority
-                # So move more of the PV into PV DC
-                if pv_dc < charge_rate_now_curve * step:
-                    extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
-                    pv_ac -= extra_pv
-                    pv_dc += extra_pv
-
-                # Remove inverter loss as it will be added back in again when calculating the SOC change
-                charge_rate_now_curve /= self.inverter_loss
-                battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
-                battery_state = "f+"
-                first_charge = min(first_charge, minute)
-            else:
-                # ECO Mode
-                if load_yesterday - pv_ac - pv_dc > 0:
-                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac)
-                    battery_state = "e-"
-                else:
-                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step)
-                    if battery_draw < 0:
-                        battery_state = "e+"
-                    else:
-                        battery_state = "e~"
-
-            # Clamp battery at reserve for discharge
-            if battery_draw > 0:
-                # All battery discharge must go through the inverter too
-                soc -= battery_draw / (self.battery_loss_discharge * self.inverter_loss)
-                if soc < reserve_expected:
-                    battery_draw -= (reserve_expected - soc) * self.battery_loss_discharge * self.inverter_loss
-                    soc = reserve_expected
-
-            # Clamp battery at max when charging
-            if battery_draw < 0:
-                battery_draw_dc = max(-pv_dc, battery_draw)
-                battery_draw_ac = battery_draw - battery_draw_dc
-
-                if self.inverter_hybrid:
-                    inverter_loss = self.inverter_loss
-                else:
-                    inverter_loss = 1.0
-
-                # In the hybrid case only we remove the inverter loss for PV charging (as it's DC to DC), and inverter loss was already applied
-                soc -= battery_draw_dc * self.battery_loss / inverter_loss
-                if soc > self.soc_max:
-                    battery_draw_dc += ((soc - self.soc_max) / self.battery_loss) * inverter_loss
-                    soc = self.soc_max
-
-                # The rest of this charging must be from the grid (pv_dc was the left over PV)
-                soc -= battery_draw_ac * self.battery_loss * self.inverter_loss
-                if soc > self.soc_max:
-                    battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
-                    soc = self.soc_max
-
-                # if (minute % 30) == 0:
-                #    self.log("Minute {} pv_ac {} pv_dc {} battery_ac {} battery_dc {} battery b4 {} after {} soc {}".format(minute, pv_ac, pv_dc, battery_draw_ac, battery_draw_dc, battery_draw, battery_draw_ac + battery_draw_dc, soc))
-
-                battery_draw = battery_draw_ac + battery_draw_dc
-
-            # Count battery cycles
-            battery_cycle += abs(battery_draw)
-
-            # Work out left over energy after battery adjustment
-            diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
-            if diff < 0:
-                # Can not export over inverter limit, load must be taken out first from the inverter limit
-                # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
-                inverter_left = self.inverter_limit * step - load_yesterday
-                if inverter_left < 0:
-                    diff += -inverter_left
-                else:
-                    diff = max(diff, -inverter_left)
-            if diff < 0:
-                # Can not export over export limit, so cap at that
-                diff = max(diff, -self.export_limit * step)
-
-            # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if (soc < self.best_soc_keep) and (soc > self.reserve):
-                # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
-                # Weight to 50% chance of the scenario
-                if battery_draw > 0:
-                    minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
-                    metric_keep += self.rate_import[minute_absolute] * battery_draw * minute_scaling
-            elif soc < self.best_soc_keep:
-                # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
-                # and end up forcing it all to zero
-                minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
-                keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
-                if keep_diff > 0:
-                    metric_keep += self.rate_import[minute_absolute] * keep_diff * minute_scaling
-
-            if diff > 0:
-                # Import
-                # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
-                import_kwh += diff
-                if charge_window_n >= 0:
-                    # If the battery is on charge anyhow then imports are at battery charging rate
-                    import_kwh_battery += diff
-                else:
-                    # self.log("importing to minute %s amount %s kW total %s kWh total draw %s" % (minute, energy, import_kwh_house, diff))
-                    import_kwh_house += diff
-
-                metric += self.rate_import[minute_absolute] * diff
-                grid_state = "<"
-            else:
-                # Export
-                energy = -diff
-                export_kwh += energy
-                if minute_absolute in self.rate_export:
-                    metric -= self.rate_export[minute_absolute] * energy
-                if diff != 0:
-                    grid_state = ">"
-                else:
-                    grid_state = "~"
-
-            # Store the number of minutes until the battery runs out
-            if record and soc <= self.reserve:
-                minute_left = min(minute, minute_left)
-
-            # Record final soc & metric
-            if record:
-                final_soc = soc
-                for car_n in range(self.num_cars):
-                    final_car_soc[car_n] = car_soc[car_n]
-                    if minute == 0:
-                        # Next car SOC
-                        self.car_charging_soc_next[car_n] = car_soc[car_n]
-
-                final_metric = metric
-                final_import_kwh = import_kwh
-                final_import_kwh_battery = import_kwh_battery
-                final_import_kwh_house = import_kwh_house
-                final_export_kwh = export_kwh
-                final_iboost_kwh = iboost_today_kwh
-                final_battery_cycle = battery_cycle
-                final_metric_keep = metric_keep
-
-                # Store export data
-                if diff < 0:
-                    predict_export[minute] = energy
-                    if minute <= first_charge:
-                        export_to_first_charge += energy
-                else:
-                    predict_export[minute] = 0
-
-                # Soc at next charge start
-                if minute <= first_charge:
-                    first_charge_soc = prev_soc
-
-            # Have we past the charging or discharging time?
-            if charge_window_n >= 0:
-                charge_has_started = True
-            if charge_has_started and (charge_window_n < 0):
-                charge_has_run = True
-            if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
-                discharge_has_run = True
-
-            # Record soc min
-            if record and (discharge_has_run or charge_has_run or not charge_window):
-                if soc < soc_min:
-                    soc_min_minute = minute_absolute
-                soc_min = min(soc_min, soc)
-
-            # Record state
-            if ((minute % 10) == 0) and (self.debug_enable or save):
-                predict_state[stamp] = "g" + grid_state + "b" + battery_state
-                predict_battery_power[stamp] = self.dp3(battery_draw * (60 / step))
-                predict_battery_cycle[stamp] = self.dp3(battery_cycle)
-                predict_pv_power[stamp] = self.dp3((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (30 / step))
-                predict_grid_power[stamp] = self.dp3(diff * (60 / step))
-                predict_load_power[stamp] = self.dp3(load_yesterday * (60 / step))
-
-            minute += step
-
-        hours_left = minute_left / 60.0
-
-        if self.debug_enable or save:
-            self.log(
-                "predict {} end_record {} final soc {} kWh metric {} p metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
-                    save,
-                    self.time_abs_str(end_record + self.minutes_now),
-                    self.dp2(final_soc),
-                    self.dp2(final_metric),
-                    self.dp2(final_metric_keep),
-                    self.dp2(soc_min),
-                    self.time_abs_str(soc_min_minute),
-                    self.dp2(final_load_kwh),
-                    self.dp2(final_pv_kwh),
                 )
-            )
-            self.log("         [{}]".format(self.scenario_summary_title(record_time)))
-            self.log("    SOC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
-            self.log("  STATE: [{}]".format(self.scenario_summary(record_time, predict_state)))
-            self.log("   LOAD: [{}]".format(self.scenario_summary(record_time, load_kwh_time)))
-            self.log("     PV: [{}]".format(self.scenario_summary(record_time, pv_kwh_time)))
-            self.log(" IMPORT: [{}]".format(self.scenario_summary(record_time, import_kwh_time)))
-            self.log(" EXPORT: [{}]".format(self.scenario_summary(record_time, export_kwh_time)))
-            if self.iboost_enable:
-                self.log(" IBOOST: [{}]".format(self.scenario_summary(record_time, predict_iboost)))
-            for car_n in range(self.num_cars):
-                self.log("   CAR{}: [{}]".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
-            self.log(" METRIC: [{}]".format(self.scenario_summary(record_time, metric_time)))
+                self.log("         [{}]".format(self.scenario_summary_title(record_time)))
+                self.log("    SOC: [{}]".format(self.scenario_summary(record_time, predict_soc_time)))
+                self.log("  STATE: [{}]".format(self.scenario_summary(record_time, predict_state)))
+                self.log("   LOAD: [{}]".format(self.scenario_summary(record_time, load_kwh_time)))
+                self.log("     PV: [{}]".format(self.scenario_summary(record_time, pv_kwh_time)))
+                self.log(" IMPORT: [{}]".format(self.scenario_summary(record_time, import_kwh_time)))
+                self.log(" EXPORT: [{}]".format(self.scenario_summary(record_time, export_kwh_time)))
+                if self.iboost_enable:
+                    self.log(" IBOOST: [{}]".format(self.scenario_summary(record_time, predict_iboost)))
+                for car_n in range(self.num_cars):
+                    self.log("   CAR{}: [{}]".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
+                self.log(" METRIC: [{}]".format(self.scenario_summary(record_time, metric_time)))
 
-        # Save data to HA state
-        if save and save == "base" and not SIMULATE:
-            self.dashboard_item(
-                self.prefix + ".battery_hours_left",
-                state=self.dp2(hours_left),
-                attributes={"friendly_name": "Predicted Battery Hours left", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
-            )
-            postfix = ""
-            for car_n in range(self.num_cars):
-                if car_n > 0:
-                    postfix = "_" + str(car_n)
+            # Save data to HA state
+            if save and save == "base" and not SIMULATE:
                 self.dashboard_item(
-                    self.prefix + ".car_soc" + postfix,
-                    state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
+                    self.prefix + ".battery_hours_left",
+                    state=self.dp2(hours_left),
+                    attributes={"friendly_name": "Predicted Battery Hours left", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
+                )
+                postfix = ""
+                for car_n in range(self.num_cars):
+                    if car_n > 0:
+                        postfix = "_" + str(car_n)
+                    self.dashboard_item(
+                        self.prefix + ".car_soc" + postfix,
+                        state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
+                        attributes={
+                            "results": predict_car_soc_time[car_n],
+                            "friendly_name": "Car " + str(car_n) + " battery SOC",
+                            "state_class": "measurement",
+                            "unit_of_measurement": "%",
+                            "icon": "mdi:battery",
+                        },
+                    )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_h0",
+                    state=self.dp3(self.predict_soc[0]),
+                    attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw",
+                    state=self.dp3(final_soc),
                     attributes={
-                        "results": predict_car_soc_time[car_n],
-                        "friendly_name": "Car " + str(car_n) + " battery SOC",
+                        "results": predict_soc_time,
+                        "friendly_name": "Predicted SOC kWh",
                         "state_class": "measurement",
-                        "unit_of_measurement": "%",
+                        "unit_of_measurement": "kWh",
+                        "first_charge_kwh": first_charge_soc,
                         "icon": "mdi:battery",
                     },
                 )
-            self.dashboard_item(
-                self.prefix + ".soc_kw_h0",
-                state=self.dp3(self.predict_soc[0]),
-                attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
-            )
-            self.dashboard_item(
-                self.prefix + ".soc_kw",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Predicted SOC kWh",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".battery_power",
-                state=self.dp3(0),
-                attributes={
-                    "results": predict_battery_power,
-                    "friendly_name": "Predicted Battery Power",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".battery_cycle",
-                state=self.dp3(final_battery_cycle),
-                attributes={
-                    "results": predict_battery_cycle,
-                    "friendly_name": "Predicted Battery Cycle",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".pv_power",
-                state=self.dp3(0),
-                attributes={"results": predict_pv_power, "friendly_name": "Predicted PV Power", "state_class": "measurement", "unit_of_measurement": "kW", "icon": "mdi:battery"},
-            )
-            self.dashboard_item(
-                self.prefix + ".grid_power",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_grid_power,
-                    "friendly_name": "Predicted Grid Power",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".load_power",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_load_power,
-                    "friendly_name": "Predicted Load Power",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".soc_min_kwh",
-                state=self.dp3(soc_min),
-                attributes={
-                    "time": self.time_abs_str(soc_min_minute),
-                    "friendly_name": "Predicted minimum SOC best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:battery-arrow-down-outline",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".export_energy",
-                state=self.dp3(final_export_kwh),
-                attributes={
-                    "results": export_kwh_time,
-                    "export_until_charge_kwh": export_to_first_charge,
-                    "friendly_name": "Predicted exports",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-export",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".export_energy_h0",
-                state=self.dp3(export_kwh_h0),
-                attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-export"},
-            )
-            self.dashboard_item(
-                self.prefix + ".load_energy",
-                state=self.dp3(final_load_kwh),
-                attributes={
-                    "results": load_kwh_time,
-                    "friendly_name": "Predicted load",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:home-lightning-bolt",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".load_energy_h0",
-                state=self.dp3(load_kwh_h0),
-                attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
-            )
-            self.dashboard_item(
-                self.prefix + ".pv_energy",
-                state=self.dp3(final_pv_kwh),
-                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
-            )
-            self.dashboard_item(
-                self.prefix + ".pv_energy_h0",
-                state=self.dp3(pv_kwh_h0),
-                attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
-            )
-            self.dashboard_item(
-                self.prefix + ".import_energy",
-                state=self.dp3(final_import_kwh),
-                attributes={
-                    "results": import_kwh_time,
-                    "friendly_name": "Predicted imports",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-import",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".import_energy_h0",
-                state=self.dp3(import_kwh_h0),
-                attributes={"friendly_name": "Current import kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
-            )
-            self.dashboard_item(
-                self.prefix + ".import_energy_battery",
-                state=self.dp3(final_import_kwh_battery),
-                attributes={"friendly_name": "Predicted import to battery", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
-            )
-            self.dashboard_item(
-                self.prefix + ".import_energy_house",
-                state=self.dp3(final_import_kwh_house),
-                attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
-            )
-            self.log("Battery has {} hours left - now at {}".format(self.dp2(hours_left), self.dp2(self.soc_kw)))
-            self.dashboard_item(
-                self.prefix + ".metric",
-                state=self.dp2(final_metric),
-                attributes={
-                    "results": metric_time,
-                    "friendly_name": "Predicted metric (cost)",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "p",
-                    "icon": "mdi:currency-usd",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".duration",
-                state=self.dp2(end_record / 60),
-                attributes={"friendly_name": "Prediction duration", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:arrow-split-vertical"},
-            )
-
-        if save and save == "best" and not SIMULATE:
-            self.dashboard_item(
-                self.prefix + ".best_battery_hours_left",
-                state=self.dp2(hours_left),
-                attributes={"friendly_name": "Predicted Battery Hours left best", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
-            )
-            postfix = ""
-            for car_n in range(self.num_cars):
-                if car_n > 0:
-                    postfix = "_" + str(car_n)
                 self.dashboard_item(
-                    self.prefix + ".car_soc_best" + postfix,
-                    state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
+                    self.prefix + ".battery_power",
+                    state=self.dp3(0),
                     attributes={
-                        "results": predict_car_soc_time[car_n],
-                        "friendly_name": "Car " + str(car_n) + " battery SOC best",
+                        "results": predict_battery_power,
+                        "friendly_name": "Predicted Battery Power",
                         "state_class": "measurement",
-                        "unit_of_measurement": "%",
+                        "unit_of_measurement": "kW",
                         "icon": "mdi:battery",
                     },
                 )
-            self.dashboard_item(
-                self.prefix + ".soc_kw_best",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kWh best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".battery_power_best",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_battery_power,
-                    "friendly_name": "Predicted Battery Power Best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".battery_cycle_best",
-                state=self.dp3(final_battery_cycle),
-                attributes={
-                    "results": predict_battery_cycle,
-                    "friendly_name": "Predicted Battery Cycle Best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".pv_power_best",
-                state=self.dp3(0),
-                attributes={
-                    "results": predict_pv_power,
-                    "friendly_name": "Predicted PV Power Best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".grid_power_best",
-                state=self.dp3(0),
-                attributes={
-                    "results": predict_grid_power,
-                    "friendly_name": "Predicted Grid Power Best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".load_power_best",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_load_power,
-                    "friendly_name": "Predicted Load Power Best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".soc_kw_best_h1",
-                state=self.dp3(self.predict_soc[60]),
-                attributes={"friendly_name": "Predicted SOC kWh best + 1h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
-            )
-            self.dashboard_item(
-                self.prefix + ".soc_kw_best_h8",
-                state=self.dp3(self.predict_soc[60 * 8]),
-                attributes={"friendly_name": "Predicted SOC kWh best + 8h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
-            )
-            self.dashboard_item(
-                self.prefix + ".soc_kw_best_h12",
-                state=self.dp3(self.predict_soc[60 * 12]),
-                attributes={"friendly_name": "Predicted SOC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
-            )
-            self.dashboard_item(
-                self.prefix + ".best_soc_min_kwh",
-                state=self.dp3(soc_min),
-                attributes={
-                    "time": self.time_abs_str(soc_min_minute),
-                    "friendly_name": "Predicted minimum SOC best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:battery-arrow-down-outline",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best_export_energy",
-                state=self.dp3(final_export_kwh),
-                attributes={
-                    "results": export_kwh_time,
-                    "export_until_charge_kwh": export_to_first_charge,
-                    "friendly_name": "Predicted exports best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-export",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best_load_energy",
-                state=self.dp3(final_load_kwh),
-                attributes={
-                    "results": load_kwh_time,
-                    "friendly_name": "Predicted load best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:home-lightning-bolt",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best_pv_energy",
-                state=self.dp3(final_pv_kwh),
-                attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
-            )
-            self.dashboard_item(
-                self.prefix + ".best_import_energy",
-                state=self.dp3(final_import_kwh),
-                attributes={
-                    "results": import_kwh_time,
-                    "friendly_name": "Predicted imports best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-import",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best_import_energy_battery",
-                state=self.dp3(final_import_kwh_battery),
-                attributes={
-                    "friendly_name": "Predicted import to battery best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-import",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best_import_energy_house",
-                state=self.dp3(final_import_kwh_house),
-                attributes={"friendly_name": "Predicted import to house best", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
-            )
-            self.dashboard_item(
-                self.prefix + ".best_metric",
-                state=self.dp2(final_metric),
-                attributes={
-                    "results": metric_time,
-                    "friendly_name": "Predicted best metric (cost)",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "p",
-                    "icon": "mdi:currency-usd",
-                },
-            )
-            self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": record_time, "friendly_name": "Prediction window", "state_class": "measurement"})
-            self.dashboard_item(
-                self.prefix + ".iboost_best",
-                state=self.dp2(final_iboost_kwh),
-                attributes={
-                    "results": predict_iboost,
-                    "friendly_name": "Predicted IBoost energy best",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:water-boiler",
-                },
-            )
-            self.dashboard_item(
-                "binary_sensor." + self.prefix + "_iboost_active" + postfix,
-                state=self.iboost_running,
-                attributes={"friendly_name": "IBoost active", "icon": "mdi:water-boiler"},
-            )
-            self.find_spare_energy(predict_soc, predict_export, step, first_charge)
+                self.dashboard_item(
+                    self.prefix + ".battery_cycle",
+                    state=self.dp3(final_battery_cycle),
+                    attributes={
+                        "results": predict_battery_cycle,
+                        "friendly_name": "Predicted Battery Cycle",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".pv_power",
+                    state=self.dp3(0),
+                    attributes={
+                        "results": predict_pv_power,
+                        "friendly_name": "Predicted PV Power",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".grid_power",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_grid_power,
+                        "friendly_name": "Predicted Grid Power",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_power",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_load_power,
+                        "friendly_name": "Predicted Load Power",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_min_kwh",
+                    state=self.dp3(soc_min),
+                    attributes={
+                        "time": self.time_abs_str(soc_min_minute),
+                        "friendly_name": "Predicted minimum SOC best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery-arrow-down-outline",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".export_energy",
+                    state=self.dp3(final_export_kwh),
+                    attributes={
+                        "results": export_kwh_time,
+                        "export_until_charge_kwh": export_to_first_charge,
+                        "friendly_name": "Predicted exports",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-export",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".export_energy_h0",
+                    state=self.dp3(export_kwh_h0),
+                    attributes={"friendly_name": "Current export kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-export"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_energy",
+                    state=self.dp3(final_load_kwh),
+                    attributes={
+                        "results": load_kwh_time,
+                        "friendly_name": "Predicted load",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:home-lightning-bolt",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_energy_h0",
+                    state=self.dp3(load_kwh_h0),
+                    attributes={"friendly_name": "Current load kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".pv_energy",
+                    state=self.dp3(final_pv_kwh),
+                    attributes={"results": pv_kwh_time, "friendly_name": "Predicted PV", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".pv_energy_h0",
+                    state=self.dp3(pv_kwh_h0),
+                    attributes={"friendly_name": "Current PV kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:solar-power"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".import_energy",
+                    state=self.dp3(final_import_kwh),
+                    attributes={
+                        "results": import_kwh_time,
+                        "friendly_name": "Predicted imports",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".import_energy_h0",
+                    state=self.dp3(import_kwh_h0),
+                    attributes={"friendly_name": "Current import kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".import_energy_battery",
+                    state=self.dp3(final_import_kwh_battery),
+                    attributes={
+                        "friendly_name": "Predicted import to battery",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".import_energy_house",
+                    state=self.dp3(final_import_kwh_house),
+                    attributes={"friendly_name": "Predicted import to house", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:transmission-tower-import"},
+                )
+                self.log("Battery has {} hours left - now at {}".format(self.dp2(hours_left), self.dp2(self.soc_kw)))
+                self.dashboard_item(
+                    self.prefix + ".metric",
+                    state=self.dp2(final_metric),
+                    attributes={
+                        "results": metric_time,
+                        "friendly_name": "Predicted metric (cost)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "p",
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".duration",
+                    state=self.dp2(end_record / 60),
+                    attributes={"friendly_name": "Prediction duration", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:arrow-split-vertical"},
+                )
 
-        if save and save == "debug" and not SIMULATE:
-            self.dashboard_item(
-                self.prefix + ".pv_power_debug",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_pv_power,
-                    "friendly_name": "Predicted PV Power Debug",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".grid_power_debug",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_grid_power,
-                    "friendly_name": "Predicted Grid Power Debug",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".load_power_debug",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_load_power,
-                    "friendly_name": "Predicted Load Power Debug",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".battery_power_debug",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_battery_power,
-                    "friendly_name": "Predicted Battery Power Debug",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kW",
-                    "icon": "mdi:battery",
-                },
-            )
+            if save and save == "best" and not SIMULATE:
+                self.dashboard_item(
+                    self.prefix + ".best_battery_hours_left",
+                    state=self.dp2(hours_left),
+                    attributes={"friendly_name": "Predicted Battery Hours left best", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:timelapse"},
+                )
+                postfix = ""
+                for car_n in range(self.num_cars):
+                    if car_n > 0:
+                        postfix = "_" + str(car_n)
+                    self.dashboard_item(
+                        self.prefix + ".car_soc_best" + postfix,
+                        state=self.dp2(final_car_soc[car_n] / self.car_charging_battery_size[car_n] * 100.0),
+                        attributes={
+                            "results": predict_car_soc_time[car_n],
+                            "friendly_name": "Car " + str(car_n) + " battery SOC best",
+                            "state_class": "measurement",
+                            "unit_of_measurement": "%",
+                            "icon": "mdi:battery",
+                        },
+                    )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_best",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_soc_time,
+                        "friendly_name": "Battery SOC kWh best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "first_charge_kwh": first_charge_soc,
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".battery_power_best",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_battery_power,
+                        "friendly_name": "Predicted Battery Power Best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".battery_cycle_best",
+                    state=self.dp3(final_battery_cycle),
+                    attributes={
+                        "results": predict_battery_cycle,
+                        "friendly_name": "Predicted Battery Cycle Best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".pv_power_best",
+                    state=self.dp3(0),
+                    attributes={
+                        "results": predict_pv_power,
+                        "friendly_name": "Predicted PV Power Best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".grid_power_best",
+                    state=self.dp3(0),
+                    attributes={
+                        "results": predict_grid_power,
+                        "friendly_name": "Predicted Grid Power Best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_power_best",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_load_power,
+                        "friendly_name": "Predicted Load Power Best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_best_h1",
+                    state=self.dp3(self.predict_soc[60]),
+                    attributes={"friendly_name": "Predicted SOC kWh best + 1h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_best_h8",
+                    state=self.dp3(self.predict_soc[60 * 8]),
+                    attributes={"friendly_name": "Predicted SOC kWh best + 8h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_best_h12",
+                    state=self.dp3(self.predict_soc[60 * 12]),
+                    attributes={"friendly_name": "Predicted SOC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_soc_min_kwh",
+                    state=self.dp3(soc_min),
+                    attributes={
+                        "time": self.time_abs_str(soc_min_minute),
+                        "friendly_name": "Predicted minimum SOC best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery-arrow-down-outline",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_export_energy",
+                    state=self.dp3(final_export_kwh),
+                    attributes={
+                        "results": export_kwh_time,
+                        "export_until_charge_kwh": export_to_first_charge,
+                        "friendly_name": "Predicted exports best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-export",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_load_energy",
+                    state=self.dp3(final_load_kwh),
+                    attributes={
+                        "results": load_kwh_time,
+                        "friendly_name": "Predicted load best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:home-lightning-bolt",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_pv_energy",
+                    state=self.dp3(final_pv_kwh),
+                    attributes={
+                        "results": pv_kwh_time,
+                        "friendly_name": "Predicted PV best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_import_energy",
+                    state=self.dp3(final_import_kwh),
+                    attributes={
+                        "results": import_kwh_time,
+                        "friendly_name": "Predicted imports best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_import_energy_battery",
+                    state=self.dp3(final_import_kwh_battery),
+                    attributes={
+                        "friendly_name": "Predicted import to battery best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_import_energy_house",
+                    state=self.dp3(final_import_kwh_house),
+                    attributes={
+                        "friendly_name": "Predicted import to house best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best_metric",
+                    state=self.dp2(final_metric),
+                    attributes={
+                        "results": metric_time,
+                        "friendly_name": "Predicted best metric (cost)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "p",
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+                self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": record_time, "friendly_name": "Prediction window", "state_class": "measurement"})
+                self.dashboard_item(
+                    self.prefix + ".iboost_best",
+                    state=self.dp2(final_iboost_kwh),
+                    attributes={
+                        "results": predict_iboost,
+                        "friendly_name": "Predicted IBoost energy best",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:water-boiler",
+                    },
+                )
+                self.dashboard_item(
+                    "binary_sensor." + self.prefix + "_iboost_active" + postfix,
+                    state=self.iboost_running,
+                    attributes={"friendly_name": "IBoost active", "icon": "mdi:water-boiler"},
+                )
+                self.find_spare_energy(self.predict_soc, predict_export, step, first_charge)
 
-        if save and save == "best10" and not SIMULATE:
-            self.dashboard_item(
-                self.prefix + ".soc_kw_best10",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kWh best 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "first_charge_kwh": first_charge_soc,
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best10_pv_energy",
-                state=self.dp3(final_pv_kwh),
-                attributes={
-                    "results": pv_kwh_time,
-                    "friendly_name": "Predicted PV best 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:solar-power",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best10_metric",
-                state=self.dp2(final_metric),
-                attributes={
-                    "results": metric_time,
-                    "friendly_name": "Predicted best 10% metric (cost)",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "p",
-                    "icon": "mdi:currency-usd",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best10_export_energy",
-                state=self.dp3(final_export_kwh),
-                attributes={
-                    "results": export_kwh_time,
-                    "export_until_charge_kwh": export_to_first_charge,
-                    "friendly_name": "Predicted exports best 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-export",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".best10_load_energy",
-                state=self.dp3(final_load_kwh),
-                attributes={"friendly_name": "Predicted load best 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
-            )
-            self.dashboard_item(
-                self.prefix + ".best10_import_energy",
-                state=self.dp3(final_import_kwh),
-                attributes={
-                    "results": import_kwh_time,
-                    "friendly_name": "Predicted imports best 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-import",
-                },
-            )
+            if save and save == "debug" and not SIMULATE:
+                self.dashboard_item(
+                    self.prefix + ".pv_power_debug",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_pv_power,
+                        "friendly_name": "Predicted PV Power Debug",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".grid_power_debug",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_grid_power,
+                        "friendly_name": "Predicted Grid Power Debug",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".load_power_debug",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_load_power,
+                        "friendly_name": "Predicted Load Power Debug",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".battery_power_debug",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_battery_power,
+                        "friendly_name": "Predicted Battery Power Debug",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kW",
+                        "icon": "mdi:battery",
+                    },
+                )
 
-        if save and save == "base10" and not SIMULATE:
-            self.dashboard_item(
-                self.prefix + ".soc_kw_base10",
-                state=self.dp3(final_soc),
-                attributes={
-                    "results": predict_soc_time,
-                    "friendly_name": "Battery SOC kWh base 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:battery",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".base10_pv_energy",
-                state=self.dp3(final_pv_kwh),
-                attributes={
-                    "results": pv_kwh_time,
-                    "friendly_name": "Predicted PV base 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:solar-power",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".base10_metric",
-                state=self.dp2(final_metric),
-                attributes={
-                    "results": metric_time,
-                    "friendly_name": "Predicted base 10% metric (cost)",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "p",
-                    "icon": "mdi:currency-usd",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".base10_export_energy",
-                state=self.dp3(final_export_kwh),
-                attributes={
-                    "results": export_kwh_time,
-                    "export_until_charge_kwh": export_to_first_charge,
-                    "friendly_name": "Predicted exports base 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-export",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".base10_load_energy",
-                state=self.dp3(final_load_kwh),
-                attributes={"friendly_name": "Predicted load base 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
-            )
-            self.dashboard_item(
-                self.prefix + ".base10_import_energy",
-                state=self.dp3(final_import_kwh),
-                attributes={
-                    "results": import_kwh_time,
-                    "friendly_name": "Predicted imports base 10%",
-                    "state_class": "measurement",
-                    "unit_of_measurement": "kWh",
-                    "icon": "mdi:transmission-tower-import",
-                },
-            )
+            if save and save == "best10" and not SIMULATE:
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_best10",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_soc_time,
+                        "friendly_name": "Battery SOC kWh best 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "first_charge_kwh": first_charge_soc,
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best10_pv_energy",
+                    state=self.dp3(final_pv_kwh),
+                    attributes={
+                        "results": pv_kwh_time,
+                        "friendly_name": "Predicted PV best 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best10_metric",
+                    state=self.dp2(final_metric),
+                    attributes={
+                        "results": metric_time,
+                        "friendly_name": "Predicted best 10% metric (cost)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "p",
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best10_export_energy",
+                    state=self.dp3(final_export_kwh),
+                    attributes={
+                        "results": export_kwh_time,
+                        "export_until_charge_kwh": export_to_first_charge,
+                        "friendly_name": "Predicted exports best 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-export",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".best10_load_energy",
+                    state=self.dp3(final_load_kwh),
+                    attributes={"friendly_name": "Predicted load best 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".best10_import_energy",
+                    state=self.dp3(final_import_kwh),
+                    attributes={
+                        "results": import_kwh_time,
+                        "friendly_name": "Predicted imports best 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
+
+            if save and save == "base10" and not SIMULATE:
+                self.dashboard_item(
+                    self.prefix + ".soc_kw_base10",
+                    state=self.dp3(final_soc),
+                    attributes={
+                        "results": predict_soc_time,
+                        "friendly_name": "Battery SOC kWh base 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".base10_pv_energy",
+                    state=self.dp3(final_pv_kwh),
+                    attributes={
+                        "results": pv_kwh_time,
+                        "friendly_name": "Predicted PV base 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".base10_metric",
+                    state=self.dp2(final_metric),
+                    attributes={
+                        "results": metric_time,
+                        "friendly_name": "Predicted base 10% metric (cost)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "p",
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".base10_export_energy",
+                    state=self.dp3(final_export_kwh),
+                    attributes={
+                        "results": export_kwh_time,
+                        "export_until_charge_kwh": export_to_first_charge,
+                        "friendly_name": "Predicted exports base 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-export",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".base10_load_energy",
+                    state=self.dp3(final_load_kwh),
+                    attributes={"friendly_name": "Predicted load base 10%", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:home-lightning-bolt"},
+                )
+                self.dashboard_item(
+                    self.prefix + ".base10_import_energy",
+                    state=self.dp3(final_import_kwh),
+                    attributes={
+                        "results": import_kwh_time,
+                        "friendly_name": "Predicted imports base 10%",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:transmission-tower-import",
+                    },
+                )
 
         return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
 
@@ -6017,27 +6439,6 @@ class PredBat(hass.Hass):
                 new_slot["cost"] = new_slot["average"] * kwh
                 new_slots.append(new_slot)
         return new_slots
-
-    def in_car_slot(self, minute):
-        """
-        Is the given minute inside a car slot
-        """
-        load_amount = [0 for car_n in range(self.num_cars)]
-
-        for car_n in range(self.num_cars):
-            if self.car_charging_slots[car_n]:
-                for slot in self.car_charging_slots[car_n]:
-                    start_minutes = slot["start"]
-                    end_minutes = slot["end"]
-                    kwh = slot["kwh"]
-                    slot_minutes = end_minutes - start_minutes
-                    slot_hours = slot_minutes / 60.0
-
-                    # Return the load in that slot
-                    if minute >= start_minutes and minute < end_minutes:
-                        load_amount[car_n] = abs(kwh / slot_hours)
-                        break
-        return load_amount
 
     def rate_scan_export(self, rates, print=True):
         """
@@ -7382,6 +7783,7 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -7551,10 +7953,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limits,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         end_record=None,
         region_start=None,
         region_end=None,
@@ -7692,8 +8090,7 @@ class PredBat(hass.Hass):
                             charge_window,
                             discharge_window,
                             try_discharge,
-                            load_minutes_step,
-                            pv_forecast_minute_step,
+                            False,
                             end_record=end_record,
                             step=step,
                         )
@@ -7769,10 +8166,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limits,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         all_n=None,
         end_record=None,
     ):
@@ -7787,9 +8180,11 @@ class PredBat(hass.Hass):
         best_cost = 0
         best_soc_step = self.best_soc_step
         best_keep = 0
-        max_soc = self.soc_max
-        min_soc = 0
+        all_max_soc = self.soc_max
+        all_min_soc = 0
         try_charge_limit = copy.deepcopy(charge_limit)
+        resultmid = {}
+        result10 = {}
 
         # For single windows, if the size is 30 minutes or less then use a larger step
         if not all_n:
@@ -7802,6 +8197,100 @@ class PredBat(hass.Hass):
         if self.best_soc_max > 0:
             loop_soc = min(loop_soc, self.best_soc_max)
 
+        # Create min/max SOC to avoid simulating SOC that are not going have any impact
+        # Can't do this for anything but a single window as the winder SOC impact isn't known
+        if not all_n:
+            hans = []
+            all_max_soc = 0
+            all_min_soc = self.soc_max
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge,
+                    (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record),
+                )
+            )
+            hans.append(
+                self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+                )
+            )
+            id = 0
+            for han in hans:
+                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = han.get()
+                all_min_soc = min(all_min_soc, min_soc)
+                all_max_soc = max(all_max_soc, max_soc)
+                if id == 0:
+                    resultmid[loop_soc] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
+                elif id == 1:
+                    result10[loop_soc] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
+                elif id == 2:
+                    resultmid[best_soc_min] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
+                elif id == 3:
+                    result10[best_soc_min] = [
+                        metricmid,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        min_soc,
+                        max_soc,
+                    ]
+                id += 1
+
         # Assemble list of SOCs to try
         try_socs = []
         loop_step = max(best_soc_step, 0.1)
@@ -7809,9 +8298,17 @@ class PredBat(hass.Hass):
         if best_soc_min > 0:
             best_soc_min = max(self.reserve, best_soc_min)
         while loop_soc > self.reserve:
+            skip = False
             try_soc = max(best_soc_min, loop_soc)
             try_soc = self.dp2(min(try_soc, self.soc_max))
-            if (try_soc not in try_socs) and (try_soc != self.reserve):
+            if try_soc > (all_max_soc + loop_step):
+                skip = True
+            if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (all_min_soc - loop_step)):
+                skip = True
+            # Keep those we already simulated
+            if try_soc in resultmid:
+                skip = False
+            if not skip and (try_soc not in try_socs) and (try_soc != self.reserve):
                 try_socs.append(self.dp2(try_soc))
             loop_soc -= loop_step
         # Give priority to off to avoid spurious charge freezes
@@ -7820,52 +8317,32 @@ class PredBat(hass.Hass):
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
 
-        window_results = {}
-        first_window = True
+        # Run the simulations in parallel
+        results = []
+        results10 = []
         for try_soc in try_socs:
-            was_debug = self.debug_enable
-            self.debug_enable = False
-
-            if not first_window and not all_n:
-                # If the SOC is already saturated then those values greater than what was achieved but not 100% won't do anything
-                if try_soc > (max_soc + loop_step):
-                    self.debug_enable = was_debug
-                    if self.debug_enable and 0:
-                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, min_soc, max_soc))
-                    continue
-                if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (min_soc - loop_step)):
-                    self.debug_enable = was_debug
-                    if self.debug_enable and 0:
-                        self.log("Skip redundant try soc {} for window {} min_soc {} max_soc {}".format(try_soc, window_n, max_soc, min_soc))
-                    continue
-
-            # Get data for 'off' also
-            if first_window and not all_n:
-                try_charge_limit[window_n] = 0
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                    try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
+            if try_soc not in resultmid:
+                hanres = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
                 )
-                predict_soc_nom = self.predict_soc.copy()
-                (
-                    metric10,
-                    import_kwh_battery10,
-                    import_kwh_house10,
-                    export_kwh10,
-                    soc_min10,
-                    soc10,
-                    soc_min_minute10,
-                    battery_cycle10,
-                    metric_keep10,
-                    final_iboost10,
-                ) = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
+                results.append(hanres)
+                hanres10 = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
+                )
+                results10.append(hanres10)
 
-                window = charge_window[window_n]
-                predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
-                predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    min_soc = min(
-                        self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end]
-                    )
+        # Get results from sims if we simulated them
+        for try_soc in try_socs:
+            if try_soc not in resultmid:
+                hanres = results.pop(0)
+                hanres10 = results10.pop(0)
+                resultmid[try_soc] = hanres.get()
+                result10[try_soc] = hanres10.get()
+
+        window_results = {}
+        # Now we have all the results, we can pick the best SOC
+        for try_soc in try_socs:
+            window = charge_window[window_n]
 
             # Store try value into the window, either all or just this one
             if all_n:
@@ -7875,34 +8352,12 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=end_record
-            )
-            predict_soc_nom = self.predict_soc.copy()
-
-            # Simulate with 10% PV
-            (
-                metric10,
-                import_kwh_battery10,
-                import_kwh_house10,
-                export_kwh10,
-                soc_min10,
-                soc10,
-                soc_min_minute10,
-                battery_cycle10,
-                metric_keep10,
-                final_iboost10,
-            ) = self.run_prediction(try_charge_limit, charge_window, discharge_window, discharge_limits, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
-
-            # Get data for fully on
-            if first_window and not all_n:
-                window = charge_window[window_n]
-                predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
-                predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-                if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                    max_soc = max(
-                        self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end], predict_soc_nom[predict_minute_start], predict_soc_nom[predict_minute_end]
-                    )
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = resultmid[
+                try_soc
+            ]
+            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[
+                try_soc
+            ]
 
             # Store simulated mid value
             metric = metricmid
@@ -7927,7 +8382,7 @@ class PredBat(hass.Hass):
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
             if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
-                try_percent = self.calc_percent_limit(try_soc)
+                try_percent = calc_percent_limit(try_soc, self.soc_max)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if abs(compare_with - try_percent) <= 2:
@@ -7941,7 +8396,6 @@ class PredBat(hass.Hass):
             if (try_soc == self.soc_max) or (try_soc == 0):
                 metric -= 0.01
 
-            self.debug_enable = was_debug
             if self.debug_enable and 0:
                 self.log(
                     "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
@@ -7972,8 +8426,6 @@ class PredBat(hass.Hass):
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
-
-            first_window = False
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -8010,10 +8462,6 @@ class PredBat(hass.Hass):
         charge_window,
         discharge_window,
         discharge_limit,
-        load_minutes_step,
-        load_minutes_step10,
-        pv_forecast_minute_step,
-        pv_forecast_minute10_step,
         all_n=None,
         end_record=None,
     ):
@@ -8042,7 +8490,10 @@ class PredBat(hass.Hass):
         else:
             loop_options = [100, 0]
 
-        window_results = {}
+        # Collect all options
+        results = []
+        results10 = []
+        try_options = []
         for loop_limit in loop_options:
             # Loop on window size
             loop_start = window["end"] - 10  # Minimum discharge window size 10 minutes
@@ -8062,117 +8513,109 @@ class PredBat(hass.Hass):
                     continue
 
                 # Never go below the minimum level
-                this_discharge_limit = max(self.calc_percent_limit(max(self.best_soc_min, self.reserve)), this_discharge_limit)
+                this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
+                try_options.append([start, this_discharge_limit])
 
-                # Store try value into the window
-                if all_n:
-                    for window_id in all_n:
-                        try_discharge[window_id] = this_discharge_limit
-                else:
-                    try_discharge[window_n] = this_discharge_limit
-                    # Adjust start
-                    start = min(start, window["end"] - 5)
-                    try_discharge_window[window_n]["start"] = start
-
-                was_debug = self.debug_enable
-                self.debug_enable = False
-
-                # Simulate with medium PV
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-                    try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step, pv_forecast_minute_step, end_record=end_record
+                hanres = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_discharge,
+                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record),
                 )
-
-                # Simulate with 10% PV
-                (
-                    metric10,
-                    import_kwh_battery10,
-                    import_kwh_house10,
-                    export_kwh10,
-                    soc_min10,
-                    soc10,
-                    soc_min_minute10,
-                    battery_cycle10,
-                    metric_keep10,
-                    final_iboost10,
-                ) = self.run_prediction(try_charge_limit, charge_window, try_discharge_window, try_discharge, load_minutes_step10, pv_forecast_minute10_step, end_record=end_record)
-
-                # Put back debug enable
-                self.debug_enable = was_debug
-
-                # Store simulated mid value
-                metric = metricmid
-                cost = metricmid
-
-                # Balancing payment to account for battery left over
-                # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-                metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-                metric10 -= (
-                    (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+                hanres10 = self.pool.apply_async(
+                    self.prediction.thread_run_prediction_discharge,
+                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record),
                 )
+                results.append(hanres)
+                results10.append(hanres10)
 
-                # Metric adjustment based on 10% outcome weighting
-                if metric10 > metric:
-                    metric_diff = metric10 - metric
-                    metric_diff *= self.pv_metric10_weight
-                    metric += metric_diff
-                    metric = self.dp2(metric)
+        # Get results from sims
+        try_results = []
+        for try_option in try_options:
+            hanres = results.pop(0)
+            hanres10 = results10.pop(0)
+            result = hanres.get()
+            result10 = hanres10.get()
+            try_results.append(try_option + [result, result10])
 
-                # Adjustment for battery cycles metric
-                metric += battery_cycle * self.metric_battery_cycle + metric_keep
-                metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
+        window_results = {}
+        for try_option in try_results:
+            start, this_discharge_limit, hanres, hanres10 = try_option
 
-                # Adjust to try to keep existing windows
-                if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
-                    pwindow = discharge_window[window_n]
-                    dwindow = self.discharge_window[0]
-                    if (
-                        self.minutes_now >= pwindow["start"]
-                        and self.minutes_now < pwindow["end"]
-                        and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]))
-                    ):
-                        metric -= max(0.5, self.metric_min_improvement_discharge)
+            # Simulate with medium PV
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = hanres
+            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = hanres10
 
-                if self.debug_enable:
-                    self.log(
-                        "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
-                            this_discharge_limit,
-                            window_n,
-                            self.time_abs_str(try_discharge_window[window_n]["start"]),
-                            self.time_abs_str(try_discharge_window[window_n]["end"]),
-                            self.dp2(import_kwh_battery),
-                            self.dp2(import_kwh_house),
-                            self.dp2(export_kwh),
-                            self.dp2(soc_min),
-                            self.time_abs_str(soc_min_minute),
-                            self.dp2(soc),
-                            self.dp2(cost),
-                            self.dp2(metric),
-                            self.dp2(metricmid),
-                            self.dp2(metric10),
-                            self.dp2(battery_cycle * self.metric_battery_cycle),
-                            end_record,
-                        )
+            # Store simulated mid value
+            metric = metricmid
+            cost = metricmid
+
+            # Balancing payment to account for battery left over
+            # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+            rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+            metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+
+            # Metric adjustment based on 10% outcome weighting
+            if metric10 > metric:
+                metric_diff = metric10 - metric
+                metric_diff *= self.pv_metric10_weight
+                metric += metric_diff
+                metric = self.dp2(metric)
+
+            # Adjustment for battery cycles metric
+            metric += battery_cycle * self.metric_battery_cycle + metric_keep
+            metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
+
+            # Adjust to try to keep existing windows
+            if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
+                pwindow = discharge_window[window_n]
+                dwindow = self.discharge_window[0]
+                if (
+                    self.minutes_now >= pwindow["start"]
+                    and self.minutes_now < pwindow["end"]
+                    and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"]))
+                ):
+                    metric -= max(0.5, self.metric_min_improvement_discharge)
+
+            if self.debug_enable:
+                self.log(
+                    "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
+                        this_discharge_limit,
+                        window_n,
+                        self.time_abs_str(try_discharge_window[window_n]["start"]),
+                        self.time_abs_str(try_discharge_window[window_n]["end"]),
+                        self.dp2(import_kwh_battery),
+                        self.dp2(import_kwh_house),
+                        self.dp2(export_kwh),
+                        self.dp2(soc_min),
+                        self.time_abs_str(soc_min_minute),
+                        self.dp2(soc),
+                        self.dp2(cost),
+                        self.dp2(metric),
+                        self.dp2(metricmid),
+                        self.dp2(metric10),
+                        self.dp2(battery_cycle * self.metric_battery_cycle),
+                        end_record,
                     )
+                )
 
-                window_size = try_discharge_window[window_n]["end"] - start
-                window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
-                window_results[window_key] = self.dp2(metric)
+            window_size = try_discharge_window[window_n]["end"] - start
+            window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
+            window_results[window_key] = self.dp2(metric)
 
-                # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-                if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
-                    best_metric = metric
-                    best_discharge = this_discharge_limit
-                    best_cost = cost
-                    best_soc_min = soc_min
-                    best_soc_min_minute = soc_min_minute
-                    best_start = start
-                    best_size = window_size
-                    best_keep = metric_keep
+            # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
+            if ((metric + self.metric_min_improvement_discharge) <= off_metric) and (metric <= best_metric):
+                best_metric = metric
+                best_discharge = this_discharge_limit
+                best_cost = cost
+                best_soc_min = soc_min
+                best_soc_min_minute = soc_min_minute
+                best_start = start
+                best_size = window_size
+                best_keep = metric_keep
 
-                # Store the metric for discharge off
-                if off_metric == 9999999:
-                    off_metric = metric
+            # Store the metric for discharge off
+            if off_metric == 9999999:
+                off_metric = metric
 
         if self.debug_enable:
             if not all_n:
@@ -8341,70 +8784,6 @@ class PredBat(hass.Hass):
             id_list.append(window["id"])
         return id_list
 
-    def remove_intersecting_windows(self, charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
-        """
-        Filters and removes intersecting charge windows
-        """
-        clip_again = True
-
-        # For each charge window
-        while clip_again:
-            clip_again = False
-            new_limit_best = []
-            new_window_best = []
-            for window_n in range(len(charge_limit_best)):
-                window = charge_window_best[window_n]
-                start = window["start"]
-                end = window["end"]
-                average = window["average"]
-                limit = charge_limit_best[window_n]
-                clipped = False
-
-                # For each discharge window
-                for dwindow_n in range(len(discharge_limit_best)):
-                    dwindow = discharge_window_best[dwindow_n]
-                    dlimit = discharge_limit_best[dwindow_n]
-                    dstart = dwindow["start"]
-                    dend = dwindow["end"]
-
-                    # Overlapping window with enabled discharge?
-                    if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-                        if dstart <= start:
-                            if start != dend:
-                                start = dend
-                                clipped = True
-                        elif dend >= end:
-                            if end != dstart:
-                                end = dstart
-                                clipped = True
-                        else:
-                            # Two segments
-                            if (dstart - start) >= 5:
-                                new_window = {}
-                                new_window["start"] = start
-                                new_window["end"] = dstart
-                                new_window["average"] = average
-                                new_window_best.append(new_window)
-                                new_limit_best.append(limit)
-                            start = dend
-                            clipped = True
-                            if (end - start) >= 5:
-                                clip_again = True
-
-                if not clipped or ((end - start) >= 5):
-                    new_window = {}
-                    new_window["start"] = start
-                    new_window["end"] = end
-                    new_window["average"] = average
-                    new_window_best.append(new_window)
-                    new_limit_best.append(limit)
-
-            if clip_again:
-                charge_window_best = new_window_best.copy()
-                charge_limit_best = new_limit_best.copy()
-
-        return new_limit_best, new_window_best
-
     def discard_unused_charge_slots(self, charge_limit_best, charge_window_best, reserve):
         """
         Filter out unused charge slots (those set at 0)
@@ -8530,7 +8909,7 @@ class PredBat(hass.Hass):
                     soc_start = predict_soc[predict_minute_start]
                     soc_end = predict_soc[predict_minute_end]
                     soc_min = min(soc_start, soc_end)
-                    soc_min_percent = self.calc_percent_limit(soc_min)
+                    soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
                     soc_max = max(soc_start, soc_end)
 
                     if self.debug_enable:
@@ -8540,7 +8919,7 @@ class PredBat(hass.Hass):
                             )
                         )
 
-                    if (soc_min_percent > self.calc_percent_limit(charge_limit_best[window_n])) and (charge_limit_best[window_n] != self.reserve):
+                    if (soc_min_percent > calc_percent_limit(charge_limit_best[window_n], self.soc_max)) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
                         self.log(
                             "Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n])
@@ -8600,7 +8979,7 @@ class PredBat(hass.Hass):
                     if soc_min > limit_soc:
                         # Give it 10 minute margin
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
-                        discharge_limits_best[window_n] = self.calc_percent_limit(limit_soc)
+                        discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
                         if limit != discharge_limits_best[window_n] and self.debug_enable:
                             self.log(
                                 "Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(
@@ -8612,7 +8991,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # Get it 5 minute margin upwards
                             limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
-                            discharge_limits_best[window_n] = self.calc_percent_limit(limit_soc)
+                            discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
                             if limit != discharge_limits_best[window_n] and self.debug_enable:
                                 self.log(
                                     "Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(
@@ -8649,7 +9028,7 @@ class PredBat(hass.Hass):
 
         return new_enable, new_best
 
-    def tweak_plan(self, end_record, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, best_metric, metric_keep):
+    def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
         """
@@ -8674,10 +9053,6 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        load_minutes_step10,
-                        pv_forecast_minute_step,
-                        pv_forecast_minute10_step,
                         end_record=end_record,
                     )
                     self.charge_limit_best[window_n] = best_soc
@@ -8695,10 +9070,6 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        load_minutes_step10,
-                        pv_forecast_minute_step,
-                        pv_forecast_minute10_step,
                         end_record=end_record,
                     )
                     self.discharge_limits_best[window_n] = best_soc
@@ -8709,7 +9080,7 @@ class PredBat(hass.Hass):
 
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {}".format(self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep)))
 
-    def optimise_all_windows(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, best_metric, metric_keep):
+    def optimise_all_windows(self, best_metric, metric_keep):
         """
         Optimise all windows, both charge and discharge in rate order
         """
@@ -8739,10 +9110,6 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step,
-                load_minutes_step10,
-                pv_forecast_minute_step,
-                pv_forecast_minute10_step,
                 end_record=self.end_record,
                 fast=fast_mode,
                 quiet=True,
@@ -8763,10 +9130,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                             region_start=region + self.minutes_now,
                             region_end=region_end + self.minutes_now,
@@ -8847,10 +9210,6 @@ class PredBat(hass.Hass):
                                 self.charge_window_best,
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
-                                load_minutes_step,
-                                load_minutes_step10,
-                                pv_forecast_minute_step,
-                                pv_forecast_minute10_step,
                                 end_record=self.end_record,
                             )
                             self.charge_limit_best[window_n] = best_soc
@@ -8870,7 +9229,7 @@ class PredBat(hass.Hass):
                                         self.best_soc_max,
                                         self.dp2(best_metric),
                                         self.dp2(best_cost),
-                                        self.calc_percent_limit(self.charge_limit_best),
+                                        calc_percent_limit(self.charge_limit_best, self.soc_max),
                                     )
                                 )
                     else:
@@ -8916,10 +9275,6 @@ class PredBat(hass.Hass):
                                 self.charge_window_best,
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
-                                load_minutes_step,
-                                load_minutes_step10,
-                                pv_forecast_minute_step,
-                                pv_forecast_minute10_step,
                                 end_record=self.end_record,
                             )
                             self.discharge_limits_best[window_n] = best_soc
@@ -8950,7 +9305,7 @@ class PredBat(hass.Hass):
                         self.dp2(best_cost),
                         self.dp2(best_keep),
                         self.time_abs_str(self.end_record + self.minutes_now),
-                        self.window_as_text(self.charge_window_best, self.calc_percent_limit(self.charge_limit_best), ignore_min=True),
+                        self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max), ignore_min=True),
                     )
                 )
 
@@ -8982,10 +9337,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                         )
                         self.charge_limit_best[window_n] = best_soc
@@ -9004,10 +9355,6 @@ class PredBat(hass.Hass):
                             self.charge_window_best,
                             self.discharge_window_best,
                             self.discharge_limits_best,
-                            load_minutes_step,
-                            load_minutes_step10,
-                            pv_forecast_minute_step,
-                            pv_forecast_minute10_step,
                             end_record=self.end_record,
                         )
                         self.discharge_limits_best[window_n] = best_soc
@@ -9450,58 +9797,6 @@ class PredBat(hass.Hass):
 
         self.log("BALANCE: Completed this run")
 
-    def find_charge_rate(self, minutes_now, soc, window, target_soc, max_rate, quiet=True):
-        """
-        Find the lowest charge rate that fits the charge slow
-        """
-        margin = 10
-        if self.set_charge_low_power:
-            minutes_left = window["end"] - minutes_now - margin
-
-            # If we don't have enough minutes left go to max
-            if minutes_left < 0:
-                return max_rate
-
-            # If we already have reached target go back to max
-            if soc >= target_soc:
-                return max_rate
-
-            # Work out the charge left in kw
-            charge_left = target_soc - soc
-
-            # If we can never hit the target then go to max
-            if max_rate * minutes_left < charge_left:
-                return max_rate
-
-            # What's the lowest we could go?
-            min_rate = charge_left / minutes_left
-
-            # Apply the curve at each rate to pick one that works
-            rate_w = max_rate * MINUTE_WATT
-            best_rate = max_rate
-            while rate_w >= 400:
-                rate = rate_w / MINUTE_WATT
-                if rate >= min_rate:
-                    charge_now = soc
-                    minute = 0
-                    for minute in range(0, minutes_left, PREDICT_STEP):
-                        rate_scale = self.get_charge_rate_curve(charge_now, rate)
-                        charge_amount = rate_scale * PREDICT_STEP * self.battery_loss
-                        charge_now += charge_amount
-                        if charge_now >= target_soc:
-                            best_rate = rate
-                            break
-                rate_w -= 125.0
-            if not quiet:
-                self.log(
-                    "Find charge rate now {} soc {} window {} target_soc {} max_rate {} min_rate {} returns {}".format(
-                        minutes_now, soc, window, target_soc, int(max_rate * MINUTE_WATT), int(min_rate * MINUTE_WATT), int(best_rate * MINUTE_WATT)
-                    )
-                )
-            return best_rate
-        else:
-            return max_rate
-
     def log_option_best(self):
         """
         Log options
@@ -9617,9 +9912,16 @@ class PredBat(hass.Hass):
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
+        # Creation prediction object
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+
+        # Create pool
+        if not self.pool:
+            self.pool = Pool(processes=8)
+
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, end_record=self.end_record
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record
         )
 
         # Try different battery SOCs to get the best result
@@ -9632,14 +9934,14 @@ class PredBat(hass.Hass):
             self.log_option_best()
 
             # Full plan
-            self.optimise_all_windows(load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+            self.optimise_all_windows(metric, metric_keep)
 
             # Tweak plan
             if self.calculate_tweak_plan:
-                self.tweak_plan(self.end_record, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step, metric, metric_keep)
+                self.tweak_plan(self.end_record, metric, metric_keep)
 
             # Remove charge windows that overlap with discharge windows
-            self.charge_limit_best, self.charge_window_best = self.remove_intersecting_windows(
+            self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(
                 self.charge_limit_best, self.charge_window_best, self.discharge_limits_best, self.discharge_window_best
             )
 
@@ -9656,8 +9958,7 @@ class PredBat(hass.Hass):
                         self.charge_window_best,
                         self.discharge_window_best,
                         self.discharge_limits_best,
-                        load_minutes_step,
-                        pv_forecast_minute_step,
+                        False,
                         end_record=self.end_record,
                     )
 
@@ -9681,8 +9982,7 @@ class PredBat(hass.Hass):
                     self.charge_window_best,
                     self.discharge_window_best,
                     self.discharge_limits_best,
-                    load_minutes_step,
-                    pv_forecast_minute_step,
+                    False,
                     end_record=self.end_record,
                 )
                 # Initial charge slot filter
@@ -9698,10 +9998,10 @@ class PredBat(hass.Hass):
                 if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
-                    self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
+                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                     self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
                 else:
-                    self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
+                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                     self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
 
             # Plan is now valid
@@ -9711,7 +10011,7 @@ class PredBat(hass.Hass):
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
-            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, load_minutes_step, pv_forecast_minute_step, save="base", end_record=self.end_record
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, save="base", end_record=self.end_record
         )
         (
             metricb10,
@@ -9729,8 +10029,7 @@ class PredBat(hass.Hass):
             self.charge_window,
             self.discharge_window,
             self.discharge_limits,
-            load_minutes_step10,
-            pv_forecast_minute10_step,
+            True,
             save="base10",
             end_record=self.end_record,
         )
@@ -9753,8 +10052,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step10,
-                pv_forecast_minute10_step,
+                True,
                 save="best10",
                 end_record=self.end_record,
             )
@@ -9763,8 +10061,7 @@ class PredBat(hass.Hass):
                 self.charge_window_best,
                 self.discharge_window_best,
                 self.discharge_limits_best,
-                load_minutes_step,
-                pv_forecast_minute_step,
+                False,
                 save="best",
                 end_record=self.end_record,
             )
@@ -9785,13 +10082,18 @@ class PredBat(hass.Hass):
             )
 
             # Publish charge and discharge window best
-            self.charge_limit_percent_best = self.calc_percent_limit(self.charge_limit_best)
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
             self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
 
+        # Destroy pool
+        if self.pool:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
         # Return if we recomputed or not
         return recompute
 
@@ -9898,8 +10200,14 @@ class PredBat(hass.Hass):
                     )
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        charge_rate = self.find_charge_rate(
-                            self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
+                        charge_rate = find_charge_rate(
+                            self,
+                            self.minutes_now,
+                            inverter.soc_kw,
+                            window,
+                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
+                            inverter.battery_rate_max_charge,
+                            quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
@@ -10766,7 +11074,7 @@ class PredBat(hass.Hass):
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
-        self.charge_limit_percent = self.calc_percent_limit(self.charge_limit)
+        self.charge_limit_percent = calc_percent_limit(self.charge_limit, self.soc_max)
         self.publish_charge_limit(self.charge_limit, self.charge_window, self.charge_limit_percent, best=False)
 
         self.log("Base charge    window {}".format(self.window_as_text(self.charge_window, self.charge_limit_percent)))
@@ -11113,6 +11421,7 @@ class PredBat(hass.Hass):
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
 
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
+        self.expose_config("active", True)
 
         # Check our version
         self.download_predbat_releases()
@@ -11200,6 +11509,7 @@ class PredBat(hass.Hass):
                 notify=True,
                 extra=status_extra,
             )
+        self.expose_config("active", False)
 
     async def update_event(self, event, data, kwargs):
         """
@@ -11982,12 +12292,12 @@ class PredBat(hass.Hass):
                         res = re.search('THIS_VERSION\s+=\s+"([0-9.v]+)"', line)
                         if res:
                             version = res.group(1)
+                            foundVersion = True
                             if version != THIS_VERSION:
                                 self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
                                 passed = False
                             else:
                                 self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))
-                                foundVersion = True
             if not foundVersion:
                 self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
                 passed = False
@@ -12004,7 +12314,7 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         global SIMULATE
-        self.log("Predbat: Startup")
+        self.log("Predbat: Startup {}".format(__name__))
 
         try:
             self.reset()
