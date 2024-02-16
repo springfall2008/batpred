@@ -153,7 +153,7 @@ If you've run out of API calls you will have to wait until midnight GMT for the 
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
 
-## Note, Can not find battery charge curve
+## Note: Can not find battery charge curve
 
 If you get the message "Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
 then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
@@ -173,12 +173,33 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
-## WARN, Inverter is in calibration mode
+## WARN: Inverter is in calibration mode
 
 If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
 then Predbat has identified that your inverter is currently calibrating your battery.
+
 Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
-and will not execute the plan nor enable battery charge or discharge. Once the inverter finishes calibrating the battery, Predbat will resume normal operations.
+and will not execute the plan nor enable battery charge or discharge.
+
+Once the inverter finishes calibrating the battery, Predbat will resume normal operations.
+
+## Inverter time is xxx AppDaemon time is xxx this is xxx minutes skewed, Predbat may not function correctly
+
+If the **predbat.status** gives a warning error about the inverter time:
+
+![IMAGE](images/Inverter-time-warning.png)
+
+Then it indicates that there is a mis-match between the clock that Predbat AppDaemon is using and the inverter time clock, and clearly with a clock mis-match,
+charging and discharging your battery at specific times may not work as expected.
+
+There are several potential causes of this problem:
+
+- Check that the inverter time is correctly set, especially that its set to GMT (even if its summer time).
+In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / click SEND next to 'Set Date and Time'
+- Check that the [time_zone in appdaemon.yaml](install.md#appdaemon-install) is correctly set for your location (e.g. Europe/London)
+- The time zone for [Predbat in apps.yaml](apps-yaml.md#basics) needs to be set to the same value
+- Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
+is recommended to be set to a value of between 20 and 60 seconds.
 
 ## I have another problem not listed above
 

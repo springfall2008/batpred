@@ -194,9 +194,11 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring:
+*TIP:* It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring,
+and set the Self Run Loop Timer which controls how often GivTCP retrieves data from your inverters to a value between 20 and 60 seconds.
+Do not set Self Run to too low a value (i.e. retrieve too often) as this may overload the inverter:
 
-![image](images/GivTCP-output_raw_register_values.png)
+![image](images/GivTCP-recommended-settings.png)
 
 ### Home Assistant inverter control
 
