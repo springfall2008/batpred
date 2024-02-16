@@ -23,7 +23,7 @@ import yaml
 from multiprocessing import Pool
 
 # Only assign globals once to avoid re-creating them with processes are forked
-if not 'THIS_VERSION' in globals():
+if not "THIS_VERSION" in globals():
     PRED_GLOBAL = {}
     THIS_VERSION = "v7.16.0"
     PREDBAT_FILES = ["predbat.py"]
@@ -963,7 +963,6 @@ if not 'THIS_VERSION' in globals():
         },
     }
 
-
     SOLAX_SOLIS_MODES = {
         "Selfuse - No Grid Charging": 1,
         "Timed Charge/Discharge - No Grid Charging": 3,
@@ -1056,6 +1055,7 @@ def calc_percent_limit(charge_limit, soc_max):
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
+
 def get_charge_rate_curve(model, soc, charge_rate_setting):
     """
     Compute true charging rate from SOC and charge rate setting
@@ -1064,6 +1064,7 @@ def get_charge_rate_curve(model, soc, charge_rate_setting):
     max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
     return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
 
+
 def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     """
     Compute true discharging rate from SOC and charge rate setting
@@ -1071,6 +1072,7 @@ def get_discharge_rate_curve(model, soc, discharge_rate_setting):
     soc_percent = calc_percent_limit(soc, model.soc_max)
     max_discharge_rate = model.battery_rate_max_discharge * model.battery_discharge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling_discharge
     return max(min(discharge_rate_setting, max_discharge_rate), model.battery_rate_min)
+
 
 def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quiet=True):
     """
@@ -1117,6 +1119,7 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
         return best_rate
     else:
         return max_rate
+
 
 class Prediction:
     """
@@ -1185,13 +1188,13 @@ class Prediction:
         self.car_charging_battery_size = base.car_charging_battery_size
 
         # Store the larger structures in globals to avoid passing them to threads
-        PRED_GLOBAL['pv_forecast_minute_step'] = pv_forecast_minute_step
-        PRED_GLOBAL['pv_forecast_minute10_step'] = pv_forecast_minute10_step
-        PRED_GLOBAL['load_minutes_step'] = load_minutes_step
-        PRED_GLOBAL['load_minutes_step10'] = load_minutes_step10
-        PRED_GLOBAL['rate_gas'] = base.rate_gas
-        PRED_GLOBAL['rate_import'] = base.rate_import
-        PRED_GLOBAL['rate_export'] = base.rate_export
+        PRED_GLOBAL["pv_forecast_minute_step"] = pv_forecast_minute_step
+        PRED_GLOBAL["pv_forecast_minute10_step"] = pv_forecast_minute10_step
+        PRED_GLOBAL["load_minutes_step"] = load_minutes_step
+        PRED_GLOBAL["load_minutes_step10"] = load_minutes_step10
+        PRED_GLOBAL["rate_gas"] = base.rate_gas
+        PRED_GLOBAL["rate_import"] = base.rate_import
+        PRED_GLOBAL["rate_export"] = base.rate_export
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1241,7 +1244,6 @@ class Prediction:
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
 
-
     def find_charge_window_optimised(self, charge_windows):
         """
         Takes in an array of charge windows
@@ -1282,14 +1284,14 @@ class Prediction:
         # Fetch data from globals, optimised away from class to avoid passing it between threads
         global PRED_GLOBAL
         if pv10:
-            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute10_step']
-            load_minutes_step = PRED_GLOBAL['load_minutes_step10']
+            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute10_step"]
+            load_minutes_step = PRED_GLOBAL["load_minutes_step10"]
         else:
-            pv_forecast_minute_step = PRED_GLOBAL['pv_forecast_minute_step']
-            load_minutes_step = PRED_GLOBAL['load_minutes_step']
-        rate_gas = PRED_GLOBAL['rate_gas']
-        rate_import = PRED_GLOBAL['rate_import']
-        rate_export = PRED_GLOBAL['rate_export']
+            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute_step"]
+            load_minutes_step = PRED_GLOBAL["load_minutes_step"]
+        rate_gas = PRED_GLOBAL["rate_gas"]
+        rate_import = PRED_GLOBAL["rate_import"]
+        rate_export = PRED_GLOBAL["rate_export"]
 
         # Data structures creating during the prediction
         self.predict_soc = {}
@@ -10191,7 +10193,13 @@ class PredBat(hass.Hass):
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         charge_rate = find_charge_rate(
-                            self, self.minutes_now, inverter.soc_kw, window, self.charge_limit_percent_best[0] * inverter.soc_max / 100.0, inverter.battery_rate_max_charge, quiet=False
+                            self,
+                            self.minutes_now,
+                            inverter.soc_kw,
+                            window,
+                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
+                            inverter.battery_rate_max_charge,
+                            quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
