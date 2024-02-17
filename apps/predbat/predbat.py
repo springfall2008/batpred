@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.0"
+THIS_VERSION = "v7.16.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -3816,7 +3816,10 @@ class PredBat(hass.Hass):
                 final = []
                 for item in value:
                     item = self.resolve_arg(arg, item, default=default, indirect=indirect)
-                    final.append(item)
+                    if isinstance(item, list):
+                        final += item
+                    else:
+                        final.append(item)
                 return final
 
         # Resolve templated data
@@ -3828,6 +3831,10 @@ class PredBat(hass.Hass):
                     self.log("WARN: can not resolve {} value {}".format(arg, value))
                     self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
+
+        # Resolve join list by name
+        if isinstance(value, str) and value.startswith("+[") and value.endswith("]"):
+            value = self.get_arg(value[2:-1], default=default, indirect=indirect, combine=False, attribute=attribute, index=index)
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and "." in value:
@@ -11740,6 +11747,14 @@ class PredBat(hass.Hass):
                 self.update_pending = True
                 self.plan_valid = False
 
+    async def watch_event(self, entity, attribute, old, new, kwargs):
+        """
+        Catch HA state changes for watched entities
+        """
+        self.log("Watched event: {} = {} will trigger re-plan".format(entity, new))
+        self.update_pending = True
+        self.plan_valid = False
+
     async def switch_event(self, event, data, kwargs):
         """
         Catch HA Switch toggle
@@ -12156,6 +12171,12 @@ class PredBat(hass.Hass):
             self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
             self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
             self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+
+            watch_list = self.get_arg("watch_list", [], indirect=False)
+            self.log("Watch list {}".format(watch_list))
+            for entity in watch_list:
+                if entity:
+                    self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """

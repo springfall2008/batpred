@@ -398,3 +398,16 @@ pred_bat:
   #futurerate_peak_end: "19:00:00"
   #futurerate_peak_premium_import: 14
   #futurerate_peak_premium_export: 6.5
+
+  # Watch list, a list of sensors to watch for changes and then update the plan if they change
+  # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in
+  # Only uncomment the items you actually have set up above in apps.yaml, of course you can add your own as well
+  # Note those using +[] are lists that are appended to this list, whereas {} items are single items only
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{car_charging_now}'
