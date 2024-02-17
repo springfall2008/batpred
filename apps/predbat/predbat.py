@@ -1148,80 +1148,96 @@ class DummyThread:
         return self.result
 
 
+def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+    global PRED_GLOBAL
+    pred = Prediction()
+    pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+
+
+def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+    global PRED_GLOBAL
+    pred = Prediction()
+    pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+
+
 class Prediction:
     """
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10):
+    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
-        self.minutes_now = base.minutes_now
-        self.forecast_minutes = base.forecast_minutes
-        self.midnight_utc = base.midnight_utc
-        self.soc_kw = base.soc_kw
-        self.soc_max = base.soc_max
-        self.export_today_now = base.export_today_now
-        self.import_today_now = base.import_today_now
-        self.load_minutes_now = base.load_minutes_now
-        self.pv_today_now = base.pv_today_now
-        self.iboost_today = base.iboost_today
-        self.charge_rate_now = base.charge_rate_now
-        self.discharge_rate_now = base.discharge_rate_now
-        self.cost_today_sofar = base.cost_today_sofar
-        self.debug_enable = base.debug_enable
-        self.num_cars = base.num_cars
-        self.car_charging_soc = base.car_charging_soc
-        self.car_charging_soc_next = base.car_charging_soc_next
-        self.car_charging_loss = base.car_charging_loss
-        self.reserve = base.reserve
-        self.metric_standing_charge = base.metric_standing_charge
-        self.set_charge_freeze = base.set_charge_freeze
-        self.set_reserve_enable = base.set_reserve_enable
-        self.set_discharge_freeze = base.set_discharge_freeze
-        self.set_discharge_freeze_only = base.set_discharge_freeze_only
-        self.set_discharge_during_charge = base.set_discharge_during_charge
-        self.set_read_only = base.set_read_only
-        self.set_charge_low_power = base.set_charge_low_power
-        self.car_charging_slots = base.car_charging_slots
-        self.car_charging_limit = base.car_charging_limit
-        self.car_charging_from_battery = base.car_charging_from_battery
-        self.iboost_enable = base.iboost_enable
-        self.iboost_next = base.iboost_next
-        self.iboost_max_energy = base.iboost_max_energy
-        self.iboost_gas = base.iboost_gas
-        self.iboost_gas_scale = base.iboost_gas_scale
-        self.iboost_max_power = base.iboost_max_power
-        self.iboost_min_power = base.iboost_min_power
-        self.iboost_min_soc = base.iboost_min_soc
-        self.iboost_solar = base.iboost_solar
-        self.iboost_charging = base.iboost_charging
-        self.iboost_running = base.iboost_running
-        self.inverter_loss = base.inverter_loss
-        self.inverter_hybrid = base.inverter_hybrid
-        self.inverter_limit = base.inverter_limit
-        self.export_limit = base.export_limit
-        self.battery_rate_min = base.battery_rate_min
-        self.battery_rate_max_charge = base.battery_rate_max_charge
-        self.battery_rate_max_discharge = base.battery_rate_max_discharge
-        self.battery_rate_max_charge_scaled = base.battery_rate_max_charge_scaled
-        self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
-        self.battery_charge_power_curve = base.battery_charge_power_curve
-        self.battery_discharge_power_curve = base.battery_discharge_power_curve
-        self.battery_rate_max_scaling = base.battery_rate_max_scaling
-        self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
-        self.battery_loss = base.battery_loss
-        self.battery_loss_discharge = base.battery_loss_discharge
-        self.best_soc_keep = base.best_soc_keep
-        self.car_charging_battery_size = base.car_charging_battery_size
+        if base:
+            self.minutes_now = base.minutes_now
+            self.forecast_minutes = base.forecast_minutes
+            self.midnight_utc = base.midnight_utc
+            self.soc_kw = base.soc_kw
+            self.soc_max = base.soc_max
+            self.export_today_now = base.export_today_now
+            self.import_today_now = base.import_today_now
+            self.load_minutes_now = base.load_minutes_now
+            self.pv_today_now = base.pv_today_now
+            self.iboost_today = base.iboost_today
+            self.charge_rate_now = base.charge_rate_now
+            self.discharge_rate_now = base.discharge_rate_now
+            self.cost_today_sofar = base.cost_today_sofar
+            self.debug_enable = base.debug_enable
+            self.num_cars = base.num_cars
+            self.car_charging_soc = base.car_charging_soc
+            self.car_charging_soc_next = base.car_charging_soc_next
+            self.car_charging_loss = base.car_charging_loss
+            self.reserve = base.reserve
+            self.metric_standing_charge = base.metric_standing_charge
+            self.set_charge_freeze = base.set_charge_freeze
+            self.set_reserve_enable = base.set_reserve_enable
+            self.set_discharge_freeze = base.set_discharge_freeze
+            self.set_discharge_freeze_only = base.set_discharge_freeze_only
+            self.set_discharge_during_charge = base.set_discharge_during_charge
+            self.set_read_only = base.set_read_only
+            self.set_charge_low_power = base.set_charge_low_power
+            self.car_charging_slots = base.car_charging_slots
+            self.car_charging_limit = base.car_charging_limit
+            self.car_charging_from_battery = base.car_charging_from_battery
+            self.iboost_enable = base.iboost_enable
+            self.iboost_next = base.iboost_next
+            self.iboost_max_energy = base.iboost_max_energy
+            self.iboost_gas = base.iboost_gas
+            self.iboost_gas_scale = base.iboost_gas_scale
+            self.iboost_max_power = base.iboost_max_power
+            self.iboost_min_power = base.iboost_min_power
+            self.iboost_min_soc = base.iboost_min_soc
+            self.iboost_solar = base.iboost_solar
+            self.iboost_charging = base.iboost_charging
+            self.iboost_running = base.iboost_running
+            self.inverter_loss = base.inverter_loss
+            self.inverter_hybrid = base.inverter_hybrid
+            self.inverter_limit = base.inverter_limit
+            self.export_limit = base.export_limit
+            self.battery_rate_min = base.battery_rate_min
+            self.battery_rate_max_charge = base.battery_rate_max_charge
+            self.battery_rate_max_discharge = base.battery_rate_max_discharge
+            self.battery_rate_max_charge_scaled = base.battery_rate_max_charge_scaled
+            self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
+            self.battery_charge_power_curve = base.battery_charge_power_curve
+            self.battery_discharge_power_curve = base.battery_discharge_power_curve
+            self.battery_rate_max_scaling = base.battery_rate_max_scaling
+            self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
+            self.battery_loss = base.battery_loss
+            self.battery_loss_discharge = base.battery_loss_discharge
+            self.best_soc_keep = base.best_soc_keep
+            self.car_charging_battery_size = base.car_charging_battery_size
+            self.rate_gas = base.rate_gas
+            self.rate_import = base.rate_import
+            self.rate_export = base.rate_export
+            self.pv_forecast_minute_step = pv_forecast_minute_step
+            self.pv_forecast_minute10_step = pv_forecast_minute10_step
+            self.load_minutes_step = load_minutes_step
+            self.load_minutes_step10 = load_minutes_step10
 
-        # Store the larger structures in globals to avoid passing them to threads
-        PRED_GLOBAL["pv_forecast_minute_step"] = pv_forecast_minute_step
-        PRED_GLOBAL["pv_forecast_minute10_step"] = pv_forecast_minute10_step
-        PRED_GLOBAL["load_minutes_step"] = load_minutes_step
-        PRED_GLOBAL["load_minutes_step10"] = load_minutes_step10
-        PRED_GLOBAL["rate_gas"] = base.rate_gas
-        PRED_GLOBAL["rate_import"] = base.rate_import
-        PRED_GLOBAL["rate_export"] = base.rate_export
+            # Store this dictionary in global so we can reconstruct it in the thread without passing the data
+            PRED_GLOBAL["dict"] = self.__dict__.copy()
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1309,16 +1325,15 @@ class Prediction:
         """
 
         # Fetch data from globals, optimised away from class to avoid passing it between threads
-        global PRED_GLOBAL
         if pv10:
-            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute10_step"]
-            load_minutes_step = PRED_GLOBAL["load_minutes_step10"]
+            pv_forecast_minute_step = self.pv_forecast_minute10_step
+            load_minutes_step = self.load_minutes_step10
         else:
-            pv_forecast_minute_step = PRED_GLOBAL["pv_forecast_minute_step"]
-            load_minutes_step = PRED_GLOBAL["load_minutes_step"]
-        rate_gas = PRED_GLOBAL["rate_gas"]
-        rate_import = PRED_GLOBAL["rate_import"]
-        rate_export = PRED_GLOBAL["rate_export"]
+            pv_forecast_minute_step = self.pv_forecast_minute_step
+            load_minutes_step = self.load_minutes_step
+        rate_gas = self.rate_gas
+        rate_import = self.rate_import
+        rate_export = self.rate_export
 
         # Data structures creating during the prediction
         self.predict_soc = {}
@@ -2615,7 +2630,7 @@ class Inverter:
                     )
                 )
             else:
-                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kW".format(self.id, self.charge_rate_now * 60.0))
+                self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kW".format(self.id, round(self.charge_rate_now * 60.0, 2)))
 
         # Construct discharge window from GivTCP settings
         self.discharge_window = []
@@ -8191,7 +8206,7 @@ class PredBat(hass.Hass):
         """
         if self.pool:
             han = self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+                wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
             )
         else:
             han = DummyThread(
@@ -8205,7 +8220,7 @@ class PredBat(hass.Hass):
         """
         if self.pool:
             han = self.pool.apply_async(
-                self.prediction.thread_run_prediction_discharge,
+                wrapped_run_prediction_discharge,
                 (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record),
             )
         else:
