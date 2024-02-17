@@ -1130,7 +1130,7 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
 
 
 """
-Used to mimmic threads when they are disabled
+Used to mimic threads when they are disabled
 """
 
 
