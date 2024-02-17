@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.0"
+THIS_VERSION = "v7.16.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1132,21 +1132,17 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
 """
 Used to mimic threads when they are disabled
 """
-
-
 class DummyThread:
     def __init__(self, result):
         """
         Store the data into the class
         """
         self.result = result
-
     def get(self):
         """
         Return the result
         """
         return self.result
-
 
 class Prediction:
     """
@@ -3816,7 +3812,10 @@ class PredBat(hass.Hass):
                 final = []
                 for item in value:
                     item = self.resolve_arg(arg, item, default=default, indirect=indirect)
-                    final.append(item)
+                    if isinstance(item, list):
+                        final += item
+                    else:
+                        final.append(item)
                 return final
 
         # Resolve templated data
@@ -3828,6 +3827,10 @@ class PredBat(hass.Hass):
                     self.log("WARN: can not resolve {} value {}".format(arg, value))
                     self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
+        
+        # Resolve join list by name
+        if isinstance(value, str) and value.startswith("+[") and value.endswith("]"):
+            value = self.get_arg(value[2:-1], default=default, indirect=indirect, combine=False, attribute=attribute, index=index)
 
         # Resolve indirect instance
         if indirect and isinstance(value, str) and "." in value:
@@ -8177,19 +8180,15 @@ class PredBat(hass.Hass):
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost
-
+    
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
         Launch a thread to run a prediction
         """
         if self.pool:
-            han = self.pool.apply_async(
-                self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
-            )
+            han = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record))
         else:
-            han = DummyThread(
-                self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
-            )
+            han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record))
         return han
 
     def launch_run_prediction_discharge(self, this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record):
@@ -8197,16 +8196,9 @@ class PredBat(hass.Hass):
         Launch a thread to run a prediction
         """
         if self.pool:
-            han = self.pool.apply_async(
-                self.prediction.thread_run_prediction_discharge,
-                (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record),
-            )
+            han = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record))
         else:
-            han = DummyThread(
-                self.prediction.thread_run_prediction_discharge(
-                    this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record
-                )
-            )
+            han = DummyThread(self.prediction.thread_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record))
         return han
 
     def optimise_charge_limit(
@@ -8546,16 +8538,8 @@ class PredBat(hass.Hass):
                 this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
                 try_options.append([start, this_discharge_limit])
 
-                results.append(
-                    self.launch_run_prediction_discharge(
-                        this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record
-                    )
-                )
-                results10.append(
-                    self.launch_run_prediction_discharge(
-                        this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record
-                    )
-                )
+                results.append(self.launch_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record))
+                results10.append(self.launch_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record))
 
         # Get results from sims
         try_results = []
@@ -9947,8 +9931,8 @@ class PredBat(hass.Hass):
 
         # Create pool
         if not self.pool:
-            threads = self.get_arg("threads", "auto")
-            if threads == "auto":
+            threads = self.get_arg('threads', 'auto')
+            if threads == 'auto':
                 self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
                 self.pool = Pool(processes=cpu_count())
             elif threads:
@@ -11740,6 +11724,15 @@ class PredBat(hass.Hass):
                 self.update_pending = True
                 self.plan_valid = False
 
+    async def watch_event(self, entity, attribute, old, new, kwargs):
+
+        """
+        Catch HA state changes for watched entities
+        """
+        self.log("Watched event: {} = {} will trigger re-plan".format(entity, new))
+        self.update_pending = True
+        self.plan_valid = False
+
     async def switch_event(self, event, data, kwargs):
         """
         Catch HA Switch toggle
@@ -12156,6 +12149,12 @@ class PredBat(hass.Hass):
             self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
             self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
             self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+
+            watch_list = self.get_arg("watch_list", [], indirect=False)
+            self.log("Watch list {}".format(watch_list))
+            for entity in watch_list:
+                if entity:
+                    self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
