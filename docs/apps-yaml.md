@@ -47,7 +47,7 @@ Once you have made all other required changes to apps.yaml this line should be d
 - **threads** - If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
 you have CPUs in your system.
 Valid values are:
-    - 'auto' - Use the smae number of threads as your CPU count
+    - 'auto' - Use the same number of threads as your CPU count
     - '0' - Don't use threads - disabled
     - 'N' - Use N threads, recommended values are between 2 and 8
 
