@@ -93,7 +93,7 @@ The default value is 1, that all history days are equally weighted, so if you do
     - 1
 ```
 
-- **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+- **forecast_hours** - the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
 ## Inverter information
