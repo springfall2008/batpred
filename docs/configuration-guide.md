@@ -18,7 +18,7 @@ Also set **switch.predbat_inverter_hybrid** to True or False depending upon if y
 
 The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
-The default is 1p but can be set to 0 if you want to turn this feature off.
+The default is 0.5p (meaning charging and discharging the battery would effectively cost an extra 1p per kWh) but can be set to 0 if you want to turn this feature off.
 
 Below is a guide to some of the electricity tariff options and a set of recommended Predbat settings for each tariff type.
 In theory most tariffs will work out of the box but still it's worth reviewing your settings.
