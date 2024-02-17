@@ -92,6 +92,9 @@ quite CPU intensive and provides very little improvement for most systems.
 If you have performance problems turn **switch.predbat_calculate_fast_plan** (_expert mode_) On to help
 reduce your CPU load.
 
+The number of threads you use can change your performance, you can set **threads** in apps.yaml to 0 to disable threading
+if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU.
+
 ## Battery loss options
 
 **input_number.predbat_battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.05 is 5%.

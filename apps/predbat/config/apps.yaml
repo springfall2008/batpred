@@ -12,6 +12,10 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
+  # Number of threads to use in plan calculation
+  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
+  threads: auto
+
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
