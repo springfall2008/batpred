@@ -1147,17 +1147,20 @@ class DummyThread:
         """
         return self.result
 
+
 def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
 
+
 def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+
 
 class Prediction:
     """
@@ -8203,14 +8206,10 @@ class PredBat(hass.Hass):
         """
         if self.pool:
             han = self.pool.apply_async(
-                wrapped_run_prediction_charge, 
-                (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+                wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
             )
         else:
-            han = DummyThread(
-                self.pred.thread_run_prediction_charge(
-                    loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
-            )
+            han = DummyThread(self.pred.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record))
         return han
 
     def launch_run_prediction_discharge(self, this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record):
