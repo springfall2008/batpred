@@ -307,7 +307,8 @@ Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can
 You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
 high battery charge levels when the car was charged previously (e.g. last week).
 
-- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from Predbat's battery prediction plan.
+- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
+so that Predbat's battery prediction plan is not distorted by previous car charging.
 
 - **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
 This has been pre-defined to a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
