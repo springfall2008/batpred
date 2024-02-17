@@ -295,7 +295,7 @@ If new Predbat releases introduce new features to apps.yaml you may therefore ne
 
 **Recommended**
 
-Predbat can now be updated using the Home Asssitant update feature. We a new release is available you should see it in settings:
+Predbat can now be updated using the Home Assitant update feature. We a new release is available you should see it in settings:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/516c77b8-7258-45e7-868f-eea40ee380ac)
 
