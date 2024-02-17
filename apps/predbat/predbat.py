@@ -20,7 +20,7 @@ import appdaemon.plugins.hass.hassapi as hass
 import pytz
 import requests
 import yaml
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
@@ -1128,6 +1128,21 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
     else:
         return max_rate
 
+
+"""
+Used to mimmick threads when they are disabled
+"""
+class DummyThread:
+    def __init__(self, result):
+        """
+        Store the result for lata
+        """
+        self.result = result
+    def get(self):
+        """
+        Return the result
+        """
+        return self.result
 
 class Prediction:
     """
@@ -8158,6 +8173,26 @@ class PredBat(hass.Hass):
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost
+    
+    def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+        """
+        Launch a thread to run a prediction
+        """
+        if self.pool:
+            han = self.pool.apply_async(self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record))
+        else:
+            han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record))
+        return han
+
+    def launch_run_prediction_discharge(self, this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record):
+        """
+        Launch a thread to run a prediction
+        """
+        if self.pool:
+            han = self.pool.apply_async(self.prediction.thread_run_prediction_discharge, (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record))
+        else:
+            han = DummyThread(self.prediction.thread_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record))
+        return han
 
     def optimise_charge_limit(
         self,
@@ -8204,27 +8239,10 @@ class PredBat(hass.Hass):
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
-            hans.append(
-                self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-                )
-            )
-            hans.append(
-                self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-                )
-            )
-            hans.append(
-                self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge,
-                    (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record),
-                )
-            )
-            hans.append(
-                self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge, (best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-                )
-            )
+            hans.append(self.launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
             id = 0
             for han in hans:
                 metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = han.get()
@@ -8323,13 +8341,9 @@ class PredBat(hass.Hass):
         results10 = []
         for try_soc in try_socs:
             if try_soc not in resultmid:
-                hanres = self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-                )
+                hanres = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
                 results.append(hanres)
-                hanres10 = self.pool.apply_async(
-                    self.prediction.thread_run_prediction_charge, (try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-                )
+                hanres10 = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
                 results10.append(hanres10)
 
         # Get results from sims if we simulated them
@@ -8517,16 +8531,8 @@ class PredBat(hass.Hass):
                 this_discharge_limit = max(calc_percent_limit(max(self.best_soc_min, self.reserve), self.soc_max), this_discharge_limit)
                 try_options.append([start, this_discharge_limit])
 
-                hanres = self.pool.apply_async(
-                    self.prediction.thread_run_prediction_discharge,
-                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record),
-                )
-                hanres10 = self.pool.apply_async(
-                    self.prediction.thread_run_prediction_discharge,
-                    (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record),
-                )
-                results.append(hanres)
-                results10.append(hanres10)
+                results.append(self.launch_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, False, all_n, end_record))
+                results10.append(self.launch_run_prediction_discharge(this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, True, all_n, end_record))
 
         # Get results from sims
         try_results = []
@@ -9918,7 +9924,15 @@ class PredBat(hass.Hass):
 
         # Create pool
         if not self.pool:
-            self.pool = Pool(processes=8)
+            threads = self.get_arg('threads', 'auto')
+            if threads == 'auto':
+                self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
+                self.pool = Pool(processes=cpu_count())
+            elif threads:
+                self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
+                self.pool = Pool(processes=int(threads))
+            else:
+                self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
