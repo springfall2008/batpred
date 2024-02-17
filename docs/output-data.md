@@ -18,8 +18,13 @@ A set of Apex Charts can also be created to see graphically what Predbat plans t
 
 ## Basic status
 
-- predbat.status - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
+- **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does predbat do](what-does-predbat-do.md#predbat-status).
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
+
+- **switch.predbat_active** - When on Predbat is busy calculating or controlling your inverter, when Off its waiting for the next time it needs to make an update.
+If you toggle this switch in HA it will force Predbat to perform an update now (useful for automations).
 
 ## Baseline data
 
