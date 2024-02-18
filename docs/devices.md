@@ -2,7 +2,7 @@
 
 ## Wallbox Pulsar
 
-https://www.home-assistant.io/integrations/wallbox/
+<https://www.home-assistant.io/integrations/wallbox/>
 
 Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
@@ -16,7 +16,7 @@ Wallbox works with Octopus Intelligent GO, and can be triggered via Octopus them
 
 ## Zappi
 
-https://github.com/CJNE/ha-myenergi
+<https://github.com/CJNE/ha-myenergi>
 
 Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in
 
@@ -28,7 +28,7 @@ Can be used both for Car Charging Hold feature (to filter out previous car charg
 
 ## Tesla
 
-https://github.com/alandtse/tesla
+<https://github.com/alandtse/tesla>
 
 Can be used to extract the cars current SOC and Charge limit. Also can be used to control the cars charging with an automation linked to the Predbat slot sensor
 
@@ -41,13 +41,13 @@ Can be used to extract the cars current SOC and Charge limit. Also can be used t
 
 ## Ohme
 
-https://github.com/dan-r/HomeAssistant-Ohme
+<https://github.com/dan-r/HomeAssistant-Ohme>
 
 Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
 Also can be used with Octopus Intelligent GO to map out the cars charging slots into Predbat
 
-
 **car charging energy**
+
 ```yaml
   car_charging_energy: 'sensor.ohme_session_energy'
 ```
@@ -71,17 +71,19 @@ car_charging_now:
 
 ## Octopus Energy
 
-https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy
+<https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy>
 
 Can be used for energy rates, car charging and saving sessions
 
 **For energy rate**
+
 ```yaml
   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 ```
-  
+
 **For Octopus Intelligent GO**
+
 ```yaml
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
@@ -89,6 +91,7 @@ Can be used for energy rates, car charging and saving sessions
 ```
 
 **For Octopus Saving sessions**
+
 ```yaml
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
@@ -102,7 +105,7 @@ This is built into Predbat, see the apps.yaml configuration guide
 
 ### As your energy rates (e.g. for those in Norway)
 
-https://github.com/custom-components/nordpool/
+<https://github.com/custom-components/nordpool/>
 
 Can be linked to Predbat to provide energy rates in your region e.g:
 
@@ -112,7 +115,7 @@ Can be linked to Predbat to provide energy rates in your region e.g:
 
 ## Solcast
 
-https://github.com/oziee/ha-solcast-solar
+<https://github.com/oziee/ha-solcast-solar>
 
 For solar forecast data
 
