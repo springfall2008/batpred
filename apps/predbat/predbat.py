@@ -886,6 +886,7 @@ INVERTER_DEF = {
         "clock_time_format": "%H:%M:%S",
         "write_and_poll_sleep": 10,
         "has_time_window": True,
+        "support_charge_freeze": True,
         "support_discharge_freeze": True,
     },
     "GS": {
@@ -906,6 +907,7 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": True,
+        "support_charge_freeze": False,
         "support_discharge_freeze": False,
     },
     "SX4": {
@@ -926,6 +928,7 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,
+        "support_charge_freeze": False,
         "support_discharge_freeze": False,
     },
     "SF": {
@@ -946,13 +949,14 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,
+        "support_charge_freeze": False,
         "support_discharge_freeze": False,
     },
     "HU": {
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
-        "output_charge_control": "none",
+        "output_charge_control": "power",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": False,
@@ -966,6 +970,7 @@ INVERTER_DEF = {
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
         "write_and_poll_sleep": 2,
         "has_time_window": False,
+        "support_charge_freeze": False,
         "support_discharge_freeze": False,
     },
 }
@@ -1963,6 +1968,7 @@ class Inverter:
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
         self.inv_soc_units = INVERTER_DEF[self.inverter_type]["soc_units"]
         self.inv_time_button_press = INVERTER_DEF[self.inverter_type]["time_button_press"]
+        self.inv_support_charge_freeze = INVERTER_DEF[self.inverter_type]["support_charge_freeze"]
         self.inv_support_discharge_freeze = INVERTER_DEF[self.inverter_type]["support_discharge_freeze"]
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]["has_ge_inverter_mode"]
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
@@ -11095,6 +11101,10 @@ class PredBat(hass.Hass):
                     self.log("Note: Inverter does not support discharge freeze - disabled")
                     self.set_discharge_freeze = False
                     self.set_discharge_freeze_only = False
+                if not inverter.inv_support_charge_freeze:
+                    # Force off unsupported feature
+                    self.log("Note: Inverter does not support charge freeze - disabled")
+                    self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
                     self.log("Note: Inverter does not support reserve - disabled")
                     self.set_reserve_enable = False
