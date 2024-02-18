@@ -351,7 +351,8 @@ from the grid/solar as an alternative to charging. Enabled by default.
 solar exports but don't allow forced export (brown energy).
 
 If you have **switch.predbat_inverter_hybrid** set to False then if **switch.predbat_inverter_soc_reset** (_expert mode_) is set to True then the
-target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
+target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar. The default for
+this switch is True but it can be disabled in expert mode if need be.
 
 **input_number.predbat_set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use,
 a value of 4 is the minimum and recommended to make use of the full battery.<BR>

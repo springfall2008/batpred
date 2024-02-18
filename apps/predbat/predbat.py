@@ -208,7 +208,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Inverter SOC Reset",
         "type": "switch",
         "enable": "expert_mode",
-        "default": False,
+        "default": True,
     },
     {
         "name": "battery_capacity_nominal",
