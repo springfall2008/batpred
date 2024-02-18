@@ -1,4 +1,4 @@
-# Support devices
+# Support 3rd party devices/integrations
 
 ## Wallbox Pulsar
 
