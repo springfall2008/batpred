@@ -46,9 +46,9 @@ pred_bat:
   # If not using REST then instead set the Control here (one for each inverter)
   # - you can delete this section if using REST
   charge_rate:
-    - number.battery_end_of_charge_soc
+    - number.battery_maximum_charging_power
   discharge_rate:
-    - number.battery_end_of_discharge_soc
+    - number.battery_maximum_discharging_power
   battery_power:
     - sensor.battery_charge_discharge_power
   pv_power:
