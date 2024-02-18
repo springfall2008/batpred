@@ -93,3 +93,32 @@ Can be used for energy rates, car charging and saving sessions
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
 ```
+
+## Nordpool
+
+### For adjustment to Octopus Intelligent
+
+This is built into Predbat, see the apps.yaml configuration guide
+
+### As your energy rates (e.g. for those in Norway)
+
+https://github.com/custom-components/nordpool/
+
+Can be linked to Predbat to provide energy rates in your region e.g:
+
+```yaml
+  metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+```
+
+## Solcast
+
+https://github.com/oziee/ha-solcast-solar
+
+For solar forecast data
+
+```yaml
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+```
