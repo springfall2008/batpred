@@ -1372,6 +1372,7 @@ class Prediction:
         import_kwh_battery = 0
         battery_cycle = 0
         metric_keep = 0
+        four_hour_rule = True
         final_export_kwh = export_kwh
         final_import_kwh = import_kwh
         final_load_kwh = load_kwh
@@ -1417,6 +1418,12 @@ class Prediction:
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
             prev_soc = soc
             reserve_expected = self.reserve
+
+            # Once a force discharge is set the four hour rule is disabled
+            if four_hour_rule:
+                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+            else:
+                keep_minute_scaling = 0.5
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -1601,6 +1608,9 @@ class Prediction:
                     battery_draw = max(0, battery_draw - reduce_by)
 
                 battery_state = "f-"
+
+                # Once force discharge starts the four hour rule is disabled
+                four_hour_rule = False
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
                 if save in ["best", "best10"]:
@@ -1695,15 +1705,13 @@ class Prediction:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
                 if battery_draw > 0:
-                    minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
-                    metric_keep += rate_import[minute_absolute] * battery_draw * minute_scaling
+                    metric_keep += rate_import[minute_absolute] * battery_draw * keep_minute_scaling
             elif soc < self.best_soc_keep:
                 # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
                 # and end up forcing it all to zero
-                minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
                 keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
                 if keep_diff > 0:
-                    metric_keep += rate_import[minute_absolute] * keep_diff * minute_scaling
+                    metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
 
             if diff > 0:
                 # Import
