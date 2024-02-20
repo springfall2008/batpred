@@ -7838,6 +7838,9 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        global PRED_GLOBAL
+        PRED_GLOBAL['dict'] = None
+
         self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -10286,7 +10289,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
                         # Do we disable discharge during charge?
-                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
+                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
