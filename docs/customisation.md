@@ -233,8 +233,8 @@ charging sessions but will not reset it automatically.
 
 See the Predbat mode setting as above for basic calculation options
 
-**input_number.predbat_forecast_plan_hours** is the number of hours after the next charge slot to include in the plan,
-default 24 hours is the suggested amount (to match energy rate cycles).
+**input_number.predbat_forecast_plan_hours** is the minimum length of the Predbat charge plan, and is the number of hours _after_ the first charge slot to include in the plan.
+The default of 24 hours is the recommended value (to match energy rate cycles). Note that the actual length of the Predbat plan will vary depending upon when the first charge slot is.
 
 **switch.predbat_calculate_regions** (_expert mode_) When True the a second pass of the initial thresholds is
 calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
@@ -267,14 +267,15 @@ This can help to slightly improve the plan for tariffs like Agile but can make i
 
 ## Battery margins and metrics options
 
-**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep above during the whole period of the simulation time.
-This is a soft constraint only so it is possible for your SoC to drop below this - use **input_number.predbat_best_soc_min** for a hard SoC constraint that will always be maintained.
-It's usually good to have best_soc_keep set to a value above 0 to allow some margin
-in case you use more energy than planned between charge slots.
+**input_number.predbat_best_soc_keep** is the minimum battery level in kWh that Predbat will to try to keep the battery above for the Predbat plan.
+This is a soft constraint only that's used for longer term planning and is ignored for the forthcoming first 4 hours of the plan.
+As this is not used for short-term planning it's possible for your SoC to drop below this - use **input_number.predbat_best_soc_min**
+if you need a hard SoC constraint that will always be maintained.
+It's usually good to have best_soc_keep set to a value above 0 to allow some margin in case you use more energy than planned between charge slots.
 
 **input_number.predbat_best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
-minimum discharge level also (set to 0 if you want to skip some slots). If you set this to a non-zero value you will need
-to use the low rate threshold to control which slots you charge from or you may charge all the time.
+minimum discharge level also (set to 0 if you want to skip some slots).
+If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
@@ -326,7 +327,7 @@ If you set this to a negative value then Predbat will assume unpublished export 
 calculate the difference between today's actual load and today's predicated load and adjust the rest of the days usage
 prediction accordingly. A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_)
 to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact). The in-day adjustment
-factor can be seen in **predbat_load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
+factor can be seen in **predbat.load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
 in the charts template in Github).
 
 ## Inverter control options
@@ -336,9 +337,14 @@ in the charts template in Github).
 **switch.predbat_set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
 Off by default.
 
-**switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be limited to the
-lowest possible to meet the charge target. Only really effective for charge windows >30 minutes.
-Off by default.
+**switch.predbat_set_charge_low_power** Enables low power charging mode where the max charge rate will be automatically determined by Predbat  to be the
+lowest possible rate to meet the charge target. This is only really effective for charge windows >30 minutes.
+If this setting is turned on, its strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#workarounds)
+as otherwise the low power charge may not reach the charge target in time.
+This setting is off by default.
+
+The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+explains how the low power charging works and shows how Predbat automatically creates it.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
@@ -434,13 +440,13 @@ In summary:
 ## Manual control
 
 In some cases you may want to override Predbat's planned behaviour and make a decision yourself. One way to achieve this is to put Predbat into
-read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and then you should
-control it yourself using GivTCP or the App.
+read-only mode using **switch.predbat_set_read_only**. When going to read only mode the inverter will be put back to the default settings and you should then
+control it yourself using GivTCP or the App appropriate to your inverter.
 
 A better alternative in some cases is to tell Predbat what you want it to do using the manual force features:
 
 You can force the battery to be charged within a 30 minute slot by using the **select.predbat_manual_charge** selector.
-Pick the 30 minute slot you wish to charge in and Predbat will change the plan to charge in the selected slot.
+Pick the 30 minute slot you wish to charge in, and Predbat will change the plan to charge in the selected slot.
 You can select multiple slots by using the drop down menu more than once.
 When Predbat updates the plan you will see the slots picked to be charging slots in the current value of this selector,
 and annotated in the [Predbat HTML plan](predbat-plan-card.md#displaying-the-predbat-plan) with an upside down 'F' symbol.
@@ -452,11 +458,17 @@ You can cancel a force slot by selecting the slot time again (it will be shown i
 The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the manual force charge feature.
 The force discharge takes priority over force charging.
 
-The **select.predbat_manual_idle** selector is used to force Predbat to be idle during a 30 minute slot, this implies no charging or discharging and thus the
-battery will cover the house load (if there is enough charge).
+The **select.predbat_manual_idle** selector is used to force Predbat to idle mode during a 30 minute slot, this implies no forced grid charging or discharging of the battery.
+House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
+This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
+
+_NOTE: once you select a time slot from any of the **select.predbat_manual_** selectors the selected time slot is immediately marked on the drop-down and you can then make another change.
+Predbat still has to update the plan which it will be doing so in the background,
+and this can take a few minutes to run (depending on the speed and power of the PC you are running Home Assistant on) so don't be surprised why the
+[Predbat plan](predbat-plan-card.md) doesn't change immediately - remember you can see the date/time the plan was last updated on the first row of the plan.
 
 _CAUTION: If you leave Predbat turned off for a long period of time then the override timeslots could end up repeating when you restart_
 

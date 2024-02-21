@@ -36,6 +36,7 @@ a script that changes the reserve %, this will cause problems - please disable o
 ## I changed a config item but it made no difference?
 
 - You might have to wait a few minutes until the next update cycle. Depending on the speed of the computer that Predbat is running on, it can take 1-5 minutes for Predbat to run through.
+You can see the date/time that Predbat last completed a run at the start of the [Predbat HTML plan](predbat-plan-card.md).
 
 ## It's all running but I'm not getting very good results
 
@@ -52,6 +53,18 @@ especially if you have a small battery. If you set it to zero then predbat may n
 
 ## The plan doesn't charge or discharge when I expect it to
 
+Predbat can only work on the information its given, although it does run every 5 minutes when it re-evaluates the plan and adjusts if necessary.
+
+The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.
+
+Make sure you have setup your [Solcast solar forecast correctly](install.md#solcast-install) with the number of panels, orientation, output, etc.
+
+Projected daily load is determined from historical load information so make sure you have set [days_previous and days_previous_weight in apps.yaml](apps-yaml.md#basics)
+to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).
+
+You could adjust **input_number.predbat_load_scaling** to 1.2 so the plan will incorporate 20% more expected load if you want to be more pessimistic about historical load,
+and **input_number.predbat_pv_scaling** to similarly adjust the PV forecast - these and other adjustment options are described in the [Scaling and Weight options](customisation.md#scaling-and-weight-options).
+
 It is very important to correctly set Predbat's [Battery Loss Options](customisation.md#battery-loss-options)
 and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as these can have a huge and critical impact on the plan that Predbat generates.
 
@@ -61,6 +74,7 @@ it depends on many factors and your personal preferences. Many users will need t
 The SOC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
 and the absolute minimum SoC level **input_number.predbat_best_soc_min** are the first thing to check.
 If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
+Conversely if you find Predbat is letting the battery exhaust too early, set predbat_best_soc_keep to 1.0 so Predbat will aim to keep 1kWh available for unexpected load.
 
 Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery are the loss rates
 **input_number.predbat_battery_loss**, **input_number.predbat_battery_loss_discharge** and **input_number.predbat_inverter_loss**.
@@ -87,14 +101,18 @@ So if metric battery cycle is set to 1p, and continuing the example above, each 
 and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).
 
 **input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
-as to whether to charge or discharge the battery so could be tweaked. The defaults (0p and 0.1p respectively) should however give good results for most users.
+as to [whether its cost beneficial to charge or discharge the battery](customisation.md#battery-margins-and-metrics-options)
+so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
-## Predbat is causing warning messages in the Home Assistant Core log
+Finally, it could be worth considering adding [import or export rate increments](energy-rates.md#manually-over-riding-energy-rates) to `apps.yaml` if you want to direct Predbat
+to avoid or encourage charging or discharging in certain time periods - e.g. avoiding exporting in the time period saving sessions normally fall in,
+or to encourage discharging just before import rates fall overnight.
 
-- If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning
-messages in the Home Assistant Core log about the size of the predbat.plan_html entity.
-This is just a warning, the entity isn't stored in the database, but you can suppress it by adding the following
-to your `configuration.yaml` file:
+## Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log
+
+If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning messages in the Home Assistant Core log about the size of the predbat.plan_html entity,
+the message will be "State attributes for predbat.plan_html exceed maximum size of 16384 bytes".
+This is just a warning, the Predbat html plan entity isn't stored in the database anyway, but you can suppress the warning by adding the following to your `configuration.yaml` file:
 
 ```yaml
 # Filter out 'message too large' warnings from Predbat
@@ -135,7 +153,7 @@ If you've run out of API calls you will have to wait until midnight GMT for the 
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
 
-## Note, Can not find battery charge curve
+## Note: Can not find battery charge curve
 
 If you get the message "Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
 then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.
@@ -147,11 +165,41 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
 ```yaml
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
   battery_power:
     - sensor.givtcp_{geserial}_battery_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
 ```
+
+## WARN: Inverter is in calibration mode
+
+If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
+then Predbat has identified that your inverter is currently calibrating your battery.
+
+Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
+and will not execute the plan nor enable battery charge or discharge.
+
+Once the inverter finishes calibrating the battery, Predbat will resume normal operations.
+
+## Inverter time is xxx AppDaemon time is xxx this is xxx minutes skewed, Predbat may not function correctly
+
+If the **predbat.status** gives a warning error about the inverter time:
+
+![IMAGE](images/Inverter-time-warning.png)
+
+Then it indicates that there is a mis-match between the clock that Predbat AppDaemon is using and the inverter time clock, and clearly with a clock mis-match,
+charging and discharging your battery at specific times may not work as expected.
+
+There are several potential causes of this problem:
+
+- Check that the inverter time is correctly set, especially that its set to GMT (even if its summer time).
+In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / click SEND next to 'Set Date and Time'
+- Check that the [time_zone in appdaemon.yaml](install.md#appdaemon-install) is correctly set for your location (e.g. Europe/London)
+- The time zone for [Predbat in apps.yaml](apps-yaml.md#basics) needs to be set to the same value
+- Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
+is recommended to be set to a value of between 20 and 60 seconds.
 
 ## I have another problem not listed above
 

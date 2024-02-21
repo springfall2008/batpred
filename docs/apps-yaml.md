@@ -100,7 +100,7 @@ The default value is 1, that all history days are equally weighted, so if you do
     - 1
 ```
 
-- **forecast_hours** - the number of hours to that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+- **forecast_hours** - the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
 ## Inverter information
@@ -201,9 +201,11 @@ To check your REST is working open up the readData API point in a Web browser e.
 
 If you get a bunch of inverter information back then it's working!
 
-It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring:
+*TIP:* It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring,
+and set the Self Run Loop Timer which controls how often GivTCP retrieves data from your inverters to a value between 20 and 60 seconds.
+Do not set Self Run to too low a value (i.e. retrieve too often) as this may overload the inverter:
 
-![image](images/GivTCP-output_raw_register_values.png)
+![image](images/GivTCP-recommended-settings.png)
 
 ### Home Assistant inverter control
 
@@ -312,12 +314,14 @@ Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can
 You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
 high battery charge levels when the car was charged previously (e.g. last week).
 
-- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from Predbat's battery prediction plan.
+- **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
+so that Predbat's battery prediction plan is not distorted by previous car charging.
 
-- **car_charging_energy** - Set in apps.yaml to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
-This has been pre-defined to a regular expression to auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in apps.yaml for your charger sensor.<BR>
+- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
+This has been pre-defined to a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
+or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
-You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
+*TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
 
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
@@ -350,11 +354,15 @@ whether you are within an Octopus Energy "smart charge" slot, and provides the l
 If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted,
 and there are a number of other apps.yaml configuration items that should be set:
 
-- **car_charging_planned** - Optional, can be set to a Home Assistant sensor which lets Predbat know the car is plugged in and planned to charge during low rate slots.
-Or manually set it to 'False' to disable this feature, or 'True' to always enable.
+- **car_charging_planned** - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
+which lets Predbat know the car is plugged in and planned to charge during low rate slots.
+Or manually set it to 'False' to disable this feature, or 'True' to always enable.<BR>
+The `apps.yaml` template supplied with Predbat comes pre-configured with a regular expression that should automatically match Zappi or Wallbox car chargers.
+If you have a different type of charger you will need to configure it manually.
 
-- **car_charging_planned_response** - An array of values for the above car_charging_planned sensor which indicate that the car is plugged in and will charge
-in the next low rate slot. Customise for your car charger sensor if it sets sensor values that are not in the pre-defined list.
+- **car_charging_planned_response** - An array of values for the above car_charging_planned sensor which indicate that the car is plugged in and will charge in the next low rate slot.
+The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
+Customise for your car charger sensor if it sets sensor values that are not in the list.
 
 - **car_charging_now** - For some cases finding details of planned car charging is difficult to obtain (e.g. Ohme with Intelligent doesn't report slots).<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
@@ -367,11 +375,14 @@ Useful if you have a sensor for your car charger that isn't binary.
 
 To make planned car charging more accurate, configure the following items in `apps.yaml`:
 
-- **car_charging_battery_size** - Set to the car's battery size in kWh, defaults to 100. It will be used to predict car charging stops.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100. It will be used to predict car charging stops.
 
-- **car_charging_limit** - Set to point to a sensor that specifies the % limit the car is set to charge to. Default is 100%
+- **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
+This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
+If you don't specify a sensor Predbat will default to 100%.
 
-- **car_charging_soc** - Set to point to a sensor that specifies the car's current % charge level. Default is 0%
+- **car_charging_soc** - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current % charge level.
+If not set, Predbat will default to 0%.
 
 ### Multiple Electric Cars
 
@@ -438,8 +449,10 @@ You can adjust the charge and discharge times written to the inverter by setting
 
 - **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time
 
-- **battery_scaling** - Default value 1.0. This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is
-e.g. if you have an 80% depth of discharge battery that falsely reports its capacity, set this to 0.8 to report the real figure.<BR>
+- **battery_scaling** - Default value 1.0. This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+*TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
+so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
+*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
 rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up
 
@@ -485,16 +498,19 @@ Modelling the charge curve becomes important if you have limited charging slots 
 low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
-when battery_charge_power_curve option is *not* set in apps.yaml and Predbat is started for the first time (due to restarting AppDaemon or an edit to apps.yaml).
+when battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
 You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 This will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
 
-Setting This option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
+The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+explains how the curve works and shows how Predbat automatically creates it.
+
+Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
 history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually save the data.
 
 NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
 
-If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in apps.yaml:
+If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in `apps.yaml`:
 
 ```yaml
   charge_rate:
@@ -533,6 +549,19 @@ You can also look at the automation power curve calculation in the AppDaemon/Pre
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
 the battery.
+
+In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
+
+If you are using REST mode to control your inverter then the following entries in `apps.yaml` will need to be uncommented :
+
+```yaml
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+```
 
 ## Triggers
 

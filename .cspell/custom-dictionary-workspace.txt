@@ -82,6 +82,7 @@ minuteb
 Mixergy
 mkdocs
 Modbus
+Mosquitto
 mqtt
 myenergi
 mypy

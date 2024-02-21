@@ -1,12 +1,28 @@
 # Creating the charts
 
-To create the fancy charts:
+There are a number of fancy Apex charts that can be produced from Predbat data - things like Home Battery SoC prediction, Cost prediction, Energy Rates, etc.
 
-- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card)
+There's a [Video Guide to the different charts](https://www.youtube.com/watch?v=KXiRzMyRZyM) available on YouTube.
+
+To install the charts:
+
+- Install Apex Charts [https://github.com/RomRider/apexcharts-card](https://github.com/RomRider/apexcharts-card):
+    - In HACS, click on Frontend
+    - Click the blue *Explore and download repositories* button and type 'apex'
+    - Click on 'apexcharts-card', then click the blue 'Download', then 'Download' again to install it
+    - When prompted to 'reload your browser', click 'Reload'
+
+- Next, on a Home Assistant dashboard you create the charts you want.
 - There are multiple charts, for each section of the
 [example chart yaml file](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/example_chart.yml),
-create a new apexcharts card and copy the YAML into it.
+create a new apexcharts card and copy the YAML into it:
+    - Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Custom: ApexCharts card'
+    - Delete the template card configuration and copy/paste ONE Apex chart from the example file
+    - Click 'Save'
+    - Repeat (adding Apex chart card, copy paste card config) for all of the charts you want to see
 - Customise as you like
+
+If you get an error 'Custom element doesn't exist: apexcharts-card' then you've not installed the Apex Charts card correctly from HACS.
 
 See the [video guides](video-guides.md) for a walkthrough of what the different charts show.
 
