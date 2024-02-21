@@ -233,7 +233,7 @@ charging sessions but will not reset it automatically.
 
 See the Predbat mode setting as above for basic calculation options
 
-**input_number.predbat_forecast_plan_hours** is the minimum length of the Predbat charge plan, and is the number of hours *after* the first charge slot to include in the plan.
+**input_number.predbat_forecast_plan_hours** is the minimum length of the Predbat charge plan, and is the number of hours _after_ the first charge slot to include in the plan.
 The default of 24 hours is the recommended value (to match energy rate cycles). Note that the actual length of the Predbat plan will vary depending upon when the first charge slot is.
 
 **switch.predbat_calculate_regions** (_expert mode_) When True the a second pass of the initial thresholds is
