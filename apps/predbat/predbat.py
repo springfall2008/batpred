@@ -18,10 +18,10 @@ from datetime import datetime, timedelta
 # Assume running in normal AppDaemon environment
 try:
     import adbase as ad
-    import appdaemon.plugins.hass.hassapi as hass
+    from appdaemon.plugins.hass.hassapi import Hass
 except ImportError:
     # If AppDaemon is not present, import HA stubs as per HA integration environment
-    from .appdaemon_stub import AppDaemonHassStub as hass
+    from .appdaemon_stub import AppDaemonHassApiStub as Hass
     from .appdaemon_stub import AppDaemonAdStub as ad
 
 import pytz
@@ -3813,7 +3813,7 @@ class Inverter:
         return False
 
 
-class PredBat(hass.Hass):
+class PredBat(Hass):
     """
     The battery prediction class itself
     """
