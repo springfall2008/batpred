@@ -43,9 +43,9 @@ PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 
-ENVIRONMENT = 'environment'
-ENVIRONMENT_HA_INTEGRATION = 'ha_integration'
-ENVIRONMENT_APPDAEMON = 'appdaemon'
+ENVIRONMENT = "environment"
+ENVIRONMENT_HA_INTEGRATION = "ha_integration"
+ENVIRONMENT_APPDAEMON = "appdaemon"
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -12425,7 +12425,7 @@ class PredBat(hass.Hass):
             # Determine the mode we're running in right at the start
             if ENVIRONMENT not in self.args:
                 self.args[ENVIRONMENT] = ENVIRONMENT_APPDAEMON
-            
+
             self.reset()
             self.sanity()
             self.auto_config()
