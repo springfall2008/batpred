@@ -15,8 +15,15 @@ import time
 # pylint: disable=attribute-defined-outside-init
 from datetime import datetime, timedelta
 
-import adbase as ad
-import appdaemon.plugins.hass.hassapi as hass
+# Assume running in normal AppDaemon environment
+try:
+    import adbase as ad
+    import appdaemon.plugins.hass.hassapi as hass
+except ImportError:
+    # If AppDaemon is not present, import HA stubs as per HA integration environment
+    from .appdaemon_stub import AppDaemonHassStub as hass
+    from .appdaemon_stub import AppDaemonAdStub as ad
+
 import pytz
 import requests
 import yaml
