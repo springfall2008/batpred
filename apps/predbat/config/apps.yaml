@@ -12,6 +12,10 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
+  # Number of threads to use in plan calculation
+  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
+  threads: auto
+
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
@@ -69,6 +73,17 @@ pred_bat:
   givtcp_rest:
    - 'http://homeassistant.local:6345'
    - 'http://homeassistant.local:6346'
+
+  # When enabled automatic restart will restart the add-on if communication fails
+  # Example below is auto-restart for GivTCP add-on itself
+  #auto_restart:
+  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
+  #  - service: hassio/addon_restart
+  #    addon: a6a2857d_givtcp
+
+  #  Example on how to restart the inverter via GivTCP
+  #  - service: switch.turn_on
+  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
 
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
@@ -253,6 +268,10 @@ pred_bat:
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  # Example alternative configuration for Ohme integration release >=v0.6.1
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
@@ -379,3 +398,16 @@ pred_bat:
   #futurerate_peak_end: "19:00:00"
   #futurerate_peak_premium_import: 14
   #futurerate_peak_premium_export: 6.5
+
+  # Watch list, a list of sensors to watch for changes and then update the plan if they change
+  # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in
+  # Only uncomment the items you actually have set up above in apps.yaml, of course you can add your own as well
+  # Note those using +[] are lists that are appended to this list, whereas {} items are single items only
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{car_charging_now}'

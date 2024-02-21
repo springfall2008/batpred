@@ -13,6 +13,7 @@ autopep
 autoupdate
 Basepath
 Batpred
+batteri
 batteryb
 bierner
 chargedischarge
@@ -49,6 +50,7 @@ GivEnergy
 givtcp
 HACS
 hadashboard
+hanres
 HAOS
 hass
 hassapi
@@ -56,11 +58,14 @@ hassio
 heatsink
 homeassistant
 houseb
+husforbrukning
 iboost
+idag
 idetails
 inday
 isort
 ivtime
+kopt
 Krakenflex
 kwhb
 linebreak
@@ -103,6 +108,7 @@ pyproject
 pytz
 rarr
 Redownload
+resultmid
 rname
 rowspan
 rstart
@@ -112,6 +118,7 @@ searr
 Selfuse
 socb
 socs
+sofar
 SolarEdge
 Solax
 Solcast

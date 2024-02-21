@@ -61,6 +61,8 @@ in order to access files in different directories (i.e. within the appdaemon dir
 
 ## AppDaemon-Predbat combined install
 
+**Recommended**
+
 The simplest way to install Predbat now is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
@@ -271,6 +273,8 @@ The detailed [Predbat Customisation Guide](customisation.md) details all the Pre
 
 By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
 
+![image](https://github.com/springfall2008/batpred/assets/48591903/48cffa4a-5f05-4cbc-9356-68eb3d8fb730)
+
 You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
 
 You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
@@ -298,7 +302,21 @@ You can see the planned charging and discharging activity in the [Predbat Plan](
 Note that any future updates to Predbat will not overwrite the `apps.yaml` configuration file that you have tailored to your setup.
 If new Predbat releases introduce new features to apps.yaml you may therefore need to manually copy across the new apps.yaml settings from the [Template apps.yaml](apps-yaml.md#templates).
 
+## Update via Home Assistant
+
+**Recommended**
+
+Predbat can now be updated using the Home Assistant update feature. We a new release is available you should see it in settings:
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/516c77b8-7258-45e7-868f-eea40ee380ac)
+
+Click on the update and select install:
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
+
 ## HACS Update
+
+**Not Recommended**
 
 HACS checks for updates and new releases only once a day by default, you can however force it to check again, or download a specific version
 by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
@@ -307,17 +325,25 @@ by using the 'Redownload' option from the top-right three dots menu for Predbat 
 (If this happens you will get a template configuration error in the entity **predbat.status**).<BR>
 Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
 
+If you update Predbat via Home Assistant or via its build-in update then HACS will not know about this.
+
 ## Predbat built-in update
+
+**Recommended for manual selection of versions or automatic updates**
 
 Predbat can now update itself, just select the version of Predbat you want to install from the **select.predbat_update** drop down menu,
 the latest version will be at the top of the list. Predbat will update itself and automatically restart.
 
 Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will automatically update itself as new releases are published on Github.
 
+![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
+
 If you have used the [Combined AppDaemon and Predbat add-on installation method](#appdaemon-predbat-combined-install) then
 once installed and configured you should update Predbat to the latest version by using the **select.predbat_update** selector or by enabling the **switch.predbat_auto_update**.
 
 ## Manual update of Predbat
+
+**Expert only**
 
 You can go to Github and download predbat.py from the releases tab and then manually copy this file
 over the existing version in `/config/appdaemon/apps/batpred/` manually.

@@ -16,6 +16,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [Understanding the charts](https://www.youtube.com/watch?v=KXiRzMyRZyM)
 - [How to understand Predbat plans](https://www.youtube.com/watch?v=rAZ9s7n4kuY)
 - [AppDaemon log files](https://www.youtube.com/watch?v=2pVlGSuMVtA)
+- [Documentation overview](https://youtu.be/wG78oJn_FC8?si=diuMLPYW0qesF9CK)
 
 ## Other configuration videos
 
@@ -31,9 +32,13 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 [Playlist of Predbat feature videos](https://www.youtube.com/playlist?list=PLTjtFJ0drtokvs-H0nb1WBO49DNjbyuDb)
 
 - [Intelligent Octopus car charging](https://www.youtube.com/watch?v=XGs_Rph5li0)
-- [Octopus Saving Sessions](https://www.youtube.com/watch?v=7fpCwKlRVJk)
+- [Saving sessions and power ups](https://youtu.be/58QVoVhqvmI?si=omkx3KpWavrn9r8r)
 - [How to update Predbat](https://www.youtube.com/watch?v=Z6-Nds_dlyc)
 - [Predbat mode and read-only mode](https://www.youtube.com/watch?v=YNixY2cF8kE)
+- [Creating a dashboard](https://youtu.be/tGF1LEKiiEY?si=hbiVZCNGSE24f8Zs)
+- [Saving and restoring settings](https://youtu.be/zhfJzKNkq4Q?si=06aYAE4yKv8bylaY)
+- [Manual plan override](https://youtu.be/yDwO_-eXbvI?si=o8tiOEKSPIPo6tEP)
+- [Charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 
 ## Energy Tariffs
 
@@ -41,5 +46,5 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Intelligent Octopus import + Agile export](https://www.youtube.com/watch?v=o1CZrM3S2w0)
 - [Intelligent Octopus import + Fixed export](https://www.youtube.com/watch?v=USyzJfIa0iQ)
-- [Octopus Agile import + Agile export](https://www.loom.com/share/5f007eff9d984dc8bdb03df708fde711?sid=4ae133c4-c7e5-4307-8c50-8737d1ca1593)
+- [Octopus Agile import + Agile export](https://youtu.be/USyzJfIa0iQ?si=te3DaYFh4SJLITZ8)
 - [Octopus Flux](https://www.youtube.com/watch?v=NkoJtvS5Lok)

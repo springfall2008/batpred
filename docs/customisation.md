@@ -92,6 +92,9 @@ quite CPU intensive and provides very little improvement for most systems.
 If you have performance problems turn **switch.predbat_calculate_fast_plan** (_expert mode_) On to help
 reduce your CPU load.
 
+The number of threads you use can change your performance, you can set **threads** in apps.yaml to 0 to disable threading
+if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU.
+
 ## Battery loss options
 
 **input_number.predbat_battery_loss** is an assumed percentage figure for energy lost when charging the battery, the default 0.05 is 5%.
@@ -116,12 +119,12 @@ This cost will be included in Predbat's cost optimisation plan when it decides w
 _NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
 
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
-The default is 1p but can be set to 0 if you want to turn this feature off.
+The default is 0.5p (meaning an extra virtual cost of 1p per kWh to charge and discharge) but can be set to 0 if you want to turn this feature off.
 Note that the cycle cost will not be included in the cost predictions that Predbat produces such as the Predbat HTML plan or Apex charts,
 its just a cost taken into account by Predbat at the planning stage when the plan is calculated.<BR>
 _NB: Setting this to a non-zero value will increase your daily cost, but will reduce your home battery usage._
 
-Figures of around 1p-5p are recommended, the default is 1p per kWh.
+Figures of around 0p-2p are recommended, the default is 0.5p per kWh.
 
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
@@ -354,7 +357,8 @@ from the grid/solar as an alternative to charging. Enabled by default.
 solar exports but don't allow forced export (brown energy).
 
 If you have **switch.predbat_inverter_hybrid** set to False then if **switch.predbat_inverter_soc_reset** (_expert mode_) is set to True then the
-target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar.
+target SOC % will be reset to 100% outside a charge window. This may be required for AIO inverter to ensure it charges from solar. The default for
+this switch is True but it can be disabled in expert mode if need be.
 
 **input_number.predbat_set_reserve_min** Defines the reserve percentage to reset the reserve to when not in use,
 a value of 4 is the minimum and recommended to make use of the full battery.<BR>

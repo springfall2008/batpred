@@ -44,6 +44,13 @@ Basic configuration items
 - **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 
+- **threads** - If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
+you have CPUs in your system.
+Valid values are:
+    - 'auto' - Use the same number of threads as your CPU count
+    - '0' - Don't use threads - disabled
+    - 'N' - Use N threads, recommended values are between 2 and 8
+
 - **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
 - **days_previous** - Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
@@ -111,9 +118,9 @@ For other inverter brands, see [Other Inverters](other-inverters.md)
 Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.
 Unless you have a specific reason to not use the GivTCP data (e.g. you've lost your GivTCP data), its recommended to use GivTCP.
 
-### Data from GivTCP
+### Data from Home assistant
 
-The following configuration entries in `apps.yaml` are pre-configured to automatically use the appropriate GivTCP sensors.
+The following configuration entries in `apps.yaml` are pre-configured to automatically use the appropriate sensors.
 
 If you have a 3-phase electricity supply and one inverter (and battery) on each phase then you will need to add one line for the load, import, export and PV sensors
 for each of the 3 phases.
@@ -121,18 +128,18 @@ for each of the 3 phases.
 If you have a single phase electricity supply and multiple inverters on the phase then you will need to add one line for each of the load and PV sensors.
 You don't need multiple lines for the import or export sensors as each inverter will give the total import or export information.
 
-Edit if necessary if you have non-standard GivTCP sensor names:
+Edit if necessary if you have non-standard sensor names:
 
-- **load_today** - GivTCP Entity name for the house load in kWh today (must be incrementing)
-- **import_today** - GivTCP Imported energy today in kWh (incrementing)
-- **export_today** - GivTCP Exported energy today in kWh (incrementing)
-- **pv_today** - GivTCP PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
-If you have an AC-coupled GivEnergy inverter then enter the Home Assistant sensor for your PV inverter.<BR>
+- **load_today** - Entity name for the house load in kWh today (must be incrementing)
+- **import_today** - Imported energy today in kWh (incrementing)
+- **export_today** - Exported energy today in kWh (incrementing)
+- **pv_today** - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
+If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
 If you don't have any PV panels, comment or delete this line out of apps.yaml.
 
 See the [Workarounds](#workarounds) section below for configuration settings for scaling these if required.
 
-If you have multiple inverters then you may find that the load_today figures from GivTCP are incorrect as the inverters share the house load between them.
+If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
 In this circumstance one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
 
 e.g.
@@ -457,6 +464,30 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
 
 - **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
+
+## Automatic restarts
+
+If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. In this case you can tell Predbat
+how to restart the add-on using a service.
+
+Right now only communication loss with GE inverters is detectable but in future other systems will be supported.
+
+When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restart the connection.
+This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.
+
+The auto_restart itself is a list of commands to run to trigger a restart.
+
+- The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
+- The **service** command is used to call a service, and can contain arguments of **addon** and/or **entity_id**
+
+```yaml
+auto_restart:
+  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
+  - service: hassio/addon_restart
+    addon: a6a2857d_givtcp
+```
+
+## Battery charge/discharge curves
 
 - **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
 Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
