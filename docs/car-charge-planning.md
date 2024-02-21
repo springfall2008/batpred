@@ -27,5 +27,131 @@ This should normally be a sensor provided by your car charger. If you don't have
 
 NOTE: Multiple cars can be planned with Predbat.
 
+**Example of automation using the cheapest Octopus Agile charging slots and how to set an EV and Charger with no/limited Homeassistant Integration**
+
+ MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG, and the Hypervolt car charger doesn't understand when an EV is plugged in.
+
+Yet it can be stopped and started with a 3rd party integration.
+
+In Homeassistant, make the two examples below in Settings - Helpers - Number.
+
+    - EV Max Charge  input_number.car_max_charge
+    - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+
+Again, in Settings - Helpers - Dropdown, enter a name with the two options True and False.
+
+    - Car Charger Plugged in -  input_select.car_charger_plugged_in
+
+Browse to the Predbat `apps.yaml` configuration file. Please stay in `apps.yaml` until instructed.
+Within `apps.yaml` find the line for **car_charger_battery_size** and enter the Car Battery Size in kWh.
+
+**Example**
+
+```text
+  car_charging_battery_size:
+    - 61.7
+```
+
+Within the first steps, we created the EV Max Charge helper. We want to specify the Car Charging Limit input.
+
+```
+  car_charging_limit:
+    - 're:(input_number.car_max_charge)'
+```
+
+Find **car_charging_planned** and add **input_select.car_charger_plugged_in** to the end of the line.
+
+**Example**
+```
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|input_select.car_charger_plugged_in)'
+```
+
+Find **car_charging_planned_response** and add
+**'true'** to the list.
+
+**Example**
+```
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+```
+If possible, add your entity keeping track of the kWh used for car charging. Please look into [Integration - Riemann sum integral](URL) to convert KW into kWh.
+Your charging device doesn't keep track of kWh.
+
+**Example**
+```
+car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy|sensor.mixergy_electricity_used|**sensor.car_energy_left**|sensor.pvd_immersion_load_total_diverted)'
+```
+Car Charging now must be hashed out.
+```
+  #car_charging_now:
+  #  - off
+```
+
+Please save the `apps.yaml` file and exit.
+
+In Homeassistant, turn **on** the Predbat creates switches.
+
+**switch.predbat_car_charging_hold**
+**switch.predbat_car_charging_manual_soc**
+**switch.predbat_car_charging_plan_smart**
+
+Turn **off** the predbat-created switch.
+
+**switch.predbat_octopus_intelligent_charging**
+
+**HA Charging Slot Automation**
+
+In Homeassistant - Settings - Automation, you must create an automation to monitor the charging slot.
+Below is an example that monitors the state of the charging slot, turning the charger on and off according to the plan.
+
+```
+alias: Car Charging Slot
+description: ""
+trigger:
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+condition: []
+action:
+  - if:
+      - condition: state
+        entity_id: binary_sensor.predbat_car_charging_slot
+        state: "off"
+    then:
+      - type: turn_off
+        device_id: ac8b06952c7fe838314e
+        entity_id: f6de2df0758744aba60f6b5f
+        domain: switch
+  - if:
+      - condition: state
+        entity_id: binary_sensor.predbat_car_charging_slot
+        state: "on"
+    then:
+      - type: turn_on
+        device_id: ac8b06952c7fe838314e
+        entity_id: f6de2df0758744aba60f6b5f
+        domain: switch
+mode: single
+```
+
+Finally, for simplicity, add the below to your HA Dashboard. Once the charger is switched to  **true** and your Target SOC % is higher than the kWh currently in the car,
+Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Capacity of Battery.
+
+**Example**
+
+```65/100*61.7=40.1```
+
+Enter 40.1 into the EV Current SOC in kWh. 80% in Max car charge.
+This will update the Predbat plan  with the cheapest times to charge the EV in line with the number of KW that needed to charge the EV.
+
+    - EV Max Charge  input_number.car_max_charge
+    - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+    - Car Charger Plugged in -  input_select.car_charger_plugged_in
+
+---
+
 See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)
 in the [apps.yaml settings](apps-yaml.md) section of the documentation.
