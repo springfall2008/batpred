@@ -2,15 +2,24 @@
 
 These instructions will take you through the process of installing and configuring Predbat for first time use.
 
-It's recommended that you watch the [Video Guides](video-guides.md) before you start.
+It's recommended that you watch the [Predbat Video Guides](video-guides.md) before you start.
 
-A level of familiarity with the basics of Home Assistant, Add-on's, Integrations, Entities and File Editing is assumed.
-There are plenty of "Home Assistant basics" tutorials on YouTube, but if you get stuck, please read the [FAQ's](faq.md)
-and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
+We have tried to make the documentation as comprehensive as possible but a level of familiarity with the basics of
+Home Assistant, Add-on's, Integrations, Entities, File Editing and YAML is assumed.
+There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a few useful videos to introduce you to Home Assistant and displaying inverter data:
+
+- [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
+- [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
+- [Installing GivTCP and Mosquitto Add-on's from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54)
+- [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=jzpm89956Pw)
+- [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
+- [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
+
+If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
 ## Inverter Control Integration install (GivTCP/SolaX-ModBus)
 
-The Integration that communicates with your inverter will be depend on the brand of inverter you have:
+You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
 
 | Brand     | Integration  | Github Link                                                                      |
 | :-------- | :----------- | :------------------------------------------------------------------------------- |
@@ -18,7 +27,8 @@ The Integration that communicates with your inverter will be depend on the brand
 | Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                         |
 | Sofar     | Sofar MQTT   | <https://github.com/cmcgerty/Sofar2mqtt> |
 
-Please see [Other Inverters](other-inverters.md) for details on how Solis, Solax and Sofar install details.
+Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
+At present Predbat supports Solis, Solax and Sofar inverters; please see [Other Inverters](other-inverters.md) for details on the install details.
 
 - Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
@@ -41,11 +51,12 @@ If you do not have one of these file editors already installed in Home Assistant
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
 
-Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / <editor_you_chose_to_use> / 'OPEN WEB UI'
+Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / *editor_you_chose_to_use* / 'OPEN WEB UI'
 
-If you are using the File Editor to edit Predbat's configuration files, you will need to turn off **Enforce Basepath** to enable you to access files in the appdaemon directory:
+If you are using the File Editor to edit Predbat's configuration files, you will need to turn **OFF** the **Enforce Basepath** option
+in order to access files in different directories (i.e. within the appdaemon directory):
 
-- From the File editor add-on page, click on the 'Configuration' tab to change this setting):<BR>
+- From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
 ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
 
 ## AppDaemon-Predbat combined install

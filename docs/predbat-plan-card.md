@@ -9,11 +9,14 @@ At a glance the Predbat plan shows you the plan going forward of home demand, EV
 Firstly install the [HTML template card](https://github.com/PiotrMachowski/Home-Assistant-Lovelace-HTML-Jinja2-Template-card) in HACS:
 
 - In HACS, click on Frontend
-- Click in the *Search for downloaded or new repositories* and type 'HTML'
-- Click on 'HTML Jinja2 Template card', then click 'Download' to install it
+- Click the blue *Explore and download repositories* button and type 'HTML'
+- Click on 'HTML Jinja2 Template card', then click the blue 'Download', then 'Download' again to install it
 - When prompted to 'reload your browser', click 'Reload'
 
-Next, on a Home Assistant dashboard create a new card with the following configuration to display the Predbat plan:
+*NB: Do not install the very similarly named 'Lovelace Html card', it won't work!  You must install 'HTML Jinja2 Template card'.*
+
+Next, on a Home Assistant dashboard, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following to display the Predbat plan:
 
 ```yaml
 type: custom:html-template-card
@@ -26,6 +29,8 @@ content: |
 You should see something like this:
 
 ![image](images/predbat-html-plan.png)
+
+If you get an error 'Custom element doesn't exist: html-template-card' then you've not installed the Jinja2 template card correctly from HACS.
 
 ## Understanding the Predbat plan
 
@@ -51,11 +56,15 @@ Rate symbols (import and export):
 - &#177; - Rate that has been adjusted with a rate offset in the users apps.yaml
 - &dollar; - Rate that has been adjusted for an Octopus Saving session
 - ? - Rate that has not yet been defined and the previous days data was used instead
+
 Battery SOC symbols:
+
 - &rarr; - Current SOC expected to remain level
 - &searr; - Current SOC expected to fall
 - &nearr; - Current SOC expected to rise
+
 Cost symbols:
+
 - &rarr; - Current cost expected to remain level
 - &searr; - Current cost expected to fall (due to export)
 - &nearr; - Current cost expected to rise (due to import or standing charge)
@@ -71,13 +80,15 @@ Green if the rate is less than the import rate threshold,
 Red if the rate is more than 1.5 times the import rate threshold,
 and Yellow if the rate is between 1 and 1.5 times the import rate threshold.<BR>
 See the [Predbat customisation guide](customisation.md#battery-margins-and-metrics-options) for explanation of the import rate threshold (and over-riding it), but in essence
-Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.
+Predbat will consider blue and green-coloured slots as preferred candidates for importing, yellow and red (higher rates) will not.<BR>
+If battery charging is planned by Predbat for a particular slot, the import rate for that slot will be highlighted in bold text.
 
 - **Export** - Similarly, the export rate for that time slot in pence.<BR>
 The rate will be coloured White if the price is less than the export rate threshold,
 Yellow if it is more than the export rate threshold,
 and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
-So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.
+So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.<BR>
+If battery discharging is planned by Predbat for a particular slot, the export rate for that slot will be highlighted in bold text.
 
 - **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Eco mode),
 discharging and force exported, or being held at the current level.<BR>
@@ -150,10 +161,12 @@ Using the above debug plan as an example:
 - At 22:30 the battery is being charged. The actual import rate is 14.07p, but after conversion losses to store the grid AC into the DC battery,
 the energy being put into the battery has effectively cost 14.81p - for every 1kWh of AC grid import you don't get 1kWh of DC stored in the battery,
 so 1kWh of battery charge has effectively cost slightly more than the import rate.
+
 - At 00:30 the battery is being force discharged and excess energy (above the estimated house load of 0.47kWh) will be exported.
 The actual export rate is 18.22p, but after losses converting the stored DC battery charge into AC to supply the home and export it,
 the energy being exported has effectively only earned 17.31p - it will take slightly more than 1kWh of stored DC battery charge to get 1kWh of AC to use or export
 so each discharged and exported kWh actually earns slightly less.
+
 - Putting these together, at 00:00, the effective import rate (after losses) is 13.93p, the effective export rate is 17.31p,
 so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
 Predbat plans to charge and then discharge the battery in the same slot to generate that profit.

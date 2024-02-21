@@ -45,8 +45,6 @@ with the MQTT sensors. This is the default with a couple of additional inputs to
 - Predbat configuration - [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) template for Predbat (in templates directory).
 This file should be copied to apps.yaml
 
-Note: You will need to change the min reserve in Home Assistant to match your minimum battery level.
-
 - Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.
 - This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%
 - Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (**input_number.predbat_set_reserve_min**).
