@@ -4471,7 +4471,7 @@ class PredBat(Hass):
             # This will do its own conversion to async when needed
             # TODO - this is not attempting to fit with the
             # multiple threads approach and will need reviewing
-            return self.history(entity_id=entity_id, days=days)
+            return self.get_history(entity_id=entity_id, days=days)
 
     def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None):
         """
@@ -12175,8 +12175,7 @@ class PredBat(Hass):
             if ha_value is None:
                 history = self.get_history_async(entity_id=entity)
                 if history:
-                    history = history[0]
-                    ha_value = history[-1]["state"]
+                    ha_value = history[0][-1]["state"] if self.__is_appdaemon() else history[-1].state
 
             # Default?
             if ha_value is None:
@@ -12204,30 +12203,34 @@ class PredBat(Hass):
 
         # Register HA services
         if register:
-            self.fire_event("service_registered", domain="input_number", service="set_value")
-            self.fire_event("service_registered", domain="input_number", service="increment")
-            self.fire_event("service_registered", domain="input_number", service="decrement")
-            self.fire_event("service_registered", domain="switch", service="turn_on")
-            self.fire_event("service_registered", domain="switch", service="turn_off")
-            self.fire_event("service_registered", domain="switch", service="toggle")
-            self.fire_event("service_registered", domain="select", service="select_option")
-            self.fire_event("service_registered", domain="select", service="select_first")
-            self.fire_event("service_registered", domain="select", service="select_last")
-            self.fire_event("service_registered", domain="select", service="select_next")
-            self.fire_event("service_registered", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            if self.__is_appdaemon():
+                self.fire_event("service_registered", domain="input_number", service="set_value")
+                self.fire_event("service_registered", domain="input_number", service="increment")
+                self.fire_event("service_registered", domain="input_number", service="decrement")
+                self.fire_event("service_registered", domain="switch", service="turn_on")
+                self.fire_event("service_registered", domain="switch", service="turn_off")
+                self.fire_event("service_registered", domain="switch", service="toggle")
+                self.fire_event("service_registered", domain="select", service="select_option")
+                self.fire_event("service_registered", domain="select", service="select_first")
+                self.fire_event("service_registered", domain="select", service="select_last")
+                self.fire_event("service_registered", domain="select", service="select_next")
+                self.fire_event("service_registered", domain="select", service="select_previous")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
+                self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
+                self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            elif self.__is_ha_integration():
+                # TODO: Incorporate registering callbacks within native HA environment
+                self.log("TODO: Not currently listening for changes to entities (apart from watch_list)")
 
             watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(watch_list))
