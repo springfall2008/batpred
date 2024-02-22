@@ -12105,6 +12105,12 @@ class PredBat(Hass):
         else:
             self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
 
+    def __is_ha_integration(self):
+        return self.args[ENVIRONMENT] == ENVIRONMENT_HA_INTEGRATION
+
+    def __is_appdaemon(self):
+        return self.args[ENVIRONMENT] == ENVIRONMENT_APPDAEMON
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
