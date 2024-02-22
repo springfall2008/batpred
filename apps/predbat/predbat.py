@@ -4453,18 +4453,25 @@ class PredBat(Hass):
         """
         Async function to get history from HA using Async task
         """
-        result = {}
-        task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
-        cnt = 0
-        while not task.done() and (cnt < 120):
-            time.sleep(0.05)
-            cnt += 0.05
+        if self.__is_appdaemon():
+            result = {}
+            task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
+            cnt = 0
+            while not task.done() and (cnt < 120):
+                time.sleep(0.05)
+                cnt += 0.05
 
-        if "data" in result:
-            return result["data"]
-        else:
-            self.log("Failure to fetch history for {}".format(entity_id))
-            raise ValueError
+            if "data" in result:
+                return result["data"]
+            else:
+                self.log("Failure to fetch history for {}".format(entity_id))
+                raise ValueError
+        elif self.__is_ha_integration():
+            # Use the AD replacement to get the history
+            # This will do its own conversion to async when needed
+            # TODO - this is not attempting to fit with the
+            # multiple threads approach and will need reviewing
+            return self.history(entity_id=entity_id, days=days)
 
     def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None):
         """
