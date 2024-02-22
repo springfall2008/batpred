@@ -12439,6 +12439,8 @@ class PredBat(Hass):
             if ENVIRONMENT not in self.args:
                 self.args[ENVIRONMENT] = ENVIRONMENT_APPDAEMON
 
+            self.log(f"Predbat environment: {self.args[ENVIRONMENT]}")
+
             self.reset()
             self.sanity()
             self.auto_config()
