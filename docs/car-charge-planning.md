@@ -205,9 +205,9 @@ Annoyingly, you have to calculate the kWh your vehicle has in total by taking th
 Enter 40.1 into the EV Current SOC in kWh. 80% in Max car charge.
 This will update the Predbat plan  with the cheapest times to charge the EV in line with the number of KW that needed to charge the EV.
 
-  - EV Max Charge - input_number.car_max_charge
-  - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
-  - Car Charger Plugged in -  input_select.car_charger_plugged_in
+- EV Max Charge - input_number.car_max_charge
+- EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+- Car Charger Plugged in -  input_select.car_charger_plugged_in
 
 ---
 
