@@ -85,12 +85,12 @@ Yet it can be stopped and started with a 3rd party integration.
 
 In Homeassistant, make the two examples below in Settings - Helpers - Number.
 
-    - EV Max Charge  input_number.car_max_charge
-    - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+  - EV Max Charge - input_number.car_max_charge
+  - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
 
 Again, in Settings - Helpers - Dropdown, enter a name with the two options True and False.
 
-    - Car Charger Plugged in -  input_select.car_charger_plugged_in
+  - Car Charger Plugged in -  input_select.car_charger_plugged_in
 
 Browse to the Predbat `apps.yaml` configuration file. Please stay in `apps.yaml` until instructed.
 Within `apps.yaml` find the line for **car_charger_battery_size** and enter the Car Battery Size in kWh.
@@ -135,7 +135,7 @@ Your charging device doesn't keep track of kWh.
 
 **Example**
 
-```
+```yaml
 car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy|sensor.mixergy_electricity_used|**sensor.car_energy_left**|sensor.pvd_immersion_load_total_diverted)'
 ```
 
