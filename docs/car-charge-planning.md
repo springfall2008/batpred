@@ -97,14 +97,14 @@ Within `apps.yaml` find the line for **car_charger_battery_size** and enter the 
 
 **Example**
 
-```text
+```yaml
   car_charging_battery_size:
     - 61.7
 ```
 
 Within the first steps, we created the EV Max Charge helper. We want to specify the Car Charging Limit input.
 
-```
+```yaml
   car_charging_limit:
     - 're:(input_number.car_max_charge)'
 ```
@@ -113,7 +113,7 @@ Find **car_charging_planned** and add **input_select.car_charger_plugged_in** to
 
 **Example**
 
-```
+```yaml
   car_charging_planned:
     - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|input_select.car_charger_plugged_in)'
 ```
@@ -123,7 +123,7 @@ Find **car_charging_planned_response** and add
 
 **Example**
 
-```
+```yaml
   car_charging_planned_response:
     - 'yes'
     - 'on'
@@ -141,7 +141,7 @@ car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|s
 
 Car Charging now must be hashed out.
 
-```
+```yaml
   #car_charging_now:
   #  - off
 ```
@@ -163,7 +163,7 @@ Turn **off** the predbat-created switch.
 In Homeassistant - Settings - Automation, you must create an automation to monitor the charging slot.
 Below is an example that monitors the state of the charging slot, turning the charger on and off according to the plan.
 
-```
+```yaml
 alias: Car Charging Slot
 description: ""
 trigger:
@@ -198,14 +198,16 @@ Annoyingly, you have to calculate the kWh your vehicle has in total by taking th
 
 **Example**
 
-```65/100*61.7=40.1```
+```text
+65/100*61.7=40.1
+```
 
 Enter 40.1 into the EV Current SOC in kWh. 80% in Max car charge.
 This will update the Predbat plan  with the cheapest times to charge the EV in line with the number of KW that needed to charge the EV.
 
-    - EV Max Charge  input_number.car_max_charge
-    - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
-    - Car Charger Plugged in -  input_select.car_charger_plugged_in
+  - EV Max Charge - input_number.car_max_charge
+  - EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+  - Car Charger Plugged in -  input_select.car_charger_plugged_in
 
 ---
 
