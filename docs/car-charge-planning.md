@@ -112,6 +112,7 @@ Within the first steps, we created the EV Max Charge helper. We want to specify 
 Find **car_charging_planned** and add **input_select.car_charger_plugged_in** to the end of the line.
 
 **Example**
+
 ```
   car_charging_planned:
     - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|input_select.car_charger_plugged_in)'
@@ -121,20 +122,25 @@ Find **car_charging_planned_response** and add
 **'true'** to the list.
 
 **Example**
+
 ```
   car_charging_planned_response:
     - 'yes'
     - 'on'
     - 'true'
 ```
+
 If possible, add your entity keeping track of the kWh used for car charging. Please look into [Integration - Riemann sum integral](URL) to convert KW into kWh.
 Your charging device doesn't keep track of kWh.
 
 **Example**
+
 ```
 car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy|sensor.mixergy_electricity_used|**sensor.car_energy_left**|sensor.pvd_immersion_load_total_diverted)'
 ```
+
 Car Charging now must be hashed out.
+
 ```
   #car_charging_now:
   #  - off
