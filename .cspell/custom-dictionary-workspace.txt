@@ -59,6 +59,7 @@ heatsink
 homeassistant
 houseb
 husforbrukning
+hypervolt
 iboost
 idag
 idetails
