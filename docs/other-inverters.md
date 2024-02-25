@@ -5,7 +5,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 - Solis Hybrid inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)
 - Solax Gen4 inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode
 - Sofar inverters [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)
-- Huawei inverters [Huawei Solar][https://github.com/wlcrs/huawei_solar]
+- Huawei inverters [Huawei Solar](https://github.com/wlcrs/huawei_solar)
 - SolarEdge inverters - **Work in progress, please contribute**
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
