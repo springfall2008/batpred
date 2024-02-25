@@ -5,6 +5,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 - Solis Hybrid inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)
 - Solax Gen4 inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode
 - Sofar inverters [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)
+- Huawei inverters [Huawei Solar][https://github.com/wlcrs/huawei_solar]
 - SolarEdge inverters - **Work in progress, please contribute**
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
@@ -50,3 +51,10 @@ This file should be copied to apps.yaml
 - Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (**input_number.predbat_set_reserve_min**).
 
 Please see this ticket in Github for ongoing discussions: <https://github.com/springfall2008/batpred/issues/395>
+
+## Huawei Inverters
+
+Discussion ticket is here: https://github.com/springfall2008/batpred/issues/684
+
+- Please copy the template apps.yaml from https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml and modify for your system
+- Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which maybe 12%
