@@ -28,9 +28,12 @@ You can find template configurations in the following locations:
 | GivEnergy | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/apps/predbat/config/apps.yaml) |
 | SolisX | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
 | SolarEdge | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
+| Huawei | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
 
 The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into the directory
-where your `apps.yaml` is stored, and modify it from there.
+where your `apps.yaml` is stored, and modify it from there. 
+
+Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
 
 ## Basics
 
