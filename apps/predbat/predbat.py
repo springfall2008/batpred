@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.1"
+THIS_VERSION = "v7.16.2"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -7838,6 +7838,9 @@ class PredBat(hass.Hass):
         """
         Init stub
         """
+        global PRED_GLOBAL
+        PRED_GLOBAL["dict"] = None
+
         self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -10286,7 +10289,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
                         # Do we disable discharge during charge?
-                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
+                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
@@ -11106,9 +11109,10 @@ class PredBat(hass.Hass):
                     self.log("Note: Inverter does not support charge freeze - disabled")
                     self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
-                    self.log("Note: Inverter does not support reserve - disabled")
+                    self.log("Note: Inverter does not support reserve - disabling reserve functions")
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
+                    self.set_discharge_during_charge = False
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
