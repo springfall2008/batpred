@@ -7839,7 +7839,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         global PRED_GLOBAL
-        PRED_GLOBAL['dict'] = None
+        PRED_GLOBAL["dict"] = None
 
         self.pool = None
         self.restart_active = False
