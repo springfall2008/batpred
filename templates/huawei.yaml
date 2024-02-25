@@ -55,28 +55,30 @@ pred_bat:
     - sensor.inverter_input_power
   load_power:
     - sensor.power_meter_active_power
-  #soc_percent:
-    #- sensor.battery_state_of_capacity
-  soc_kw:
-    - sensor.batteri_to_kw
+  soc_percent:
+    - sensor.battery_state_of_capacity
+  #soc_kw:
+  #  - sensor.batteri_to_kw
   soc_max:
-   - 10
+    - 10
   charge_limit:
     - number.battery_end_of_charge_soc
   reserve:
     - 12
   scheduled_charge_enable:
-  - off
+    - off
   scheduled_discharge_enable:
-  - off
+    - off
   charge_start_time:
-  - "00:00:00"
+    - "00:00:00"
   charge_end_time:
-  - "06:00:00"
+    - "06:00:00"
   discharge_start_time:
-  - "07:00:00"
+    - "07:00:00"
   discharge_end_time:
-  - "23:00:00"
+    - "23:00:00"
+  battery_min_soc:
+    - 14
 
   # Services to charge/discharge
   charge_start_service: huawei_solar/forcible_charge_soc
