@@ -54,7 +54,7 @@ Please see this ticket in Github for ongoing discussions: <https://github.com/sp
 
 ## Huawei Inverters
 
-Discussion ticket is here: https://github.com/springfall2008/batpred/issues/684
+Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
 
-- Please copy the template apps.yaml from https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml and modify for your system
+- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which maybe 12%
