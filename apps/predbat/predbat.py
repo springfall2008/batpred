@@ -10192,9 +10192,7 @@ class PredBat(hass.Hass):
                 )
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
-                    if self.set_read_only and self.set_charge_window:
-                        # Only reset charge window if we are no longer controller charge window
-                        inverter.disable_charge_window()
+                    inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0, False)
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
