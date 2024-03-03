@@ -11693,6 +11693,13 @@ class PredBat(hass.Hass):
                         if file != "predbat.py":
                             self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
 
+                # Kill the current threads
+                if self.pool:
+                    self.log("WARN: Killing current threads before update...")
+                    self.pool.close()
+                    self.pool.join()
+                    self.pool = None
+
                 # Notify that we are about to update
                 self.call_notify("Predbat: update to: {}".format(version))
 
