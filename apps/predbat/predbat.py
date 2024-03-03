@@ -7844,7 +7844,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         global PRED_GLOBAL
-        PRED_GLOBAL["dict"] = None
+        PRED_GLOBAL['dict'] = None
 
         self.pool = None
         self.restart_active = False
@@ -11692,6 +11692,13 @@ class PredBat(hass.Hass):
                         # Download the remaining files
                         if file != "predbat.py":
                             self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
+
+                # Kill the current threads
+                if self.pool:
+                    self.log("WARN: Killing current threads before update...")
+                    self.pool.close()
+                    self.pool.join()
+                    self.pool = None
 
                 # Notify that we are about to update
                 self.call_notify("Predbat: update to: {}".format(version))
