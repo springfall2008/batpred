@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.2"
+THIS_VERSION = "v7.16.3"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1851,8 +1851,8 @@ class Prediction:
 class Inverter:
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
-        self.adjust_battery_target(99)
-        self.adjust_battery_target(100)
+        self.adjust_battery_target(99, False)
+        self.adjust_battery_target(100, False)
         self.adjust_charge_rate(215)
         self.adjust_charge_rate(self.battery_rate_max_charge)
         self.adjust_discharge_rate(220)
@@ -2875,7 +2875,7 @@ class Inverter:
                 self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
 
-    def adjust_battery_target(self, soc):
+    def adjust_battery_target(self, soc, isCharging=False):
         """
         Adjust the battery charging target SOC % in GivTCP
 
@@ -2926,7 +2926,10 @@ class Inverter:
 
         # Inverters that need on/off controls rather than target SOC
         if not self.inv_has_target_soc:
-            self.mimic_target_soc(soc)
+            if isCharging:
+                self.mimic_target_soc(soc)
+            else:
+                self.mimic_target_soc(0)
 
     def write_and_poll_switch(self, name, entity, new_value):
         """
@@ -10191,7 +10194,7 @@ class PredBat(hass.Hass):
                     if self.set_read_only and self.set_charge_window:
                         # Only reset charge window if we are no longer controller charge window
                         inverter.disable_charge_window()
-                    inverter.adjust_battery_target(100.0)
+                    inverter.adjust_battery_target(100.0, False)
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
@@ -10224,7 +10227,7 @@ class PredBat(hass.Hass):
                 status = "Calibration"
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
-                inverter.adjust_battery_target(100.0)
+                inverter.adjust_battery_target(100.0, False)
                 inverter.adjust_reserve(0)
                 self.log("Inverter is in calibration mode, not executing plan and enabling charge/discharge at full rate.")
                 break
@@ -10478,10 +10481,13 @@ class PredBat(hass.Hass):
                 ):
                     if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                         # In charge freeze hold the target SOC at the current value
-                        self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
-                        inverter.adjust_battery_target(inverter.soc_percent)
+                        if isCharging:
+                            self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
+                            inverter.adjust_battery_target(inverter.soc_percent, True)
+                        else:
+                            inverter.adjust_battery_target(100.0, False)
                     else:
-                        inverter.adjust_battery_target(self.charge_limit_percent_best[0])
+                        inverter.adjust_battery_target(self.charge_limit_percent_best[0], isCharging)
                 else:
                     if not inverter.inv_has_target_soc:
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
@@ -10507,7 +10513,7 @@ class PredBat(hass.Hass):
                                     self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
                                 )
                             )
-                            inverter.adjust_battery_target(100.0)
+                            inverter.adjust_battery_target(100.0, False)
                     else:
                         self.log(
                             "Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
