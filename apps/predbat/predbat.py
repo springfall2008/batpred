@@ -10481,9 +10481,11 @@ class PredBat(hass.Hass):
                 ):
                     if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                         # In charge freeze hold the target SOC at the current value
-                        self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                         if isCharging:
-                            inverter.adjust_battery_target(inverter.soc_percent, isCharging)
+                            self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
+                            inverter.adjust_battery_target(inverter.soc_percent, True)
+                        else:
+                            inverter.adjust_battery_target(100.0, False)
                     else:
                         inverter.adjust_battery_target(self.charge_limit_percent_best[0], isCharging)
                 else:
