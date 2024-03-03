@@ -1829,7 +1829,7 @@ class Prediction:
         self.predict_pv_power = predict_pv_power
         self.predict_grid_power = predict_grid_power
         self.predict_load_power = predict_load_power
-        self.predict_iboost_best = predict_iboost
+        self.predict_iboost_best = predict_iboost_best
         self.predict_iboost = predict_iboost
         self.predict_export = predict_export
         self.metric_time = metric_time
