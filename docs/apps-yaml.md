@@ -430,14 +430,24 @@ When enabled, balance inverters tries to recover this situation by disabling eit
 Most of the Predbat configuration for balancing inverters is through a number of [Home Assistant controls for Balancing Inverters](customisation.md#balance-inverters),
 but there is one configuration item in `apps.yaml`:
 
-- **balance_inverters_seconds** - defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+```yaml
+  balance_inverters_seconds: seconds
+```
+
+Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
 
 ## Workarounds
 
 There are a number of different configuration items in `apps.yaml` that can be used to tweak the way Predbat operates and workaround
 weirdness you may have from your inverter and battery setup.
 
-- **clock_skew** - Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
+### Clock skew
+
+```yaml
+  clock_skew: minutes
+```
+
+Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
 Set to 1 means add a minute to the AppDaemon time, set to -1 means take a minute off the AppDaemon time.
 This will change when real-time actions happen e.g. triggering a charge or discharge.
 
@@ -448,24 +458,60 @@ Separate start and end options are applied to the start and end time windows, mo
 
 You can adjust the charge and discharge times written to the inverter by setting the following in `apps.yaml`:
 
-- **inverter_clock_skew_start**, **inverter_clock_skew_end** - Skews the setting of the charge slot registers vs the predicted start time
+```yaml
+  inverter_clock_skew_start: minutes
+  inverter_clock_skew_end: minutes
+```
 
-- **inverter_clock_skew_discharge_start**, **inverter_clock_skew_discharge_end** - Skews the setting of the discharge slot registers vs the predicted start time
+Skews the setting of the charge slot registers vs the predicted start time
 
-- **battery_scaling** - Default value 1.0. This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+```yaml
+  inverter_clock_skew_discharge_start: minutes
+  inverter_clock_skew_discharge_end: minutes
+```
+
+Skews the setting of the discharge slot registers vs the predicted start time
+
+### Battery size scaling
+
+```yaml
+  battery_scaling: scale
+```
+
+Default value 1.0. One per inverter.
+
+This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
 so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
 *TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
 rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up
 
-- **import_export_scaling** - Default value 1.0. Used to scale the import & export kWh data from GivTCP if the inverter information is incorrect.
+### Import export scaling
 
-- **inverter_battery_rate_min** - One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+```yaml
+  import_export_scaling: scale
+```
+
+Default value 1.0. Used to scale the import & export kWh data from GivTCP if the inverter information is incorrect.
+
+### Inverter rate minimum
+
+```yaml
+  inverter_battery_rate_min: watts
+```
+
+One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 Recommended setting is 200 for Gen 1 hybrids with this issue.
 
-- **inverter_reserve_max** - Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
+### Inverter reserve maximum
+
+```yaml
+  inverter_reserve_max: percent
+```
+
+Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
 ## Automatic restarts

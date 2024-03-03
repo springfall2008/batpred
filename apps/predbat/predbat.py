@@ -1938,6 +1938,8 @@ class Inverter:
         self.inverter_time = None
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
+        self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+
         self.reserve_max = 100
         self.battery_rate_max_raw = 0
         self.battery_rate_max_charge = 0
@@ -2007,7 +2009,7 @@ class Inverter:
                 if soc_force_adjust and soc_force_adjust != "0" and soc_force_adjust != "7":
                     self.in_calibration = True
                     self.log("WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled")
-            self.soc_max *= self.base.battery_scaling
+            self.soc_max *= self.battery_scaling
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
@@ -2025,7 +2027,7 @@ class Inverter:
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
         else:
-            self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.base.battery_scaling
+            self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
             self.battery_voltage = 52.0
@@ -2213,7 +2215,7 @@ class Inverter:
                     clean_increment=False,
                     smoothing=False,
                     divide_by=1.0,
-                    scale=self.base.battery_scaling,
+                    scale=self.battery_scaling,
                     required_unit="kWh",
                 )
                 charge_rate = self.base.minute_data(
@@ -2519,12 +2521,12 @@ class Inverter:
             self.soc_kw = self.base.sim_soc_kw
         else:
             if self.rest_data:
-                self.soc_kw = self.rest_data["Power"]["Power"]["SOC_kWh"] * self.base.battery_scaling
+                self.soc_kw = self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling
             else:
                 if "soc_percent" in self.base.args:
-                    self.soc_kw = self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max * self.base.battery_scaling / 100.0
+                    self.soc_kw = self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max * self.battery_scaling / 100.0
                 else:
-                    self.soc_kw = self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.base.battery_scaling
+                    self.soc_kw = self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.battery_scaling
 
         if self.soc_max <= 0.0:
             self.soc_percent = 0
@@ -7903,7 +7905,6 @@ class PredBat(hass.Hass):
         self.inverter_loss = 1.0
         self.inverter_hybrid = True
         self.inverter_soc_reset = False
-        self.battery_scaling = 1.0
         self.best_soc_min = 0
         self.best_soc_max = 0
         self.best_soc_margin = 0
@@ -11337,7 +11338,6 @@ class PredBat(hass.Hass):
         self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
-        self.battery_scaling = self.get_arg("battery_scaling", 1.0)
 
         # Charge curve
         if self.args.get("battery_charge_power_curve", "") == "auto":

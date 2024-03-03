@@ -364,7 +364,9 @@ pred_bat:
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
-  battery_scaling: 1.0
+  # One per inverter
+  battery_scaling:
+    - 1.0
 
   # Can be used to scale import and export data, used for workarounds
   import_export_scaling: 1.0
