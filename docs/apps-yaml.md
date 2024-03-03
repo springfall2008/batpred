@@ -479,7 +479,7 @@ Skews the setting of the discharge slot registers vs the predicted start time
 ```
 
 Default value 1.0. One per inverter.
-  
+
 This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
 so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
