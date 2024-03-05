@@ -26,6 +26,9 @@ If you do something like have export>import then Predbat will try to export as m
 ## Why didn't the slot actually get configured?
 
 - Are you in read-only mode?
+
+## My plan doesn't include any charging?
+
 - Do you have the predbat_mode set to Control charge (or Control charge & discharge)?
 
 ## The charge limit keeps increasing/decreasing in the charge window or is unstable
@@ -50,6 +53,16 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Do you have a solar diverter? If so maybe you want to try using the iBoost model settings.
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
+
+## When my battery is charging to 100% is fluctuates between 98% and 100%, and/or gives an error setting reserve
+
+Some inverters e.g. GE AIO inverter won't allow the reserve to be set too 100, in which case set in apps.yaml
+
+```yaml
+inverter_reserve_max : 98
+```
+
+And this should prevent the issue
 
 ## The plan doesn't charge or discharge when I expect it to
 
