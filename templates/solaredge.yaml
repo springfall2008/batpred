@@ -68,6 +68,20 @@ pred_bat:
   discharge_end_time:
    - "00:01:00"
 
+  # Services to control charging/discharging 
+  charge_start_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Charge from Solar Power and Grid"
+  charge_stop_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Charge from Solar Power"
+  discharge_start_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Discharge to Maximize Export"
+    
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
   #inverter_limit:
