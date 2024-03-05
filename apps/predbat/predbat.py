@@ -3406,14 +3406,14 @@ class Inverter:
                 service_data = data
             else:
                 for key in service_template:
-                    if key == 'service':
+                    if key == "service":
                         service_name = service_template[key]
                     else:
                         value = service_template[key]
                         value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
                         if value:
                             service_data[key] = value
-                            
+
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
@@ -3429,7 +3429,11 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_charge * MINUTE_WATT)}
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_charge * MINUTE_WATT),
+                }
                 self.call_service_template("charge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc}
@@ -3441,7 +3445,11 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_discharge * MINUTE_WATT)}
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
+                }
                 self.call_service_template("discharge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc}
