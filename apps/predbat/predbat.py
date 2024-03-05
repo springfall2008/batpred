@@ -913,12 +913,12 @@ INVERTER_DEF = {
     "SE": {
         "has_rest_api": False,
         "has_mqtt_api": False,
-        "has_service_api": False,
+        "has_service_api": True,
         "output_charge_control": "power",
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": False,
-        "has_reserve_soc": False,
+        "has_reserve_soc": True,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -3392,33 +3392,48 @@ class Inverter:
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
 
+    def call_service_template(self, service, data):
+        """
+        Call a service template with data
+        """
+        service_template = self.base.args.get(service, "")
+        self.log("Inverter {} Call service template {} = {}".format(self.id, service, service_template))
+        service_data = {}
+        service_name = ""
+        if service_template:
+            if isinstance(service_template, str):
+                service_name = service
+                service_data = data
+            else:
+                for key in service_template:
+                    if key == 'service':
+                        service_name = service_template[key]
+                    else:
+                        value = service_template[key]
+                        value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
+                        if value:
+                            service_data[key] = value
+                            
+            if service_name:
+                service_name = service_name.replace(".", "/")
+                self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
+                self.base.call_service(service_name, **service_data)
+            else:
+                self.log("WARN: Inverter {} unable to find service name for {}".format(self.id, service))
+        else:
+            self.log("WARN: Inverter {} unable to find service template for {}".format(self.id, service))
+
     def adjust_charge_immediate(self, target_soc):
         """
         Adjust from charging or not charging based on passed target soc
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service = self.base.get_arg("charge_start_service", "")
-                if service:
-                    self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
-                    self.base.log(
-                        "Call service {} device_id {} target_soc {} power {}".format(
-                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_charge * MINUTE_WATT)
-                        )
-                    )
-                    self.base.call_service(
-                        service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
-                    )
-                else:
-                    self.log("WARN: Inverter {} unable to start charge as charge_start_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_charge * MINUTE_WATT)}
+                self.call_service_template("charge_start_service", service_data)
             else:
-                service = self.base.get_arg("charge_stop_service", "")
-                if service:
-                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
-                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
-                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
-                else:
-                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc}
+                self.call_service_template("charge_stop_service", service_data)
 
     def adjust_discharge_immediate(self, target_soc):
         """
@@ -3426,30 +3441,11 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service = self.base.get_arg("discharge_start_service", "")
-                if service:
-                    self.log("Inverter {} Starting discharge to {} % via Service {}".format(self.id, target_soc, service))
-                    self.base.log(
-                        "Call service {} device_id {} target_soc {} power {}".format(
-                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_discharge * MINUTE_WATT)
-                        )
-                    )
-                    self.base.call_service(
-                        service,
-                        device_id=self.base.get_arg("device_id", index=self.id, default=""),
-                        target_soc=target_soc,
-                        power=int(self.battery_rate_max_discharge * MINUTE_WATT),
-                    )
-                else:
-                    self.log("WARN: Inverter {} unable to start discharge as discharge_start_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_discharge * MINUTE_WATT)}
+                self.call_service_template("discharge_start_service", service_data)
             else:
-                service = self.base.get_arg("charge_stop_service", "")
-                if service:
-                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
-                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
-                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
-                else:
-                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc}
+                self.call_service_template("charge_stop_service", service_data)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -3839,7 +3835,7 @@ class PredBat(hass.Hass):
         for device in self.notify_devices:
             self.call_service("notify/" + device, message=message)
 
-    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
         """
         Resolve argument templates and state instances
         """
@@ -3880,7 +3876,10 @@ class PredBat(hass.Hass):
         for repeat in range(2):
             if isinstance(value, str) and "{" in value:
                 try:
-                    value = value.format(**self.args)
+                    if extra_args:
+                        value = value.format(**self.args, **extra_args)
+                    else:
+                        value = value.format(**self.args)
                 except KeyError:
                     self.log("WARN: can not resolve {} value {}".format(arg, value))
                     self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
