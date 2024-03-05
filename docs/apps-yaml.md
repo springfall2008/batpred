@@ -47,7 +47,7 @@ Basic configuration items
 - **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 
-- **threads** - If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
+- **threads** - If defined sets the number of CPU threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
 you have CPUs in your system.
 Valid values are:
     - 'auto' - Use the same number of threads as your CPU count
@@ -475,17 +475,23 @@ Skews the setting of the discharge slot registers vs the predicted start time
 ### Battery size scaling
 
 ```yaml
-  battery_scaling: scale
+  battery_scaling:
+    - scale
 ```
 
-Default value 1.0. One per inverter.
+Default value 1.0. Multiple battery size scales can be entered, one per inverter.
 
-This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.
+As the GivEnergy inverters treat all batteries attached to an inverter as in effect one giant battery,
+if you have multiple batteries on an inverter that need scaling you should enter a composite scaling value for all batteries attached to the inverter.
+
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
-so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
-*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
+so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.
+
+*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.
+
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
-rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up
+rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up.
 
 ### Import export scaling
 
@@ -511,7 +517,7 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
   inverter_reserve_max: percent
 ```
 
-Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
+Global, sets the maximum battery reserve % that the inverter can be set to, the default is 98 as some Gen 2 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
 ## Automatic restarts
