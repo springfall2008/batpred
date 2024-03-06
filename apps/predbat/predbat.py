@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.3"
+THIS_VERSION = "v7.16.4"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -47,9 +47,6 @@ INVERTER_TEST = False  # Run inverter control self test
 # Create an array of times in the day in 5-minute intervals
 BASE_TIME = datetime.strptime("00:00:00", "%H:%M:%S")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M:%S")) for minute in range(0, 24 * 60, 5)]
-
-# List of supported inverters
-INVERTER_TYPES = {"GE": "GivEnergy", "GS": "Ginlong Solis", "SE": "SolarEdge", "SX4": "Solax Gen4 (Modbus Power Control)", "SF": "Sofar HYD", "HU": "Huawei Solar"}
 
 # Inverter modes
 PREDBAT_MODE_OPTIONS = ["Monitor", "Control SOC only", "Control charge", "Control charge & discharge"]
@@ -869,6 +866,7 @@ code can be used with minimal modification.
 """
 INVERTER_DEF = {
     "GE": {
+        "name": "GivEnergy",
         "has_rest_api": True,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -890,6 +888,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": True,
     },
     "GS": {
+        "name": "Ginlong Solis",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -910,7 +909,30 @@ INVERTER_DEF = {
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
     },
+    "SE": {
+        "name": "SolarEdge",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "has_service_api": True,
+        "output_charge_control": "power",
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "has_reserve_soc": False,
+        "charge_time_format": "S",
+        "charge_time_entity_is_option": False,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
+    },
     "SX4": {
+        "name": "Solax Gen4 (Modbus Power Control)",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -932,6 +954,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SF": {
+        "name": "Sofar HYD",
         "has_rest_api": False,
         "has_mqtt_api": True,
         "has_service_api": False,
@@ -953,6 +976,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "HU": {
+        "name": "Huawei Solar",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
@@ -1951,7 +1975,30 @@ class Inverter:
         self.rest_api = None
         self.in_calibration = False
 
-        self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False)
+        self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
+
+        # Read user defined inverter type
+        if "inverter" in self.base.args:
+            if self.inverter_type not in INVERTER_DEF:
+                INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
+
+            inverter_def = self.base.args["inverter"]
+            if isinstance(inverter_def, list):
+                inverter_def = inverter_def[self.id]
+
+            if isinstance(inverter_def, dict):
+                for key in inverter_def:
+                    INVERTER_DEF[self.inverter_type][key] = inverter_def[key]
+            else:
+                self.log("WARN: Inverter {}: inverter definition is not a dictionary".format(self.id))
+
+        if self.inverter_type in INVERTER_DEF:
+            self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']})")
+        else:
+            raise ValueError("Inverter type {} not defined".format(self.inverter_type))
+
+        if self.inverter_type != "GE":
+            self.log("WARN: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
@@ -2106,7 +2153,7 @@ class Inverter:
 
         # Get the expected minimum reserve value
         battery_min_soc = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
-        self.reserve_min = self.base.get_arg("set_reserve_min", 4.0)
+        self.reserve_min = self.base.get_arg("set_reserve_min")
         if self.reserve_min < battery_min_soc:
             self.base.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
             self.base.expose_config("set_reserve_min", battery_min_soc)
@@ -3371,33 +3418,52 @@ class Inverter:
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
 
+    def call_service_template(self, service, data):
+        """
+        Call a service template with data
+        """
+        service_template = self.base.args.get(service, "")
+        self.log("Inverter {} Call service template {} = {}".format(self.id, service, service_template))
+        service_data = {}
+        service_name = ""
+        if service_template:
+            if isinstance(service_template, str):
+                service_name = service
+                service_data = data
+            else:
+                for key in service_template:
+                    if key == "service":
+                        service_name = service_template[key]
+                    else:
+                        value = service_template[key]
+                        value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
+                        if value:
+                            service_data[key] = value
+
+            if service_name:
+                service_name = service_name.replace(".", "/")
+                self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
+                self.base.call_service(service_name, **service_data)
+            else:
+                self.log("WARN: Inverter {} unable to find service name for {}".format(self.id, service))
+        else:
+            self.log("WARN: Inverter {} unable to find service template for {}".format(self.id, service))
+
     def adjust_charge_immediate(self, target_soc):
         """
         Adjust from charging or not charging based on passed target soc
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service = self.base.get_arg("charge_start_service", "")
-                if service:
-                    self.base.log("Inverter {} Starting charge to {} % via Service {}".format(self.id, target_soc, service))
-                    self.base.log(
-                        "Call service {} device_id {} target_soc {} power {}".format(
-                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_charge * MINUTE_WATT)
-                        )
-                    )
-                    self.base.call_service(
-                        service, device_id=self.base.get_arg("device_id", index=self.id, default=""), target_soc=target_soc, power=int(self.battery_rate_max_charge * MINUTE_WATT)
-                    )
-                else:
-                    self.log("WARN: Inverter {} unable to start charge as charge_start_service not set in apps.yaml".format(self.id))
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_charge * MINUTE_WATT),
+                }
+                self.call_service_template("charge_start_service", service_data)
             else:
-                service = self.base.get_arg("charge_stop_service", "")
-                if service:
-                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
-                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
-                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
-                else:
-                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
+                self.call_service_template("charge_stop_service", service_data)
 
     def adjust_discharge_immediate(self, target_soc):
         """
@@ -3405,30 +3471,15 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service = self.base.get_arg("discharge_start_service", "")
-                if service:
-                    self.log("Inverter {} Starting discharge to {} % via Service {}".format(self.id, target_soc, service))
-                    self.base.log(
-                        "Call service {} device_id {} target_soc {} power {}".format(
-                            service, self.base.get_arg("device_id", index=self.id, default=""), target_soc, int(self.battery_rate_max_discharge * MINUTE_WATT)
-                        )
-                    )
-                    self.base.call_service(
-                        service,
-                        device_id=self.base.get_arg("device_id", index=self.id, default=""),
-                        target_soc=target_soc,
-                        power=int(self.battery_rate_max_discharge * MINUTE_WATT),
-                    )
-                else:
-                    self.log("WARN: Inverter {} unable to start discharge as discharge_start_service not set in apps.yaml".format(self.id))
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
+                }
+                self.call_service_template("discharge_start_service", service_data)
             else:
-                service = self.base.get_arg("charge_stop_service", "")
-                if service:
-                    self.base.log("Inverter {} Stop charge via Service {}".format(self.id, service))
-                    self.base.log("Call service {} device_id {}".format(service, self.base.get_arg("device_id", index=self.id, default="")))
-                    self.base.call_service(service, device_id=self.base.get_arg("device_id", index=self.id, default=""))
-                else:
-                    self.log("WARN: Inverter {} unable to stop charge as charge_stop_service not set in apps.yaml".format(self.id))
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
+                self.call_service_template("charge_stop_service", service_data)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
@@ -3818,7 +3869,7 @@ class PredBat(hass.Hass):
         for device in self.notify_devices:
             self.call_service("notify/" + device, message=message)
 
-    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
         """
         Resolve argument templates and state instances
         """
@@ -3859,7 +3910,10 @@ class PredBat(hass.Hass):
         for repeat in range(2):
             if isinstance(value, str) and "{" in value:
                 try:
-                    value = value.format(**self.args)
+                    if extra_args:
+                        value = value.format(**self.args, **extra_args)
+                    else:
+                        value = value.format(**self.args)
                 except KeyError:
                     self.log("WARN: can not resolve {} value {}".format(arg, value))
                     self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
@@ -11270,12 +11324,11 @@ class PredBat(hass.Hass):
             self.calculate_max_windows = max(int(forecast_hours * 2), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
-        self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
 
         self.log(
-            "Inverter type {} forecast_hours {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {}".format(
-                self.inverter_type, forecast_hours, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every
+            "Configuration: forecast_hours {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {} calculate_fast_plan {}".format(
+                forecast_hours, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every, self.calculate_fast_plan
             )
         )
 
@@ -11377,11 +11430,6 @@ class PredBat(hass.Hass):
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
         self.charge_slot_split = 60
         self.discharge_slot_split = 60 if self.calculate_fast_plan else 30
-
-        # Enables
-        if self.inverter_type != "GE":
-            self.log("WARN: Using experimental inverter type {} - not all features are available".format(self.inverter_type))
-
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
 
@@ -12439,9 +12487,6 @@ class PredBat(hass.Hass):
             self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
-
-        self.inverter_type = self.get_arg("inverter_type", "GE", indirect=False)
-        self.log(f"Inverter Type: {self.inverter_type} ({INVERTER_TYPES[self.inverter_type]})")
 
         if SIMULATE and SIMULATE_LENGTH:
             # run once to get data
