@@ -866,7 +866,7 @@ code can be used with minimal modification.
 """
 INVERTER_DEF = {
     "GE": {
-        "name": "GivEnergy",
+        "name" : "GivEnergy",
         "has_rest_api": True,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -888,7 +888,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": True,
     },
     "GS": {
-        "name": "Ginlong Solis",
+        "name" : "Ginlong Solis",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -910,7 +910,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SE": {
-        "name": "SolarEdge",
+        "name" : "SolarEdge",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
@@ -932,7 +932,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SX4": {
-        "name": "Solax Gen4 (Modbus Power Control)",
+        "name" : "Solax Gen4 (Modbus Power Control)",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -954,7 +954,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SF": {
-        "name": "Sofar HYD",
+        "name" : "Sofar HYD",
         "has_rest_api": False,
         "has_mqtt_api": True,
         "has_service_api": False,
@@ -976,7 +976,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "HU": {
-        "name": "Huawei Solar",
+        "name" : "Huawei Solar",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
@@ -1978,11 +1978,11 @@ class Inverter:
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
         # Read user defined inverter type
-        if "inverter" in self.base.args:
+        if 'inverter' in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
                 INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
-
-            inverter_def = self.base.args["inverter"]
+                
+            inverter_def = self.base.args['inverter']
             if isinstance(inverter_def, list):
                 inverter_def = inverter_def[self.id]
 
@@ -1996,7 +1996,7 @@ class Inverter:
             self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']})")
         else:
             raise ValueError("Inverter type {} not defined".format(self.inverter_type))
-
+        
         if self.inverter_type != "GE":
             self.log("WARN: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
 
@@ -3432,14 +3432,14 @@ class Inverter:
                 service_data = data
             else:
                 for key in service_template:
-                    if key == "service":
+                    if key == 'service':
                         service_name = service_template[key]
                     else:
                         value = service_template[key]
                         value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
                         if value:
                             service_data[key] = value
-
+                            
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
@@ -3455,11 +3455,7 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {
-                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                    "target_soc": target_soc,
-                    "power": int(self.battery_rate_max_charge * MINUTE_WATT),
-                }
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_charge * MINUTE_WATT)}
                 self.call_service_template("charge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
@@ -3471,11 +3467,7 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {
-                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                    "target_soc": target_soc,
-                    "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
-                }
+                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_discharge * MINUTE_WATT)}
                 self.call_service_template("discharge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
@@ -7182,6 +7174,7 @@ class PredBat(hass.Hass):
         start_span = False
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = max(minute - self.minutes_now, 0)
+            minute_relative_end = minute_relative + 30
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             rate_start = minute_timestamp
             rate_value_import = self.dp2(self.rate_import.get(minute, 0))
@@ -7204,6 +7197,11 @@ class PredBat(hass.Hass):
                 if charge_window_n >= 0:
                     break
 
+            for try_minute in range(minute, minute + 30, 5):
+                discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
+                if discharge_window_n >= 0:
+                    break
+
             start_span = False
             if in_span:
                 rowspan = max(rowspan - 1, 0)
@@ -7215,13 +7213,18 @@ class PredBat(hass.Hass):
                 if rowspan > 1:
                     in_span = True
                     start_span = True
+                    minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
                 else:
                     rowspan = 0
 
-            for try_minute in range(minute, minute + 30, 5):
-                discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
-                if discharge_window_n >= 0:
-                    break
+            if discharge_window_n >= 0 and not in_span:
+                rowspan = int((self.discharge_window_best[discharge_window_n]["end"] - minute) / 30)
+                if rowspan > 1:
+                    in_span = True
+                    start_span = True
+                    minute_relative_end = self.discharge_window_best[discharge_window_n]["end"] - minute_now_align
+                else:
+                    rowspan = 0
 
             pv_forecast = 0
             load_forecast = 0
@@ -7233,8 +7236,11 @@ class PredBat(hass.Hass):
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative + 30, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent_end_window = int(self.dp2((self.predict_soc_best.get(minute_relative_end, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
+            soc_percent_max_window = max(soc_percent, soc_percent_end_window)
+            soc_percent_min_window = min(soc_percent, soc_percent_end_window)
             soc_change = self.predict_soc_best.get(minute_relative + 30, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative + 30, metric_start)
@@ -7302,10 +7308,10 @@ class PredBat(hass.Hass):
                         state = "FreezeChrg&rarr;"
                         state_color = "#EEEEEE"
                         limit_percent = soc_percent
-                    elif limit_percent == soc_percent_min:
+                    elif limit_percent == soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
-                    elif limit_percent < soc_percent_min:
+                    elif limit_percent < soc_percent_min_window:
                         state = "NoCharge&searr;"
                         state_color = "#FFFFFF"
                     else:
@@ -7317,7 +7323,7 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
-                if limit < 100 and limit > soc_percent_max:
+                if limit < 100 and limit > soc_percent_max_window:
                     if state == soc_sym:
                         state = ""
                     if state:
@@ -8590,6 +8596,7 @@ class PredBat(hass.Hass):
         discharge_limit,
         all_n=None,
         end_record=None,
+        freeze_only=False
     ):
         """
         Optimise a single discharging window for best discharge %
@@ -8610,7 +8617,9 @@ class PredBat(hass.Hass):
         discharge_step = 5
 
         # loop on each discharge option
-        if self.set_discharge_freeze and not self.set_discharge_freeze_only:
+        if self.set_discharge_freeze and freeze_only:
+            loop_options = [100, 99]
+        elif self.set_discharge_freeze and not self.set_discharge_freeze_only:
             # If we support freeze, try a 99% option which will freeze at any SOC level below this
             loop_options = [100, 99, 0]
         else:
@@ -9296,9 +9305,15 @@ class PredBat(hass.Hass):
                 best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
             )
         )
-        for start_at_low in [False, True]:
-            if start_at_low:
+        for pass_type in ['freeze', 'normal', 'low']:
+
+            if not self.set_charge_freeze and pass_type == 'freeze':
+                continue
+
+            start_at_low = False
+            if pass_type in ['low']:
                 price_set.reverse()
+                start_at_low = True
 
             for price in price_set:
                 links = price_links[price]
@@ -9312,6 +9327,10 @@ class PredBat(hass.Hass):
                         # Store price set with window
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
+
+                        # Freeze mode only for freeze discharge
+                        if pass_type in ['freeze']:
+                            continue
 
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
@@ -9365,7 +9384,7 @@ class PredBat(hass.Hass):
 
                         # Do highest price first
                         # Second pass to tune down any excess exports only
-                        if start_at_low and ((price > best_price) or (self.discharge_limits_best[window_n] == 100.0)):
+                        if pass_type == 'low' and ((price > best_price) or (self.discharge_limits_best[window_n] == 100.0)):
                             continue
 
                         if self.calculate_best_discharge and (window_start not in self.manual_all_times):
@@ -9402,6 +9421,7 @@ class PredBat(hass.Hass):
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
                                 end_record=self.end_record,
+                                freeze_only = pass_type in ['freeze'],
                             )
                             self.discharge_limits_best[window_n] = best_soc
                             self.discharge_window_best[window_n]["start"] = best_start
