@@ -12,6 +12,11 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
+  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  currency_symbols:
+   - '£'
+   - 'p'
+
   # Number of threads to use in plan calculation
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto

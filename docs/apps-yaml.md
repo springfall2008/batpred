@@ -40,24 +40,67 @@ Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
 
 Basic configuration items
 
-- **prefix** - Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
+### prefix
 
-- **timezone** - Set to your local timezone, default is Europe/London. It must be set to a
+Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
+
+```yaml
+  prefix: predbat
+```
+
+### timezone
+
+Set to your local timezone, default is Europe/London. It must be set to a
 [valid Python time zone for your location](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
 
-- **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
+```yaml
+  timezone: Europe/London
+```
+
+### currency_symbols
+
+Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
+
+```yaml
+ currency_symbols:
+   - '£'
+   - 'p'
+```
+
+### template
+
+Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 
-- **threads** - If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
+```yaml
+#  template: True
+```
+
+### threads
+
+If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
 you have CPUs in your system.
 Valid values are:
     - 'auto' - Use the same number of threads as your CPU count
     - '0' - Don't use threads - disabled
     - 'N' - Use N threads, recommended values are between 2 and 8
 
-- **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
+```yaml
+  threads: auto
+```
 
-- **days_previous** - Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
+### notify_devices
+
+A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
+
+```yaml
+  notify_devices:
+    - mobile_app_treforsiphone12_2
+```
+
+### days_previous
+
+Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
 days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
 It's recommended that you set days_previous so Predbat calculates an average house load using sufficient days' history so that 'unusual' load activity
 (e.g. saving sessions, "big washing day", etc) get averaged out.
@@ -87,7 +130,7 @@ kept in HA before it is purged by editing and adding the following to the `/home
     purge_keep_days: 14
 ```
 
-- **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
+**days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
 
 For example, to apply a 100% weighting for the first day entry in days_previous, but only a 50% weighting to the second day in days_previous:
 
@@ -104,8 +147,14 @@ The default value is 1, that all history days are equally weighted, so if you do
     - 1
 ```
 
-- **forecast_hours** - the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+### forecast_hours
+
+the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
+
+```yaml
+  forecast_hours: 48
+```
 
 ## Inverter information
 
@@ -113,9 +162,23 @@ The template `apps.yaml` comes pre-configured with regular expressions that shou
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 For other inverter brands, see [Other Inverters](other-inverters.md)
 
-- **num_inverters** - The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
+### num_inverters
 
-- **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
+
+```yaml
+  num_inverters: 1
+```
+
+### geserial
+
+Only for GE inverters, this is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
+
+```yaml
+  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+```
 
 ## Historical data
 
