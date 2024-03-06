@@ -34,17 +34,17 @@ pred_bat:
   #  has_reserve_soc: True
 
   battery_rate_max:
-    - 11600
+    - sensor.solaredge_b1_max_charge_power
   charge_rate:
     - number.solaredge_i1_storage_charge_limit
   discharge_rate:
     - number.solaredge_i1_storage_discharge_limit
-  #battery_power:
-  #  - number.givtcp_{geserial}_battery_power
-  #pv_power:
-  #  - number.givtcp_{geserial}_pv_power
-  #load_power:
-  #  - number.givtcp_{geserial}_load_power
+  battery_power:
+    - sensor.solaredge_b1_dc_power
+  pv_power:
+    - sensor.solar_panel_production_w # This is a custom sensor - see Readme on how to create or comment out
+  load_power:
+    - sensor.solar_house_consumption_w # This is a custom sensor - see Readme on how to create or comment out
   soc_percent:
     - sensor.solaredge_b1_state_of_energy
   soc_max:
