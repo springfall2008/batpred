@@ -80,7 +80,7 @@ pred_bat:
   discharge_start_service:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
-    option: "Discharge to Maximize Export"
+    option: "Maximize Self Consumption"
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
