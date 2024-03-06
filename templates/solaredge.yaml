@@ -6,7 +6,7 @@ pred_bat:
   prefix: predbat
 
   # XXX: This is a configuration template, delete this line once you edit your configuration
-  # template: True
+  template: True
 
   # Timezone to work in
   timezone: Europe/London
@@ -16,13 +16,13 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
   load_today:
-    - sensor.solaredge_i2_ac_energy_kwh
+    - sensor.solaredge_i1_ac_energy_kwh
   import_today:
     - sensor.solaredge_m1_imported_kwh
   export_today:
     - sensor.solaredge_m1_exported_kwh
   pv_today:
-    - sensor.solar_panel_production_kwh   # This is a custom sensor - documentation TBD
+    - sensor.solar_panel_production_kwh   # This is a custom sensor - see Readme on how to create or comment out
   #
   # Controls/status - must by 1 per inverter
   #
@@ -32,9 +32,9 @@ pred_bat:
   battery_rate_max:
     - 11600
   charge_rate:
-    - number.solaredge_i2_storage_charge_limit
+    - number.solaredge_i1_storage_charge_limit
   discharge_rate:
-    - number.solaredge_i2_storage_discharge_limit
+    - number.solaredge_i1_storage_discharge_limit
   #battery_power:
   #  - number.givtcp_{geserial}_battery_power
   #pv_power:
@@ -43,22 +43,16 @@ pred_bat:
   #  - number.givtcp_{geserial}_load_power
   soc_kw:
     - sensor.solaredge_b1_available_energy
-  #soc_percent:
-  #  - sensor.solaredge_b1_state_of_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
   reserve:
-    - number.solaredge_i2_backup_reserve
-  #inverter_mode:
-  # - select.givtcp_{geserial}_mode
-  #inverter_time:
-  # - sensor.givtcp_{geserial}_invertor_time
+    - number.solaredge_i1_backup_reserve
   charge_start_time:
    - "00:00:00"
   charge_end_time:
    - "00:01:00"
   charge_limit:
-   - number.solaredge_i2_ac_charge_limit
+   - number.solaredge_i1_ac_charge_limit
   scheduled_charge_enable:
    - off
   scheduled_discharge_enable:
