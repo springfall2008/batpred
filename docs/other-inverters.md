@@ -69,7 +69,7 @@ Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181
 and switch.solaredge_i1_advanced_power_control must be on.
 
 - For **pv_today**, **pv_power** and **load_power** sensors to work you need to create this as a template within your Home Assistant configuration.yml
-Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. Tehse sensor are not critical so you can just comment it out in apps.yaml
+Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. These sensors are not critical so you can just comment it out in apps.yaml
 if you can't get it to work
 
 ```yaml
