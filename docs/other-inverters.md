@@ -68,8 +68,9 @@ Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
 and switch.solaredge_i1_advanced_power_control must be on.
 
-- For the pv_today sensor to work you need to create this as a template, please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>.
-This sensor isn't critical so you can just comment it out in apps.yaml if you can't get it to work
+- For **pv_today**, **pv_power** and **load_power** sensors to work you need to create this as a template within your Home Assistant configuration.yml
+Please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>. Tehse sensor are not critical so you can just comment it out in apps.yaml
+if you can't get it to work
 
 ```yaml
 template:
@@ -88,6 +89,22 @@ template:
           {% endif %}
         availability: >
           {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+
+      - name: "Solar House Consumption W"
+        unique_id: solar_house_consumption_w
+        unit_of_measurement: "W"
+        icon: mdi:home
+        state: >
+          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+          {% if (i1_ac_power - m1_ac_power <= 0) %}
+            0
+          {% else %}
+            {{ (i1_ac_power - m1_ac_power) }}
+          {% endif %}
+        availability: >
+          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+
 sensor:
   - platform: integration
     source: sensor.solar_panel_production_w
