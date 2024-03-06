@@ -45,8 +45,9 @@ pred_bat:
     - sensor.solaredge_b1_available_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
-  reserve:
-    - number.solaredge_i1_backup_reserve
+  # Can only be used if you have a backup interface, otherwise leave commented out
+  #reserve:
+  #  - number.solaredge_i1_backup_reserve
   charge_start_time:
    - "00:00:00"
   charge_end_time:
@@ -70,11 +71,11 @@ pred_bat:
   charge_stop_service:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
-    option: "Charge from Solar Power"
+    option: "Maximize Self Consumption"
   discharge_start_service:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
-    option: "Maximize Self Consumption"
+    option: "Discharge to Maximize Export"
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
