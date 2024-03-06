@@ -71,8 +71,8 @@ pred_bat:
   # Set one per inverter
   # If using Docker then change homeassistant.local to the Docker IP address
   givtcp_rest:
-   - 'http://homeassistant.local:6345'
-   - 'http://homeassistant.local:6346'
+    - 'http://homeassistant.local:6345'
+    - 'http://homeassistant.local:6346'
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
@@ -112,38 +112,38 @@ pred_bat:
     - number.givtcp_{geserial}_battery_power_reserve
     - number.givtcp2_{geserial2}_battery_power_reserve
   inverter_mode:
-   - select.givtcp_{geserial}_mode
-   - select.givtcp2_{geserial2}_mode
+    - select.givtcp_{geserial}_mode
+    - select.givtcp2_{geserial2}_mode
   inverter_time:
-   - sensor.givtcp_{geserial}_invertor_time
-   - sensor.givtcp2_{geserial2}_invertor_time
+    - sensor.givtcp_{geserial}_invertor_time
+    - sensor.givtcp2_{geserial2}_invertor_time
   charge_start_time:
-   - select.givtcp_{geserial}_charge_start_time_slot_1
-   - select.givtcp2_{geserial2}_charge_start_time_slot_1
+    - select.givtcp_{geserial}_charge_start_time_slot_1
+    - select.givtcp2_{geserial2}_charge_start_time_slot_1
   charge_end_time:
-   - select.givtcp_{geserial}_charge_end_time_slot_1
-   - select.givtcp2_{geserial2}_charge_end_time_slot_1
+    - select.givtcp_{geserial}_charge_end_time_slot_1
+    - select.givtcp2_{geserial2}_charge_end_time_slot_1
   charge_limit:
-   - number.givtcp_{geserial}_target_soc
-   - number.givtcp2_{geserial2}_target_soc
+    - number.givtcp_{geserial}_target_soc
+    - number.givtcp2_{geserial2}_target_soc
   scheduled_charge_enable:
-   - switch.givtcp_{geserial}_enable_charge_schedule
-   - switch.givtcp2_{geserial2}_enable_charge_schedule
+    - switch.givtcp_{geserial}_enable_charge_schedule
+    - switch.givtcp2_{geserial2}_enable_charge_schedule
   scheduled_discharge_enable:
-   - switch.givtcp_{geserial}_enable_discharge_schedule
-   - switch.givtcp2_{geserial2}_enable_discharge_schedule
+    - switch.givtcp_{geserial}_enable_discharge_schedule
+    - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
-   - select.givtcp_{geserial}_discharge_start_time_slot_1
-   - select.givtcp2_{geserial2}_discharge_start_time_slot_1
+    - select.givtcp_{geserial}_discharge_start_time_slot_1
+    - select.givtcp2_{geserial2}_discharge_start_time_slot_1
   discharge_end_time:
-   - select.givtcp_{geserial}_discharge_end_time_slot_1
-   - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+    - select.givtcp_{geserial}_discharge_end_time_slot_1
+    - select.givtcp2_{geserial2}_discharge_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-   - 7500
-   - 7500
+    - 7500
+    - 7500
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
