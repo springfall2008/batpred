@@ -120,7 +120,6 @@ sensor:
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
 - The easy way to integrate is to use a HA service to start charges and discharges, edit the template below
--
 
 ```yaml
  inverter_type: MINE
