@@ -5709,7 +5709,7 @@ class PredBat(hass.Hass):
                         "results": metric_time,
                         "friendly_name": "Predicted metric (cost)",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -5905,7 +5905,7 @@ class PredBat(hass.Hass):
                         "results": metric_time,
                         "friendly_name": "Predicted best metric (cost)",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -6005,7 +6005,7 @@ class PredBat(hass.Hass):
                         "results": metric_time,
                         "friendly_name": "Predicted best 10% metric (cost)",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -6068,7 +6068,7 @@ class PredBat(hass.Hass):
                         "results": metric_time,
                         "friendly_name": "Predicted base 10% metric (cost)",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -6685,7 +6685,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_cost",
                         state=self.dp2(rate_high_average),
-                        attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                        attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                     in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
                     self.dashboard_item(
@@ -6723,7 +6723,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_cost_2",
                         state=self.dp2(rate_high_average),
-                        attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                        attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                 window_n += 1
 
@@ -6746,7 +6746,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost",
                 state=self.dp2(self.rate_export_average),
-                attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
             self.dashboard_item(
                 "binary_sensor." + self.prefix + "_high_rate_export_slot",
@@ -6772,7 +6772,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost_2",
                 state=self.dp2(self.rate_export_average),
-                attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
 
     def rate_minmax(self, rates):
@@ -7030,7 +7030,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost",
                         state=rate_low_average,
-                        attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                        attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                     in_low_rate = self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end
                     self.dashboard_item(
@@ -7063,7 +7063,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost_2",
                         state=rate_low_average,
-                        attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                        attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                 window_n += 1
 
@@ -7085,7 +7085,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".low_rate_cost",
                 state=self.rate_average,
-                attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_duration",
@@ -7109,7 +7109,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".low_rate_cost_2",
                 state=self.rate_average,
-                attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
 
     def adjust_symbol(self, adjust_type):
@@ -7146,11 +7146,11 @@ class PredBat(hass.Hass):
         html += "<tr>"
         html += "<td><b>Time</b></td>"
         if plan_debug:
-            html += "<td><b>Import p (w/loss)</b></td>"
-            html += "<td><b>Export p (w/loss)</b></td>"
+            html += "<td><b>Import {} (w/loss)</b></td>".format(self.currency_symbols[1])
+            html += "<td><b>Export {} (w/loss)</b></td>".format(self.currency_symbols[1])
         else:
-            html += "<td><b>Import p</b></td>"
-            html += "<td><b>Export p</b></td>"
+            html += "<td><b>Import {}</b></td>".format(self.currency_symbols[1])
+            html += "<td><b>Export {}</b></td>".format(self.currency_symbols[1])
         html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
         html += "<td><b>PV kWh</b></td>"
@@ -7381,17 +7381,17 @@ class PredBat(hass.Hass):
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
             # Cost
-            total_str = "£%02.02f" % (metric_start / 100.0)
+            total_str = self.currency_symbols[0] + "%02.02f" % (metric_start / 100.0)
             if metric_change >= 10.0:
-                cost_str = "+%d p " % int(metric_change)
+                cost_str = "+%d %s " % (int(metric_change), self.currency_symbols[1])
                 cost_str += " &nearr;"
                 cost_color = "#F18261"
             elif metric_change >= 0.5:
-                cost_str = "+%d p " % int(metric_change)
+                cost_str = "+%d %s " % (int(metric_change), self.currency_symbols[1])
                 cost_str += " &nearr;"
                 cost_color = "#FFFF00"
             elif metric_change <= -0.5:
-                cost_str = "-%d p " % int(abs(metric_change))
+                cost_str = "-%d %s " % (int(abs(metric_change)), self.currency_symbols[1])
                 cost_str += " &searr;"
                 cost_color = "#3AEE85"
             else:
@@ -7490,7 +7490,7 @@ class PredBat(hass.Hass):
                         "results": rates_time,
                         "friendly_name": "Export rates",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -7506,7 +7506,7 @@ class PredBat(hass.Hass):
                         "results": rates_time,
                         "friendly_name": "Import rates",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
                     },
                 )
@@ -7560,7 +7560,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".cost_today",
                 state=self.dp2(day_cost),
-                attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"},
+                attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
             self.dashboard_item(
                 self.prefix + ".cost_today_import",
@@ -7569,7 +7569,7 @@ class PredBat(hass.Hass):
                     "results": day_cost_time_import,
                     "friendly_name": "Cost so far today import",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
                 },
             )
@@ -7580,13 +7580,13 @@ class PredBat(hass.Hass):
                     "results": day_cost_time_export,
                     "friendly_name": "Cost so far today export",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
                 },
             )
         self.log(
-            "Todays energy import {} kWh export {} kWh cost {} p import {} p export {} p".format(
-                self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.dp2(day_cost_import), self.dp2(day_cost_export)
+            "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {}".format(
+                self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.currency_symbols[1], self.dp2(day_cost_import), self.currency_symbols[1], self.dp2(day_cost_export), self.currency_symbols[1]
             )
         )
         return day_cost
@@ -7913,6 +7913,7 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
+        self.currency_symbols = self.args.get('currency_symbols', "£p")
         self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -11955,6 +11956,9 @@ class PredBat(hass.Hass):
                         self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
                         icon = item.get("icon", "mdi:numeric")
+                        unit = item["unit"]
+                        unit = unit.replace('£', self.currency_symbols[0])
+                        unit = unit.replace('p', self.currency_symbols[1])
                         self.set_state(
                             entity_id=entity,
                             state=value,
@@ -11963,7 +11967,7 @@ class PredBat(hass.Hass):
                                 "min": item["min"],
                                 "max": item["max"],
                                 "step": item["step"],
-                                "unit_of_measurement": item["unit"],
+                                "unit_of_measurement": unit,
                                 "icon": icon,
                             },
                         )
