@@ -8715,7 +8715,7 @@ class PredBat(hass.Hass):
                     "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
                         this_discharge_limit,
                         window_n,
-                        self.time_abs_str(try_discharge_window[window_n]["start"]),
+                        self.time_abs_str(start),
                         self.time_abs_str(try_discharge_window[window_n]["end"]),
                         self.dp2(import_kwh_battery),
                         self.dp2(import_kwh_house),
@@ -9305,9 +9305,6 @@ class PredBat(hass.Hass):
             )
         )
         for pass_type in ["freeze", "normal", "low"]:
-            if not self.set_charge_freeze and pass_type == "freeze":
-                continue
-
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -9325,10 +9322,6 @@ class PredBat(hass.Hass):
                         # Store price set with window
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
-
-                        # Freeze mode only for freeze discharge
-                        if pass_type in ["freeze"]:
-                            continue
 
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
@@ -9379,6 +9372,10 @@ class PredBat(hass.Hass):
                         # Store price set with window
                         self.discharge_window_best[window_n]["set"] = price
                         window_start = self.discharge_window_best[window_n]["start"]
+
+                        # Ignore freeze pass if discharge freeze disabled
+                        if not self.set_discharge_freeze and pass_type == "freeze":
+                            continue
 
                         # Do highest price first
                         # Second pass to tune down any excess exports only
