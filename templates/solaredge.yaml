@@ -29,6 +29,10 @@ pred_bat:
   num_inverters: 1
   inverter_type: "SE"
 
+  # Can be enabled if you have a backup interface
+  #inverter:
+  #  has_reserve_soc: True
+
   battery_rate_max:
     - 11600
   charge_rate:
@@ -45,7 +49,7 @@ pred_bat:
     - sensor.solaredge_b1_available_energy
   soc_max:
     - sensor.solaredge_b1_maximum_energy
-  # Can only be used if you have a backup interface, otherwise leave commented out
+  # Can be enabled you have a backup interface
   #reserve:
   #  - number.solaredge_i1_backup_reserve
   charge_start_time:
