@@ -61,13 +61,13 @@ Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684
 
 ## Solar edge Inverters
 
-Discussion ticket is here: https://github.com/springfall2008/batpred/issues/181
+Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
 - Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify for your system
 - Ensure that **number.solaredge_i1_storage_command_timeout** is set to reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
 - Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration, and switch.solaredge_i1_advanced_power_control must be on.
 
-- For the pv_today sensor to work you need to create this as a template, please see: https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c.
+- For the pv_today sensor to work you need to create this as a template, please see: <https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c>.
 This sensor isn't critical so you can just comment it out in apps.yaml if you can't get it to work
 
 ```yaml
@@ -102,7 +102,7 @@ sensor:
 - Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
 - You can create a new inverter type in apps.yaml and change the options as to which controls it has
 - The easy way to integrate is to use a HA service to start charges and discharges, edit the template below
-- 
+-
 
 ```yaml
  inverter_type: MINE
