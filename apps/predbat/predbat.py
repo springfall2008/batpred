@@ -866,7 +866,7 @@ code can be used with minimal modification.
 """
 INVERTER_DEF = {
     "GE": {
-        "name" : "GivEnergy",
+        "name": "GivEnergy",
         "has_rest_api": True,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -888,7 +888,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": True,
     },
     "GS": {
-        "name" : "Ginlong Solis",
+        "name": "Ginlong Solis",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -910,7 +910,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SE": {
-        "name" : "Solar Edge",
+        "name": "Solar Edge",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
@@ -932,7 +932,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SX4": {
-        "name" : "Solax Gen4 (Modbus Power Control)",
+        "name": "Solax Gen4 (Modbus Power Control)",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": False,
@@ -954,7 +954,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SF": {
-        "name" : "Sofar HYD",
+        "name": "Sofar HYD",
         "has_rest_api": False,
         "has_mqtt_api": True,
         "has_service_api": False,
@@ -976,7 +976,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "HU": {
-        "name" : "Huawei Solar",
+        "name": "Huawei Solar",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
@@ -1978,11 +1978,11 @@ class Inverter:
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
         # Read user defined inverter type
-        if 'inverter' in self.base.args:
+        if "inverter" in self.base.args:
             if self.inverter_type not in INVERTER_DEF:
                 INVERTER_DEF[self.inverter_type] = INVERTER_DEF["GE"].copy()
-                
-            inverter_def = self.base.args['inverter']
+
+            inverter_def = self.base.args["inverter"]
             if isinstance(inverter_def, list):
                 inverter_def = inverter_def[self.id]
 
@@ -1996,7 +1996,7 @@ class Inverter:
             self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']})")
         else:
             raise ValueError("Inverter type {} not defined".format(self.inverter_type))
-        
+
         if self.inverter_type != "GE":
             self.log("WARN: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
 
@@ -3432,14 +3432,14 @@ class Inverter:
                 service_data = data
             else:
                 for key in service_template:
-                    if key == 'service':
+                    if key == "service":
                         service_name = service_template[key]
                     else:
                         value = service_template[key]
                         value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
                         if value:
                             service_data[key] = value
-                            
+
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
@@ -3455,7 +3455,11 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_charge * MINUTE_WATT)}
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_charge * MINUTE_WATT),
+                }
                 self.call_service_template("charge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
@@ -3467,7 +3471,11 @@ class Inverter:
         """
         if self.inv_has_service_api:
             if target_soc > 0:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "target_soc": target_soc, "power": int(self.battery_rate_max_discharge * MINUTE_WATT)}
+                service_data = {
+                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                    "target_soc": target_soc,
+                    "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
+                }
                 self.call_service_template("discharge_start_service", service_data)
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
