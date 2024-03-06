@@ -59,7 +59,7 @@ Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684
 - Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which maybe 12%
 
-## Solar edge Inverters
+## SolarEdge Inverters
 
 Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/181>
 
@@ -95,7 +95,7 @@ sensor:
     name: solar_panel_production_kwh
 ```
 
-## I want to add my newer inverter to Predbat
+## I want to add an unsupported inverter to Predbat
 
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
 - Create a github ticket for support and add in what you know to the ticket
