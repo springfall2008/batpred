@@ -62,7 +62,7 @@ Set to your local timezone, default is Europe/London. It must be set to a
 Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
 
 ```yaml
- currency_symbols: 
+ currency_symbols:
    - '£'
    - 'p'
 ```
