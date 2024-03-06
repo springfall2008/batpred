@@ -6,7 +6,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 - Solax Gen4 inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode
 - Sofar inverters [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)
 - Huawei inverters [Huawei Solar](https://github.com/wlcrs/huawei_solar)
-- SolarEdge inverters - **Work in progress, please contribute**
+- SolarEdge inverters - [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi)
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 Please also ensure you have set up enhanced logging in AppDaemon as described here.
@@ -58,3 +58,88 @@ Discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684
 
 - Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> and modify for your system
 - Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which maybe 12%
+
+## Solar edge Inverters
+
+Discussion ticket is here: https://github.com/springfall2008/batpred/issues/181
+
+- Please copy the template apps.yaml from <https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml> and modify for your system
+- Ensure that **number.solaredge_i1_storage_command_timeout** is set to reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled
+- Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration, and switch.solaredge_i1_advanced_power_control must be on.
+
+- For the pv_today sensor to work you need to create this as a template, please see: https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c.
+This sensor isn't critical so you can just comment it out in apps.yaml if you can't get it to work
+
+```yaml
+template:
+  - sensor:
+      - name: "Solar Panel Production W"
+        unique_id: solar_panel_production_w
+        unit_of_measurement: "W"
+        icon: mdi:solar-power
+        state: >
+          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+          {% if (i1_dc_power + b1_dc_power <= 0) %}
+            0
+          {% else %}
+            {{ (i1_dc_power + b1_dc_power) }}
+          {% endif %}
+        availability: >
+          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+sensor:
+  - platform: integration
+    source: sensor.solar_panel_production_w
+    method: left
+    unit_prefix: k
+    name: solar_panel_production_kwh
+```
+
+## I want to add my newer inverter to Predbat
+
+- First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
+- Create a github ticket for support and add in what you know to the ticket
+- Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter
+- You can create a new inverter type in apps.yaml and change the options as to which controls it has
+- The easy way to integrate is to use a HA service to start charges and discharges, edit the template below
+- 
+
+```yaml
+ inverter_type: MINE
+ inverter:
+    name : "My Shiny new Inverter"
+    has_rest_api: False
+    has_mqtt_api: False
+    has_service_api: True
+    output_charge_control: "power"
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    has_reserve_soc: False
+    charge_time_format: "S"
+    charge_time_entity_is_option: False
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode": False
+    time_button_press: False
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    write_and_poll_sleep: 2
+    has_time_window: False
+    support_charge_freeze: False
+    support_discharge_freeze": False
+
+  # Services to control charging/discharging
+  charge_start_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Charge from Solar Power and Grid"
+  charge_stop_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Charge from Solar Power"
+  discharge_start_service:
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Maximize Self Consumption"
+
+```
