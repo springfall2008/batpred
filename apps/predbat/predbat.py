@@ -910,7 +910,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
     },
     "SE": {
-        "name": "Solar Edge",
+        "name": "SolarEdge",
         "has_rest_api": False,
         "has_mqtt_api": False,
         "has_service_api": True,
