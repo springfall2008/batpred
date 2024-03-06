@@ -6,7 +6,7 @@
 
 ## Introduction
 
-Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including GivEnergy, Solis, Huawei and Sofar.
+Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including GivEnergy, Solis, Huawei, SolarEdge and Sofar.
 
 Also known by some as Batpred or Batman!
 
