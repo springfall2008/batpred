@@ -2623,7 +2623,9 @@ class Inverter:
                     charge_start_time = datetime.strptime(self.base.get_arg("charge_start_time", index=self.id), "%H:%M:%S")
                     charge_end_time = datetime.strptime(self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S")
                 else:
-                    self.log("WARN: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                    self.log("ERROR: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                    self.base.record_status("Error - Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
+                    raise ValueError
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -2704,7 +2706,9 @@ class Inverter:
             discharge_start = datetime.strptime(self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S")
             discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
         else:
-            self.base.log("WARN: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
+            self.log("ERROR: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
+            self.base.record_status("Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
+            raise ValueError
 
         # Reverse clock skew
         discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -5148,7 +5152,7 @@ class PredBat(hass.Hass):
         self.dashboard_item(
             self.prefix + ".status",
             state=message,
-            attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION},
+            attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION, "error": (had_errors or self.had_errors)},
         )
         self.previous_status = message
         if had_errors:
@@ -5497,11 +5501,11 @@ class PredBat(hass.Hass):
 
             if self.debug_enable or save:
                 self.log(
-                    "predict {} end_record {} final soc {} kWh metric {} p metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
+                    "predict {} end_record {} final soc {} kWh metric {} {} metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
                         save,
                         self.time_abs_str(end_record + self.minutes_now),
                         round(final_soc, 2),
-                        round(final_metric, 2),
+                        round(final_metric, 2), self.currency_symbols[1],
                         round(final_metric_keep, 2),
                         round(soc_min, 2),
                         self.time_abs_str(soc_min_minute),
@@ -6685,12 +6689,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_cost",
                         state=self.dp2(rate_high_average),
-                        attributes={
-                            "friendly_name": "Next high export rate cost",
-                            "state_class": "measurement",
-                            "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
-                        },
+                        attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                     in_high_rate = self.minutes_now >= rate_high_start and self.minutes_now <= rate_high_end
                     self.dashboard_item(
@@ -6728,12 +6727,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_cost_2",
                         state=self.dp2(rate_high_average),
-                        attributes={
-                            "friendly_name": "Next+1 high export rate cost",
-                            "state_class": "measurement",
-                            "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
-                        },
+                        attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                 window_n += 1
 
@@ -6756,12 +6750,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost",
                 state=self.dp2(self.rate_export_average),
-                attributes={
-                    "friendly_name": "Next high export rate cost",
-                    "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
-                },
+                attributes={"friendly_name": "Next high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
             self.dashboard_item(
                 "binary_sensor." + self.prefix + "_high_rate_export_slot",
@@ -6787,12 +6776,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost_2",
                 state=self.dp2(self.rate_export_average),
-                attributes={
-                    "friendly_name": "Next+1 high export rate cost",
-                    "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
-                },
+                attributes={"friendly_name": "Next+1 high export rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
 
     def rate_minmax(self, rates):
@@ -7050,12 +7034,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost",
                         state=rate_low_average,
-                        attributes={
-                            "friendly_name": "Next low rate cost",
-                            "state_class": "measurement",
-                            "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
-                        },
+                        attributes={"friendly_name": "Next low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                     in_low_rate = self.minutes_now >= rate_low_start and self.minutes_now <= rate_low_end
                     self.dashboard_item(
@@ -7088,12 +7067,7 @@ class PredBat(hass.Hass):
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost_2",
                         state=rate_low_average,
-                        attributes={
-                            "friendly_name": "Next+1 low rate cost",
-                            "state_class": "measurement",
-                            "unit_of_measurement": self.currency_symbols[1],
-                            "icon": "mdi:currency-usd",
-                        },
+                        attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
                     )
                 window_n += 1
 
@@ -7590,13 +7564,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".cost_today",
                 state=self.dp2(day_cost),
-                attributes={
-                    "results": day_cost_time,
-                    "friendly_name": "Cost so far today",
-                    "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
-                },
+                attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
             self.dashboard_item(
                 self.prefix + ".cost_today_import",
@@ -7622,14 +7590,7 @@ class PredBat(hass.Hass):
             )
         self.log(
             "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {}".format(
-                self.dp2(day_energy),
-                self.dp2(day_energy_export),
-                self.dp2(day_cost),
-                self.currency_symbols[1],
-                self.dp2(day_cost_import),
-                self.currency_symbols[1],
-                self.dp2(day_cost_export),
-                self.currency_symbols[1],
+                self.dp2(day_energy), self.dp2(day_energy_export), self.dp2(day_cost), self.currency_symbols[1], self.dp2(day_cost_import), self.currency_symbols[1], self.dp2(day_cost_export), self.currency_symbols[1]
             )
         )
         return day_cost
@@ -7956,7 +7917,7 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
-        self.currency_symbols = self.args.get("currency_symbols", "£p")
+        self.currency_symbols = self.args.get('currency_symbols', "£p")
         self.pool = None
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -9613,7 +9574,7 @@ class PredBat(hass.Hass):
             end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
             txt += start_time + " - "
             txt += end_time
-            txt += " @ {}p {}%".format(self.dp2(average), self.dp2(percent))
+            txt += " @ {}{} {}%".format(self.dp2(average), self.currency_symbols[1], self.dp2(percent))
         txt += " ]"
         return txt
 
@@ -12000,8 +11961,8 @@ class PredBat(hass.Hass):
                     if item["type"] == "input_number":
                         icon = item.get("icon", "mdi:numeric")
                         unit = item["unit"]
-                        unit = unit.replace("£", self.currency_symbols[0])
-                        unit = unit.replace("p", self.currency_symbols[1])
+                        unit = unit.replace('£', self.currency_symbols[0])
+                        unit = unit.replace('p', self.currency_symbols[1])
                         self.set_state(
                             entity_id=entity,
                             state=value,
