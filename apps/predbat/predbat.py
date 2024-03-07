@@ -1545,7 +1545,7 @@ class Prediction:
                             if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
                                 iboost_amount = self.iboost_max_power * step
                                 load_yesterday += iboost_amount
-                    if not iboost_amount and self.iboost_charging:
+                    elif self.iboost_charging:
                         if charge_window_n >= 0:
                             iboost_amount = self.iboost_max_power * step
                             load_yesterday += iboost_amount
