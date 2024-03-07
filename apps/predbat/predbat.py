@@ -2341,7 +2341,7 @@ class Inverter:
                     # Average the data points
                     for index in final_curve:
                         if final_curve_count[index] > 0:
-                            final_curve[index] = final_curve[index] / final_curve_count[index]
+                            final_curve[index] = self.base.dp2(final_curve[index] / final_curve_count[index])
 
                     self.log("Curve before adjustment is: {}".format(final_curve))
 
