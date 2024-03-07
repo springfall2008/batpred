@@ -2623,7 +2623,11 @@ class Inverter:
                     charge_start_time = datetime.strptime(self.base.get_arg("charge_start_time", index=self.id), "%H:%M:%S")
                     charge_end_time = datetime.strptime(self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S")
                 else:
-                    self.log("WARN: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                    self.log("ERROR: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                    self.base.record_status(
+                        "Error - Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True
+                    )
+                    raise ValueError
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -2704,7 +2708,9 @@ class Inverter:
             discharge_start = datetime.strptime(self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S")
             discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
         else:
-            self.base.log("WARN: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
+            self.log("ERROR: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
+            self.base.record_status("Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
+            raise ValueError
 
         # Reverse clock skew
         discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -5148,7 +5154,14 @@ class PredBat(hass.Hass):
         self.dashboard_item(
             self.prefix + ".status",
             state=message,
-            attributes={"friendly_name": "Status", "icon": "mdi:information", "last_updated": datetime.now(), "debug": debug, "version": THIS_VERSION},
+            attributes={
+                "friendly_name": "Status",
+                "icon": "mdi:information",
+                "last_updated": datetime.now(),
+                "debug": debug,
+                "version": THIS_VERSION,
+                "error": (had_errors or self.had_errors),
+            },
         )
         self.previous_status = message
         if had_errors:
@@ -5497,11 +5510,12 @@ class PredBat(hass.Hass):
 
             if self.debug_enable or save:
                 self.log(
-                    "predict {} end_record {} final soc {} kWh metric {} p metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
+                    "predict {} end_record {} final soc {} kWh metric {} {} metric_keep {} min_soc {} @ {} kWh load {} pv {}".format(
                         save,
                         self.time_abs_str(end_record + self.minutes_now),
                         round(final_soc, 2),
                         round(final_metric, 2),
+                        self.currency_symbols[1],
                         round(final_metric_keep, 2),
                         round(soc_min, 2),
                         self.time_abs_str(soc_min_minute),
@@ -9613,7 +9627,7 @@ class PredBat(hass.Hass):
             end_time = end_timestamp.strftime("%d-%m %H:%M:%S")
             txt += start_time + " - "
             txt += end_time
-            txt += " @ {}p {}%".format(self.dp2(average), self.dp2(percent))
+            txt += " @ {}{} {}%".format(self.dp2(average), self.currency_symbols[1], self.dp2(percent))
         txt += " ]"
         return txt
 
