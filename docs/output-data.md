@@ -128,7 +128,9 @@ The calculated best results under PV 10% scenario:
 
 ## Car data
 
-- binary_sensor.predbat_car_charging_slot - A binary sensor suggesting when to charge your car (if the car planning is enabled)
+- binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
+as described in [Predbat let car charging](car-charge-planning.md)
+- predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format.
 
 ## Sample Predbat data out dashboard
 
