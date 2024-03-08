@@ -9356,7 +9356,12 @@ class PredBat(hass.Hass):
                 start_at_low = True
 
             for price in price_set:
-                links = price_links[price]
+                links = price_links[price].copy()
+
+                # Freeze pass should be done in time order (newest first)
+                if pass_type in ["freeze"]:
+                    links.reverse()
+
                 printed_set = False
 
                 for key in links:
