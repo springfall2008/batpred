@@ -1533,8 +1533,8 @@ class Prediction:
             if not self.car_charging_from_battery and not car_freeze:
                 discharge_rate_now = self.battery_rate_max_discharge
 
-            # IBoost on load
-            if self.iboost_enable:
+            # IBoost on load, don't do on discharge
+            if self.iboost_enable and (discharge_window_n < 0):
                 iboost_amount = 0
                 if iboost_today_kwh < self.iboost_max_energy:
                     if self.iboost_gas:
@@ -2824,7 +2824,6 @@ class Inverter:
                     self.write_and_poll_value("reserve", entity_soc, reserve)
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
-                self.base.record_status("Inverter {} set reserve to {}".format(self.id, reserve))
             self.mqtt_message(topic="set/reserve", payload=reserve)
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
@@ -2876,8 +2875,6 @@ class Inverter:
 
                 if notify and self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} charge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
-            if notify:
-                self.base.record_status("Inverter {} charge rate changed to {}".format(self.id, new_rate))
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
@@ -2925,8 +2922,6 @@ class Inverter:
 
                 if notify and self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} discharge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
-            if notify:
-                self.base.record_status("Inverter {} discharge rate changed to {}".format(self.id, new_rate))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
 
     def adjust_battery_target(self, soc, isCharging=False):
@@ -2973,7 +2968,6 @@ class Inverter:
 
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {} % at {}".format(self.id, soc, self.base.time_now_str()))
-            self.base.record_status("Inverter {} set soc to {}".format(self.id, soc))
             self.mqtt_message(topic="set/target_soc", payload=soc)
         else:
             self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
@@ -3134,7 +3128,6 @@ class Inverter:
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
 
-            self.base.record_status("Inverter {} Set discharge mode to {}".format(self.id, new_inverter_mode))
             self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
@@ -3269,7 +3262,6 @@ class Inverter:
 
         # Notify
         if changed_start_end:
-            self.base.record_status("Inverter {} set discharge slot to {} - {}".format(self.id, new_start, new_end))
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
@@ -3325,8 +3317,6 @@ class Inverter:
             else:
                 self.base.sim_charge_schedule_enable = "off"
 
-            if notify:
-                self.base.record_status("Inverter {} Turned off scheduled charge".format(self.id))
             self.base.log("Inverter {} Turning off scheduled charge".format(self.id))
 
         # Updated cached status to disabled
@@ -3614,7 +3604,6 @@ class Inverter:
 
             if self.base.set_inverter_notify and not SIMULATE:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
-            self.base.record_status("Inverter {} Charge window change to: {} - {}".format(self.id, new_start, new_end))
             self.base.log("Inverter {} Updated start and end charge window to {} - {} (old {} - {})".format(self.id, new_start, new_end, old_start, old_end))
 
         if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable" or have_disabled:
@@ -3637,8 +3626,6 @@ class Inverter:
                 self.base.sim_charge_schedule_enable = "on"
 
             self.charge_enable_time = True
-
-            self.base.record_status("Inverter {} Turned on charge enable".format(self.id))
 
             if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
@@ -5153,7 +5140,7 @@ class PredBat(hass.Hass):
 
         self.dashboard_item(
             self.prefix + ".status",
-            state=message,
+            state=message + extra,
             attributes={
                 "friendly_name": "Status",
                 "icon": "mdi:information",
