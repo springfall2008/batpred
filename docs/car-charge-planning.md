@@ -35,45 +35,45 @@ You should not need to change this, but its worth checking the [Predbat logfile]
     this should be adapted for your own charger type and how it controls starting/stopping car charging:
 
 ```yaml
-      alias: Car charging
-      description: "Start/stop car charging based on Predbat determined slots"
-      trigger:
-        - platform: state
-          entity_id:
-            - binary_sensor.predbat_car_charging_slot
-          to: "on"
-          id: start_charge
-        - platform: state
-          entity_id:
-            - binary_sensor.predbat_car_charging_slot
-          to: "off"
-          id: end_charge
-      action:
-        - choose:
-            - conditions:
-                - condition: trigger
-                  id:
-                    - start_charge
-              sequence:
-                - service: select.select_option
-                  data:
-                    option: Eco+
-                  target:
-                    entity_id: select.myenergi_zappi_charge_mode
-            - conditions:
-                - condition: trigger
-                  id:
-                    - end_charge
-              sequence:
-                - service: select.select_option
-                  data:
-                    option: Stopped
-                  target:
-                    entity_id: select.myenergi_zappi_charge_mode
-        mode: single
+alias: Car charging
+description: "Start/stop car charging based on Predbat determined slots"
+trigger:
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+    to: "on"
+    id: start_charge
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+    to: "off"
+    id: end_charge
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - start_charge
+        sequence:
+          - service: select.select_option
+            data:
+              option: Eco+
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+      - conditions:
+          - condition: trigger
+            id:
+              - end_charge
+        sequence:
+          - service: select.select_option
+            data:
+              option: Stopped
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+  mode: single
 ```
 
-    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
+- _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 NOTE: Multiple cars can be planned with Predbat.
 
