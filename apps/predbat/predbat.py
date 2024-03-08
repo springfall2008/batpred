@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.4"
+THIS_VERSION = "v7.16.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1534,8 +1534,8 @@ class Prediction:
                 discharge_rate_now = self.battery_rate_max_discharge
 
             # IBoost on load, don't do on discharge
+            iboost_amount = 0
             if self.iboost_enable and (discharge_window_n < 0):
-                iboost_amount = 0
                 if iboost_today_kwh < self.iboost_max_energy:
                     if self.iboost_gas:
                         if rate_gas:
