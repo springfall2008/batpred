@@ -772,7 +772,7 @@ CONFIG_ITEMS = [
         "friendly_name": "IBoost max energy",
         "type": "input_number",
         "min": 0,
-        "max": 5,
+        "max": 20,
         "step": 0.1,
         "unit": "kWh",
         "enable": "iboost_enable",
@@ -1598,7 +1598,7 @@ class Prediction:
 
             # Set discharge during charge?
             if not self.set_discharge_during_charge:
-                if (charge_window_n >= 0) and (soc >= charge_limit_n):
+                if (charge_window_n >= 0) and ((soc >= charge_limit_n) or not self.set_reserve_enable):
                     discharge_rate_now = self.battery_rate_min  # 0
                 elif not car_freeze:
                     # Reset discharge rate
@@ -7249,7 +7249,7 @@ class PredBat(hass.Hass):
 
             if charge_window_n >= 0 and not in_span:
                 rowspan = int((self.charge_window_best[charge_window_n]["end"] - minute) / 30)
-                if rowspan > 1:
+                if rowspan > 1 and (discharge_window_n < 0):
                     in_span = True
                     start_span = True
                     minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
@@ -7258,7 +7258,7 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0 and not in_span:
                 rowspan = int((self.discharge_window_best[discharge_window_n]["end"] - minute) / 30)
-                if rowspan > 1:
+                if rowspan > 1 and (charge_window_n < 0):
                     in_span = True
                     start_span = True
                     minute_relative_end = self.discharge_window_best[discharge_window_n]["end"] - minute_now_align
