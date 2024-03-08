@@ -33,6 +33,7 @@ You should not need to change this, but its worth checking the [Predbat logfile]
     you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
     A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
     this should be adapted for your own charger type and how it controls starting/stopping car charging:
+    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 ```yaml
 alias: Car charging
@@ -72,8 +73,6 @@ action:
               entity_id: select.myenergi_zappi_charge_mode
   mode: single
 ```
-
-- _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 NOTE: Multiple cars can be planned with Predbat.
 
