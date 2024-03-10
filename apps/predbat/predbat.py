@@ -19,10 +19,16 @@ from datetime import datetime, timedelta
 try:
     import adbase as ad
     from appdaemon.plugins.hass.hassapi import Hass
+
+    # Define any constants that require specific values for AppDaemon v HA
+    CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 except ImportError:
     # If AppDaemon is not present, import HA stubs as per HA integration environment
     from .appdaemon_stub import AppDaemonHassApiStub as Hass
     from .appdaemon_stub import AppDaemonAdStub as ad
+
+    # Define any constants that require specific values for HA v AppDaemon
+    CONFIG_ROOTS = ["/config/custom_components/predbat_ha/config"]
 
 import pytz
 import requests
@@ -41,7 +47,6 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 
 ENVIRONMENT = "environment"
 ENVIRONMENT_HA_INTEGRATION = "ha_integration"
@@ -4490,7 +4495,7 @@ class PredBat(Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0],
+                    history[0] if self.__is_appdaemon() else history,
                     self.max_days_previous,
                     now_utc,
                     "state",
@@ -4522,9 +4527,9 @@ class PredBat(Hass):
         for entity_id in entity_ids:
             history = self.get_history_async(entity_id=entity_id, days=max_days_previous)
             if history:
-                item = history[0][0]
+                item = history[0][0] if self.__is_appdaemon() else history[0]
                 try:
-                    last_updated_time = self.str2time(item["last_updated"])
+                    last_updated_time = self.str2time(item["last_updated"] if self.__is_appdaemon() else item.last_updated)
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time
@@ -4533,7 +4538,7 @@ class PredBat(Hass):
                 else:
                     age_days = min(age_days, age.days)
                 load_minutes = self.minute_data(
-                    history[0],
+                    history[0]  if self.__is_appdaemon() else history,
                     max_days_previous,
                     now_utc,
                     "state",
@@ -4657,6 +4662,12 @@ class PredBat(Hass):
 
         # Process history
         for item in history:
+            # If HA, convert the LazyState object to a dictionary, so the 
+            # rest of the code can run as normal
+            # TODO: Consider whether to do this in the get_history / get_state methods
+            if self.__is_ha_integration():
+                item = item.as_dict()
+            
             # Ignore data without correct keys
             if state_key not in item:
                 continue
@@ -12307,6 +12318,7 @@ class PredBat(Hass):
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
                 self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                # self.log("WARN: Extra info: arg {} arg_value {} states {} states.keys {} state_keys {}".format(arg, arg_value, states, state_keys, state_keys))
                 disabled.append(arg)
             else:
                 self.args[arg] = arg_value
@@ -12319,6 +12331,11 @@ class PredBat(Hass):
         """
         Sanity check appdaemon setup
         """
+
+        if self.__is_ha_integration:
+            self.log("Warn: Sanity check not currently being run for HA component")
+            return
+
         self.log("Sanity check:")
         config_dir = ""
         passed = True
@@ -12536,11 +12553,18 @@ class PredBat(Hass):
                 self.prediction_started = False
             self.prediction_started = False
 
-    @ad.app_lock
+    # @ad.app_lock
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
         """
+        # history = self.get_history_async(entity_id='sensor.givtcp_dx2311g170_battery_soc', days=1)
+        # # if history:
+        # self.log("here it is...")
+        # self.log("history: {}".format(history))
+        # self.log("done")
+        # return
+
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
