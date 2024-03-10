@@ -4495,7 +4495,7 @@ class PredBat(Hass):
 
             if history:
                 import_today = self.minute_data(
-                    history[0] if self.__is_appdaemon() else history,
+                    history[0],
                     self.max_days_previous,
                     now_utc,
                     "state",
@@ -4527,9 +4527,9 @@ class PredBat(Hass):
         for entity_id in entity_ids:
             history = self.get_history_async(entity_id=entity_id, days=max_days_previous)
             if history:
-                item = history[0][0] if self.__is_appdaemon() else history[0]
+                item = history[0][0]
                 try:
-                    last_updated_time = self.str2time(item["last_updated"] if self.__is_appdaemon() else item.last_updated)
+                    last_updated_time = self.str2time(item["last_updated"])
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time
@@ -4538,7 +4538,7 @@ class PredBat(Hass):
                 else:
                     age_days = min(age_days, age.days)
                 load_minutes = self.minute_data(
-                    history[0] if self.__is_appdaemon() else history,
+                    history[0],
                     max_days_previous,
                     now_utc,
                     "state",
@@ -4662,12 +4662,6 @@ class PredBat(Hass):
 
         # Process history
         for item in history:
-            # If HA, convert the LazyState object to a dictionary, so the
-            # rest of the code can run as normal
-            # TODO: Consider whether to do this in the get_history / get_state methods
-            if self.__is_ha_integration():
-                item = item.as_dict()
-
             # Ignore data without correct keys
             if state_key not in item:
                 continue
@@ -12172,6 +12166,7 @@ class PredBat(Hass):
 
             # Get from current state?
             ha_value = self.get_state(entity)
+            self.log("Trace: load_user_config - entity {} ha_value {}".format(entity, ha_value))
 
             # Update drop down menu
             if name == "update":
@@ -12186,7 +12181,8 @@ class PredBat(Hass):
             if ha_value is None:
                 history = self.get_history_async(entity_id=entity)
                 if history:
-                    ha_value = history[0][-1]["state"] if self.__is_appdaemon() else history[-1].state
+                    self.log("Getting value for entity {} from history {}".format(entity, history))
+                    ha_value = history[0][-1]["state"]
 
             # Default?
             if ha_value is None:
