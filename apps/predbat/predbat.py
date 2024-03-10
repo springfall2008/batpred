@@ -4538,7 +4538,7 @@ class PredBat(Hass):
                 else:
                     age_days = min(age_days, age.days)
                 load_minutes = self.minute_data(
-                    history[0]  if self.__is_appdaemon() else history,
+                    history[0] if self.__is_appdaemon() else history,
                     max_days_previous,
                     now_utc,
                     "state",
@@ -4662,12 +4662,12 @@ class PredBat(Hass):
 
         # Process history
         for item in history:
-            # If HA, convert the LazyState object to a dictionary, so the 
+            # If HA, convert the LazyState object to a dictionary, so the
             # rest of the code can run as normal
             # TODO: Consider whether to do this in the get_history / get_state methods
             if self.__is_ha_integration():
                 item = item.as_dict()
-            
+
             # Ignore data without correct keys
             if state_key not in item:
                 continue
