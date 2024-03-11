@@ -4437,19 +4437,19 @@ class PredBat(Hass):
         else:
             tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
         return tdata
-    
+
     def strptime(self, date, date_format):
         """
         This wraps the datetime.strptime function.
 
         The reason is because when the code runs as a HA integration, rather than under AppDaemon,
-        the value may already be a datetime object - this function allows both scenarios to 
+        the value may already be a datetime object - this function allows both scenarios to
         run fine with the same codebase.
         """
         # If it's already a datetime, just return it
         if isinstance(date, datetime):
             return date
-        
+
         return datetime.strptime(date, date_format)
 
     def load_car_energy(self, now_utc):
