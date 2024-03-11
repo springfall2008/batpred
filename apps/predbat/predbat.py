@@ -4426,6 +4426,10 @@ class PredBat(Hass):
         return minutes
 
     def str2time(self, str):
+        # If it's already a datetime, just return it
+        if isinstance(str, datetime):
+            return str
+
         if "." in str:
             tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
         elif "T" in str:
@@ -4433,6 +4437,20 @@ class PredBat(Hass):
         else:
             tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
         return tdata
+    
+    def strptime(self, date, date_format):
+        """
+        This wraps the datetime.strptime function.
+
+        The reason is because when the code runs as a HA integration, rather than under AppDaemon,
+        the value may already be a datetime object - this function allows both scenarios to 
+        run fine with the same codebase.
+        """
+        # If it's already a datetime, just return it
+        if isinstance(date, datetime):
+            return date
+        
+        return datetime.strptime(date, date_format)
 
     def load_car_energy(self, now_utc):
         """
@@ -6912,11 +6930,11 @@ class PredBat(Hass):
             # Add in IO slots
             for slot in octopus_slots:
                 if "start" in slot:
-                    start = datetime.strptime(slot["start"], TIME_FORMAT)
-                    end = datetime.strptime(slot["end"], TIME_FORMAT)
+                    start = self.strptime(slot["start"], TIME_FORMAT)
+                    end = self.strptime(slot["end"], TIME_FORMAT)
                 else:
-                    start = datetime.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
-                    end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
+                    start = self.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
+                    end = self.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
                 source = slot.get("source", "")
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge":
@@ -12166,7 +12184,6 @@ class PredBat(Hass):
 
             # Get from current state?
             ha_value = self.get_state(entity)
-            self.log("Trace: load_user_config - entity {} ha_value {}".format(entity, ha_value))
 
             # Update drop down menu
             if name == "update":
@@ -12181,8 +12198,8 @@ class PredBat(Hass):
             if ha_value is None:
                 history = self.get_history_async(entity_id=entity)
                 if history:
-                    self.log("Getting value for entity {} from history {}".format(entity, history))
-                    ha_value = history[0][-1]["state"]
+                    history = history[0]
+                    ha_value = history[-1]["state"]
 
             # Default?
             if ha_value is None:
@@ -12554,13 +12571,6 @@ class PredBat(Hass):
         """
         Called every N minutes
         """
-        # history = self.get_history_async(entity_id='sensor.givtcp_dx2311g170_battery_soc', days=1)
-        # # if history:
-        # self.log("here it is...")
-        # self.log("history: {}".format(history))
-        # self.log("done")
-        # return
-
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
