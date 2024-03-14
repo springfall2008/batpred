@@ -11933,7 +11933,7 @@ class PredBat(Hass):
                         )
                     elif item["type"] == "switch":
                         icon = item.get("icon", "mdi:light-switch")
-                        self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
+                        self.create_and_set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
@@ -11962,6 +11962,16 @@ class PredBat(Hass):
                                 "supported_features": 1,
                             },
                         )
+
+    def create_and_set_state(self, **kwargs):
+        if self.__is_appdaemon():
+            self.set_state(
+                entity_id=kwargs["entity_id"],
+                state=kwargs["state"],
+                attributes=kwargs["attributes"],
+            )
+        if self.__is_ha_integration():
+            super().create_and_set_state(**kwargs)
 
     def user_config_item_enabled(self, item):
         """
@@ -12179,6 +12189,7 @@ class PredBat(Hass):
                 # Remove the state if the entity still exists
                 ha_value = self.get_state(entity)
                 if ha_value is not None:
+                    # TODO Delete entity if in HA integration
                     self.set_state(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
                 continue
 
@@ -12207,6 +12218,7 @@ class PredBat(Hass):
 
             # Switch convert to text
             if type == "switch" and isinstance(ha_value, str):
+                # TODO: Check value of switch in HA integration
                 if ha_value.lower() in ["on", "true", "enable"]:
                     ha_value = True
                 else:
