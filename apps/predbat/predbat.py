@@ -15,8 +15,21 @@ import time
 # pylint: disable=attribute-defined-outside-init
 from datetime import datetime, timedelta
 
-import adbase as ad
-import appdaemon.plugins.hass.hassapi as hass
+# Assume running in normal AppDaemon environment
+try:
+    import adbase as ad
+    from appdaemon.plugins.hass.hassapi import Hass
+
+    # Define any constants that require specific values for AppDaemon v HA
+    CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
+except ImportError:
+    # If AppDaemon is not present, import HA stubs as per HA integration environment
+    from .appdaemon_stub import AppDaemonHassApiStub as Hass
+    from .appdaemon_stub import AppDaemonAdStub as ad
+
+    # Define any constants that require specific values for HA v AppDaemon
+    CONFIG_ROOTS = ["/config/custom_components/predbat_ha/config"]
+
 import pytz
 import requests
 import yaml
@@ -34,7 +47,10 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
+
+ENVIRONMENT = "environment"
+ENVIRONMENT_HA_INTEGRATION = "ha_integration"
+ENVIRONMENT_APPDAEMON = "appdaemon"
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -3850,7 +3866,7 @@ class Inverter:
         return False
 
 
-class PredBat(hass.Hass):
+class PredBat(Hass):
     """
     The battery prediction class itself
     """
@@ -4461,6 +4477,10 @@ class PredBat(hass.Hass):
         return minutes
 
     def str2time(self, str):
+        # If it's already a datetime, just return it
+        if isinstance(str, datetime):
+            return str
+
         if "." in str:
             tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
         elif "T" in str:
@@ -4468,6 +4488,20 @@ class PredBat(hass.Hass):
         else:
             tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
         return tdata
+
+    def strptime(self, date, date_format):
+        """
+        This wraps the datetime.strptime function.
+
+        The reason is because when the code runs as a HA integration, rather than under AppDaemon,
+        the value may already be a datetime object - this function allows both scenarios to
+        run fine with the same codebase.
+        """
+        # If it's already a datetime, just return it
+        if isinstance(date, datetime):
+            return date
+
+        return datetime.strptime(date, date_format)
 
     def load_car_energy(self, now_utc):
         """
@@ -4493,18 +4527,25 @@ class PredBat(hass.Hass):
         """
         Async function to get history from HA using Async task
         """
-        result = {}
-        task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
-        cnt = 0
-        while not task.done() and (cnt < 120):
-            time.sleep(0.05)
-            cnt += 0.05
+        if self.__is_appdaemon():
+            result = {}
+            task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
+            cnt = 0
+            while not task.done() and (cnt < 120):
+                time.sleep(0.05)
+                cnt += 0.05
 
-        if "data" in result:
-            return result["data"]
-        else:
-            self.log("Failure to fetch history for {}".format(entity_id))
-            raise ValueError
+            if "data" in result:
+                return result["data"]
+            else:
+                self.log("Failure to fetch history for {}".format(entity_id))
+                raise ValueError
+        elif self.__is_ha_integration():
+            # Use the AD replacement to get the history
+            # This will do its own conversion to async when needed
+            # TODO - this is not attempting to fit with the
+            # multiple threads approach and will need reviewing
+            return self.get_history(entity_id=entity_id, days=days)
 
     def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None):
         """
@@ -6968,11 +7009,11 @@ class PredBat(hass.Hass):
             # Add in IO slots
             for slot in octopus_slots:
                 if "start" in slot:
-                    start = datetime.strptime(slot["start"], TIME_FORMAT)
-                    end = datetime.strptime(slot["end"], TIME_FORMAT)
+                    start = self.strptime(slot["start"], TIME_FORMAT)
+                    end = self.strptime(slot["end"], TIME_FORMAT)
                 else:
-                    start = datetime.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
-                    end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
+                    start = self.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
+                    end = self.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
                 source = slot.get("source", "")
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge":
@@ -12022,7 +12063,7 @@ class PredBat(hass.Hass):
                         )
                     elif item["type"] == "switch":
                         icon = item.get("icon", "mdi:light-switch")
-                        self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
+                        self.create_and_set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
@@ -12051,6 +12092,16 @@ class PredBat(hass.Hass):
                                 "supported_features": 1,
                             },
                         )
+
+    def create_and_set_state(self, **kwargs):
+        if self.__is_appdaemon():
+            self.set_state(
+                entity_id=kwargs["entity_id"],
+                state=kwargs["state"],
+                attributes=kwargs["attributes"],
+            )
+        if self.__is_ha_integration():
+            super().create_and_set_state(**kwargs)
 
     def user_config_item_enabled(self, item):
         """
@@ -12224,6 +12275,12 @@ class PredBat(hass.Hass):
         else:
             self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
 
+    def __is_ha_integration(self):
+        return self.args[ENVIRONMENT] == ENVIRONMENT_HA_INTEGRATION
+
+    def __is_appdaemon(self):
+        return self.args[ENVIRONMENT] == ENVIRONMENT_APPDAEMON
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -12262,6 +12319,7 @@ class PredBat(hass.Hass):
                 # Remove the state if the entity still exists
                 ha_value = self.get_state(entity)
                 if ha_value is not None:
+                    # TODO Delete entity if in HA integration
                     self.set_state(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
                 continue
 
@@ -12290,6 +12348,7 @@ class PredBat(hass.Hass):
 
             # Switch convert to text
             if type == "switch" and isinstance(ha_value, str):
+                # TODO: Check value of switch in HA integration
                 if ha_value.lower() in ["on", "true", "enable"]:
                     ha_value = True
                 else:
@@ -12310,30 +12369,34 @@ class PredBat(hass.Hass):
 
         # Register HA services
         if register:
-            self.fire_event("service_registered", domain="input_number", service="set_value")
-            self.fire_event("service_registered", domain="input_number", service="increment")
-            self.fire_event("service_registered", domain="input_number", service="decrement")
-            self.fire_event("service_registered", domain="switch", service="turn_on")
-            self.fire_event("service_registered", domain="switch", service="turn_off")
-            self.fire_event("service_registered", domain="switch", service="toggle")
-            self.fire_event("service_registered", domain="select", service="select_option")
-            self.fire_event("service_registered", domain="select", service="select_first")
-            self.fire_event("service_registered", domain="select", service="select_last")
-            self.fire_event("service_registered", domain="select", service="select_next")
-            self.fire_event("service_registered", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            if self.__is_appdaemon():
+                self.fire_event("service_registered", domain="input_number", service="set_value")
+                self.fire_event("service_registered", domain="input_number", service="increment")
+                self.fire_event("service_registered", domain="input_number", service="decrement")
+                self.fire_event("service_registered", domain="switch", service="turn_on")
+                self.fire_event("service_registered", domain="switch", service="turn_off")
+                self.fire_event("service_registered", domain="switch", service="toggle")
+                self.fire_event("service_registered", domain="select", service="select_option")
+                self.fire_event("service_registered", domain="select", service="select_first")
+                self.fire_event("service_registered", domain="select", service="select_last")
+                self.fire_event("service_registered", domain="select", service="select_next")
+                self.fire_event("service_registered", domain="select", service="select_previous")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
+                self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
+                self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
+                self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
+                self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
+                self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            elif self.__is_ha_integration():
+                # TODO: Incorporate registering callbacks within native HA environment
+                self.log("TODO: Not currently listening for changes to entities (apart from watch_list)")
 
             watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(watch_list))
@@ -12410,6 +12473,7 @@ class PredBat(hass.Hass):
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
                 self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                # self.log("WARN: Extra info: arg {} arg_value {} states {} states.keys {} state_keys {}".format(arg, arg_value, states, state_keys, state_keys))
                 disabled.append(arg)
             else:
                 self.args[arg] = arg_value
@@ -12422,6 +12486,11 @@ class PredBat(hass.Hass):
         """
         Sanity check appdaemon setup
         """
+
+        if self.__is_ha_integration:
+            self.log("Warn: Sanity check not currently being run for HA component")
+            return
+
         self.log("Sanity check:")
         config_dir = ""
         passed = True
@@ -12541,6 +12610,12 @@ class PredBat(hass.Hass):
         self.log("Predbat: Startup {}".format(__name__))
 
         try:
+            # Determine the mode we're running in right at the start
+            if ENVIRONMENT not in self.args:
+                self.args[ENVIRONMENT] = ENVIRONMENT_APPDAEMON
+
+            self.log(f"Predbat environment: {self.args[ENVIRONMENT]}")
+
             self.reset()
             self.sanity()
             self.auto_config()
@@ -12630,7 +12705,7 @@ class PredBat(hass.Hass):
                 self.prediction_started = False
             self.prediction_started = False
 
-    @ad.app_lock
+    # @ad.app_lock
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
