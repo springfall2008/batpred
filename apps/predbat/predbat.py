@@ -2770,9 +2770,9 @@ class Inverter:
             # If current SOC is above Target SOC, turn Grid Charging off
             self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
-        elif self.soc_percent == float(current_charge_limit):                              # If SOC target is reached
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)      # Make sure charging is on 
-            self.set_current_from_power("charge", (0))                                    # Set charge current to zero (i.e hold SOC)
+        elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)  # Make sure charging is on
+            self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
             self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
