@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.5"
+THIS_VERSION = "v7.16.6"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -12224,6 +12224,19 @@ class PredBat(hass.Hass):
         else:
             self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
 
+    def load_previous_value_from_ha(self, entity):
+        """
+        Load HA value either from state or from history if there is any
+        """
+        ha_value = self.get_state(entity)
+        if ha_value is not None:
+            return ha_value
+        history = self.get_history_async(entity_id=entity)
+        if history:
+            history = history[0]
+            ha_value = history[-1]["state"]            
+        return ha_value
+        
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -12232,7 +12245,7 @@ class PredBat(hass.Hass):
 
         # New install, used to set default of expert mode
         new_install = True
-        current_status = self.get_state("predbat.status")
+        current_status = self.load_previous_value_from_ha("predbat.status")
         if current_status:
             new_install = False
 
@@ -12266,7 +12279,7 @@ class PredBat(hass.Hass):
                 continue
 
             # Get from current state?
-            ha_value = self.get_state(entity)
+            ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
             if name == "update":
@@ -12276,13 +12289,6 @@ class PredBat(hass.Hass):
                 else:
                     # Leave current value until it's set during version discovery later
                     continue
-
-            # Get from history?
-            if ha_value is None:
-                history = self.get_history_async(entity_id=entity)
-                if history:
-                    history = history[0]
-                    ha_value = history[-1]["state"]
 
             # Default?
             if ha_value is None:
