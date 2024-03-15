@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.6"
+THIS_VERSION = "v7.16.7"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5146,9 +5146,10 @@ class PredBat(hass.Hass):
 
         self.dashboard_item(
             self.prefix + ".status",
-            state=message + extra,
+            state=message,
             attributes={
                 "friendly_name": "Status",
+                "detail": extra,
                 "icon": "mdi:information",
                 "last_updated": datetime.now(),
                 "debug": debug,
