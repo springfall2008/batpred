@@ -10440,7 +10440,7 @@ class PredBat(hass.Hass):
                                 disabled_charge_window = True
                             else:
                                 status = "Charging"
-                            status_extra = " target {}%".format(self.charge_limit_percent_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
 
@@ -10519,7 +10519,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_reserve(self.discharge_limits_best[0])
                             setReserve = True
                         status = "Discharging"
-                        status_extra = " target {}%".format(self.discharge_limits_best[0])
+                        status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
@@ -10532,10 +10532,10 @@ class PredBat(hass.Hass):
                             inverter.adjust_charge_rate(0)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
-                            status_extra = " target {}%".format(self.discharge_limits_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                         else:
                             status = "Hold discharging"
-                            status_extra = " target {}%".format(self.discharge_limits_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                             self.log(
                                 "Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SOC {} and target {}".format(
                                     self.soc_kw, discharge_soc
