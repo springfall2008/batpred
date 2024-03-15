@@ -896,7 +896,7 @@ INVERTER_DEF = {
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": False,
-        "has_reserve_soc": True,
+        "has_reserve_soc": False,
         "charge_time_format": "H M",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -2765,15 +2765,21 @@ class Inverter:
         Returns:
             None
         """
-        if self.soc_percent >= float(current_charge_limit):
+        charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+        if self.soc_percent > float(current_charge_limit):
             # If current SOC is above Target SOC, turn Grid Charging off
             self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
+        elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)  # Make sure charging is on
+            self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
+            self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
             if self.inv_output_charge_control == "current":
-                self.set_current_from_power("charge", self.battery_rate_max_charge * MINUTE_WATT)
+                self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
             self.base.log(
                 f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
             )
