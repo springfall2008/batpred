@@ -12234,9 +12234,9 @@ class PredBat(hass.Hass):
         history = self.get_history_async(entity_id=entity)
         if history:
             history = history[0]
-            ha_value = history[-1]["state"]            
+            ha_value = history[-1]["state"]
         return ha_value
-        
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
