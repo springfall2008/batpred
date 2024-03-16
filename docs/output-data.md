@@ -18,13 +18,21 @@ A set of Apex Charts can also be created to see graphically what Predbat plans t
 
 ## Basic status
 
+- **switch.predbat_active** - Automatically set by Predbat to On when Predbat is busy calculating or controlling your inverter,
+or Off when Predbat is waiting for the next time it needs to perform a plan calculation update.
+If you toggle this switch in Home Assistant it will force Predbat to perform an update now (useful for automations).
+
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
 The different Predbat status values and their meanings are detailed in [what does predbat do](what-does-predbat-do.md#predbat-status).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
 
-- **switch.predbat_active** - When on Predbat is busy calculating or controlling your inverter, when Off its waiting for the next time it needs to make an update.
-If you toggle this switch in HA it will force Predbat to perform an update now (useful for automations).
+predbat.status additionally has the following attributes that are automatically populated:
+
+- **Last updated** - date and time that Predbat last updated the plan
+- **Debug** - A number of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
+- **Version** - version of Predbat that's running
+- **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
 
 ## Baseline data
 
@@ -169,7 +177,8 @@ This automation will raise an alert if any of the following occur:
 - Inverter temperature less than 5 degrees for more than 30 minutes (should never happen)
 - The battery goes offline to the inverter for more than 30 minutes
 
-The script will need to be customised for your inverter id, battery id and mobile details, and can be extended for multiple inverters and batteries.
+The script will need to be customised for your inverter id, battery id and mobile details,
+and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter id's.
 
 ```yaml
 alias: GivTCP activity monitor
@@ -179,7 +188,7 @@ trigger:
     entity_id: sensor.givtcp_<inverter id>_last_updated_time
     to: "null"
     for:
-      minutes: 30
+      minutes: 15
     id: no-givtcp-update
     variables:
       inv_id: inverter <id>
@@ -188,7 +197,7 @@ trigger:
       - sensor.givtcp_<inverter id>_status
     from: "online"
     for:
-      minutes: 30
+      minutes: 15
     id: no-givtcp-update
     variables:
       inv_id: inverter <id>
@@ -196,7 +205,7 @@ trigger:
     entity_id:
       - sensor.givtcp_<inverter id>_invertor_temperature
     for:
-      minutes: 30
+      minutes: 15
     below: 5
     id: no-givtcp-update
     variables:
@@ -206,7 +215,7 @@ trigger:
       - sensor.givtcp_<battery id>_battery_cells
     to: "unknown"
     for:
-      minutes: 30
+      minutes: 15
     id: battery-unavailable
     variables:
       batt_id: <batt size/id>
@@ -288,13 +297,21 @@ trigger:
     value_template: "{{ 'ERROR' in states('predbat.status') }}"
     for:
       minutes: 10
+  - platform: state
+    entity_id:
+      - predbat.status
+    attribute: error
+    to: "True"
+    for:
+      minutes: 10
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: Predbat status issue
       message: |
         {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-        predbat status is {{ states('predbat.status') }}
+        predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
       data:
         visibility: public
         persistent: true
