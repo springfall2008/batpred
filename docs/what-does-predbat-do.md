@@ -69,4 +69,9 @@ but if there is excess Solar power above house load, the excess solar will be us
 The battery or solar covers the house load. As charging is disabled, if there is excess solar generated, the current SoC level will be held and the excess solar will be exported.
 If there is a shortfall of solar power to meet house load, the battery will discharge.
 
+- **Calibration** - The inverter is calibrating the batteries.
+On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge then a full charge
+so that the voltage levels associated with empty and full SoC can be determined.
+Predbat will pause executing the plan until the calibration automatically finishes - see [Calibration FAQ](faq.md#warn-inverter-is-in-calibration-mode).
+
 - **Error** - There is a configuration error or other problem, you should check the [Predbat AppDaemon log file](output-data.md#predbat-logfile) for more details.

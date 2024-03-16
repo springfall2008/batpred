@@ -189,7 +189,7 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
 ## WARN: Inverter is in calibration mode
 
 If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
-then Predbat has identified that your inverter is currently calibrating your battery.
+then Predbat has identified that your inverter is currently calibrating your battery. Predbat's status will also be set to 'Calibration'.
 
 Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
 and will not execute the plan nor enable battery charge or discharge.
