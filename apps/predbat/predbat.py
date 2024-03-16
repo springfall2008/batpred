@@ -1013,8 +1013,9 @@ SOLAX_SOLIS_MODES = {
     "Backup/Reserve": 51,
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority - No Timed Charge/Discharge": 96,
-    "Feed-in priority": 98
+    "Feed-in priority": 98,
 }
+
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
