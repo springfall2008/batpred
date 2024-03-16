@@ -1003,14 +1003,18 @@ INVERTER_DEF = {
 SOLAX_SOLIS_MODES = {
     "Selfuse - No Grid Charging": 1,
     "Timed Charge/Discharge - No Grid Charging": 3,
+    "Backup/Reserve - No Grid Charging": 17,
     "Selfuse": 33,
     "Timed Charge/Discharge": 35,
     "Off-Grid Mode": 37,
     "Battery Awaken": 41,
     "Battery Awaken + Timed Charge/Discharge": 43,
+    "Backup/Reserve - No Timed Charge/Discharge": 49,
     "Backup/Reserve": 51,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority - No Timed Charge/Discharge": 96,
+    "Feed-in priority": 98
 }
-
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
@@ -2768,7 +2772,7 @@ class Inverter:
         charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
         if self.soc_percent > float(current_charge_limit):
             # If current SOC is above Target SOC, turn Grid Charging off
-            self.alt_charge_discharge_enable("charge", False, grid=True, timed=False)
+            self.alt_charge_discharge_enable("charge", False, grid=True, timed=True)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
         elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)  # Make sure charging is on
@@ -3368,10 +3372,10 @@ class Inverter:
                     new_switch = switch & ~mask
 
                 if new_switch != switch:
-                    self.base.log(f"Setting Solis Energy Control Switch to {new_switch} from {switch} to {str_enable} {str_type} charging")
                     # Now lookup the new mode in an inverted dict:
                     new_mode = {SOLAX_SOLIS_MODES[x]: x for x in SOLAX_SOLIS_MODES}[new_switch]
 
+                    self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} to {str_enable} {str_type} charging")
                     self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
                     return True
                 else:
@@ -10423,7 +10427,6 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
                                 inverter.disable_charge_window()
-
                                 disabled_charge_window = True
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
