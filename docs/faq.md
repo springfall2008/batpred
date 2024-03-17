@@ -49,8 +49,9 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Have a read of the [energy rates configuration guide](energy-rates.md) as depending on your tariff different settings maybe required
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
 - Make sure your inverter max AC rate has been set correctly
-- If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
-- Do you have a solar diverter? If so maybe you want to try using the iBoost model settings.
+- If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable - see
+[Car charging planning](car-charge-planning.md)
+- Do you have a solar diverter? If so maybe you want to try using the [iBoost model settings](customisation.md#iboost-model-solar-diverter-options).
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
@@ -84,7 +85,7 @@ and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as t
 Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
 it depends on many factors and your personal preferences. Many users will need to customise and tweak their [Predbat configuration](customisation.md) to suit their needs.
 
-The SOC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
+The SoC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
 and the absolute minimum SoC level **input_number.predbat_best_soc_min** are the first thing to check.
 If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
 Conversely if you find Predbat is letting the battery exhaust too early, set predbat_best_soc_keep to 1.0 so Predbat will aim to keep 1kWh available for unexpected load.
