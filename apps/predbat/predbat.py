@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.7"
+THIS_VERSION = "v7.16.8"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1013,9 +1013,8 @@ SOLAX_SOLIS_MODES = {
     "Backup/Reserve": 51,
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority - No Timed Charge/Discharge": 96,
-    "Feed-in priority": 98,
+    "Feed-in priority": 98
 }
-
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
@@ -2776,12 +2775,12 @@ class Inverter:
             self.alt_charge_discharge_enable("charge", False, grid=True, timed=True)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
         elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)  # Make sure charging is on
+            self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)  # Make sure charging is on
             self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
             self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=False)
+            self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)
             if self.inv_output_charge_control == "current":
                 self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
