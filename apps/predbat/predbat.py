@@ -9380,6 +9380,10 @@ class PredBat(hass.Hass):
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
 
+                        # Freeze pass is just discharge freeze
+                        if pass_type in ["freeze"]:
+                            continue
+
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
