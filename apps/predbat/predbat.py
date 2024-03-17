@@ -736,31 +736,31 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_enable",
-        "friendly_name": "IBoost enable",
+        "friendly_name": "iBoost enable",
         "type": "switch",
         "default": False,
     },
     {
         "name": "iboost_solar",
-        "friendly_name": "IBoost on solar power",
+        "friendly_name": "iBoost on solar power",
         "type": "switch",
         "default": True,
     },
     {
         "name": "iboost_gas",
-        "friendly_name": "IBoost when cheaper than gas",
+        "friendly_name": "iBoost when electricity cheaper than gas",
         "type": "switch",
         "default": False,
     },
     {
         "name": "iboost_charging",
-        "friendly_name": "IBoost when battery charging",
+        "friendly_name": "iBoost when battery charging",
         "type": "switch",
         "default": False,
     },
     {
         "name": "iboost_gas_scale",
-        "friendly_name": "IBoost gas price scaling",
+        "friendly_name": "iBoost gas price scaling",
         "type": "input_number",
         "min": 0,
         "max": 2.0,
@@ -772,7 +772,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_max_energy",
-        "friendly_name": "IBoost max energy",
+        "friendly_name": "iBoost max energy",
         "type": "input_number",
         "min": 0,
         "max": 5,
@@ -783,7 +783,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_today",
-        "friendly_name": "IBoost today",
+        "friendly_name": "iBoost today",
         "type": "input_number",
         "min": 0,
         "max": 5,
@@ -794,7 +794,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_max_power",
-        "friendly_name": "IBoost max power",
+        "friendly_name": "iBoost max power",
         "type": "input_number",
         "min": 0,
         "max": 3500,
@@ -806,7 +806,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_min_power",
-        "friendly_name": "IBoost min power",
+        "friendly_name": "iBoost min power",
         "type": "input_number",
         "min": 0,
         "max": 3500,
@@ -817,7 +817,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_min_soc",
-        "friendly_name": "IBoost min soc",
+        "friendly_name": "iBoost min soc",
         "type": "input_number",
         "min": 0,
         "max": 100,
@@ -1509,13 +1509,13 @@ class Prediction:
             if not self.car_charging_from_battery and not car_freeze:
                 discharge_rate_now = self.battery_rate_max_discharge
 
-            # IBoost on load
+            # iBoost solar diverter on load
             if self.iboost_enable:
                 iboost_amount = 0
                 if iboost_today_kwh < self.iboost_max_energy:
                     if self.iboost_gas:
                         if rate_gas:
-                            # Iboost on cheap electric rates
+                            # iBoost on cheap electric rates
                             gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
                             electric_rate = rate_import.get(minute_absolute, 0)
                             if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
@@ -1541,7 +1541,7 @@ class Prediction:
             pv_ac *= self.inverter_loss
             pv_dc *= self.inverter_loss
 
-            # IBoost model
+            # iBoost solar diverter model
             if self.iboost_enable:
                 if iboost_today_kwh < self.iboost_max_energy and (
                     self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
@@ -1552,11 +1552,11 @@ class Prediction:
                 # Cumulative energy
                 iboost_today_kwh += iboost_amount
 
-                # Model Iboost reset
+                # Model iBoost reset
                 if (minute_absolute % (24 * 60)) >= (23 * 60 + 30):
                     iboost_today_kwh = 0
 
-                # Save Iboost next prediction
+                # Save iBoost next prediction
                 if minute == 0 and save == "best":
                     scaled_boost = (iboost_amount / step) * RUN_EVERY
                     self.iboost_next = round(self.iboost_today + scaled_boost, 3)
@@ -5861,7 +5861,7 @@ class PredBat(hass.Hass):
                     state=self.dp2(final_iboost_kwh),
                     attributes={
                         "results": predict_iboost,
-                        "friendly_name": "Predicted IBoost energy best",
+                        "friendly_name": "Predicted iBoost energy best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:water-boiler",
@@ -5870,7 +5870,7 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_iboost_active" + postfix,
                     state=self.iboost_running,
-                    attributes={"friendly_name": "IBoost active", "icon": "mdi:water-boiler"},
+                    attributes={"friendly_name": "iBoost active", "icon": "mdi:water-boiler"},
                 )
                 self.find_spare_energy(self.predict_soc, predict_export, step, first_charge)
 
@@ -7350,7 +7350,7 @@ class PredBat(hass.Hass):
                     car_charging_str = ""
                     car_color = "#FFFFFF"
 
-            # IBoost
+            # iBoost
             iboost_amount_str = ""
             iboost_color = "#FFFFFF"
             if self.iboost_enable:
@@ -10662,12 +10662,12 @@ class PredBat(hass.Hass):
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
 
-        # Iboost load data
+        # iBoost load data
         if self.iboost_enable and "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", 1, required_unit="kWh")
             if iboost_energy_age >= 1:
                 self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
-                self.log("IBoost energy today from sensor reads {} kWh".format(self.iboost_today))
+                self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -11449,7 +11449,7 @@ class PredBat(hass.Hass):
         # Enable load filtering
         self.load_filter_modal = self.get_arg("load_filter_modal")
 
-        # Iboost model
+        # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")
         self.iboost_solar = self.get_arg("iboost_solar")
         self.iboost_gas = self.get_arg("iboost_gas")
@@ -11553,7 +11553,7 @@ class PredBat(hass.Hass):
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(self.dp1(plan_age_minutes), self.calculate_plan_every))
 
-        # IBoost model update state, only on 5 minute intervals
+        # iBoost solar diverter model update state, only on 5 minute intervals
         if self.iboost_enable and scheduled:
             if self.iboost_energy_today:
                 # If we have a realtime sensor just use that data
@@ -11561,9 +11561,9 @@ class PredBat(hass.Hass):
             elif self.minutes_now >= (23 * 60 + 30):
                 # Reset after 11:30pm
                 self.iboost_next = 0
-            # Save next IBoost model value
+            # Save next iBoost model value
             self.expose_config("iboost_today", self.iboost_next)
-            self.log("IBoost model today updated to {}".format(self.iboost_next))
+            self.log("iBoost model today updated to {}".format(self.iboost_next))
 
         # Car SOC increment
         if scheduled:
