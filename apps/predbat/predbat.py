@@ -12044,7 +12044,7 @@ class PredBat(hass.Hass):
                             value = item.get("default", "")
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
                     elif item["type"] == "update":
-                        summary = self.releases.get("this_body", "")
+                        summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
                         state = "off"
                         if item["installed_version"] != latest:
