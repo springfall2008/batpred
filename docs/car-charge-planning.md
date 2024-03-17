@@ -41,36 +41,31 @@ You should not need to change this, but its worth checking the [Predbat logfile]
         - platform: state
           entity_id:
             - binary_sensor.predbat_car_charging_slot
-          to: "on"
-          id: start_charge
-        - platform: state
-          entity_id:
-            - binary_sensor.predbat_car_charging_slot
-          to: "off"
-          id: end_charge
       action:
         - choose:
             - conditions:
-                - condition: trigger
-                  id:
-                    - start_charge
+                - condition: state
+                  entity_id: binary_sensor.predbat_car_charging_slot
+                  state: "on"
               sequence:
+                <commands to turn on your car charger, e.g.>
                 - service: select.select_option
                   data:
                     option: Eco+
                   target:
                     entity_id: select.myenergi_zappi_charge_mode
             - conditions:
-                - condition: trigger
-                  id:
-                    - end_charge
+                - condition: state
+                  entity_id: binary_sensor.predbat_car_charging_slot
+                  state: "off"
               sequence:
+                <commands to turn off your car charger, e.g.>
                 - service: select.select_option
                   data:
                     option: Stopped
                   target:
                     entity_id: select.myenergi_zappi_charge_mode
-        mode: single
+      mode: single
       ```
 
     - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
