@@ -19,6 +19,28 @@ This section of the documentation describes what the different configuration ite
 When you edit `apps.yaml`, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
 You don't need to restart the AppDaemon add-on for your edits to take effect.
 
+## Warning! apps.yaml file format
+
+When editing the `apps.yaml` file you must ensure that the file remains correctly formatted.  YAML files are especially finicky about how the file contents are indented
+and its very easy to end up with an incorrectly formatted file that will cause problems for Predbat.
+
+The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured, but as a brief introduction,
+YAML files consist of an entity name, colon then the entity value, for example:
+
+```yaml
+timezone: Europe/London
+```
+
+Or the entity can be set to a list of values with each value being on a new line, two spaces, a dash, then the value.  For example:
+
+```yaml
+car_charging_now_response:
+  - 'yes'
+  - 'on'
+```
+
+The two spaces before the dash are especially critical. Its easy to mis-edit and have one or three spaces which isn't valid YAML.
+
 ## Templates
 
 You can find template configurations in the following locations:
