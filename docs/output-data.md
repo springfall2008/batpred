@@ -51,13 +51,14 @@ What your battery is expected to do with no changes made by Predbat:
 - predbat.soc_kw - Predicted state of charge (in kWh) at the end of the prediction, not very useful in itself, but holds all
 minute by minute prediction data (in attributes) which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - The minimum battery level during the time period in kWh
-- predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in attributes.
+- predbat.metric - Predicted cost metric for the next simulated period (in pence). Also contains data for charting cost in the entity attributes
 - predbat.battery_power - Predicted battery power per minute, for charting
 - predbat.battery_cycle - Predicted battery cycle in kWh (total kWh processed)
 - predbat.pv_power - Predicted PV power per minute, for charting
 - predbat.grid_power - Predicted Grid power per minute, for charting
 - predbat.car_soc - Predicted car battery %
-- predbat.iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today, increments during the day and is reset to zero at 11:30pm each night.
+- input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
+increments during the day and is reset to zero at 11:30pm each night
 
 ## PV 10% baseline data
 
@@ -72,7 +73,7 @@ The calculated baseline results under PV 10% scenario:
 
 ## Best
 
-When calculate_best is enabled a second set of entities are created for the simulation based on the best battery charge percentage:
+Predbat outputs the following 'best' entities from the simulation based on the lowest cost consumption plan:
 
 - predbat.best_battery_hours_left - Number of hours left under best plan
 - predbat.best_export_energy - Predicted exports under best plan
@@ -99,7 +100,7 @@ When calculate_best is enabled a second set of entities are created for the simu
 
 ## Best PV 10%
 
-The calculated best results under PV 10% scenario:
+The calculated best results under the PV 10% scenario:
 
 - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
 - predbat.best10_pv_energy - Predicted best PV 10% energy in kWh
@@ -108,23 +109,31 @@ The calculated best results under PV 10% scenario:
 - predbat.best10_load_energy - Predicted best load energy for PV 10%
 - predbat.best10_import_energy- Predicted best import energy for PV 10%
 
+## Battery status
+
+The following sensors are set based upon what Predbat is currently controlling the battery to do:
+
+- binary_sensor.predbat_charging - Predbat is charging the battery (from solar, or if that is insufficient, from grid import)
+- binary_sensor.predbat_discharging - Predbat is force discharging the battery for export income.
+Useful for automations if for example you want to turn off car charging when the battery is being exported.
+
 ## Energy rate data
 
 ### Low import rate entities
 
 - predbat.low_rate_cost - The lowest import rate cost in Pence
-- predbat.low_rate_start - Start time of the next low import rate
-- predbat.low_rate_end - End time of the next low import rate
+- predbat.low_rate_start - Start time of the next low import rate slot
+- predbat.low_rate_end - End time of the next low import rate slot
 - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low import rate slot
-- binary_sensor.predbat_low_rate_slot - A sensor that indicates which there is a low energy rate slot active
+- binary_sensor.predbat_low_rate_slot - A sensor that indicates when there is a low energy rate slot active
 
 ### High export rate entities
 
-- predbat.high_export_rate_cost - The highest rate cost in Pence
-- predbat.high_export_rate_start - Start time of the next high export rate
-- predbat.high_export_rate_end - End time of the next high export rate
+- predbat.high_export_rate_cost - The highest export rate cost in Pence
+- predbat.high_export_rate_start - Start time of the next high export rate slot
+- predbat.high_export_rate_end - End time of the next high export rate slot
 - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
-- binary_sensor.predbat_high_export_rate_slot - A sensor that indicates which there is a high export rate slot active
+- binary_sensor.predbat_high_export_rate_slot - A sensor that indicates when there is a high export rate slot active
 
 ### Other rate entities
 
