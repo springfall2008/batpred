@@ -30,7 +30,7 @@ The different Predbat status values and their meanings are detailed in [what doe
 predbat.status additionally has the following attributes that are automatically populated:
 
 - **Last updated** - date and time that Predbat last updated the plan
-- **Debug** - A number of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
+- **Debug** - A set of arrays containing Predbat's planned charging and discharging time windows and battery limits (in kWh)
 - **Version** - version of Predbat that's running
 - **Error** - binary value true or false depending upon whether Predbat is in an error status or nor
 
@@ -40,7 +40,7 @@ What your battery is expected to do with no changes made by Predbat:
 
 - predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out (stops at the maximum prediction time)
 - predbat.charge_limit - The current charge limit used for the scenario in %
-- predbat.charge_limit_kw - The current charge limit used for the scenario in kwH
+- predbat.charge_limit_kw - The current charge limit used for the scenario in kWh
 - predbat.duration - The duration of the prediction maximum in hours
 - predbat.load_energy - Predicted load energy in kWh
 - predbat.pv_energy - Predicted PV energy in kWh
@@ -57,6 +57,7 @@ minute by minute prediction data (in attributes) which can be charted with Apex 
 - predbat.pv_power - Predicted PV power per minute, for charting
 - predbat.grid_power - Predicted Grid power per minute, for charting
 - predbat.car_soc - Predicted car battery %
+- predbat.iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today, increments during the day and is reset to zero at 11:30pm each night.
 
 ## PV 10% baseline data
 
@@ -78,24 +79,23 @@ When calculate_best is enabled a second set of entities are created for the simu
 - predbat_best_import_energy - Predicted imports under best plan
 - predbat_best_load - Predicted best load energy
 - predbat.best_pv_energy - Predicted Best PV energy in kWh
-- predbat_best_import_energy_battery - Predicted imports to the battery under best SOC setting
-- predbat_best_import_energy_house - Predicted imports to the house under best SOC setting
+- predbat_best_import_energy_battery - Predicted imports to the battery under best SoC setting
+- predbat_best_import_energy_house - Predicted imports to the house under best SoC setting
 - predbat_soc_kw_best - Predicted best final state of charge (in kWh), holds minute by minute prediction data (in attributes) to be charted
 - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
-- predbat_best_metric - The predicted cost if the proposed SOC % charge target is selected. Also contains data for charting cost in attributes.
+- predbat_best_metric - The predicted cost if the proposed SoC % charge target is selected. Also contains data for charting cost in attributes.
 - predbat.best_charge_limit - Predicted best battery charge limit in percent
-- predbat.best_charge_limit_kw - Predicted best battery charge limit in kwH
+- predbat.best_charge_limit_kw - Predicted best battery charge limit in kWh
 - predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
-- predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kwH
+- predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
 - predbat.battery_power_best  - Predicted best battery power per minute, for charting
 - predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed)
 - predbat.pv_power_best - Predicted best PV power per minute, for charting
 - predbat.grid_power - Predicted best Grid power per minute, for charting
-- predbat.car_soc_best - Predicated car battery % in  best plan
-- predbat.iboost_best - Gives the predicted energy going into the iBoost - for charter
-- input_number.iboost_today - Gives the amount of energy modelled into the diverter today, resets at 11:30pm each night. Increments in the day.
+- predbat.car_soc_best - Predicted car battery % in  best plan
+- predbat.iboost_best - Gives the predicted energy going into the iBoost solar diverter
 
 ## Best PV 10%
 
@@ -112,7 +112,7 @@ The calculated best results under PV 10% scenario:
 
 ### Low import rate entities
 
-- predbat.low_rate_cost - The lowest import rate cost in P
+- predbat.low_rate_cost - The lowest import rate cost in Pence
 - predbat.low_rate_start - Start time of the next low import rate
 - predbat.low_rate_end - End time of the next low import rate
 - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low import rate slot
@@ -120,7 +120,7 @@ The calculated best results under PV 10% scenario:
 
 ### High export rate entities
 
-- predbat.high_export_rate_cost - The highest rate cost in P
+- predbat.high_export_rate_cost - The highest rate cost in Pence
 - predbat.high_export_rate_start - Start time of the next high export rate
 - predbat.high_export_rate_end - End time of the next high export rate
 - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
@@ -128,17 +128,22 @@ The calculated best results under PV 10% scenario:
 
 ### Other rate entities
 
-- predbat.rates - The current energy rates in P (also can be charted)
-- predbat.rates_export - The current energy export rates in P (also be be charted)
+- predbat.rates - The current energy rates in Pence (also can be charted)
+- predbat.rates_export - The current energy export rates in Pence (also can be charted)
 - predbat.cost_today - The total cost of energy so far today (since midnight)
 - predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted.
-- predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SOC%/Window. Can also be charted.
+- predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SoC%/Window. Can also be charted.
 
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
-as described in [Predbat let car charging](car-charge-planning.md)
+as described in [Predbat led car charging](car-charge-planning.md)
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format.
+
+## iBoost Solar Diverter data
+
+- binary_sensor.predbat_iboost_active - A binary sensor indicating when there is excess solar and the solar diverter (e.g. iBoost, Eddi or just plain immersion heater) should be active,
+can be used for automations to trigger the immersion heater boost.
 
 ## Sample Predbat data out dashboard
 

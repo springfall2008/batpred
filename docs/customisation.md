@@ -422,7 +422,7 @@ It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% eff
 
 - **input_number.predbat_iboost_min_power** Sets the minimum power in watts that the solar diverter will consume - default 500.
 
-You will see **predbat.iboost_today** entity which tracks the estimated kWh consumed by the solar diverter during the day, and resets at midnight.
+You will see **predbat.iboost_today** entity which tracks the estimated kWh consumed by the solar diverter during the day, and resets at 11:30pm every night.
 
 The **binary_sensor.predbat_iboost_active** entity will be enabled when the solar diverter should be active, can be used for automations to trigger the immersion heater boost.
 
