@@ -245,14 +245,14 @@ The **givtcp_rest** line should be commented out/deleted in order for Predbat to
 - **battery_power** - GivTCP current battery power in watts
 - **pv_power** - GivTCP current PV power in watts
 - **load_power** - GivTCP current load power in watts
-- **soc_kw** - GivTCP Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+- **soc_kw** - GivTCP Entity name of the battery SoC in kWh, should be the inverter one not an individual battery
 - **soc_max** - GivTCP Entity name for the maximum charge level for the battery
 - **reserve** - GivTCP sensor name for the reserve setting in %
 - **inverter_mode** - GivTCP inverter mode control
 - **inverter_time** - GivTCP inverter timestamp
 - **charge_start_time** - GivTCP battery charge start time entity
 - **charge_end_time** - GivTCP battery charge end time entity
-- **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
+- **charge_limit** - GivTCP Entity name for used to set the SoC target for the battery in percentage
 - **scheduled_charge_enable** - GivTCP Scheduled charge enable config
 - **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
 - **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
@@ -418,7 +418,7 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if its enabled
 
 - Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
-SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ## Load Forecast
 
@@ -501,9 +501,9 @@ Skews the setting of the discharge slot registers vs the predicted start time
     - scale
 ```
 
-Default value 1.0. Multiple battery size scales can be entered, one per inverter.
+Default value 1.0. Multiple battery size scales can be entered, one per inverter on separate lines.
 
-This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.
+This setting is used to scale the battery reported SoC kWh to make it appear bigger or larger than it is.
 As the GivEnergy inverters treat all batteries attached to an inverter as in effect one giant battery,
 if you have multiple batteries on an inverter that need scaling you should enter a composite scaling value for all batteries attached to the inverter.
 
@@ -566,8 +566,8 @@ auto_restart:
 
 ## Battery charge/discharge curves
 
-- **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
-Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+- **battery_charge_power_curve** - Some batteries tail off their charge rate at high SoC% and this optional configuration item enables you to model this in Predbat.
+Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
 
 The default is 1.0 (full power) charge all the way to 100%.
 
@@ -575,9 +575,10 @@ Modelling the charge curve becomes important if you have limited charging slots 
 low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
-when battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+when the battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+
 You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
-This will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
+The logfile will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the curve works and shows how Predbat automatically creates it.
@@ -598,7 +599,7 @@ If you are using the recommended default [REST mode to control your inverter](#i
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
-Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
+ Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
 
 Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
@@ -616,16 +617,18 @@ Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and 
     100 : 0.24
 ```
 
-- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low soc% and this optional configuration item enables you to model this in Predbat.
+- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low SoC% and this optional configuration item enables you to model this in Predbat.
 
-Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+Enter the discharging curve as a series of steps of % of max discharge rate for each SoC percentage.
 
 The default is 1.0 (full power) discharge all the way to 0%.
 
-You can also look at the automation power curve calculation in the AppDaemon/Predbat log when Predbat starts (when this option is not set).
+When the battery_discharge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml),
+Predbat will generate the curve for you from historical battery discharging information.
 
-Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
-the battery.
+You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
+
+Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
 In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
 

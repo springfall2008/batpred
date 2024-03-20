@@ -2384,7 +2384,7 @@ class Inverter:
                         # If we have the correct data then output it
                         if rate_scaling > 0:
                             if discharge:
-                                text = "  battery_charge_power_curve_discharge:\n"
+                                text = "  battery_discharge_power_curve:\n"
                             else:
                                 text = "  battery_charge_power_curve:\n"
                             keys = sorted(final_curve.keys())
