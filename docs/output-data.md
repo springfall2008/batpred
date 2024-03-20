@@ -113,8 +113,8 @@ The calculated best results under the PV 10% scenario:
 
 The following sensors are set based upon what Predbat is currently controlling the battery to do:
 
-- binary_sensor.predbat_charging - Predbat is charging the battery (from solar, or if that is insufficient, from grid import)
-- binary_sensor.predbat_discharging - Predbat is force discharging the battery for export income.
+- binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
+- binary_sensor.predbat_discharging - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
 Useful for automations if for example you want to turn off car charging when the battery is being exported.
 
 ## Energy rate data
@@ -125,7 +125,7 @@ Useful for automations if for example you want to turn off car charging when the
 - predbat.low_rate_start - Start time of the next low import rate slot
 - predbat.low_rate_end - End time of the next low import rate slot
 - predbat.low_rate_cost_2, predbat.low_rate_start_2, predbat.low_rate_end_2 - The following low import rate slot
-- binary_sensor.predbat_low_rate_slot - A sensor that indicates when there is a low energy rate slot active
+- binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate slot active, 'off' otherwise.
 
 ### High export rate entities
 
@@ -133,7 +133,7 @@ Useful for automations if for example you want to turn off car charging when the
 - predbat.high_export_rate_start - Start time of the next high export rate slot
 - predbat.high_export_rate_end - End time of the next high export rate slot
 - predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
-- binary_sensor.predbat_high_export_rate_slot - A sensor that indicates when there is a high export rate slot active
+- binary_sensor.predbat_high_export_rate_slot - A sensor that is 'on' to indicate when there is a high export rate slot active, 'off' otherwise.
 
 ### Other rate entities
 

@@ -440,13 +440,13 @@ action:
       - conditions:
           - condition: state
             entity_id: binary_sensor.predbat_iboost_active
-            state: "on"
+            state: "True"
         sequence:
           <commands to turn on your solar diverter>
       - conditions:
           - condition: state
             entity_id: binary_sensor.predbat_iboost_active
-            state: "off"
+            state: "False"
         sequence:
           <commands to turn off your solar diverter>
 mode: single
