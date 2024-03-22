@@ -575,7 +575,7 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
   inverter_reserve_max: percent
 ```
 
-Global, sets the maximum reserve % that maybe set to the inverter, the default is 98 as some Gen 2 inverters and
+Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
 ## Automatic restarts

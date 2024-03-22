@@ -2777,8 +2777,9 @@ class Inverter:
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
         elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)  # Make sure charging is on
-            self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
-            self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
+            if self.inv_output_charge_control == "current":
+                self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
+                self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
             self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)
@@ -9385,6 +9386,10 @@ class PredBat(hass.Hass):
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
 
+                        # Freeze pass is just discharge freeze
+                        if pass_type in ["freeze"]:
+                            continue
+
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
@@ -10607,15 +10612,20 @@ class PredBat(hass.Hass):
                     and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes)
                     and not (disabled_charge_window)
                 ):
+                    # In charge freeze hold the target SOC at the current value
                     if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
-                        # In charge freeze hold the target SOC at the current value
                         if isCharging:
                             self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                             inverter.adjust_battery_target(inverter.soc_percent, True)
                         else:
+                            # Not yet in the freeze, hold at 100% target SOC
                             inverter.adjust_battery_target(100.0, False)
                     else:
-                        inverter.adjust_battery_target(self.charge_limit_percent_best[0], isCharging)
+                        # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
+                        if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
+                            inverter.adjust_battery_target(100.0, False)
+                        else:
+                            inverter.adjust_battery_target(self.charge_limit_percent_best[0], isCharging)
                 else:
                     if not inverter.inv_has_target_soc:
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
@@ -12040,7 +12050,7 @@ class PredBat(hass.Hass):
                             value = item.get("default", "")
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
                     elif item["type"] == "update":
-                        summary = self.releases.get("this_body", "")
+                        summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
                         state = "off"
                         if item["installed_version"] != latest:
