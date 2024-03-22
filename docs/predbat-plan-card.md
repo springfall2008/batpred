@@ -172,3 +172,7 @@ so even though battery and inverter conversion losses have been incurred, there 
 Predbat plans to charge and then discharge the battery in the same slot to generate that profit.
 
 The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or discharge the battery.
+
+## Custom plan table
+
+You might also like this great add on: [PredBat-Table-Card](https://github.com/pacemaker82/PredBat-Table-Card)
