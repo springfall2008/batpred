@@ -7312,8 +7312,13 @@ class PredBat(hass.Hass):
             if discharge_window_n >= 0:
                 rate_str_export = "<b>" + rate_str_export + "</b>"
 
-            # Cost
-            total_str = "£%02.02f" % (metric_start / 100.0)
+            # Total cost at start of slot, add leading minus if negative
+            if metric_start >= 0:
+                total_str = self.currency_symbols[0] + "%02.02f" % (metric_start / 100.0)
+            else:
+                total_str = "-" + self.currency_symbols[0] + "%02.02f" % (abs(metric_start) / 100.0)
+
+            # Cost predicted for this slot
             if metric_change >= 10.0:
                 cost_str = "+%d p " % int(metric_change)
                 cost_str += " &nearr;"
