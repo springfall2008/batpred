@@ -1917,6 +1917,8 @@ class Inverter:
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     time.sleep(15)
             raise Exception("Auto-restart triggered")
+        else:
+            self.log("INFO: auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control")
 
     def __init__(self, base, id=0, quiet=False):
         self.id = id
