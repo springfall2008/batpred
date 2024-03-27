@@ -199,14 +199,14 @@ If you don't have solar then use a file editor to comment out the following line
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 ```
 
-If you do have solar panels its recommended to use the Solcast integration to automatically retrieve your forecast solar generation.
-Predbat is configured to automatically discover the Solcast forecast entities in Home Assistant.
+If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
 
-Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a [Solcast account](https://solcast.com/),
+Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-Note that Predbat does not update Solcast for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
-(e.g. dawn, dusk, and just before your nightly charge slot).
+Note that Predbat does not automatically update Solcast for you so you will need to create your own Home Assistant automation that retrieves the solar forecast a few times a day
+(e.g. dawn, mid-day, dusk, and just before your nightly charge slot).
 
 Example Solcast update automation script:
 
@@ -215,11 +215,13 @@ alias: Solcast update
 description: "Update Solcast solar forecast"
 trigger:
   - platform: time
-    at: "23:00:00"
+    at: "06:00:00"
   - platform: time
     at: "12:00:00"
   - platform: time
-    at: "04:00:00"
+    at: "18:00:00"
+  - platform: time
+    at: "23:00:00"
 condition: []
 action:
   - service: solcast_solar.update_forecasts

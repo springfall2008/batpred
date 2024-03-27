@@ -152,17 +152,20 @@ delete all the old Octopus sensors, and [re-install the Octopus Integration](ins
 
 ## WARN: No solar data has been configured
 
-If you get this warning message in the Predbat log file:
+If you get this warning message in the Predbat log file or you see that the 'PV kWh' column in the [Predbat plan card](predbat-plan-card.md) is completely blank:
 
 - Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )
+- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log)
 - Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
 and checking that you can see the half-hourly solar forecasts in the Solcast entities
 - If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities
+- If the solcast entities are still not populated, try reloading the Solcast integration (go to System / Devices & Services / Integrations tab, click on 'Solcast PV Forecast',
+click the three vertical dots beside 'Configure' and choose 'Reload' from the dropdown menu)
 - Check **sensor.solcast_pv_api_limit** (it's normally 10 for new Solcast accounts) meaning you can call the Solcast API 10 times a day
-(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.
+(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.<BR>
 Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls you have made today
-(alternatively, you can confirm how many API calls you have made today by logging into your solcast account).
+(alternatively, you can confirm how many API calls you have made today by logging into your Solcast account).<BR>
 If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
