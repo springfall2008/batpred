@@ -41,6 +41,7 @@ dstart
 dwindow
 elif
 endt
+feedin
 firstparty
 futurerate
 gekey
@@ -109,6 +110,7 @@ pyproject
 pytz
 rarr
 Redownload
+remotecontrol
 resultmid
 rname
 rowspan
@@ -122,6 +124,7 @@ socs
 sofar
 SolarEdge
 Solax
+solaxmodbus
 Solcast
 solisx
 sourcery

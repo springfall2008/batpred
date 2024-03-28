@@ -2895,9 +2895,10 @@ class Inverter:
                 if self.rest_data:
                     self.rest_setChargeRate(new_rate)
                 else:
-                    entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
-                    # Write
-                    self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+                    if "charge_rate" in self.base.args:
+                        entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
+                        self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
 
@@ -2942,8 +2943,9 @@ class Inverter:
                 if self.rest_data:
                     self.rest_setDischargeRate(new_rate)
                 else:
-                    entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
-                    self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
+                    if "discharge_rate" in self.base.args:
+                        entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
+                        self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)

@@ -1,0 +1,323 @@
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
+  prefix: predbat
+
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+
+  # Timezone to work in
+  timezone: Europe/London
+
+  #
+  # Sensors, currently more than one can be specified and they will be summed up automatically
+  # however if you have two inverters only set one of them as they will both read the same.
+  #
+
+  inverter_type: "SX4"
+  num_inverters: 1
+  #
+  # Controls/status - must by 1 per inverter
+  #
+
+  # Max inverter power from battery
+  battery_rate_max:
+    - 5000
+  # Battery capacity in kWh
+  soc_max:
+    - 11.6
+
+  # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
+
+  load_today:
+    - sensor.energy_house_load_today
+  import_today:
+    - sensor.solaxmodbus_today_s_import_energy
+  export_today:
+    - sensor.solaxmodbus_today_s_export_energy
+  pv_today:
+    - sensor.solaxmodbus_today_s_solar_energy
+
+  battery_voltage:
+    - sensor.solaxmodbus_battery_voltage_charge
+
+  # This is disabled by default in the Solax integration so it must be manually enabled.
+  inverter_time:
+    - sensor.date_time
+
+  # This is disabled by default in the Solax integration so it must be manually enabled.
+  battery_power:
+    - sensor.solaxmodbus_battery_power_charge
+  pv_power:
+    - sensor.solaxmodbus_pv_power_total
+
+  # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
+  load_power:
+    - sensor.solaxmodbus_house_load
+  #load_power_1:
+  #  - sensor.solis_bypass_load
+
+  soc_percent:
+    - sensor.solaxmodbus_battery_capacity
+
+  reserve:
+    - number.solaxmodbus_backup_discharge_min_soc
+
+  battery_min_soc:
+    - sensor.solaxmodbus_feedin_discharge_min_soc
+
+  # With the Solax integration we need to press a button to send the time to
+  charge_discharge_update_button:
+    - button.solis_update_charge_discharge_times
+
+  #timed_charge_current:
+  #  - number.solis_timed_charge_current
+  #charge_start_hour:
+  #  - number.solis_timed_charge_start_hours
+  #charge_start_minute:
+  #  - number.solis_timed_charge_start_minutes
+  #charge_end_hour:
+  #  - number.solis_timed_charge_end_hours
+  #charge_end_minute:
+  #  - number.solis_timed_charge_end_minutes
+
+
+  #timed_discharge_current:
+  #  - number.solis_timed_discharge_current
+
+  #discharge_start_hour:
+   # - number.solis_timed_discharge_start_hours
+  #discharge_start_minute:
+  #  - number.solis_timed_discharge_start_minutes
+  #discharge_end_hour:
+  #  - number.solis_timed_discharge_end_hours
+  #discharge_end_minute:
+  #  - number.solis_timed_discharge_end_minutes
+
+
+  energy_control_switch:
+    - select.solaxmodbus_remotecontrol_power_control
+
+  # Inverter max AC limit (one per inverter)
+  # If you have a second inverter for PV only please add the two values together
+  inverter_limit: 5000
+
+  # Export limit is a software limit set on your inverter that prevents exporting above a given level
+  # When enabled Predbat will model this limit
+  #export_limit:
+  # - 3600
+  # - 3600
+  #
+  # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
+  # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
+  #
+  #inverter_limit_charge:
+  # - 2000
+  #inverter_limit_discharge:
+  # - 2600
+
+
+  # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
+  # The value can be set here in watts to model this (doesn't change operation)
+  #inverter_battery_rate_min:
+  #  - 100
+
+  # Some batteries tail off their charge rate at high soc%
+  # enter the charging curve here as a % of the max charge rate for each soc percentage.
+  # the default is 1.0 (full power)
+  #battery_charge_power_curve:
+  #  91 : 0.91
+  #  92 : 0.81
+  #  93 : 0.71
+  #  94 : 0.62
+  #  95 : 0.52
+  #  96 : 0.43
+  #  97 : 0.33
+  #  98 : 0.24
+  #  99 : 0.24
+  #  100 : 0.24
+
+  # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
+  # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
+  # Separate discharge skew for discharge windows only
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+
+  # Clock skew adjusts the Appdaemon time
+  # This is the time that Predbat takes actions like starting discharge/charging
+  # Only use this for workarounds if your inverter time is correct but Predbat is somehow wrong (AppDaemon issue)
+  # 1 means add 1 minute to AppDaemon time, -1 takes it away
+  clock_skew: 0
+
+  # Set these to match solcast sensor names
+  # The regular expression (re:) makes the solcast bit optional
+  # If these don't match find your own names in Home Assistant
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  # car_charging_energy defines an incrementing sensor which measures the charge added to your car
+  # is used for car_charging_hold feature to filter out car charging from the previous load data
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
+  # car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  num_cars: 0
+
+  # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
+  # This should not be needed if you use Octopus Intelligent Slots which will take priority if enabled
+  # The list of possible values is in car_charging_planned_response
+  # Auto matches Zappi and Wallbox, or change it for your own
+  # car_charging_planned:
+  #   - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  #   - 'connected'
+
+  # car_charging_planned_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
+  #   - 'connected'
+  #   - 'ev connected'
+  #   - 'charging'
+  #   - 'paused'
+  #   - 'waiting for car demand'
+  #   - 'waiting for ev'
+  #   - 'scheduled'
+  #   - 'enabled'
+  #   - 'latched'
+  #   - 'locked'
+  #   - 'plugged in'
+
+  # To make planned car charging more accurate, either using car_charging_planned or Octopus Intelligent
+  # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values
+  # If you have intelligent the battery size and limit will be extracted from Intelligent directly
+  # Set the car SOC% if you have it to give an accurate forecast of the cars battery levels
+  # One entry per car if you have multiple cars
+  # car_charging_battery_size:
+  #   - 75
+  # car_charging_limit:
+  #   - 're:number.tsunami_charge_limit'
+  # car_charging_soc:
+  #   - 're:sensor.tsunami_battery'
+
+  # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
+  # Will automatically disable if not found, or comment out to disable fully
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
+  # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
+  #octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
+  # octopus_intelligent_slot: 're:binary_sensor.octopus_energy_intelligent_dispatching'
+  # octopus_ready_time: 're:time.octopus_energy_intelligent_ready_time'
+  # octopus_charge_limit: 're:number.octopus_energy_intelligent_charge_limit'
+
+  # Energy rates
+  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
+
+  # Set import and export entity to point to the Octopus Energy plugin
+  # automatically matches your meter number assuming you have only one
+  # Will be ignored if you don't have the sensor
+  # Or manually set it to the correct sensor names e.g:
+  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
+  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+
+  # Standing charge can be set to a sensor (e.g. Octopus) or manually entered in pounds here (e.g. 0.50 is 50p)
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+
+  # Or set your actual rates across time for import and export
+  # If start/end is missing it's assumed to be a fixed rate
+  # Gaps are filled with 0
+  # rates_import:
+  #   -  start: "23:30:00"
+  #      end: "05:30:00"
+  #      rate: 7.5
+  #   -  start: "05:30:00"
+  #      end: "23:30:00"
+  #      rate: 30.0
+
+  # rates_export:
+  #   -  rate: 15.0
+
+  # Can be used instead of the plugin to get import rates directly online
+  # Overrides metric_octopus_import and rates_import
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+
+  # Overrides metric_octopus_export and rates_export
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/"
+
+  # Import rates can be overridden with rate_import_override
+  # Export rates can be overridden with rate_export_override
+  # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
+  # This will override even the Octopus plugin rates if enabled
+  #
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 5
+
+  # For pv estimate, leave blank for central estimate, or add 10 for 10% curve (worst case) or 90 or 90% curve (best case)
+  # If you use 10 then disable pv_metric10_weight below
+  # pv_estimate: 10
+
+  # Days previous is the number of days back to find historical load data
+  # Recommended is 7 to capture day of the week but 1 can also be used
+  # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
+  days_previous:
+    - 7
+
+
+  # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
+  # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
+  days_previous_weight:
+    - 1
+
+  # Number of hours forward to forecast, best left as-is unless you have specific reason
+  forecast_hours: 48
+
+  # The number of hours ahead to count in charge planning (for cost estimates)
+  # It's best to set this on your charge window repeat cycle (24) but you may want to set it higher for more variable
+  # tariffs like Agile
+  forecast_plan_hours: 24
+
+  # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
+  #notify_devices:
+  #  - mobile_app_treforsiphone12_2
+
+  # Set the frequency in minutes that this plugin is run
+  # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
+  run_every: 5
+
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
+  battery_scaling: 1.0
+
+  # Can be used to scale import and export data, used for workarounds
+  import_export_scaling: 1.0
+
+  # Export triggers:
+  # For each trigger give a name, the minutes of export needed and the energy required in that time
+  # Multiple triggers can be set at once so in total you could use too much energy if all run
+  # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
+  # connect this to your automation to start whatever you want to trigger
+  export_triggers:
+     - name: 'large'
+       minutes: 60
+       energy: 1.0
+     - name: 'small'
+       minutes: 15
+       energy: 0.25
+
+  # If you have a sensor that gives the energy consumed by your solar diverter then add it here
+  # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
+  # It's assumed to be in Kwh but scaling can be applied if need be
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
