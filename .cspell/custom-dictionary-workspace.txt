@@ -41,6 +41,7 @@ dstart
 dwindow
 elif
 endt
+feedin
 firstparty
 futurerate
 gekey
@@ -112,6 +113,7 @@ Redownload
 resultmid
 rname
 rowspan
+remotecontrol
 rstart
 rtype
 saverestore
@@ -125,6 +127,7 @@ Solax
 Solcast
 solisx
 sourcery
+solaxmodbus
 Southwell
 springfall
 startt
