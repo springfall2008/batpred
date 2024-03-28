@@ -2068,9 +2068,14 @@ class Inverter:
                         self.base.log("WARN: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
                 soc_force_adjust = self.rest_data["raw"]["invertor"]["soc_force_adjust"]
-                if soc_force_adjust and soc_force_adjust != "0" and soc_force_adjust != "7":
-                    self.in_calibration = True
-                    self.log("WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled")
+                if soc_force_adjust:
+                    try:
+                        soc_force_adjust = int(soc_force_adjust)
+                    except ValueError:
+                        soc_force_adjust = 0
+                    if (soc_force_adjust > 0) and (soc_force_adjust < 7):
+                        self.in_calibration = True
+                        self.log("WARN: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
             self.soc_max *= self.battery_scaling
 
             # Max battery rate
