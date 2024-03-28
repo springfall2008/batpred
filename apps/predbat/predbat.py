@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.8"
+THIS_VERSION = "v7.16.9"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -464,6 +464,17 @@ CONFIG_ITEMS = [
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
         "default": False,
+    },
+    {
+        "name": "car_charging_plan_max_price",
+        "friendly_name": "Car Charging Plan max price",
+        "type": "input_number",
+        "min": 0,
+        "max": 99,
+        "step": 1,
+        "unit": "p",
+        "icon": "mdi:ev-station",
+        "default": 0,
     },
     {
         "name": "car_charging_from_battery",
@@ -6383,6 +6394,7 @@ class PredBat(hass.Hass):
         """
         plan = []
         car_soc = self.car_charging_soc[car_n]
+        max_price = self.car_charging_plan_max_price[car_n]
 
         if self.car_charging_plan_smart[car_n]:
             price_sorted = self.sort_window_by_price(low_rates)
@@ -6429,15 +6441,23 @@ class PredBat(hass.Hass):
 
             start = max(window["start"], self.minutes_now)
             end = min(window["end"], ready_minutes)
+            price = window["average"]
             length = 0
             kwh = 0
 
+            # Stop once we have enough charge
             if car_soc >= self.car_charging_limit[car_n]:
                 break
 
+            # Skip past windows
             if end <= start:
                 continue
 
+            # Skip over prices when they are too high
+            if max_price > 0 and price > max_price:
+                continue
+
+            # Compute amount of charge
             length = end - start
             hours = length / 60
             kwh = self.car_charging_rate[car_n] * hours
@@ -9647,6 +9667,7 @@ class PredBat(hass.Hass):
         self.car_charging_planned = [False for c in range(self.num_cars)]
         self.car_charging_now = [False for c in range(self.num_cars)]
         self.car_charging_plan_smart = [False for c in range(self.num_cars)]
+        self.car_charging_plan_max_price = [False for c in range(self.num_cars)]
         self.car_charging_plan_time = [False for c in range(self.num_cars)]
         self.car_charging_battery_size = [100.0 for c in range(self.num_cars)]
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
@@ -9683,6 +9704,7 @@ class PredBat(hass.Hass):
 
             # Other car related configuration
             self.car_charging_plan_smart[car_n] = self.get_arg("car_charging_plan_smart", False)
+            self.car_charging_plan_max_price[car_n] = self.get_arg("car_charging_plan_max_price", 0.0)
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
@@ -9690,12 +9712,13 @@ class PredBat(hass.Hass):
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, plan_time {}, battery size {}, limit {}, rate {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}, plan_time {}, battery size {}, limit {}, rate {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
                     self.car_charging_now,
                     self.car_charging_plan_smart,
+                    self.car_charging_plan_max_price,
                     self.car_charging_plan_time,
                     self.car_charging_battery_size,
                     self.car_charging_limit,
@@ -12365,7 +12388,7 @@ class PredBat(hass.Hass):
             watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(watch_list))
             for entity in watch_list:
-                if entity:
+                if entity and isinstance(entity, str) and ("." in entity):
                     self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):

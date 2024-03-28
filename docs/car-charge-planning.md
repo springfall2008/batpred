@@ -27,6 +27,7 @@ You should not need to change this, but its worth checking the [Predbat logfile]
     - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml`.
     - Set **select.predbat_car_charging_plan_time** in Home Assistant to the time you want the car to be ready by.
     - Enable **switch.predbat_car_charging_plan_smart** if you want to use the cheapest slots only.
+    - You can set **car_charging_plan_max_price** if you want to set a maximum price per kWh to charge your car (e.g. 10p)
     If you leave this disabled then all low rate slots will be used. This may mean you need to use expert mode and change your low rate
     threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. flux)
     - Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged;
