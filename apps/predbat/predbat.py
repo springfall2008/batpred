@@ -12388,7 +12388,7 @@ class PredBat(hass.Hass):
             watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(watch_list))
             for entity in watch_list:
-                if entity and isinstance(entity, str) and ('.' in entity):
+                if entity and isinstance(entity, str) and ("." in entity):
                     self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
