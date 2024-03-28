@@ -208,6 +208,9 @@ to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** 
 - **switch.predbat_car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
 when disabled (False) all low rate slots will be used in time order.
 
+- **input_number.predbat_car_charging_plan_max_price** - When non-zero sets a maximum price per kWh to pay when charging your car,
+when disabled (0) all slots will be considered.
+
 **switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set the **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
