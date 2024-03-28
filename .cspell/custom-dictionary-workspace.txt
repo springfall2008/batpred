@@ -110,10 +110,10 @@ pyproject
 pytz
 rarr
 Redownload
+remotecontrol
 resultmid
 rname
 rowspan
-remotecontrol
 rstart
 rtype
 saverestore
@@ -124,10 +124,10 @@ socs
 sofar
 SolarEdge
 Solax
+solaxmodbus
 Solcast
 solisx
 sourcery
-solaxmodbus
 Southwell
 springfall
 startt
