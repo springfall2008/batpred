@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Configuration guide - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Configuration guide";
+        var mkdocs_page_input_path = "configuration-guide.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Configuration guide</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#fixed-daily-rates">Fixed daily rates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#cheap-night-rate-with-bad-export-rate-eg-octopus-go-economy-7-etc">Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#cheap-night-rate-with-a-good-export-rate-eg-intelligent-octopus-with-octopus-outgoing">Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#multiple-rates-for-import-and-export-eg-octopus-flux-cozy">Multiple rates for import and export (e.g. Octopus Flux &amp; Cozy)</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#half-hourly-variable-rates-eg-octopus-agile">Half hourly variable rates (e.g. Octopus Agile)</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../other-inverters/">Other Inverters</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Configuration guide</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="configuration-guide">Configuration guide</h1>
+<p>First get the basics set up, ensure you have the <a href="../install/#inverter-control-integration-install-givtcpsolax-modbus">inverter controls configured</a>,
+you have <a href="../apps-yaml/">configured apps.yaml</a> to your setup, and the <a href="../install/#solcast-install">solar forecast</a> is in place.
+Make sure your <a href="../energy-rates/">energy rates</a> are configured correctly for import and export.</p>
+<p>If you have an EV try to set up the <a href="../apps-yaml/#car-charging-integration">car charging sensor</a> correctly so Predbat can tell what part of your historical load is EV charging.
+You might want to also set to the <a href="../apps-yaml/#planned-car-charging">car charging plan</a> so you can predict when your car is plugged in and how much it will charge.</p>
+<p>It is recommended that you <a href="../output-data/#displaying-output-data">create a dashboard page</a> with all the required entities to control Predbat.</p>
+<p>This page gives a summary of some of the key configuration settings you should consider in Predbat for different energy tariffs;
+the <a href="../customisation/">Predbat customisation guide</a> details all the Predbat customisation options.</p>
+<p>You should try to tune <strong>input_number.predbat_inverter_loss</strong>, <strong>input_number.predbat_battery_loss</strong> and <strong>input_number.predbat_battery_loss_discharge</strong> to the correct % loss
+for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
+Also set <strong>switch.predbat_inverter_hybrid</strong> to True or False depending upon if you have a Hybrid or AC-Coupled battery.</p>
+<p>The setting <strong>input_number.predbat_metric_battery_cycle</strong> (<em>expert mode</em>) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
+If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.
+The default is 0.5p (meaning charging and discharging the battery would effectively cost an extra 1p per kWh) but can be set to 0 if you want to turn this feature off.</p>
+<p>Below is a guide to some of the electricity tariff options and a set of recommended Predbat settings for each tariff type.
+In theory most tariffs will work out of the box but still it's worth reviewing your settings.</p>
+<h2 id="fixed-daily-rates">Fixed daily rates</h2>
+<p>With a fixed daily rate tariff you will just be predicting the battery levels, no charging or discharging is required although it won't hurt if you leave these options enabled.</p>
+<p>You should set <strong>select.predbat_mode</strong> to 'Monitor'.</p>
+<h2 id="cheap-night-rate-with-bad-export-rate-eg-octopus-go-economy-7-etc">Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)</h2>
+<p>In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force discharge your battery.</p>
+<p>Recommended settings - these must be changed in Home Assistant once Predbat is running:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>select.predbat_mode</td>
+<td>Control Charge</td>
+<td>You want Predbat to calculate and control charging</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_keep</td>
+<td>2.0</td>
+<td>Tweak this to control what battery level you want to keep as a backup in case you use more energy</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>True</td>
+<td>Use one big charge slot</td>
+</tr>
+</tbody>
+</table>
+<p>If you are using expert mode then these options maybe worth reviewing:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>input_number.predbat_forecast_plan_hours</td>
+<td>24</td>
+<td>If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>True</td>
+<td>As you have just one overnight rate then one slot is fine</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement</td>
+<td>0</td>
+<td>Charge less if it's cost neutral</td>
+</tr>
+</tbody>
+</table>
+<p>You should set <strong>select.predbat_mode</strong> to 'Control charge'</p>
+<h2 id="cheap-night-rate-with-a-good-export-rate-eg-intelligent-octopus-with-octopus-outgoing">Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)</h2>
+<p>Follow the instructions from the <em>Cheap Night rate</em> above, but also you will also want to have automatic discharge occurring when the export rates are profitable.</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>select.predbat_mode</td>
+<td>Control Charge &amp; Discharge</td>
+<td>You want Predbat to calculate and control charging and discharging</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_keep</td>
+<td>2.0</td>
+<td>Tweak this to control what battery level you want to keep as a backup in case you use more energy</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>True</td>
+<td>Use one big charge slot</td>
+</tr>
+</tbody>
+</table>
+<p>If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>input_number.predbat_forecast_plan_hours</td>
+<td>24</td>
+<td>If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>?</td>
+<td>Setting to False will allow charging at more expensive day rates when it's worth it to export more</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement</td>
+<td>0</td>
+<td>Charge less if it's cost neutral</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement_discharge</td>
+<td>0.1</td>
+<td>Discharge only if there is a profit</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_battery_cycle</td>
+<td>?</td>
+<td>Higher numbers mean less charging and discharging but higher costs</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_min</td>
+<td>?</td>
+<td>Can be set non-zero if you want to force a minimum charge level</td>
+</tr>
+</tbody>
+</table>
+<p>You should set <strong>select.predbat_mode</strong> to 'Control charge &amp; discharge'</p>
+<h2 id="multiple-rates-for-import-and-export-eg-octopus-flux-cozy">Multiple rates for import and export (e.g. Octopus Flux &amp; Cozy)</h2>
+<p>Follow the instructions from <em>Cheap Night</em> rate above, but also you will want to have automatic discharge when the export rates are profitable.</p>
+<p>Recommended settings - these must be changed in Home Assistant once Predbat is running:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>select.predbat_mode</td>
+<td>Control Charge &amp; Discharge</td>
+<td>You want Predbat to calculate and control charging and discharging</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_keep</td>
+<td>0.5</td>
+<td>Use the full battery without going empty</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>True</td>
+<td>Use one big charge slot</td>
+</tr>
+</tbody>
+</table>
+<p>If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>input_number.predbat_forecast_plan_hours</td>
+<td>24</td>
+<td>If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>?</td>
+<td>Setting to False will allow charging at more expensive day rates when it's worth it to export more</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement</td>
+<td>0</td>
+<td>Charge less if it's cost neutral</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement_discharge</td>
+<td>0.1</td>
+<td>Discharge only if there is a profit</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_battery_cycle</td>
+<td>?</td>
+<td>Higher numbers mean less charging and discharging but higher costs</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_min</td>
+<td>0</td>
+<td>Don't use non-zero otherwise all slots will be force charging</td>
+</tr>
+</tbody>
+</table>
+<p>You should set <strong>select.predbat_mode</strong> to 'Control charge &amp; discharge'</p>
+<h2 id="half-hourly-variable-rates-eg-octopus-agile">Half hourly variable rates (e.g. Octopus Agile)</h2>
+<p>Recommended settings - these must be changed in Home Assistant once Predbat is running:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>select.predbat_mode</td>
+<td>Control Charge &amp; Discharge</td>
+<td>You want Predbat to calculate and control charging and discharging</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_keep</td>
+<td>0.5</td>
+<td>Use the full battery without going empty</td>
+</tr>
+<tr>
+<td>switch.predbat_combine_charge_slots</td>
+<td>False</td>
+<td>Don't combine slots for a better result</td>
+</tr>
+</tbody>
+</table>
+<p>If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:</p>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Comment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>input_number.predbat_forecast_plan_hours</td>
+<td>24-48</td>
+<td>If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement</td>
+<td>0</td>
+<td>Charge less if it's cost neutral</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_min_improvement_discharge</td>
+<td>0.1</td>
+<td>Discharge only if there is a profit</td>
+</tr>
+<tr>
+<td>input_number.predbat_metric_battery_cycle</td>
+<td>?</td>
+<td>Higher numbers mean less charging and discharging but higher costs</td>
+</tr>
+<tr>
+<td>input_number.predbat_best_soc_min</td>
+<td>0</td>
+<td>Don't use non-zero otherwise all slots will be force charging</td>
+</tr>
+<tr>
+<td>switch.predbat_calculate_fast_plan</td>
+<td>False</td>
+<td>The fast plan feature reduces accuracy of planning</td>
+</tr>
+</tbody>
+</table>
+<p>You should set <strong>select.predbat_mode</strong> to 'Control charge &amp; discharge'</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../car-charge-planning/" class="btn btn-neutral float-left" title="Car charging planning"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../customisation/" class="btn btn-neutral float-right" title="Customisation">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../car-charge-planning/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../customisation/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>apps.yaml settings - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "apps.yaml settings";
+        var mkdocs_page_input_path = "apps-yaml.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">apps.yaml settings</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#templates">Templates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#basics">Basics</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#prefix">prefix</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#timezone">timezone</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#currency_symbols">currency_symbols</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#template">template</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#threads">threads</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#notify_devices">notify_devices</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#days_previous">days_previous</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#forecast_hours">forecast_hours</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-information">Inverter information</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#num_inverters">num_inverters</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#geserial">geserial</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#historical-data">Historical data</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#data-from-home-assistant">Data from Home assistant</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#givenergy-cloud-data">GivEnergy Cloud Data</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#load-filtering">Load filtering</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-control-configurations">Inverter control configurations</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#controlling-the-inverter">Controlling the Inverter</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#rest-interface-inverter-control">REST Interface inverter control</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#home-assistant-inverter-control">Home Assistant inverter control</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solcast-solar-forecast">Solcast Solar Forecast</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#energy-rates">Energy Rates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#car-charging-integration">Car Charging Integration</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#car-charging-filtering">Car Charging Filtering</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#planned-car-charging">Planned Car Charging</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#multiple-electric-cars">Multiple Electric Cars</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#load-forecast">Load Forecast</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#balance-inverters">Balance Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#workarounds">Workarounds</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#clock-skew">Clock skew</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#battery-size-scaling">Battery size scaling</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#import-export-scaling">Import export scaling</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#inverter-rate-minimum">Inverter rate minimum</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#inverter-reserve-maximum">Inverter reserve maximum</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#automatic-restarts">Automatic restarts</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#battery-chargedischarge-curves">Battery charge/discharge curves</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#triggers">Triggers</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#understanding-how-days_previous-works">Understanding how days_previous works</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../other-inverters/">Other Inverters</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">apps.yaml settings</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="appsyaml-settings">apps.yaml settings</h1>
+<p>The basic configuration for Predbat is configured in the <code>apps.yaml</code> file.</p>
+<p>Depending on whether you have used the <a href="../install/#appdaemon-predbat-combined-install">combined AppDaemon/Predbat add-on installation method</a> or the
+<a href="../install/#predbat-installation-into-appdaemon">HACS, Appdaemon add-on then Predbat installation method</a>, the <code>apps.yaml</code> file will be held in one of two directories in Home Assistant:</p>
+<ul>
+<li><code>/addon_configs/46f69597_appdaemon-predbat/apps</code> if you used the combined AppDaemon/Predbat add-on installation method</li>
+</ul>
+<p>or</p>
+<ul>
+<li><code>/config/appdaemon/apps/batpred/config/</code> if you used the HACS, AppDaemon add-on then Predbat installation method</li>
+</ul>
+<p>You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
+to edit the <code>apps.yaml</code> file - see <a href="../install/#editing-configuration-files-in-home-assistant">editing configuration files within Home Assistant</a> if you need to install an editor.</p>
+<p>This section of the documentation describes what the different configuration items in <code>apps.yaml</code> do.</p>
+<p>When you edit <code>apps.yaml</code>, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
+You don't need to restart the AppDaemon add-on for your edits to take effect.</p>
+<h2 id="templates">Templates</h2>
+<p>You can find template configurations in the following locations:</p>
+<table>
+<thead>
+<tr>
+<th>Template</th>
+<th>Link</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GivEnergy</td>
+<td><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/apps/predbat/config/apps.yaml">apps.yaml</a></td>
+</tr>
+<tr>
+<td>SolisX</td>
+<td><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml">apps.yaml</a></td>
+</tr>
+<tr>
+<td>Sofar</td>
+<td><a href="https://raw.githubusercontent.com/springfall2008/batpred/solar_edge/templates/sofar_inverter.yml">apps.yaml</a></td>
+</tr>
+<tr>
+<td>Huawei</td>
+<td><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml">apps.yaml</a></td>
+</tr>
+<tr>
+<td>SolarEdge</td>
+<td><a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml">apps.yaml</a></td>
+</tr>
+</tbody>
+</table>
+<p>The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into the directory
+where your <code>apps.yaml</code> is stored, and modify it from there.</p>
+<p>Please read: <a href="../other-inverters/">Other Inverters</a> for non Givenergy inverters</p>
+<h2 id="basics">Basics</h2>
+<p>Basic configuration items</p>
+<h3 id="prefix">prefix</h3>
+<p>Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.</p>
+<pre><code class="language-yaml">  prefix: predbat
+</code></pre>
+<h3 id="timezone">timezone</h3>
+<p>Set to your local timezone, default is Europe/London. It must be set to a
+<a href="https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568">valid Python time zone for your location</a></p>
+<pre><code class="language-yaml">  timezone: Europe/London
+</code></pre>
+<h3 id="currency_symbols">currency_symbols</h3>
+<p>Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c</p>
+<pre><code class="language-yaml"> currency_symbols:
+   - '£'
+   - 'p'
+</code></pre>
+<h3 id="template">template</h3>
+<p>Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
+Once you have made all other required changes to apps.yaml this line should be deleted or commented out.</p>
+<pre><code class="language-yaml">#  template: True
+</code></pre>
+<h3 id="threads">threads</h3>
+<p>If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
+you have CPUs in your system.
+Valid values are:
+    - 'auto' - Use the same number of threads as your CPU count
+    - '0' - Don't use threads - disabled
+    - 'N' - Use N threads, recommended values are between 2 and 8</p>
+<pre><code class="language-yaml">  threads: auto
+</code></pre>
+<h3 id="notify_devices">notify_devices</h3>
+<p>A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices</p>
+<pre><code class="language-yaml">  notify_devices:
+    - mobile_app_treforsiphone12_2
+</code></pre>
+<h3 id="days_previous">days_previous</h3>
+<p>Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
+days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
+It's recommended that you set days_previous so Predbat calculates an average house load using sufficient days' history so that 'unusual' load activity
+(e.g. saving sessions, "big washing day", etc) get averaged out.</p>
+<p>For example, if you just want Predbat to assume the house load on a particular day is the same as the same day of last week:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 7
+</code></pre>
+<p>Or if you want Predbat to take the average of the same day for the last two weeks:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 7
+    - 14
+</code></pre>
+<p>Further details and worked examples of <a href="#understanding-how-days_previous-works">how days_previous works</a> are covered at the end of this document.</p>
+<p>Do keep in mind that Home Assistant only keeps 10 days history by default, so if you want to access more than this for Predbat you might need to increase the number of days history
+kept in HA before it is purged by editing and adding the following to the <code>/homeassistant/configuration.yaml</code> configuration file and restarting Home Assistant afterwards:</p>
+<pre><code class="language-yaml">  recorder:
+    purge_keep_days: 14
+</code></pre>
+<p><strong>days_previous_weight</strong> - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.</p>
+<p>For example, to apply a 100% weighting for the first day entry in days_previous, but only a 50% weighting to the second day in days_previous:</p>
+<pre><code class="language-yaml">  days_previous_weight:
+    - 1
+    - 0.5
+</code></pre>
+<p>The default value is 1, that all history days are equally weighted, so if you don't want to weight individual days you can simply use:</p>
+<pre><code class="language-yaml">  days_previous_weight:
+    - 1
+</code></pre>
+<h3 id="forecast_hours">forecast_hours</h3>
+<p>the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.</p>
+<pre><code class="language-yaml">  forecast_hours: 48
+</code></pre>
+<h2 id="inverter-information">Inverter information</h2>
+<p>The template <code>apps.yaml</code> comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
+If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
+For other inverter brands, see <a href="../other-inverters/">Other Inverters</a></p>
+<h3 id="num_inverters">num_inverters</h3>
+<p>The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities</p>
+<pre><code class="language-yaml">  num_inverters: 1
+</code></pre>
+<h3 id="geserial">geserial</h3>
+<p>Only for GE inverters, this is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+If you  have more than one inverter you will need one per inverter to be used in the later configuration lines</p>
+<pre><code class="language-yaml">  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+</code></pre>
+<h2 id="historical-data">Historical data</h2>
+<p>Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.
+Unless you have a specific reason to not use the GivTCP data (e.g. you've lost your GivTCP data), its recommended to use GivTCP.</p>
+<h3 id="data-from-home-assistant">Data from Home assistant</h3>
+<p>The following configuration entries in <code>apps.yaml</code> are pre-configured to automatically use the appropriate sensors.</p>
+<p>If you have a 3-phase electricity supply and one inverter (and battery) on each phase then you will need to add one line for the load, import, export and PV sensors
+for each of the 3 phases.</p>
+<p>If you have a single phase electricity supply and multiple inverters on the phase then you will need to add one line for each of the load and PV sensors.
+You don't need multiple lines for the import or export sensors as each inverter will give the total import or export information.</p>
+<p>Edit if necessary if you have non-standard sensor names:</p>
+<ul>
+<li><strong>load_today</strong> - Entity name for the house load in kWh today (must be incrementing)</li>
+<li><strong>import_today</strong> - Imported energy today in kWh (incrementing)</li>
+<li><strong>export_today</strong> - Exported energy today in kWh (incrementing)</li>
+<li><strong>pv_today</strong> - PV energy today in kWh (incrementing). If you have multiple inverters, enter each inverter PV sensor on a separate line.<BR>
+If you have an AC-coupled inverter then enter the Home Assistant sensor for your PV inverter.<BR>
+If you don't have any PV panels, comment or delete this line out of apps.yaml.</li>
+</ul>
+<p>See the <a href="#workarounds">Workarounds</a> section below for configuration settings for scaling these if required.</p>
+<p>If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
+In this circumstance one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.</p>
+<p>e.g.</p>
+<pre><code class="language-yaml">{{ ( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + &lt;inverter 2&gt;...
+  + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + &lt;inverter 2&gt;...
+  - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - &lt;inverter 2&gt;...
+  + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+  - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) ) | round(1) }}
+</code></pre>
+<h3 id="givenergy-cloud-data">GivEnergy Cloud Data</h3>
+<p>If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
+Obviously connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.</p>
+<ul>
+<li><strong>ge_cloud_data</strong> - When True Predbat will use the GE Cloud for data rather than load_today, import_today and export_today</li>
+<li><strong>ge_cloud_serial</strong> - Set the inverter serial number to use for the Cloud data</li>
+<li><strong>ge_cloud_key</strong> - Set to your API Key for the GE Cloud (long string)</li>
+</ul>
+<h2 id="load-filtering">Load filtering</h2>
+<p>By default if Predbat sees a gap in the historical load data it will fill it with average data. This is to help in the cases of small amounts of lost data.
+For entire lost days you should change <strong>days_previous</strong> to point to different days(s) or include 3 or more days and if you set <strong>switch.predbat_load_filter_modal</strong> to true,
+the lowest day's historical load will be discarded.</p>
+<ul>
+<li><strong>load_filter_threshold</strong> - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
+To disable, set it to 1440.</li>
+</ul>
+<h2 id="inverter-control-configurations">Inverter control configurations</h2>
+<ul>
+<li>
+<p><strong>inverter_limit</strong> - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
+This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.</p>
+</li>
+<li>
+<p><strong>export_limit</strong> - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
+This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
+approval was lower than your maximum inverter power (check your install information for details).
+If you do not set an export limit then it's the same as the inverter limit.</p>
+</li>
+<li>
+<p><strong>inverter_limit_charge</strong> and <strong>inverter_limit_discharge</strong> - One per inverter (optional). When set in watts, overrides the maximum
+charge/discharge rate settings used when controlling the inverter.
+This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
+will normally configure all timed charges or discharges to be at the inverter's maximum rate.</p>
+</li>
+</ul>
+<h2 id="controlling-the-inverter">Controlling the Inverter</h2>
+<p>There are two ways that Predbat can control GivTCP to control the inverter, either via REST API calls (preferred) or via the GivTCP inverter controls in Home Assistant.</p>
+<h3 id="rest-interface-inverter-control">REST Interface inverter control</h3>
+<ul>
+<li><strong>givtcp_rest</strong> - One per Inverter, sets the GivTCP REST API URL (<a href="http://homeassistant.local:6345">http://homeassistant.local:6345</a>
+is the normal one for the first inverter and :6346 for the second inverter).
+When enabled the Control per inverter below isn't used and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
+If using Docker then change homeassistant.local to the Docker IP address.</li>
+</ul>
+<p>To check your REST is working open up the readData API point in a Web browser e.g: <a href="http://homeassistant.local:6345/readData">http://homeassistant.local:6345/readData</a></p>
+<p>If you get a bunch of inverter information back then it's working!</p>
+<p><em>TIP:</em> It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring,
+and set the Self Run Loop Timer which controls how often GivTCP retrieves data from your inverters to a value between 20 and 60 seconds.
+Do not set Self Run to too low a value (i.e. retrieve too often) as this may overload the inverter:</p>
+<p><img alt="image" src="../images/GivTCP-recommended-settings.png" /></p>
+<h3 id="home-assistant-inverter-control">Home Assistant inverter control</h3>
+<p>As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
+The template <code>apps.yaml</code> is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
+but may need changing if you have multiple inverters or non-standard GivTCP entity names.</p>
+<p>The <strong>givtcp_rest</strong> line should be commented out/deleted in order for Predbat to use the direct GivTCP Home Assistant controls.</p>
+<ul>
+<li><strong>charge_rate</strong> - GivTCP battery charge rate entity in watts</li>
+<li><strong>discharge_rate</strong> - GivTCP battery discharge max rate entity in watts</li>
+<li><strong>battery_power</strong> - GivTCP current battery power in watts</li>
+<li><strong>pv_power</strong> - GivTCP current PV power in watts</li>
+<li><strong>load_power</strong> - GivTCP current load power in watts</li>
+<li><strong>soc_kw</strong> - GivTCP Entity name of the battery SOC in kWh, should be the inverter one not an individual battery</li>
+<li><strong>soc_max</strong> - GivTCP Entity name for the maximum charge level for the battery</li>
+<li><strong>reserve</strong> - GivTCP sensor name for the reserve setting in %</li>
+<li><strong>inverter_mode</strong> - GivTCP inverter mode control</li>
+<li><strong>inverter_time</strong> - GivTCP inverter timestamp</li>
+<li><strong>charge_start_time</strong> - GivTCP battery charge start time entity</li>
+<li><strong>charge_end_time</strong> - GivTCP battery charge end time entity</li>
+<li><strong>charge_limit</strong> - GivTCP Entity name for used to set the SOC target for the battery in percentage</li>
+<li><strong>scheduled_charge_enable</strong> - GivTCP Scheduled charge enable config</li>
+<li><strong>scheduled_discharge_enable</strong> - GivTCP Scheduled discharge enable config</li>
+<li><strong>discharge_start_time</strong> - GivTCP scheduled discharge slot_1 start time</li>
+<li><strong>discharge_end_time</strong> - GivTCP scheduled discharge slot_1 end time</li>
+</ul>
+<p>If you are using REST control the above GivTCP configuration items can be deleted or commented out of <code>apps.yaml</code>
+(but see section below on <a href="#workarounds">creating the battery charge power curve</a>).</p>
+<h2 id="solcast-solar-forecast">Solcast Solar Forecast</h2>
+<p>As described in the <a href="../install/#solcast-install">Predbat installation instructions</a>, Predbat needs a solar forecast
+in order to predict solar generation and battery charging which can be provided by the Solcast integration.</p>
+<p>The template <code>apps.yaml</code> is pre-configured with regular expressions for the following configuration items that should auto-discover the Solcast entity names.
+They are unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking, or edit if you have non-standard names:</p>
+<ul>
+<li><strong>pv_forecast_today</strong> - Entity name for today's Solcast forecast</li>
+<li><strong>pv_forecast_tomorrow</strong> - Entity name for tomorrow's Solcast's forecast</li>
+<li><strong>pv_forecast_d3</strong> - Entity name for Solcast's forecast for day 3</li>
+<li><strong>pv_forecast_d4</strong> - Entity name for Solcast's forecast for day 4 (also d5, d6 &amp; d7 are supported, but not that useful)</li>
+</ul>
+<p>If you do not have a PV array then comment out or delete these Solcast lines from <code>apps.yaml</code>.</p>
+<p>If you have multiple PV arrays connected to GivEnergy Hybrid inverters or you have GivEnergy AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.</p>
+<p>If however you have a mixed PV array setup with some PV that does not feed into your GivEnergy inverters
+(e.g. hybrid GE inverters but a separate older FIT array that directly feeds AC into the house),
+then it's recommended that Solcast is only configured for the PV connected to the GivEnergy inverters.</p>
+<p>Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (worst case) PV forecast, and the '90%' (best case) PV forecast.<BR>
+By default Predbat will use the central estimate and applies to it the <strong>input_number.predbat_pv_metric10_weight</strong> weighting of the 10% (worst case) estimate.</p>
+<p>Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
+this modulates the PV output predictions up and down accordingly as if there were passing clouds.
+This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.</p>
+<ul>
+<li><strong>pv_estimate</strong> in <code>apps.yaml</code> can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10',
+or '90' to always use the 90% PV estimate (not recommended!).<BR>
+Set to blank or delete / comment out the line to use the default central estimate.</li>
+</ul>
+<p>If <strong>pv_estimate</strong> is set to 10 then <strong>input_number.predbat_pv_metric10_weight</strong> in Home Assistant should be set to 1.0.</p>
+<h2 id="energy-rates">Energy Rates</h2>
+<p>There are a number of configuration items in <code>apps.yaml</code> for telling Predbat what your import and export rates are.</p>
+<p>These are described in detail in <a href="../energy-rates/">Energy Rates</a> and are listed here just for completeness:</p>
+<ul>
+<li><strong>metric_octopus_import</strong> - Import rates from the Octopus Energy integration</li>
+<li><strong>metric_octopus_export</strong> - Export rates from the Octopus Energy integration</li>
+<li><strong>metric_octopus_gas</strong> - Gas rates from the Octopus Energy integration</li>
+<li><strong>octopus_intelligent_slot</strong> - Octopus Intelligent GO slot sensor from the Octopus Energy integration</li>
+<li><strong>octopus_saving_session</strong> - Energy saving sessions sensor from the Octopus Energy integration</li>
+<li><strong>octopus_saving_session_octopoints_per_penny</strong> - Sets the Octopoints per pence</li>
+<li><strong>rates_import_octopus_url</strong> - Octopus pricing URL (over-rides metric_octopus_import)</li>
+<li><strong>rates_export_octopus_url</strong> - Octopus export pricing URL (over-rides metric_octopus_export)</li>
+<li><strong>metric_standing_charge</strong> - Standing charge in pounds</li>
+<li><strong>rates_import</strong> - Import rates over a 24-hour period with start and end times</li>
+<li><strong>rates_export</strong> - Export rates over a 24-hour period with start and end times</li>
+<li><strong>rates_import_override</strong> - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events</li>
+<li><strong>rates_export_override</strong> - Over-ride export rate for specific date and time range</li>
+<li><strong>futurerate_url</strong> - URL of future energy market prices for Agile users</li>
+<li><strong>futurerate_adjust_import</strong> and <strong>futurerate_adjust_export</strong> - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not</li>
+<li><strong>futurerate_peak_start</strong> and <strong>futurerate_peak_end</strong> - start/end times for peak-rate adjustment</li>
+<li><strong>futurerate_peak_premium_import</strong> and <strong>futurerate_peak_premium_export</strong> - price premium to be added during the peak period</li>
+</ul>
+<h2 id="car-charging-integration">Car Charging Integration</h2>
+<p>Predbat is able to include electric vehicle charging in its plan and manage the battery activity so that the battery isn't discharged into your car when the car is charging
+(although you can over-ride this if you wish by setting the <strong>switch.predbat_car_charging_from_battery</strong> to True in Home Assistant).</p>
+<p>There are two different ways of planning car charging into cheap slots with Predbat, either by the Octopus Energy integration or by Predbat identifying the cheapest slots.
+These approaches and the set of settings that need to be configured together are described in <a href="../car-charge-planning/">Car Charging Planning</a>.</p>
+<p>The full list of car charging configuration items in <code>apps.yaml</code> that are used to plan car charging activity within Predbat are described below.
+The Home Assistant controls (switches, input numbers, selectors, etc) related to car charging are described in <a href="../customisation/#car-charging">Car Charging configuration within Home Assistant</a>,
+with brief mention of pertinent controls included here alongside the apps.yaml configuration items where relevant for context.</p>
+<ul>
+<li><strong>num_cars</strong> should be set in apps.yaml to the number of cars you want Predbat to plan for.
+Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can safely be commented out or deleted as they won't be required).</li>
+</ul>
+<h3 id="car-charging-filtering">Car Charging Filtering</h3>
+<p>You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
+high battery charge levels when the car was charged previously (e.g. last week).</p>
+<ul>
+<li>
+<p><strong>switch.predbat_car_charging_hold</strong> - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
+so that Predbat's battery prediction plan is not distorted by previous car charging.</p>
+</li>
+<li>
+<p><strong>car_charging_energy</strong> - Set in <code>apps.yaml</code> to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
+This has been pre-defined to a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
+or edit as necessary in <code>apps.yaml</code> for your charger sensor.<BR>
+This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
+<em>TIP:</em> You can also use <strong>car_charging_energy</strong> to remove other house load kWh from the data Predbat uses for the forecast,
+e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.</p>
+</li>
+<li>
+<p><strong>input_number.predbat_car_charging_energy_scale</strong> - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
+to multiply the car_charging_energy data by if required (e.g. set to 0.001 to convert Watts to kW).</p>
+</li>
+</ul>
+<p>If you do not have a suitable car charging kWh sensor in Home Assistant then comment the car_charging_energy line out of <code>apps.yaml</code> and configure the following Home Assistant entity:</p>
+<ul>
+<li><strong>input_number.predbat_car_charging_threshold</strong> - Sets the threshold above which home consumption is assumed to be car charging and
+will be removed from the home load data (default 6 = 6kW).</li>
+</ul>
+<h3 id="planned-car-charging">Planned Car Charging</h3>
+<p>These features allow Predbat to know when you plan to charge your car.</p>
+<p>If you have Intelligent Octopus setup then planning of charging is done via the Octopus app and Predbat obtains this information through the Octopus Energy integration in Home Assistant.</p>
+<ul>
+<li><strong>switch.predbat_octopus_intelligent_charging</strong> - When this Home Assistant switch is enabled, Predbat will plan charging around the Intelligent Octopus slots, taking
+it into account for battery load and generating the slot information</li>
+</ul>
+<p>The following <code>apps.yaml</code> configuration items are pre-defined with regular expressions to point to appropriate sensors in the Octopus Energy integration.
+You should not normally need to change these if you have Octopus Intelligent:</p>
+<ul>
+<li>
+<p><strong>octopus_intelligent_slot</strong> - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
+whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.</p>
+</li>
+<li>
+<p><strong>octopus_ready_time</strong> - Points to the Octopus Energy integration sensor that details when the car charging will be completed by.</p>
+</li>
+<li>
+<p><strong>octopus_charge_limit</strong> - Points to the Octopus Energy integration sensor that provides the car charging limit.</p>
+</li>
+</ul>
+<p>If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in <code>apps.yaml</code> can be commented out or deleted,
+and there are a number of other apps.yaml configuration items that should be set:</p>
+<ul>
+<li>
+<p><strong>car_charging_planned</strong> - Optional, can be set to a Home Assistant sensor (e.g. from your car charger integration)
+which lets Predbat know the car is plugged in and planned to charge during low rate slots.
+Or manually set it to 'False' to disable this feature, or 'True' to always enable.<BR>
+The <code>apps.yaml</code> template supplied with Predbat comes pre-configured with a regular expression that should automatically match Zappi or Wallbox car chargers.
+If you have a different type of charger you will need to configure it manually.</p>
+</li>
+<li>
+<p><strong>car_charging_planned_response</strong> - An array of values for the above car_charging_planned sensor which indicate that the car is plugged in and will charge in the next low rate slot.
+The template <code>apps.yaml</code> comes with a set of pre-defined sensor values that should match most EV chargers.
+Customise for your car charger sensor if it sets sensor values that are not in the list.</p>
+</li>
+<li>
+<p><strong>car_charging_now</strong> - For some cases finding details of planned car charging is difficult to obtain (e.g. Ohme with Intelligent doesn't report slots).<BR>
+The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
+Predbat will then assume this 30 minute slot is used for charging regardless of the plan.<BR>
+If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
+low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.</p>
+</li>
+<li>
+<p><strong>car_charging_now_response</strong> - Set to the range of positive responses for car_charging_now to indicate that the car is charging.
+Useful if you have a sensor for your car charger that isn't binary.</p>
+</li>
+</ul>
+<p>To make planned car charging more accurate, configure the following items in <code>apps.yaml</code>:</p>
+<ul>
+<li>
+<p><strong>car_charging_battery_size</strong> - Set this value in <code>apps.yaml</code> to the car's battery size in kWh. If not set, Predbat defaults to 100. It will be used to predict car charging stops.</p>
+</li>
+<li>
+<p><strong>car_charging_limit</strong> - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
+This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
+If you don't specify a sensor Predbat will default to 100%.</p>
+</li>
+<li>
+<p><strong>car_charging_soc</strong> - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current % charge level.
+If not set, Predbat will default to 0%.</p>
+</li>
+</ul>
+<h3 id="multiple-electric-cars">Multiple Electric Cars</h3>
+<p>Multiple cars can be planned with Predbat, in which case you should set <strong>num_cars</strong> in <code>apps.yaml</code> to the number of cars you want to plan</p>
+<ul>
+<li>
+<p><strong>car_charging_limit</strong>, <strong>car_charging_planned</strong>, <strong>car_charging_battery_size</strong> and <strong>car_charging_soc</strong> must then be a list of values (i.e. 2 entries for 2 cars)</p>
+</li>
+<li>
+<p>If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if its enabled</p>
+</li>
+<li>
+<p>Each car will have it's own Home Assistant slot sensor created e.g. <strong>binary_sensor.predbat_car_charging_slot_1</strong>,
+SOC planning sensor e.g <strong>predbat.car_soc_1</strong> and <strong>predbat.car_soc_best_1</strong> for car 1</p>
+</li>
+</ul>
+<h2 id="load-forecast">Load Forecast</h2>
+<p>In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
+such as is produced by <a href="https://github.com/springfall2008/predheat">Predheat for Hot water and Heat Pump heating systems</a>:</p>
+<ul>
+<li><strong>load_forecast</strong> - this should be configured to point to a sensor and attribute that is in the format of 'last_updated' timestamp and 'energy' in incrementing kWh.</li>
+</ul>
+<p>For example:<BR>
+<img alt="IMAGE" src="../images/load_forecast.png" /></p>
+<p><code>apps.yaml</code> should be configured to point to the forecast sensor and attribute (in the above format) like this:</p>
+<pre><code class="language-yaml">load_forecast:
+  - sensor_name$attribute_name
+</code></pre>
+<p>So if using Predheat it would be configured as:</p>
+<pre><code class="language-yaml">load_forecast:
+  - predheat.heat_energy$external
+</code></pre>
+<h2 id="balance-inverters">Balance Inverters</h2>
+<p>When you have two or more inverters it's possible they get out of sync so they are at different charge levels or they start to cross-charge (one discharges into another).
+When enabled, balance inverters tries to recover this situation by disabling either charging or discharging from one of the batteries until they re-align.</p>
+<p>Most of the Predbat configuration for balancing inverters is through a number of <a href="../customisation/#balance-inverters">Home Assistant controls for Balancing Inverters</a>,
+but there is one configuration item in <code>apps.yaml</code>:</p>
+<pre><code class="language-yaml">  balance_inverters_seconds: seconds
+</code></pre>
+<p>Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.</p>
+<h2 id="workarounds">Workarounds</h2>
+<p>There are a number of different configuration items in <code>apps.yaml</code> that can be used to tweak the way Predbat operates and workaround
+weirdness you may have from your inverter and battery setup.</p>
+<h3 id="clock-skew">Clock skew</h3>
+<pre><code class="language-yaml">  clock_skew: minutes
+</code></pre>
+<p>Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
+Set to 1 means add a minute to the AppDaemon time, set to -1 means take a minute off the AppDaemon time.
+This will change when real-time actions happen e.g. triggering a charge or discharge.</p>
+<p>If your inverter's time is different to the time on the computer running Home Assistant, you may need to skew the time settings made on the inverter when you trigger charging or discharging.
+Again 1 means the inverter is 1 minute fast and -1 means the inverter is 1 minute slow.</p>
+<p>Separate start and end options are applied to the start and end time windows, mostly as you want to start battery activity late (not early) and finish early (not late).</p>
+<p>You can adjust the charge and discharge times written to the inverter by setting the following in <code>apps.yaml</code>:</p>
+<pre><code class="language-yaml">  inverter_clock_skew_start: minutes
+  inverter_clock_skew_end: minutes
+</code></pre>
+<p>Skews the setting of the charge slot registers vs the predicted start time</p>
+<pre><code class="language-yaml">  inverter_clock_skew_discharge_start: minutes
+  inverter_clock_skew_discharge_end: minutes
+</code></pre>
+<p>Skews the setting of the discharge slot registers vs the predicted start time</p>
+<h3 id="battery-size-scaling">Battery size scaling</h3>
+<pre><code class="language-yaml">  battery_scaling: scale
+</code></pre>
+<p>Default value 1.0. One per inverter.</p>
+<p>This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+<em>TIP:</em> If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
+so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
+<em>TIP:</em> Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
+If you are going chart your battery SoC in Home Assistant then you may want to use <strong>predbat.soc_kw_h0</strong> as your current SoC
+rather than the usual <em>givtcp_<serial_number>_soc</em> GivTCP entity so everything lines up</p>
+<h3 id="import-export-scaling">Import export scaling</h3>
+<pre><code class="language-yaml">  import_export_scaling: scale
+</code></pre>
+<p>Default value 1.0. Used to scale the import &amp; export kWh data from GivTCP if the inverter information is incorrect.</p>
+<h3 id="inverter-rate-minimum">Inverter rate minimum</h3>
+<pre><code class="language-yaml">  inverter_battery_rate_min: watts
+</code></pre>
+<p>One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
+Recommended setting is 200 for Gen 1 hybrids with this issue.</p>
+<h3 id="inverter-reserve-maximum">Inverter reserve maximum</h3>
+<pre><code class="language-yaml">  inverter_reserve_max: percent
+</code></pre>
+<p>Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 &amp; Gen 3 inverters and
+AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.</p>
+<h2 id="automatic-restarts">Automatic restarts</h2>
+<p>If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. In this case you can tell Predbat
+how to restart the add-on using a service.</p>
+<p>Right now only communication loss with GE inverters is detectable but in future other systems will be supported.</p>
+<p>When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restart the connection.
+This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.</p>
+<p>The auto_restart itself is a list of commands to run to trigger a restart.</p>
+<ul>
+<li>The <strong>shell</strong> command will call a 'sh' shell and can be used to delete files and suchlike.</li>
+<li>The <strong>service</strong> command is used to call a service, and can contain arguments of <strong>addon</strong> and/or <strong>entity_id</strong></li>
+</ul>
+<pre><code class="language-yaml">auto_restart:
+  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
+  - service: hassio/addon_restart
+    addon: a6a2857d_givtcp
+</code></pre>
+<h2 id="battery-chargedischarge-curves">Battery charge/discharge curves</h2>
+<ul>
+<li><strong>battery_charge_power_curve</strong> - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
+Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.</li>
+</ul>
+<p>The default is 1.0 (full power) charge all the way to 100%.</p>
+<p>Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
+low power charging mode (<strong>switch.predbat_set_charge_low_power</strong>).</p>
+<p>Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
+when battery_charge_power_curve option is <em>not</em> set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+You should look at the <a href="../output-data/#predbat-logfile">AppDaemon/Predbat logfile</a> to find the predicted battery charging curve and copy/paste it into your <code>apps.yaml</code> file.
+This will also include a recommendation for how to set your <strong>battery_rate_max_scaling</strong> setting in HA.</p>
+<p>The YouTube video <a href="https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h">charging curve and low power charging</a>
+explains how the curve works and shows how Predbat automatically creates it.</p>
+<p>Setting this option to <strong>auto</strong> will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
+history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually save the data.</p>
+<p>NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.</p>
+<p>If you are using the recommended default <a href="#inverter-control-configurations">REST mode to control your inverter</a> then you will need to uncomment out the following entries in <code>apps.yaml</code>:</p>
+<pre><code class="language-yaml">  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+</code></pre>
+<p>Once the battery charge curve has been created these entries can be commented out again in <code>apps.yaml</code>.</p>
+<p>Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:</p>
+<pre><code class="language-yaml">  battery_charge_power_curve:
+    91 : 0.91
+    92 : 0.81
+    93 : 0.71
+    94 : 0.62
+    95 : 0.52
+    96 : 0.43
+    97 : 0.33
+    98 : 0.24
+    99 : 0.24
+    100 : 0.24
+</code></pre>
+<ul>
+<li><strong>battery_discharge_power_curve</strong> - Some batteries tail off their discharge rate at low soc% and this optional configuration item enables you to model this in Predbat.</li>
+</ul>
+<p>Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.</p>
+<p>The default is 1.0 (full power) discharge all the way to 0%.</p>
+<p>You can also look at the automation power curve calculation in the AppDaemon/Predbat log when Predbat starts (when this option is not set).</p>
+<p>Setting This option to <strong>auto</strong> will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
+the battery.</p>
+<p>In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.</p>
+<p>If you are using REST mode to control your inverter then the following entries in <code>apps.yaml</code> will need to be uncommented :</p>
+<pre><code class="language-yaml">  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+</code></pre>
+<h2 id="triggers">Triggers</h2>
+<p>The trigger feature is useful to help trigger your own automations based on Predbat determining that you have spare solar energy or battery that you would otherwise export.
+For example you may turn an immersion heater or the washing machine on to consume the excess solar power.</p>
+<p>The triggers count export energy until the next active charge slot only.</p>
+<p>For each trigger give a name, the minutes of export needed and the energy required in that time.</p>
+<p>Multiple triggers can be set at once so in total you could use too much energy if all run.</p>
+<p>Each trigger specified in <code>apps.yaml</code> will create a Home Assistant entity called 'binary_sensor.predbat_export_trigger_<em>name</em>' which will be turned on when the condition is valid.
+Connect this binary sensor to your automation to start whatever you want to trigger.</p>
+<p>Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kWh you will need available during that time period in apps.yaml:</p>
+<p>For example:</p>
+<pre><code class="language-yaml">export_triggers:
+  - name: &quot;large&quot;
+    minutes: 60
+    energy: 1.0
+  - name: &quot;small&quot;
+    minutes: 15
+    energy: 0.25
+</code></pre>
+<p>If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors in Home Assistant:</p>
+<ul>
+<li>
+<p><strong>binary_sensor.predbat_charging</strong> - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
+Note that this does include charge freeze slots where the discharge rate is set to zero without charging the battery.</p>
+</li>
+<li>
+<p><strong>binary_sensor.predbat_discharging</strong> - Will be True when the home battery is inside a force discharge slot. This does not include
+discharge freeze slots where the charge rate is set to zero to export excess solar only.</p>
+</li>
+</ul>
+<h2 id="understanding-how-days_previous-works">Understanding how days_previous works</h2>
+<p>As described earlier, <strong>days_previous</strong> is a list of the previous days of historical house load that are averaged together to predict your future daily load.</p>
+<p>e.g., if you want the average of the same day for the last 2 weeks:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 7
+    - 14
+</code></pre>
+<p>This section describes in more detail how days_previous is used by Predbat in creating the future battery plan, and gives some worked examples and a 'gotcha' to be aware of.</p>
+<p>When Predbat forecasts future home demand it counts backwards the days_previous number of days to find the appropriate historical home consumption.
+This is best explained through a worked example:</p>
+<p>In this example, days_previous is set to use history from 2 days ago:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 2
+</code></pre>
+<p>If right now today it's Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:</p>
+<ul>
+<li>For tomorrow (Tuesday) 9am slot, Predbat will look backwards 2 days from Tuesday so will use the historical home consumption from Sunday 9am
+as being the predicted load for Tuesday 9am.</li>
+<li>For the day after (Wednesday) 9am slot, Predbat again looks backwards 2 days from that day, so will use historical home consumption from Monday 9am as being the Wednesday 9am prediction.</li>
+</ul>
+<p>This pattern of counting backwards days_previous days to find the appropriate time slot to load historical home consumption from
+requires Predbat to operate some additional special processing if days_previous is set to a low value or forecast_hours to a high value.</p>
+<p>Extending the previous example but this time days_previous is set to use history from just the previous day:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 1
+</code></pre>
+<p>Today its still Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:</p>
+<ul>
+<li>For tomorrow (Tuesday) 9am slot, Predbat will look backwards 1 day from Tuesday so will use the historical home consumption from today (Monday) 9am
+as being the predicted load for Tuesday 9am.</li>
+<li>For the day after (Wednesday) 9am slot, Predbat again looks backwards 1 days from that day,
+so looks for historical home consumption from Tuesday 9am as being the Wednesday 9am prediction,
+but of course it's still Monday and Tuesday hasn't happened yet so we can't know what that historial consumption was!<BR>
+What Predbat does in this circumstance is to subtract a further day from days_previous and for Wednesday 9am's prediction it will therefore use the historical load from Monday 9am.</li>
+</ul>
+<p>This issue of finding future historical load only occurs when days_previous is set to 1 and Predbat is forecasting more than 24 hours ahead from 'now'.
+So to highlight this with some edge cases, today is still Monday 3:15pm, days_previous is still set to '1' and in the forward plan:</p>
+<ul>
+<li>For tomorrow (Tuesday) 2:30pm slot, Predbat looks backwards 1 day from Tuesday and takes the historical home consumption from today (Monday) 2:30pm slot.</li>
+<li>For tomorrow (Tuesday) 3:00pm slot, Predbat looks backwards 1 day and takes the historical load from today (Monday) 3:00pm slot - which we are only part way through
+so only 15 minutes of load will be predicted for tomorrow 3pm.</li>
+<li>For tomorrow (Tuesday) 3:30pm slot, Predbat looks backwards 1 day but the 3:30pm slot today hasn't yet occurred so Predbat will take the historical load from the prior day
+and has to use Sunday's 3:30pm load for tomorrow's prediction.</li>
+<li>Ditto the predicted load for tomorrow (Tuesday) 4:00pm slot comes from Sunday 4pm.</li>
+</ul>
+<p>Of course as today rolls forward and Predbat keeps on updating the forward plan every 5 minutes the prediction will be updated with the correct previous_day history as and when it exists.</p>
+<p>Its recommended therefore that days_previous isn't set to 1, or if it is, that you understand the way this has to work and the consequences.
+If you want to set days_previous to take an average of the house load over all the days of the last week its suggested that it be set as:</p>
+<pre><code class="language-yaml">  days_previous:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../energy-rates/" class="btn btn-neutral float-left" title="Energy rates"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../car-charge-planning/" class="btn btn-neutral float-right" title="Car charging planning">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../energy-rates/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../car-charge-planning/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

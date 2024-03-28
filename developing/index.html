@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Developing on Predbat - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Developing on Predbat";
+        var mkdocs_page_input_path = "developing.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../other-inverters/">Other Inverters</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Developing on Predbat</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#creating-a-fork">Creating a fork</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#pull-requests">Pull requests</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#editing-the-code">Editing the code</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#using-github-codespaces">Using GitHub Codespaces</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#what-is-github-codespaces">What is GitHub Codespaces?</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-github-codespaces">Running GitHub Codespaces</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#developing-locally-within-home-assistant">Developing locally within Home Assistant</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#working-on-the-documentation">Working on the documentation</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#overview-of-the-predbat-documentation">Overview of the Predbat documentation</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#the-documentation-build-process">The documentation build process</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#working-locally-on-the-documentation">Working locally on the documentation</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#coding-standards">Coding standards</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#expected-standards">Expected standards</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#enforced-standards">Enforced standards</a>
+        <ul>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-checks-locally">Running the checks locally</a>
+    </li>
+    <li class="toctree-l4"><a class="reference internal" href="#running-the-checks-from-within-github">Running the checks from within GitHub</a>
+    </li>
+        </ul>
+    </li>
+        </ul>
+    </li>
+    </ul>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predbat development</li>
+      <li class="breadcrumb-item active">Developing on Predbat</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="developing-on-predbat">Developing on Predbat</h1>
+<h2 id="creating-a-fork">Creating a fork</h2>
+<p>Using GitHub, take a fork of Predbat - effectively, this creates
+a copy of the main repository, but in your personal space.
+There, you can create branches to develop on.</p>
+<h2 id="pull-requests">Pull requests</h2>
+<p>Once you've completed your work on your branch, you can create a
+pull request (PR) to merge your work back in to the <code>main</code> branch
+of Predbat.</p>
+<p>This PR should describe the work you've done in a way that
+makes it easy for someone to review your work, and either
+add comments or approve it.</p>
+<h2 id="editing-the-code">Editing the code</h2>
+<p>There are at least a couple of ways of working on the code, outlined here.</p>
+<h3 id="using-github-codespaces">Using GitHub Codespaces</h3>
+<h4 id="what-is-github-codespaces">What is GitHub Codespaces?</h4>
+<p>Especially if you don't need to have a running Home Assistant system
+to make the changes you're interested in (e.g. for documentation,
+quick fixes etc.) a really easy way to work on the code is using
+GitHub Codespaces.</p>
+<p>GitHub Codespaces gives you a full featured development environment.
+This includes:</p>
+<ul>
+<li>A full IDE (a code editor), Visual Studio Code, which can be:<ul>
+<li>Run in the browser, requiring no additional software to
+be installed</li>
+<li>Run in a virtual machine (VM) running in the cloud which
+can connect to a copy of VS Code installed on your own
+machine</li>
+</ul>
+</li>
+<li>A terminal where you can run commands against your codebase
+e.g. running <code>pre-commit</code> to run the automatic code quality checks, linting files, etc.</li>
+<li>Software like <code>mkdocs</code> to re-generate the documentation files (and other software we may include)
+pre-installed in it</li>
+</ul>
+<p>The Codespaces environment is entirely separate from your HA
+installation, so does not require any modification to your HA
+setup to work with it.</p>
+<p>However, you are modifying code in an environment where you
+can't see HA running, so it's great for things like
+updating documentation, or writing automated tests, but not
+if you need to see your changes live within HA.</p>
+<h4 id="running-github-codespaces">Running GitHub Codespaces</h4>
+<p>You may with to first install <a href="https://code.visualstudio.com/download">VS Code</a>
+on your machine, which does offer some benefits compared to running
+Codespaces in the cloud, but this is certainly not essential, and
+you'll see the same code editor and terminal, and you'll have the
+same commands and Python packages available in the terminal.
+The local installation is better in a small number of
+scenarios e.g. if you need to connect from your browser to a specific port
+on the VM, such as if you're working on the documentation.</p>
+<p>Importantly, even if you do a local install of VS Code and use that
+to edit your code within GitHub, the terminal, the code you're editing
+any commands that you run, and any processes like <code>mkdocs</code> that you
+may browse to are all running in the Codespaces VM. Your local
+VS Code is connected to the VM through SSH. It will appear as if
+the code, the terminal etc. are local, but they are not. Running
+a local VS Code install connected to Codespaces will not install
+Python, Python packages or anything else on your local machine.</p>
+<p>Now, from your fork or branch, click on the Code button, and select the Codespaces tab.
+You can create multiple environments, or use a single environment and swap
+between branches in it.</p>
+<p><img alt="codespaces-selection" src="../images/codespaces-selection.png" /></p>
+<p>Once you start your Codespaces environment, it'll take a minute to
+create a VM for you, and to install the software we've asked it to
+install in there. It will also clone your repository and chosen
+branch into it for you, and the VM will be authenticated with GitHub
+so you can commit and push straight back to your fork of Predbat on GitHub.</p>
+<p>You can choose between running the IDE in the browser, or having
+your local installation of VS Code connect to the environment that GitHub
+Codespaces has created for you.</p>
+<p>The Codespaces will be already set up with Python, along with various
+Python packages (as defined in <code>requirements.txt</code>). The environment
+is configured through the config in <code>.devcontainer/devcontainer.json</code>.</p>
+<h3 id="developing-locally-within-home-assistant">Developing locally within Home Assistant</h3>
+<p>To be documented later.</p>
+<h2 id="working-on-the-documentation">Working on the documentation</h2>
+<h3 id="overview-of-the-predbat-documentation">Overview of the Predbat documentation</h3>
+<p>The documentation site at <a href="https://springfall2008.github.io/batpred/">https://springfall2008.github.io/batpred/</a>
+is built from Markdown files in this repo.</p>
+<p>The Markdown files used to build the documentation are in the <code>docs/</code> folder,
+with additional config for building the documentation site in <code>mkdocs.yml</code>.</p>
+<p>If you're making minor changes to the documentation e.g. fixing a spelling,
+you can just edit the Markdown files directly, and it will be pushed to the
+main documentation site as outlined in <a href="#the-documentation-build-process">the documentation build process</a>
+section below, once your changes are merged into <code>main</code> and released.</p>
+<p>However, if you're doing more than that, e.g. adding new sections, working
+with lists etc. we recommend you follow the instructions in
+<a href="#working-locally-on-the-documentation">working locally on the documentation</a>
+below, as this will give you a live preview of what the documentation
+will look like once it's build and published. This will avoid any
+unexpected results appearing in the main documentation site.</p>
+<p>If you are adding a new file, please ensure you add that file to
+<code>mkdocs.yml</code>, so it will be linked from the menu in the sidebar.</p>
+<h3 id="the-documentation-build-process">The documentation build process</h3>
+<p>The documentation for the site is built using <code>mkdocs</code>, which will
+already be installed if you're using a GitHub Codespaces environment.</p>
+<p>For a detailed explanation of <code>mkdocs</code> features, please read the
+<code>mkdocs</code> <a href="https://www.mkdocs.org/user-guide/">documentation</a>.</p>
+<p>As briefly covered above, <code>mkdocs.yml</code> contains the config for defining the documentation site,
+and the documentation is built by <code>mkdocs</code> reading the Markdown files in the <code>docs/</code> folder,
+and creating HTML files from those files. <code>mkdocs</code> can be used locally for previewing,
+but is also used as part of the documentation build process that publishes
+the official documentation site.</p>
+<p>The publishing of the documentation is triggered by a GitHub action,
+as defined in <code>.github/workflows/main.yml</code>.</p>
+<p>In short, after configuring the build environment, <code>mkdocs</code> builds the
+site, then pushes the HTML produced to the <code>gh-pages</code> branch,
+overwriting whatever was there previously.</p>
+<p>GitHub will then detect a new commit on the <code>gh-pages</code> branch,
+and that will trigger another action to run (as defined by GitHub).
+This action will take the HTML files on the <code>gh-pages</code> branch,
+and will make it available at <a href="https://springfall2008.github.io/batpred/">https://springfall2008.github.io/batpred/</a>.</p>
+<p>The documentation will be published as it is, with no further
+review process, so please ensure you check the documentation
+that will be built before merging it in.</p>
+<h3 id="working-locally-on-the-documentation">Working locally on the documentation</h3>
+<p>If you are making changes to the documentation, you can see
+a live preview version of the documentation as it will be
+built and deployed.</p>
+<p>This preview version is local to your environment, is
+temporary, and does not impact the published version in any way.</p>
+<p>It's recommended for anything other than simple changes
+like fixing spellings, adding a sentence or two. Things like
+new sections, lists, new pages etc. are best previewed
+due to the complications of various Markdown standards,
+as what works on GitHub READMEs, for example, does not
+necessarily work with the published documentation site
+(which follows a more strict Markdown standard).</p>
+<p>There are a number of terminal commands that you can use in the Codespaces environment. Open a terminal window in Codespaces by choosing menu &gt; Terminal &gt; New Terminal.</p>
+<p>To run the live preview, enter <code>mkdocs serve</code> in the terminal window - this will cause <code>mkdocs</code> to build a
+local temporary version of the documentation site,
+and to temporarily publish it on port 8000 - it will
+show the link where you can access the documentation.</p>
+<p>Also, it will watch the <code>docs/</code> folder, and any time you change the
+files, it will rebuild the site, allowing you to see changes to
+the Markdown files in your browser within a few seconds.</p>
+<p>The site will continue being served until you press <code>CTRL-C</code> to
+end the <code>mkdocs serve</code> command.</p>
+<p><em>Note, accessing the site published by <code>mkdocs serve</code> is not
+possible if you are using Codespaces to run VS Code in the browser,
+but it is possible if you're using it via VS Code running locally,
+due to the way in which ports on your environment are shared.</em></p>
+<h2 id="coding-standards">Coding standards</h2>
+<h3 id="expected-standards">Expected standards</h3>
+<p>This section will be enhanced following discussions as we go.</p>
+<p>However, here's a starting point:</p>
+<ul>
+<li>Variable names should be <code>lower_case_with_underscores</code> - this fits
+with most existing variables, is a common standard for Python code,
+and also allows the spell checking to check individual words within
+the variable name.</li>
+</ul>
+<h3 id="enforced-standards">Enforced standards</h3>
+<p>Certain coding standards are enforced within the repository.
+Some of them can be auto-fixed, if you do a commit that
+fails one of those standards; other issues will need fixing
+first, as your pull request won't merge in GitHub until it passes.</p>
+<p>These standards are enforced by <a href="https://pre-commit.com">pre-commit</a>,
+a tool which is able to run other tools to check, and potentially fix
+(for certain types of issues) any mistakes you've made.</p>
+<p>The <code>.pre-commit-config.yaml</code> file lists all checks that are
+currently carried out within the repository. Bear in mind that
+these checks are done according to the config within that file
+in the branch that you are working in,
+so if someone adds a new check, or changes some of the related settings,
+it won't apply on your branch until you've merged in their changes.</p>
+<p>Some of the tools have their own related config files:</p>
+<ul>
+<li>CSpell - <code>.cspell.json</code> and <code>.cspell/custom-dictionary-workspace.txt</code></li>
+<li>Black - <code>pyproject.toml</code></li>
+<li>Markdown Lint - <code>.markdownlint.jsonc</code></li>
+</ul>
+<p>Additional notes on some of the standards:</p>
+<ul>
+<li>CSpell - if you have the spelling check failing due to a word which is valid
+but is not in the in-built dictionary, please add that word to the end
+of <code>.cspell/custom-dictionary-workspace.txt</code> and stage those changes.
+The spell-check should then pass. Note, the dictionary file will get
+re-sorted alphabetically when you run <code>pre-commit</code>, so you'll need to
+re-stage the file after it's been sorted.</li>
+</ul>
+<h4 id="running-the-checks-locally">Running the checks locally</h4>
+<p>If you are using a Codespaces environment, you'll already have <code>pre-commit</code>
+installed automatically. You can run it manually, or automatically.</p>
+<p>Running <code>pre-commit</code> manually:</p>
+<ul>
+<li>
+<p>In a terminal window, running <code>pre-commit</code> will run all the checks against any files that you
+have modified and staged.</p>
+</li>
+<li>
+<p>Alternatively, running <code>pre-commit run --all-files</code> will run all the checks
+against all files within the repository.</p>
+</li>
+<li>
+<p>Note that if <code>pre-commit</code> makes any changes to any files when it runs,
+those changes will not be staged. You will need to stage those changes too
+before committing.</p>
+</li>
+<li>
+<p>You may notice <code>pre-commit</code> mentioning about stashing changes - this is
+because when it runs, any changes that aren't staged are stashed (saved
+away temporarily) so it runs against only the staged changes;
+after it has run, it pulls back those stashed changes, so they appear
+again (still unstaged).</p>
+</li>
+</ul>
+<p>Running <code>pre-commit</code> automatically:</p>
+<ul>
+<li>
+<p>If you run <code>pre-commit install</code> in a terminal window it will install a pre-commit hook -
+this is a file which tells <code>git</code> to run some code each type you do a
+particular action (a pre-commit hook runs at the start of processing
+a commit, but there are other hooks e.g. pre-push).</p>
+</li>
+<li>
+<p>Now, any time you perform a commit, <code>pre-commit</code> will run
+automatically on the staged files - this is a handy way of making sure
+that you don't accidentally commit code which will fail checks later.</p>
+</li>
+<li>
+<p>You can still run it manually as outlined above, in addition to the
+automated checks that it will do on commits.</p>
+</li>
+</ul>
+<h4 id="running-the-checks-from-within-github">Running the checks from within GitHub</h4>
+<p>When commits are done on pull requests, and in any other scenarios
+added to the <code>on</code> section of<code>.github/workflows/linting.yml</code>,
+the GitHub Actions in that file will run.</p>
+<p>In particular, the <a href="https://pre-commit.ci/lite.html">pre-commit.ci lite</a>
+action will run. This uses the code <a href="https://github.com/pre-commit-ci/lite-action">here</a>
+to run the same checks that get run locally
+(as described in the <code>.pre-commit-config.yaml</code> file).</p>
+<p>This will cause your commit, branch or pull request to get either a green tick
+or a red cross against it, to show whether the code passed the checks or not.
+This will happen automatically, when you push code on a branch that has a
+pull request.</p>
+<p>In addition, if <code>pre-commit</code> finds any errors that it is able to fix
+(e.g. a missing blank line at the end of a file, or trailing whitespace),
+it will do a commit of its own to fix those problems, and will push that
+commit back to your branch on GitHub. This will then trigger another run,
+which should now pass.</p>
+<p><strong>Note</strong>: This means that <code>pre-commit</code> will be adding commits to
+your branch - this will need you to be pulling changes from GitHub
+so you pick up the changes that have been added by <code>pre-commit</code>
+otherwise you will hit a problem when you next try to push a commit
+on your branch. You can pull in those changes by running <code>git pull</code>
+, which is the equivalent of running <code>git fetch</code> then <code>git merge</code> .
+This is no different to working on the same branch with another developer,
+but it will be different to the workflow most of us have when working
+on Predbat.</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../todo-list/" class="btn btn-neutral float-left" title="To-do list"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../todo-list/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

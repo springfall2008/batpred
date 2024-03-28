@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>FAQ - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "FAQ";
+        var mkdocs_page_input_path = "faq.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">FAQ</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#ive-installed-predbat-but-i-dont-see-the-correct-entities">I've installed Predbat but I don't see the correct entities</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#why-is-my-predicted-charge-higher-or-lower-than-i-might-expect">Why is my predicted charge % higher or lower than I might expect?</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#why-didnt-the-slot-actually-get-configured">Why didn't the slot actually get configured?</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#my-plan-doesnt-include-any-charging">My plan doesn't include any charging?</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#the-charge-limit-keeps-increasingdecreasing-in-the-charge-window-or-is-unstable">The charge limit keeps increasing/decreasing in the charge window or is unstable</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#i-changed-a-config-item-but-it-made-no-difference">I changed a config item but it made no difference?</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#its-all-running-but-im-not-getting-very-good-results">It's all running but I'm not getting very good results</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#when-my-battery-is-charging-to-100-is-fluctuates-between-98-and-100-andor-gives-an-error-setting-reserve">When my battery is charging to 100% is fluctuates between 98% and 100%, and/or gives an error setting reserve</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#the-plan-doesnt-charge-or-discharge-when-i-expect-it-to">The plan doesn't charge or discharge when I expect it to</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#predbat-is-causing-warning-messages-about-exceeding-maximum-size-in-the-home-assistant-core-log">Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#error-metric_octopus_import-not-set-correctly-or-no-energy-rates-can-be-read">Error - metric_octopus_import not set correctly or no energy rates can be read</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#warn-no-solar-data-has-been-configured">WARN: No solar data has been configured</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#note-can-not-find-battery-charge-curve">Note: Can not find battery charge curve</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#warn-inverter-is-in-calibration-mode">WARN: Inverter is in calibration mode</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#inverter-time-is-xxx-appdaemon-time-is-xxx-this-is-xxx-minutes-skewed-predbat-may-not-function-correctly">Inverter time is xxx AppDaemon time is xxx this is xxx minutes skewed, Predbat may not function correctly</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#i-have-another-problem-not-listed-above">I have another problem not listed above</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../other-inverters/">Other Inverters</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">FAQ</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="faq">FAQ</h1>
+<h2 id="ive-installed-predbat-but-i-dont-see-the-correct-entities">I've installed Predbat but I don't see the correct entities</h2>
+<ul>
+<li>First look at predbat.status in Home Assistant and the AppDaemon.log (which can be found in the list of log files in the System/Log area of the GUI).
+See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
+check your entity settings are correct.</li>
+<li>Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the <a href="../install/#solcast-install">Solcast instructions</a>).
+The default solcast sensor names maybe wrong, you might need to update the <code>apps.yaml</code> config to match your own names
+(some people don't have the solcast_ bit in their names)</li>
+<li>Did you configure AppDaemon apps_dir correctly in <code>appdaemon.yaml</code>?</li>
+</ul>
+<h2 id="why-is-my-predicted-charge-higher-or-lower-than-i-might-expect">Why is my predicted charge % higher or lower than I might expect?</h2>
+<ul>
+<li>Predbat is based on costing, so it will try to save you money. If you have the PV 10% option enabled it will also
+take into account the more worse case scenario and how often it might happen, so if the forecast is a bit unreliable
+it's better to charge more and not risk getting stung importing.</li>
+<li>Have you checked your energy rates for import and export are correct, maybe check the rates graph and confirm.
+If you do something like have export&gt;import then Predbat will try to export as much as possible.</li>
+<li>Have you tuned Solcast to match your output accurately?</li>
+<li>Have you tuned <strong>predbat_best_soc_keep settings</strong>?</li>
+<li>Do you have predicted car charging during the time period?</li>
+<li>You can also tune <strong>predbat_load_scaling</strong> and <strong>predbat_pv_scaling</strong> to adjust predictions up and down a bit</li>
+<li>Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)</li>
+</ul>
+<h2 id="why-didnt-the-slot-actually-get-configured">Why didn't the slot actually get configured?</h2>
+<ul>
+<li>Are you in read-only mode?</li>
+</ul>
+<h2 id="my-plan-doesnt-include-any-charging">My plan doesn't include any charging?</h2>
+<ul>
+<li>Do you have the predbat_mode set to Control charge (or Control charge &amp; discharge)?</li>
+</ul>
+<h2 id="the-charge-limit-keeps-increasingdecreasing-in-the-charge-window-or-is-unstable">The charge limit keeps increasing/decreasing in the charge window or is unstable</h2>
+<ul>
+<li>Check you don't have any other automations running that adjust GivTCP settings during this time. Some people had
+a script that changes the reserve %, this will cause problems - please disable other automations and retry.</li>
+</ul>
+<h2 id="i-changed-a-config-item-but-it-made-no-difference">I changed a config item but it made no difference?</h2>
+<ul>
+<li>You might have to wait a few minutes until the next update cycle. Depending on the speed of the computer that Predbat is running on, it can take 1-5 minutes for Predbat to run through.
+You can see the date/time that Predbat last completed a run at the start of the <a href="../predbat-plan-card/">Predbat HTML plan</a>.</li>
+</ul>
+<h2 id="its-all-running-but-im-not-getting-very-good-results">It's all running but I'm not getting very good results</h2>
+<ul>
+<li>You might want to tune <strong>input_number.predbat_best_soc_keep</strong> to set a minimum target battery level, e.g. I use 2.0 (for 2kWh, which is just over 20% on a 9.5kWh battery).
+If you set <strong>input_number.predbat_best_soc_keep</strong> too high then predbat could need to charge the battery in unfavourable import rates, so try to set it to a fairly low value,
+especially if you have a small battery. If you set it to zero then predbat may not charge at all, so use 0.1 as a minimum.</li>
+<li>Have a read of the <a href="../energy-rates/">energy rates configuration guide</a> as depending on your tariff different settings maybe required</li>
+<li>Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)</li>
+<li>Make sure your inverter max AC rate has been set correctly</li>
+<li>If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable</li>
+<li>Do you have a solar diverter? If so maybe you want to try using the iBoost model settings.</li>
+<li>Perhaps set up the calibration chart and let it run for 24 hours to see how things line up</li>
+<li>If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)</li>
+</ul>
+<h2 id="when-my-battery-is-charging-to-100-is-fluctuates-between-98-and-100-andor-gives-an-error-setting-reserve">When my battery is charging to 100% is fluctuates between 98% and 100%, and/or gives an error setting reserve</h2>
+<p>Some inverters e.g. GE AIO inverter won't allow the reserve to be set too 100, in which case set in apps.yaml</p>
+<pre><code class="language-yaml">inverter_reserve_max : 98
+</code></pre>
+<p>And this should prevent the issue</p>
+<h2 id="the-plan-doesnt-charge-or-discharge-when-i-expect-it-to">The plan doesn't charge or discharge when I expect it to</h2>
+<p>Predbat can only work on the information its given, although it does run every 5 minutes when it re-evaluates the plan and adjusts if necessary.</p>
+<p>The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.</p>
+<p>Make sure you have setup your <a href="../install/#solcast-install">Solcast solar forecast correctly</a> with the number of panels, orientation, output, etc.</p>
+<p>Projected daily load is determined from historical load information so make sure you have set <a href="../apps-yaml/#basics">days_previous and days_previous_weight in apps.yaml</a>
+to give appropriately representative load history to Predbat, and read the <a href="../apps-yaml/#understanding-how-days_previous-works">longer explanation of how days_previous works</a>.</p>
+<p>You could adjust <strong>input_number.predbat_load_scaling</strong> to 1.2 so the plan will incorporate 20% more expected load if you want to be more pessimistic about historical load,
+and <strong>input_number.predbat_pv_scaling</strong> to similarly adjust the PV forecast - these and other adjustment options are described in the <a href="../customisation/#scaling-and-weight-options">Scaling and Weight options</a>.</p>
+<p>It is very important to correctly set Predbat's <a href="../customisation/#battery-loss-options">Battery Loss Options</a>
+and <a href="../customisation/#battery-margins-and-metrics-options">Battery Margins</a> as these can have a huge and critical impact on the plan that Predbat generates.</p>
+<p>Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
+it depends on many factors and your personal preferences. Many users will need to customise and tweak their <a href="../customisation/">Predbat configuration</a> to suit their needs.</p>
+<p>The SOC level that Predbat aims to keep in the battery <strong>input_number.predbat_best_soc_keep</strong>
+and the absolute minimum SoC level <strong>input_number.predbat_best_soc_min</strong> are the first thing to check.
+If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
+Conversely if you find Predbat is letting the battery exhaust too early, set predbat_best_soc_keep to 1.0 so Predbat will aim to keep 1kWh available for unexpected load.</p>
+<p>Predbat performs a lowest cost battery optimisation so a key part of deciding whether to charge, discharge or feed the house from the battery are the loss rates
+<strong>input_number.predbat_battery_loss</strong>, <strong>input_number.predbat_battery_loss_discharge</strong> and <strong>input_number.predbat_inverter_loss</strong>.
+Typical values could be 4, 4, 4 or 5, 5, 5.  It is tempting to set these inverter loss figures lower to encourage Predbat to use the battery more,
+but this should be resisted as experience from the GivEnergy community forum suggests total energy conversion losses are in the range of 10-20%.</p>
+<p>Putting these losses into context and assuming you have an AC-coupled battery and have set the losses to 4, 4 and 4;
+then for every kWh charged from the grid you will only get 0.92kWh stored in the battery (4% charge + 4% inverter conversion loss)
+and similarly when that 0.92kWh is discharged to the home you will only receive 0.85kWh (0.92 x 0.92).</p>
+<p>These loss percentages also impact the Predbat plan. Consider an import rate of 20p/kWh; after conversion losses are considered,
+each 1kWh of stored battery charge will in effect have cost 21.7p (20 / 0.92) to import.</p>
+<p>Then for discharging, the same applies. Each kWh of stored battery charge (that cost 21.7p to charge) will in effect have cost 23.6p (21.7 / 0.92) to discharge.
+Predbat makes cost optimisation decisions so unless the current import rate is more than 23.6p, it will be cheaper to let the home run off grid import rather than to discharge the battery.</p>
+<p>If you turn <a href="../predbat-plan-card/#debug-mode-for-predbat-plan">debug mode on for the Predbat plan</a> then you can see the
+effective import and export rates after losses that Predbat calculates in the Predbat plan.</p>
+<p>Predbat also uses <strong>input_number.predbat_metric_battery_cycle</strong> (<em>expert mode</em> setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.</p>
+<p>So if metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
+and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).</p>
+<p><strong>input_number.predbat_metric_min_improvement</strong> and <strong>input_number.predbat_metric_min_improvement_discharge</strong> (both <em>expert mode</em> settings) also affect Predbat's cost optimisation decisions
+as to <a href="../customisation/#battery-margins-and-metrics-options">whether its cost beneficial to charge or discharge the battery</a>
+so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.</p>
+<p>Finally, it could be worth considering adding <a href="../energy-rates/#manually-over-riding-energy-rates">import or export rate increments</a> to <code>apps.yaml</code> if you want to direct Predbat
+to avoid or encourage charging or discharging in certain time periods - e.g. avoiding exporting in the time period saving sessions normally fall in,
+or to encourage discharging just before import rates fall overnight.</p>
+<h2 id="predbat-is-causing-warning-messages-about-exceeding-maximum-size-in-the-home-assistant-core-log">Predbat is causing warning messages about 'exceeding maximum size' in the Home Assistant Core log</h2>
+<p>If you have a large <strong>input_number.predbat_forecast_plan_hours</strong> then you may see warning messages in the Home Assistant Core log about the size of the predbat.plan_html entity,
+the message will be "State attributes for predbat.plan_html exceed maximum size of 16384 bytes".
+This is just a warning, the Predbat html plan entity isn't stored in the database anyway, but you can suppress the warning by adding the following to your <code>configuration.yaml</code> file:</p>
+<pre><code class="language-yaml"># Filter out 'message too large' warnings from Predbat
+logger:
+  default: warning
+  filters:
+    homeassistant.components.recorder.db_schema:
+      - &quot;State attributes for predbat.plan_html exceed maximum size of 16384 bytes. This can cause database performance issues; Attributes will not be stored&quot;
+</code></pre>
+<h2 id="error-metric_octopus_import-not-set-correctly-or-no-energy-rates-can-be-read">Error - metric_octopus_import not set correctly or no energy rates can be read</h2>
+<p>If you get this error in the Predbat log file:</p>
+<ul>
+<li>Check that the Octopus integration is working and that <strong>event.octopus_energy_electricity_<meter_number>_current_day_rates</strong>
+and <strong>sensor.octopus_electricity_energy_<meter_number>_current_rate</strong> are both populated by the integration.</li>
+<li>Ensure that you have followed the <a href="../install/#octopus-energy">Octopus Integration Installation instructions</a>, including enabling the Octopus Integration events.</li>
+<li>If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named <strong>sensor.electricity_<meter_number>_current_rate</strong>
+(i.e. no 'octopus_energy_' prefix) but the 'event' entities have the 'octopus_energy' prefix.<BR>
+If the 'event' and 'sensor' entities are not consistently named then Predbat will not be able to find the event entities if the sensor names don't match what's expected.<BR>
+To fix this, uninstall the Octopus integration, reboot Home Assistant,
+delete all the old Octopus sensors, and <a href="../install/#octopus-energy">re-install the Octopus Integration</a>.</li>
+</ul>
+<h2 id="warn-no-solar-data-has-been-configured">WARN: No solar data has been configured</h2>
+<p>If you get this warning message in the Predbat log file:</p>
+<ul>
+<li>Ensure that you have <a href="../install/#solcast-install">installed and configured Solcast correctly</a></li>
+<li>Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )</li>
+<li>Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
+and checking that you can see the half-hourly solar forecasts in the Solcast entities</li>
+<li>If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities</li>
+<li>Check <strong>sensor.solcast_pv_api_limit</strong> (it's normally 10 for new Solcast accounts) meaning you can call the Solcast API 10 times a day
+(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.
+Compare this to <strong>sensor.solcast_pv_api_used</strong> to see how many Solcast API calls you have made today
+(alternatively, you can confirm how many API calls you have made today by logging into your solcast account).
+If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
+It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.</li>
+<li>Check the <a href="https://status.solcast.com/">Solcast server API status</a> is OK</li>
+</ul>
+<h2 id="note-can-not-find-battery-charge-curve">Note: Can not find battery charge curve</h2>
+<p>If you get the message "Note: Can not find battery charge curve, one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml" in the logfile
+then Predbat is trying to create a battery charge curve but does not have access to the required history information in Home Assistant.</p>
+<p><a href="../apps-yaml/#workarounds">Creating the battery charge curve</a> is described in the apps.yaml document.
+The most likely cause of the above message appearing in the logfile is that you are controlling the inverter in REST mode
+but have not uncommented the following entities in apps.yaml that Predbat needs to obtain history from to create the battery charge curve:</p>
+<pre><code class="language-yaml">  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+</code></pre>
+<h2 id="warn-inverter-is-in-calibration-mode">WARN: Inverter is in calibration mode</h2>
+<p>If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
+then Predbat has identified that your inverter is currently calibrating your battery.</p>
+<p>Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
+and will not execute the plan nor enable battery charge or discharge.</p>
+<p>Once the inverter finishes calibrating the battery, Predbat will resume normal operations.</p>
+<h2 id="inverter-time-is-xxx-appdaemon-time-is-xxx-this-is-xxx-minutes-skewed-predbat-may-not-function-correctly">Inverter time is xxx AppDaemon time is xxx this is xxx minutes skewed, Predbat may not function correctly</h2>
+<p>If the <strong>predbat.status</strong> gives a warning error about the inverter time:</p>
+<p><img alt="IMAGE" src="../images/Inverter-time-warning.png" /></p>
+<p>Then it indicates that there is a mis-match between the clock that Predbat AppDaemon is using and the inverter time clock, and clearly with a clock mis-match,
+charging and discharging your battery at specific times may not work as expected.</p>
+<p>There are several potential causes of this problem:</p>
+<ul>
+<li>Check that the inverter time is correctly set, especially that its set to GMT (even if its summer time).
+In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / click SEND next to 'Set Date and Time'</li>
+<li>Check that the <a href="../install/#appdaemon-install">time_zone in appdaemon.yaml</a> is correctly set for your location (e.g. Europe/London)</li>
+<li>The time zone for <a href="../apps-yaml/#basics">Predbat in apps.yaml</a> needs to be set to the same value</li>
+<li>Finally, check how often your inverter integration is polling your inverter for new data. For <a href="../apps-yaml/#rest-interface-inverter-control">GivTCP the Self Run Loop Timer</a>
+is recommended to be set to a value of between 20 and 60 seconds.</li>
+</ul>
+<h2 id="i-have-another-problem-not-listed-above">I have another problem not listed above</h2>
+<p>If you are still having trouble feel free to raise a <a href="https://github.com/springfall2008/batpred/issues">Github ticket</a> for support</p>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../video-guides/" class="btn btn-neutral float-left" title="Video Guides"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../devices/" class="btn btn-neutral float-right" title="Support 3rd party devices/integrations">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../video-guides/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../devices/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

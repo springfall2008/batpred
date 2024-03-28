@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Other Inverters - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Other Inverters";
+        var mkdocs_page_input_path = "other-inverters.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul class="current">
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Other Inverters</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#solis-inverters">Solis Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solax-inverters">Solax Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#sofar-inverters">Sofar Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#huawei-inverters">Huawei Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#solaredge-inverters">SolarEdge Inverters</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#i-want-to-add-an-unsupported-inverter-to-predbat">I want to add an unsupported inverter to Predbat</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Predbat development</li>
+      <li class="breadcrumb-item active">Other Inverters</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="other-inverters">Other Inverters</h1>
+<p>PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other models:</p>
+<ul>
+<li>Solis Hybrid inverters <a href="https://github.com/wills106/homeassistant-solax-modbus">Solax Modbus integration</a></li>
+<li>Solax Gen4 inverters <a href="https://github.com/wills106/homeassistant-solax-modbus">Solax Modbus integration</a> in Modbus Power Control Mode</li>
+<li>Sofar inverters <a href="https://github.com/cmcgerty/Sofar2mqtt">Sofar MQTT integration</a></li>
+<li>Huawei inverters <a href="https://github.com/wlcrs/huawei_solar">Huawei Solar</a></li>
+<li>SolarEdge inverters - <a href="https://github.com/WillCodeForCats/solaredge-modbus-multi">Solaredge Modbus Multi</a></li>
+</ul>
+<p>Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
+Please also ensure you have set up enhanced logging in AppDaemon as described here.</p>
+<h2 id="solis-inverters">Solis Inverters</h2>
+<p>To run PredBat with Solis hybrid inverters, follow the following steps:</p>
+<ol>
+<li>Install PredBat as per the <a href="../installation-summary/">Installation Summary</a></li>
+<li>Ensure that you have the Solax Modbus integration running. There are a number of entities which this integration disables by default that you
+   will need to enable via the Home Assistant GUI:</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Name</th>
+<th style="text-align: left;">Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><code>sensor.solisx_rtc</code></td>
+<td style="text-align: left;">Real Time Clock</td>
+</tr>
+<tr>
+<td style="text-align: left;"><code>sensor.solisx_battery_power</code></td>
+<td style="text-align: left;">Battery Power</td>
+</tr>
+</tbody>
+</table>
+<ol start="4">
+<li>Instead of <code>apps.yaml</code> use <code>ginlong_solis.yaml</code> from this Repo as your starting template.
+   The majority of settings should be correct but please check.
+   You will need to un-comment the <code>template</code> line to enable it. Save it to the <code>config/appdaemon/apps/predbat/config</code> folder.</li>
+<li>Ensure that the inverter is set Control Mode 35 - on the Solax integration this is <code>Timed Charge/Discharge</code>.
+   If you want to use the <code>Reserve</code> functionality within PredBat you will need to select <code>Backup/Reserve</code> (code 51) instead but be aware that
+   this is not fully tested. In due course these mode settings will be incorporated into the code.</li>
+</ol>
+<h2 id="solax-inverters">Solax Inverters</h2>
+<p>Please see this ticket in Github for ongoing discussion: <a href="https://github.com/springfall2008/batpred/issues/259">https://github.com/springfall2008/batpred/issues/259</a></p>
+<h2 id="sofar-inverters">Sofar Inverters</h2>
+<p>For this integration the key elements are:</p>
+<ul>
+<li>Hardware - <a href="https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/">sofar2mqtt EPS board</a> - Relatively easy to solder and flash, or can be bought pre-made.</li>
+<li>Software - <a href="https://github.com/cmcgerty/Sofar2mqtt">Sofar MQTT integration</a> - MQTT integration</li>
+<li>Home Assistant configuration - <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar_inverter.yml">sofar_inverter.yaml</a> package (in templates directory)
+with the MQTT sensors. This is the default with a couple of additional inputs to support battery capacity. This should be installed in Home Assistant.</li>
+<li>
+<p>Predbat configuration - <a href="https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml">sofar.yaml</a> template for Predbat (in templates directory).
+This file should be copied to apps.yaml</p>
+</li>
+<li>
+<p>Please note that the inverter needs to be put into "Passive Mode" for the sofar2mqtt to control the inverter.</p>
+</li>
+<li>This integration has various limitations, it can charge and discharge the battery but does not have finer control over reserve and target SOC%</li>
+<li>Note: You will need to change the min reserve in Home Assistant to match your minimum battery level (<strong>input_number.predbat_set_reserve_min</strong>).</li>
+</ul>
+<p>Please see this ticket in Github for ongoing discussions: <a href="https://github.com/springfall2008/batpred/issues/395">https://github.com/springfall2008/batpred/issues/395</a></p>
+<h2 id="huawei-inverters">Huawei Inverters</h2>
+<p>Discussion ticket is here: <a href="https://github.com/springfall2008/batpred/issues/684">https://github.com/springfall2008/batpred/issues/684</a></p>
+<ul>
+<li>Please copy the template apps.yaml from <a href="https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml">https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml</a> and modify for your system</li>
+<li>Ensure you set <strong>input_number.predbat_set_reserve_min</strong> to the minimum value for your system which maybe 12%</li>
+</ul>
+<h2 id="solaredge-inverters">SolarEdge Inverters</h2>
+<p>Discussion ticket is here: <a href="https://github.com/springfall2008/batpred/issues/181">https://github.com/springfall2008/batpred/issues/181</a></p>
+<ul>
+<li>Please copy the template apps.yaml from <a href="https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml">https://github.com/springfall2008/batpred/blob/main/templates/solaredge.yaml</a> and modify for your system</li>
+<li>Ensure that <strong>number.solaredge_i1_storage_command_timeout</strong> is set to reasonably high value e.g. 3600 seconds to avoid the commands issued being cancelled</li>
+<li>
+<p>Power Control Options, as well as Enable Battery Control, must be enabled in the Solaredge Modbus Multi integration configuration,
+and switch.solaredge_i1_advanced_power_control must be on.</p>
+</li>
+<li>
+<p>For <strong>pv_today</strong>, <strong>pv_power</strong> and <strong>load_power</strong> sensors to work you need to create this as a template within your Home Assistant configuration.yml
+Please see: <a href="https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c">https://gist.github.com/Ashpork/f80fb0d3cb22356a12ed24734065061c</a>. These sensors are not critical so you can just comment it out in apps.yaml
+if you can't get it to work</p>
+</li>
+</ul>
+<pre><code class="language-yaml">template:
+  - sensor:
+      - name: &quot;Solar Panel Production W&quot;
+        unique_id: solar_panel_production_w
+        unit_of_measurement: &quot;W&quot;
+        icon: mdi:solar-power
+        state: &gt;
+          {% set i1_dc_power = states('sensor.solaredge_i1_dc_power') | float(0) %}
+          {% set b1_dc_power = states('sensor.solaredge_b1_dc_power') | float(0) %}
+          {% if (i1_dc_power + b1_dc_power &lt;= 0) %}
+            0
+          {% else %}
+            {{ (i1_dc_power + b1_dc_power) }}
+          {% endif %}
+        availability: &gt;
+          {{ states('sensor.solaredge_i1_dc_power') | is_number and states('sensor.solaredge_b1_dc_power') | is_number }}
+
+      - name: &quot;Solar House Consumption W&quot;
+        unique_id: solar_house_consumption_w
+        unit_of_measurement: &quot;W&quot;
+        icon: mdi:home
+        state: &gt;
+          {% set i1_ac_power = states('sensor.solaredge_i1_ac_power') | float(0) %}
+          {% set m1_ac_power = states('sensor.solaredge_m1_ac_power') | float(0) %}
+          {% if (i1_ac_power - m1_ac_power &lt;= 0) %}
+            0
+          {% else %}
+            {{ (i1_ac_power - m1_ac_power) }}
+          {% endif %}
+        availability: &gt;
+          {{ states('sensor.solaredge_i1_ac_power') | is_number and states('sensor.solaredge_m1_ac_power') | is_number }}
+
+sensor:
+  - platform: integration
+    source: sensor.solar_panel_production_w
+    method: left
+    unit_prefix: k
+    name: solar_panel_production_kwh
+</code></pre>
+<h2 id="i-want-to-add-an-unsupported-inverter-to-predbat">I want to add an unsupported inverter to Predbat</h2>
+<ul>
+<li>First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have</li>
+<li>Create a github ticket for support and add in what you know to the ticket</li>
+<li>Then find out how to control your inverter inside Home Assistant, ideally share any automation you have to control the inverter</li>
+<li>You can create a new inverter type in apps.yaml and change the options as to which controls it has</li>
+<li>The easy way to integrate is to use a HA service to start charges and discharges, edit the template below</li>
+</ul>
+<pre><code class="language-yaml"> inverter_type: MINE
+ inverter:
+    name : &quot;My Shiny new Inverter&quot;
+    has_rest_api: False
+    has_mqtt_api: False
+    has_service_api: True
+    output_charge_control: &quot;power&quot;
+    has_charge_enable_time: False
+    has_discharge_enable_time: False
+    has_target_soc: False
+    has_reserve_soc: False
+    charge_time_format: &quot;S&quot;
+    charge_time_entity_is_option: False
+    soc_units: &quot;%&quot;
+    num_load_entities: 1
+    has_ge_inverter_mode&quot;: False
+    time_button_press: False
+    clock_time_format: &quot;%Y-%m-%d %H:%M:%S&quot;
+    write_and_poll_sleep: 2
+    has_time_window: False
+    support_charge_freeze: False
+    support_discharge_freeze&quot;: False
+
+  # Services to control charging/discharging
+  charge_start_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Charge from Solar Power and Grid&quot;
+  charge_stop_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Charge from Solar Power&quot;
+  discharge_start_service:
+    service: select.select_option
+    entity_id: &quot;select.solaredge_i1_storage_command_mode&quot;
+    option: &quot;Maximize Self Consumption&quot;
+
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../creating-charts/" class="btn btn-neutral float-left" title="Creating the charts"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../todo-list/" class="btn btn-neutral float-right" title="To-do list">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../creating-charts/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../todo-list/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

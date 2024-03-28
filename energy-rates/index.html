@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>Energy rates - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Energy rates";
+        var mkdocs_page_input_path = "energy-rates.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul class="current">
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1 current"><a class="reference internal current" href="./">Energy rates</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#octopus-energy-integration">Octopus Energy integration</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#configuring-predbat-to-use-the-octopus-energy-integration">Configuring Predbat to use the Octopus Energy integration</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#standing-charge">Standing charge</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#octopus-saving-sessions">Octopus Saving sessions</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#octopus-rates-url">Octopus Rates URL</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#rate-bands-to-manually-configure-energy-rates">Rate Bands to manually configure Energy Rates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#manually-over-riding-energy-rates">Manually over-riding energy rates</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#rate-offsets">Rate offsets</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#future-agile-energy-rates">Future Agile energy rates</a>
+    </li>
+    </ul>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charge-planning/">Car charging planning</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../other-inverters/">Other Inverters</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+          <li class="breadcrumb-item">Installing & configuring Predbat</li>
+      <li class="breadcrumb-item active">Energy rates</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="energy-rates">Energy rates</h1>
+<p>Predbat needs to know what your Import and (optionally) Export rates are so it can plan the optimal way to use your battery.
+Your Import and Export rates can be simple flat rates,
+more complex time of day tariffs (e.g. Economy 7, Octopus Flux),
+or daily/half-hourly rates that track electricity market prices (e.g. Octopus Agile or Tracker).</p>
+<p>Energy rates are all configured in the <code>apps.yaml</code> file that's stored in either the <code>/addon_configs/46f69597_appdaemon-predbat/apps</code>
+or the <code>/config/appdaemon/apps/batpred/config/</code> directory depending on <a href="../apps-yaml/#appsyaml-settings">what type of Predbat installation method you have used</a>.</p>
+<p>You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
+to edit this file - see <a href="../install/#editing-configuration-files-in-home-assistant">editing configuration files within Home Assistant</a> if you need to install an editor.</p>
+<h2 id="octopus-energy-integration">Octopus Energy integration</h2>
+<p>If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information
+is to use the <a href="https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/">Octopus Energy integration</a>.</p>
+<p>The Octopus Energy integration connects to your Octopus Energy account and retrieves the tariffs you are on, and the current tariff rates.
+If you change tariff within Octopus the integration will automatically retrieve the updated tariff information, and as tariff prices change, again they are automatically retrieved.</p>
+<p>The integration also provides support for Intelligent Octopus charging to support car charging.</p>
+<p>Follow the instructions provided in the Octopus Energy integration documentation to install and setup the integration.</p>
+<p>Once installed, you will need to configure the integration (go to Settings / Devices &amp; Services / Integrations / Octopus Energy then click 'Configure')
+and provide the integration with your 'Octopus API key' (that you obtain from your Octopus account : Personal Details / API access).</p>
+<p><strong>CAUTION</strong> To get detailed energy rates needed by Predbat you need to go into Home Assistant and manually enable the following
+Octopus Energy events which are disabled by default when the integration is installed:</p>
+<pre><code class="language-yaml">    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+
+    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+
+    event.octopus_energy_gas_xxxxxxxx_previous_day_rates
+    event.octopus_energy_gas_xxxxxxxx_current_day_rates
+    event.octopus_energy_gas_xxxxxxxx_next_day_rates
+</code></pre>
+<p>To enable the above events:</p>
+<ul>
+<li>Go to Settings / Devices &amp; Services / Integrations, choose Octopus Energy, then <em>xx entities</em></li>
+<li>You will see a list of entities (and events) supplied by the Octopus integration</li>
+<li>Click the 'Filter' symbol on the top right hand corner (a series of lines in a downwards pointing arrow) and make sure all the options are selected</li>
+<li>Then in the left hand-side search entities box, type "current_day"</li>
+<li>Click on the first event that comes up, check the name is the right one</li>
+<li>Click the cog wheel, then you should see the option to enable the event</li>
+<li>Click the option to enable the event and press 'Update' to make the change</li>
+</ul>
+<p>Repeat this for the other events.</p>
+<p>The gas rates are only required if you have a gas boiler, an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.</p>
+<p>Verify that the integration is working correctly in Home Assistant by going to Developer Tools / States, and enter 'octopus' in the 'Filter entities' box.
+Confirm that the Octopus entities are being populated correctly.</p>
+<h2 id="configuring-predbat-to-use-the-octopus-energy-integration">Configuring Predbat to use the Octopus Energy integration</h2>
+<p>The following configuration items in apps.yaml are used to configure Predbat to use the Octopus Energy integration.
+They are set to a regular expression and should be auto-discovered so that Predbat automatically uses the Octopus Energy integration,
+but you can comment out the regular expression lines to disable, or you set them manually.</p>
+<ul>
+<li><strong>metric_octopus_import</strong> - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_current_rate</li>
+<li><strong>metric_octopus_export</strong> - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_export_current_rate</li>
+<li><strong>metric_octopus_gas</strong> - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_<meter_number>_current_rate</li>
+<li><strong>octopus_intelligent_slot</strong> - If you have the Octopus Intelligent GO tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_<account_id>_intelligent_dispatching</li>
+</ul>
+<p>metric_octopus_gas is (as above) only required to be configured if you are using Predbat to determine whether to heat your hot water via your iBoost or gas.</p>
+<p>If you do not have an export rate, or are not on the Octopus Go tariff, then the appropriate lines can be commented out in apps.yaml.</p>
+<h2 id="standing-charge">Standing charge</h2>
+<p>Predbat can also (optionally) include the daily standing charge in cost predictions.
+The following configuration item in apps.yaml defaults to obtaining the standing charge from the Octopus Energy integration:</p>
+<ul>
+<li><strong>metric_standing_charge</strong> - Standing charge in pounds. By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_<meter_number>_current_standing_charge</li>
+</ul>
+<p>You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
+if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.</p>
+<h2 id="octopus-saving-sessions">Octopus Saving sessions</h2>
+<p>Predbat is able to automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.</p>
+<p>For Predbat to automatically manage Octopus saving sessions the following additional configuration item in apps.yaml is used.
+Like the electricity rates this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.</p>
+<ul>
+<li><strong>octopus_saving_session</strong> - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_<account_id>_octoplus_saving_sessions.</li>
+</ul>
+<p>When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.</p>
+<p>In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
+The assumed rate will be taken from the Octopus Energy integration and converted into pence
+using the <strong>octopus_saving_session_octopoints_per_penny</strong> configuration item in apps.yaml (default is 8).</p>
+<p>If you normally cut back your house usage during a saving session then you can change <strong>input_number.predbat_load_scaling_saving</strong> to allow Predbat to assume an energy
+reduction in this period. E.g. setting to a value of 0.8 would indicate you will use 80% of the normal consumption in that period (a 20% reduction).</p>
+<p>As the saving session import and export rates are very high compared to normal Predbat will plan additional export during the saving session period.
+If necessary, a pre-charge may happen at some point during the day to maintain the battery right level for the session.</p>
+<p>Note that Predbat's operational mode <strong>select.predbat_mode</strong> must be set to either 'Control charge'
+or 'Control charge &amp; discharge' for Predbat to be able to manage the battery for the saving session.</p>
+<p>If you do not have an export tariff then forced export will not apply and Predbat will just ensure you have enough battery charge to see you through the saving session period.</p>
+<p>If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
+simply delete or comment out the <strong>octopus_saving_session</strong> entry in apps.yaml.</p>
+<h2 id="octopus-rates-url">Octopus Rates URL</h2>
+<p>If you do not wish to use the Octopus Energy integration and are an Octopus Energy customer then you can configure Predbat to get the electricity rates
+directly online from the Octopus website.</p>
+<p>In apps.yaml configure the following lines:</p>
+<ul>
+<li><strong>rates_import_octopus_url</strong> to point to the appropriate import tariff URL on the Octopus website</li>
+<li><strong>rates_export_octopus_url</strong> to point to the export tariff URL</li>
+</ul>
+<p>e.g.</p>
+<pre><code class="language-yaml">  rates_import_octopus_url : &quot;https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates&quot;
+  rates_import_octopus_url : &quot;https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates&quot;
+
+  rates_export_octopus_url: &quot;https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates&quot;
+  rates_export_octopus_url: &quot;https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/&quot;
+  rates_export_octopus_url: &quot;https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/&quot;
+</code></pre>
+<p>If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
+Similarly rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.</p>
+<p>Configuring the Octopus rates URL is an expert feature and for most users the Octopus Energy integration is a simpler solution to use.</p>
+<h2 id="rate-bands-to-manually-configure-energy-rates">Rate Bands to manually configure Energy Rates</h2>
+<p>If you are not an Octopus Energy customer, or you are but your energy rates repeat in a simple manner, you can configure your rate bands in apps.yaml using rates_import/rates_export.</p>
+<p>Add the following entries to apps.yaml to define the pattern of rates over a 24-hour period:</p>
+<pre><code class="language-yaml">rates_import:
+  - start: &quot;HH:MM:SS&quot;
+    end: &quot;HH:MM:SS&quot;
+    rate: pence
+rates_export:
+  - start: &quot;HH:MM:SS&quot;
+    end: &quot;HH:MM:SS&quot;
+    rate: pence
+</code></pre>
+<p><strong>start</strong> and <strong>end</strong> are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
+<strong>rate</strong> is in pence e.g. 4.2</p>
+<p>start and end can be omitted and Predbat will assume that you are on a single flat rate tariff.</p>
+<p>If there are any gaps in the 24-hour period then a zero rate will be assumed.</p>
+<h2 id="manually-over-riding-energy-rates">Manually over-riding energy rates</h2>
+<p>You can also override the energy rates (regardless of whether they are set manually or via the Octopus Energy integration) by using the override feature in apps.yaml.</p>
+<p>Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
+or the British Gas half-price electricity on Sunday's.</p>
+<p>Unfortunately there aren't any API's available to feed this information automatically into Predbat so you will have to edit <code>apps.yaml</code> manually
+to set the appropriate rate over-ride dates and times:</p>
+<pre><code class="language-yaml">rates_import_override:
+  - date : &quot;YYYY-MM-DD&quot;
+    start : &quot;HH:MM:SS&quot;
+    end : &quot;HH:MM:SS&quot;
+    rate : pence
+rates_export_override:
+  - date : &quot;YYYY-MM-DD&quot;
+    start : &quot;HH:MM:SS&quot;
+    end : &quot;HH:MM:SS&quot;
+    rate : pence
+</code></pre>
+<p>Optionally you can add a predicted load scaling in these periods using <strong>load_scaling</strong> for example:</p>
+<pre><code class="language-yaml">rates_import_override:
+  -  date: '2024-01-21'
+     start: '17:30:00'
+     end: '18:30:00'
+     rate: 150
+     load_scaling: 0.8
+</code></pre>
+<p>This instructs Predbat that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).</p>
+<p>You can also make relative adjustments to your energy rates, e.g. if you want to avoid exporting during peak periods to improve your energy
+saving session results you could make a relative adjustment to your export rates using <strong>rate_increment</strong>.
+The reason not to just set <strong>rate</strong> is then when an energy saving session is active you do not want to ignore the higher export rate that is automatically provided by Octopus.</p>
+<p>In this example we subtract 10p from our export rate during the period that saving sessions normally fall within and thus steer Predbat away from
+force exporting during that time. The saving session will still work correctly as a 10p adjustment on rates &gt;100p will have little/no impact.</p>
+<pre><code class="language-yaml">rates_export_override:
+ -  start: '17:00:00'
+    end: '19:00:00'
+    rate_increment: -10
+</code></pre>
+<p>You can also use a similar but opposite approach of setting a positive export rate_increment to encourage Predbat to discharge the battery at certain time periods.</p>
+<p>If you have a very low overnight rate (such as Octopus Go) and want to ensure your battery is discharged just before the low rate period,
+but you don't want to risk the battery running out too early (and importing at a higher rate),
+you can add a rate export override for the period you want to discharge just before the low rate period:</p>
+<pre><code class="language-yaml">rates_export_override:
+  - start: '22:30:00'
+    end: '23:30:00'
+    rate_increment: 10
+</code></pre>
+<p>You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.</p>
+<ul>
+<li><strong>date</strong> is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", <strong>start</strong> and <strong>end</strong> in "HH:MM:SS" time format e.g. "12:30:00", and <strong>rate</strong> in pence.</li>
+<li><strong>load_scaling</strong> is a percentage factor, where 1.0 would be no change, 0.8 is 80% of nominal house load.</li>
+<li><strong>rate_increment</strong> is the number of pence to add (or subtract) to the reported energy rates during this period</li>
+</ul>
+<h2 id="rate-offsets">Rate offsets</h2>
+<p>If you are on an Agile or Tracker tariff you can tune future unknown energy rates by adjusting the entities <strong>input_number.predbat_metric_future_rate_offset_import</strong> (<em>expert mode</em>)
+and <strong>input_number.predbat_metric_future_rate_offset_export</strong> (<em>expert mode</em>) inside Home Assistant to set the predicted offset for future unknown rates.</p>
+<h2 id="future-agile-energy-rates">Future Agile energy rates</h2>
+<p>In the energy market it's possible to calculate the Octopus Agile rates from around 10am UK time using public data, you can
+enable this in apps.yaml for Import, Export or both. This will approximate next day's rates based on the spot prices.
+The approximation is only used until the real Octopus Agile rates are released around 4pm.</p>
+<ul>
+<li><strong>futurerate_url</strong> - URL of future energy market prices; this should not normally need to be changed</li>
+<li><strong>futurerate_adjust_import</strong> and <strong>futurerate_adjust_export</strong> - Whether tomorrow's predicted import or export prices should be adjusted based on energy market prices or not.
+Set these depending upon whether you have an agile tariff for import, export or both</li>
+<li><strong>futurerate_peak_start</strong> and <strong>futurerate_peak_end</strong> - during the peak period Octopus apply an additional peak-rate price adjustment.
+These configuration items enable the peak-rate hours to be adjusted</li>
+<li><strong>futurerate_peak_premium_import</strong> and <strong>futurerate_peak_premium_export</strong> - the price premium (in pence) to be added to the energy market prices during the above-defined peak period</li>
+</ul>
+<p>CAUTION: You may violate the terms and conditions of the Nordpool site if you use this data and as such the authors of
+Predbat accept no responsibility for any violations:</p>
+<p><a href="https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/">https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/</a></p>
+<pre><code class="language-yaml">futurerate_url: '&lt;https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP&gt;'
+futurerate_adjust_import: True
+futurerate_adjust_export: False
+futurerate_peak_start: &quot;16:00:00&quot;
+futurerate_peak_end: &quot;19:00:00&quot;
+futurerate_peak_premium_import: 14
+futurerate_peak_premium_export: 6.5
+</code></pre>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../install/" class="btn btn-neutral float-left" title="Install details"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../apps-yaml/" class="btn btn-neutral float-right" title="apps.yaml settings">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../install/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../apps-yaml/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
