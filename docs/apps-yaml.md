@@ -199,7 +199,9 @@ To disable, set it to 1440.
 
 - **inverter_limit** - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
 This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
-If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
+If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR><BR>
+For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
+If though you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
 
 - **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
 This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
