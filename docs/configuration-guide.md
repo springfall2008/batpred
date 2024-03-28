@@ -107,7 +107,7 @@ Recommended settings - these must be changed in Home Assistant once Predbat is r
 |---------|---------------|-------------|
 | select.predbat_mode  | Control Charge & Discharge | You want Predbat to calculate and control charging and discharging |
 | input_number.predbat_best_soc_keep |  0.5  | Use the full battery without going empty |
-| switch.predbat_combine_charge_slots  | True  | Use one big charge slot |
+| switch.predbat_combine_charge_slots  | False  | Don't combine slots for a better result |
 
 If you are using expert mode then these options maybe worth reviewing, otherwise ignore this:
 
