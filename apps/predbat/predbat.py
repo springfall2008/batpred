@@ -1012,11 +1012,11 @@ INVERTER_DEF = {
 
 
 SOLAX_SOLIS_MODES = {
-    "Selfuse - No Grid Charging": 1,
+    "Self-Use - No Grid Charging": 1,
     "Timed Charge/Discharge - No Grid Charging": 3,
     "Backup/Reserve - No Grid Charging": 17,
-    "Selfuse": 33,
-    "Timed Charge/Discharge": 35,
+    "Self-Use - No Timed Charge/Discharge": 33,
+    "Self-Use": 35,
     "Off-Grid Mode": 37,
     "Battery Awaken": 41,
     "Battery Awaken + Timed Charge/Discharge": 43,
