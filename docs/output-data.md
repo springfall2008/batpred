@@ -203,80 +203,49 @@ trigger:
     to: "null"
     for:
       minutes: 15
-    id: no-givtcp-update
     variables:
-      inv_id: inverter <id>
+      alert_text: No GivTCP update received from inverter <id>
   - platform: state
     entity_id:
       - sensor.givtcp_<inverter id>_status
     from: "online"
     for:
       minutes: 15
-    id: no-givtcp-update
     variables:
-      inv_id: inverter <id>
+      alert_text: No GivTCP update received from inverter <id>
   - platform: numeric_state
     entity_id:
       - sensor.givtcp_<inverter id>_invertor_temperature
     for:
       minutes: 15
     below: 5
-    id: no-givtcp-update
     variables:
-      inv_id: inverter <id>
+      alert_text: No GivTCP update received from inverter <id>
   - platform: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
     to: "unknown"
     for:
       minutes: 15
-    id: battery-unavailable
     variables:
-      batt_id: <batt size/id>
+      alert_text: Battery <battery_id> is offline to GivTCP
 action:
-  - choose:
-      - conditions:
-          - condition: trigger
-            id:
-              - no-givtcp-update
-        sequence:
-          - service: notify.mobile_app_<your mobile device id>
-            data:
-              title: GivTCP communication issue
-              message: |
-                {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-                No GivTCP update received from {{ inv_id }} for the past 30 minutes.
-              data:
-                visibility: public
-                persistent: true
-                push:
-                  sound:
-                    name: default
-                    critical: 1
-                    volume: 0.8
-                sticky: true
-                color: red
-      - conditions:
-          - condition: trigger
-            id:
-              - battery-unavailable
-        sequence:
-          - service: notify.mobile_app_<your mobile device id>
-            data:
-              title: GivTCP communication issue
-              message: |
-                {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-                Battery {{ batt_id }} offline to GivTCP for the past 30 minutes.
-              data:
-                visibility: public
-                persistent: true
-                push:
-                  sound:
-                    name: default
-                    critical: 1
-                    volume: 0.8
-                  sticky: true
-                  color: red
+  - service: notify.mobile_app_<your mobile device id>
+    data:
+      title: GivTCP communication issue
+      message: |
+        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        {{ alert_text }} for the past 30 minutes.
+      data:
+        visibility: public
+        persistent: true
+        push:
+          sound:
+            name: default
+            critical: 1
+            volume: 0.8
+          sticky: true
+          color: red
 mode: single
 ```
 
