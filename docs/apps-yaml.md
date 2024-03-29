@@ -219,9 +219,10 @@ There are two ways that Predbat can control GivTCP to control the inverter, eith
 
 ### REST Interface inverter control
 
-- **givtcp_rest** - One per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal one for the first inverter and :6346 for the second inverter).
-When enabled the Control per inverter below isn't used and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
+- **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter).
+When enabled the Home Assistant GivTCP Inverter Controls below are not used
+and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
 If using Docker then change homeassistant.local to the Docker IP address.
 
 To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
@@ -234,13 +235,14 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 
 ![image](images/GivTCP-recommended-settings.png)
 
-### Home Assistant inverter control
+### Home Assistant GivTCP inverter control
 
 As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
-The template `apps.yaml` is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
-but may need changing if you have multiple inverters or non-standard GivTCP entity names.
+The template `apps.yaml` is pre-configured with regular expressions for the following configuration items
+that should auto-discover the GivTCP controls for two inverters (givtcp_ and givtcp2_), but may need changing if you have non-standard GivTCP entity names.
+If you only have a single inverter then the givtcp2_ lines can be commented out.
 
-The **givtcp_rest** line should be commented out/deleted in order for Predbat to use the direct GivTCP Home Assistant controls.
+If Predbat is to use the direct GivTCP Home Assistant controls as the preferred control method, the **givtcp_rest** line should be commented out/deleted.
 
 - **charge_rate** - GivTCP battery charge rate entity in watts
 - **discharge_rate** - GivTCP battery discharge max rate entity in watts
@@ -261,7 +263,8 @@ The **givtcp_rest** line should be commented out/deleted in order for Predbat to
 - **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
 
 If you are using REST control the above GivTCP configuration items can be deleted or commented out of `apps.yaml`
-(but see section below on [creating the battery charge power curve](#workarounds)).
+(but see section below on [creating the battery charge & discharge power curves](#workarounds)).
+You can however choose to leave these lines in `apps.yaml` when using REST as this gives Predbat the option to fall-back to the GivTCP Home Assistant controls if there is a REST failure.
 
 ## Solcast Solar Forecast
 
