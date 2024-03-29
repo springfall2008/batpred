@@ -220,7 +220,7 @@ There are two ways that Predbat can control GivTCP to control the inverter, eith
 ### REST Interface inverter control
 
 - **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter).
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter).<BR>
 When enabled the Home Assistant GivTCP Inverter Controls below are not used
 and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
 If using Docker then change homeassistant.local to the Docker IP address.
@@ -238,9 +238,10 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 ### Home Assistant GivTCP inverter control
 
 As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
+
 The template `apps.yaml` is pre-configured with regular expressions for the following configuration items
-that should auto-discover the GivTCP controls for two inverters (givtcp_ and givtcp2_), but may need changing if you have non-standard GivTCP entity names.
-If you only have a single inverter then the givtcp2_ lines can be commented out.
+that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
+If you only have a single inverter then the givtcp2 lines can be commented out.
 
 If Predbat is to use the direct GivTCP Home Assistant controls as the preferred control method, the **givtcp_rest** line should be commented out/deleted.
 
@@ -476,7 +477,7 @@ weirdness you may have from your inverter and battery setup.
 
 Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
 Set to 1 means add a minute to the AppDaemon time, set to -1 means take a minute off the AppDaemon time.
-This will change when real-time actions happen e.g. triggering a charge or discharge.
+This clock adjustment will be used by Predbat when real-time actions happen e.g. triggering a charge or discharge.
 
 If your inverter's time is different to the time on the computer running Home Assistant, you may need to skew the time settings made on the inverter when you trigger charging or discharging.
 Again 1 means the inverter is 1 minute fast and -1 means the inverter is 1 minute slow.
@@ -650,16 +651,18 @@ If you are using REST mode to control your inverter then the following entries i
 
 ## Triggers
 
-The trigger feature is useful to help trigger your own automations based on Predbat determining that you have spare solar energy or battery that you would otherwise export.
-For example you may turn an immersion heater or the washing machine on to consume the excess solar power.
+- **export_triggers** - The export trigger feature is useful to help trigger your own automations based on Predbat predicting in the plan
+that you will have spare solar energy that would be exported - this could happen if the battery is full or there is more predicted solar generation than can be charged into the battery.
+You can use the trigger in an automation, for example you could turn on an immersion heater or the washing machine to consume the excess solar power.
 
 The triggers count export energy until the next active charge slot only.
 
-For each trigger give a name, the minutes of export needed and the energy required in that time.
+For each trigger give a name, the minutes of export needed, and the energy required in that time.
 
-Multiple triggers can be set at once so in total you could use too much energy if all run.
+Multiple triggers can be enabled by Predbat at once so in total you could use too much energy if multiple triggered automations all run.
 
-Each trigger specified in `apps.yaml` will create a Home Assistant entity called 'binary_sensor.predbat_export_trigger_*name*' which will be turned on when the condition is valid.
+Each trigger specified in `apps.yaml` will create a Home Assistant entity called 'binary_sensor.predbat_export_trigger_*name*'
+which will be turned on when the predicted trigger conditions are valid.
 Connect this binary sensor to your automation to start whatever you want to trigger.
 
 Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kWh you will need available during that time period in apps.yaml:
@@ -676,7 +679,14 @@ export_triggers:
     energy: 0.25
 ```
 
-If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors in Home Assistant:
+**Note:** Predbat will set an export trigger to True if in the plan it predicts
+that there will be more than the specified amount of excess solar energy over the specified time period.<BR>
+In the example above, the 'large' trigger will be set to True for the 1 hour period where Predbat predicts
+that there will be a *total* of 1kWh of excess solar generation *over that time period*.
+For clarity the trigger is not set based on actual excess solar generation or export.<BR>
+It should also be recognised that this prediction could be wrong; there could be less solar generation or more house load than was predicted in the plan.
+
+If you wish to trigger activities based on Predbat charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors in Home Assistant:
 
 - **binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
 Note that this does include charge freeze slots where the discharge rate is set to zero without charging the battery.
