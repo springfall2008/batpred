@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.9"
+THIS_VERSION = "v7.16.10"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -7243,7 +7243,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> last updated: {} </td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M:%S"))
+        html += "<td colspan=10> last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -7252,8 +7252,10 @@ class PredBat(hass.Hass):
         in_span = False
         start_span = False
         for minute in range(minute_now_align, end_plan, 30):
-            minute_relative = max(minute - self.minutes_now, 0)
+            minute_relative = minute - self.minutes_now
+            minute_relative_start = max(minute_relative, 0)
             minute_relative_end = minute_relative + 30
+            minute_relative_slot_end = minute_relative_end
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             rate_start = minute_timestamp
             rate_value_import = self.dp2(self.rate_import.get(minute, 0))
@@ -7313,16 +7315,16 @@ class PredBat(hass.Hass):
             pv_forecast = self.dp2(pv_forecast)
             load_forecast = self.dp2(load_forecast)
 
-            soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative, 0.0) / self.soc_max) * 100.0) + 0.5)
-            soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative + 30, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative_start, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative_slot_end, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_end_window = int(self.dp2((self.predict_soc_best.get(minute_relative_end, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
             soc_percent_max_window = max(soc_percent, soc_percent_end_window)
             soc_percent_min_window = min(soc_percent, soc_percent_end_window)
-            soc_change = self.predict_soc_best.get(minute_relative + 30, 0.0) - self.predict_soc_best.get(minute_relative, 0.0)
-            metric_start = self.predict_metric_best.get(minute_relative, 0.0)
-            metric_end = self.predict_metric_best.get(minute_relative + 30, metric_start)
+            soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+            metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
+            metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
 
             soc_sym = ""
@@ -7493,8 +7495,8 @@ class PredBat(hass.Hass):
             iboost_amount_str = ""
             iboost_color = "#FFFFFF"
             if self.iboost_enable:
-                iboost_amount = self.predict_iboost_best.get(minute_relative, 0)
-                iboost_change = self.predict_iboost_best.get(minute_relative + 30, 0) - iboost_amount
+                iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
+                iboost_change = self.predict_iboost_best.get(minute_relative_slot_end, 0) - iboost_amount
                 iboost_amount_str = str(self.dp2(iboost_amount))
                 if iboost_change > 0:
                     iboost_color = "#FFFF00"
