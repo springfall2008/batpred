@@ -205,6 +205,10 @@ Predbat is configured to automatically discover the Solcast forecast entities in
 Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
+**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging (bypassing the hybrid inverter).
+
 Note that Predbat does not update Solcast for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
 (e.g. dawn, dusk, and just before your nightly charge slot).
 
