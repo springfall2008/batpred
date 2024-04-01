@@ -1048,7 +1048,7 @@ SOLAX_SOLIS_MODES = {
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
 }
-# New modes are from 2024.03.2
+# New modes are from 2024.03.2 controlled with solax_modbus_new in apps.yaml
 SOLAX_SOLIS_MODES_NEW = {
     "Self-Use - No Grid Charging": 1,
     "Timed Charge/Discharge - No Grid Charging": 3,
@@ -3417,7 +3417,7 @@ class Inverter:
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and discharging
 
-            modes_new = self.base.arg_arg("solax_modbus_new", False)
+            modes_new = self.base.arg_arg("solax_modbus_new", True)
             solax_modes = SOLAX_SOLIS_MODES_NEW if modes_new else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
