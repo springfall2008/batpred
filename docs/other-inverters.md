@@ -31,7 +31,9 @@ To run PredBat with Solis hybrid inverters, follow the following steps:
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
    this is not fully tested. In due course these mode settings will be incorporated into the code.
 
-## Solax Inverters
+## Solax Gen4 Inverters
+
+Use the template configuration from: [solax.sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml)
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 
