@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.10"
+THIS_VERSION = "v7.16.11"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -898,6 +898,28 @@ INVERTER_DEF = {
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
     },
+    "GEC": {
+        "name": "GivEnergy Cloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "has_service_api": False,
+        "output_charge_control": "power",
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "kWh",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%H:%M:%S",
+        "write_and_poll_sleep": 10,
+        "has_time_window": True,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+    },
     "GS": {
         "name": "Ginlong Solis",
         "has_rest_api": False,
@@ -1010,13 +1032,29 @@ INVERTER_DEF = {
     },
 }
 
-
+# Control modes for Solax inverters
 SOLAX_SOLIS_MODES = {
     "Selfuse - No Grid Charging": 1,
     "Timed Charge/Discharge - No Grid Charging": 3,
     "Backup/Reserve - No Grid Charging": 17,
     "Selfuse": 33,
     "Timed Charge/Discharge": 35,
+    "Off-Grid Mode": 37,
+    "Battery Awaken": 41,
+    "Battery Awaken + Timed Charge/Discharge": 43,
+    "Backup/Reserve - No Timed Charge/Discharge": 49,
+    "Backup/Reserve": 51,
+    "Feed-in priority - No Grid Charging": 64,
+    "Feed-in priority - No Timed Charge/Discharge": 96,
+    "Feed-in priority": 98,
+}
+# New modes are from 2024.03.2 controlled with solax_modbus_new in apps.yaml
+SOLAX_SOLIS_MODES_NEW = {
+    "Self-Use - No Grid Charging": 1,
+    "Timed Charge/Discharge - No Grid Charging": 3,
+    "Backup/Reserve - No Grid Charging": 17,
+    "Self-Use - No Timed Charge/Discharge": 33,
+    "Self-Use": 35,
     "Off-Grid Mode": 37,
     "Battery Awaken": 41,
     "Battery Awaken + Timed Charge/Discharge": 43,
@@ -2101,7 +2139,7 @@ class Inverter:
             if "battery_voltage" in self.base.args:
                 self.base.get_arg("battery_voltage", index=self.id, default=52.0)
 
-            if self.inverter_type == "GE":
+            if self.inverter_type in ["GE", "GEC", "GEE"]:
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0)
             elif "battery_rate_max" in self.base.args:
                 self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0)
@@ -3379,9 +3417,12 @@ class Inverter:
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and discharging
 
+            modes_new = self.base.arg_arg("solax_modbus_new", True)
+            solax_modes = SOLAX_SOLIS_MODES_NEW if modes_new else SOLAX_SOLIS_MODES
+
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
             entity = self.base.get_entity(entity_id)
-            switch = SOLAX_SOLIS_MODES.get(entity.get_state(), 0)
+            switch = solax_modes.get(entity.get_state(), 0)
             # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
             mask = 2 * timed + 32 * grid
             if switch > 0:
@@ -3393,7 +3434,7 @@ class Inverter:
 
                 if new_switch != switch:
                     # Now lookup the new mode in an inverted dict:
-                    new_mode = {SOLAX_SOLIS_MODES[x]: x for x in SOLAX_SOLIS_MODES}[new_switch]
+                    new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
 
                     self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} to {str_enable} {str_type} charging")
                     self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)

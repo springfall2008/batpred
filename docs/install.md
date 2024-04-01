@@ -17,15 +17,18 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
-## Inverter Control Integration install (GivTCP/SolaX-ModBus)
+## Inverter Control Integration install
 
 You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
 
-| Brand     | Integration  | Github Link                                                                      |
-| :-------- | :----------- | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
-| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                         |
-| Sofar     | Sofar MQTT   | <https://github.com/cmcgerty/Sofar2mqtt> |
+| Brand     | Integration     | Github Link                                                                      |
+| :-------- | :-----------     | :------------------------------------------------------------------------------- |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp]>    |
+| Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
+| Solax Gen4| Solax Modbus     | <https://github.com/wills106/homeassistant-solax-modbus> |
+| Sofar     | Sofar MQTT       | <https://github.com/cmcgerty/Sofar2mqtt> |
+| Huawei    | Huawei Modbus    | <https://github.com/wlcrs/huawei_solar> |
+| SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
 At present Predbat supports Solis, Solax and Sofar inverters; please see [Other Inverters](other-inverters.md) for details on the install details.

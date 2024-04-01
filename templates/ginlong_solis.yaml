@@ -17,6 +17,8 @@ pred_bat:
   #
 
   inverter_type: "GS"
+  solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
+
   num_inverters: 1
   #
   # Controls/status - must by 1 per inverter
