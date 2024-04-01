@@ -3266,42 +3266,48 @@ class Inverter:
             self.track_discharge_end = discharge_end
 
         self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
-
+        
         minutes_now = self.base.minutes_now
         charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, "%H:%M:%S", minutes_now)
         discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, "%H:%M:%S", minutes_now)
 
         # Idle from now until midnight
         idle_start_minutes = minutes_now
-        idle_end_minutes = 2 * 24 * 60 - 1
+        idle_end_minutes = 2*24*60 - 1
 
         if charge_start_minutes <= minutes_now and charge_end_minutes > minutes_now:
             # We are in a charge window so move on the idle start
             idle_start_minutes = max(idle_start_minutes, charge_end_minutes)
+            self.log("Clamp idle start until after charge start - idle start now {}".format(idle_start_minutes))
 
         if idle_end_minutes > charge_start_minutes and idle_start_minutes < charge_start_minutes:
             # Avoid the end running over the charge start
             idle_end_minutes = min(idle_end_minutes, charge_start_minutes)
+            self.log("Clamp idle end until before start charge - idle end now {}".format(idle_end_minutes))
 
         if discharge_start_minutes <= minutes_now and discharge_end_minutes > minutes_now:
             # We are in a discharge window so move on the idle start
             idle_start_minutes = max(idle_start_minutes, discharge_start_minutes)
+            self.log("Clamp idle start until after discharge start - idle start now {}".format(idle_start_minutes))
 
         if idle_end_minutes > discharge_start_minutes and idle_start_minutes < discharge_start_minutes:
             # Avoid the end running over the discharge start
             idle_end_minutes = min(idle_end_minutes, discharge_start_minutes)
+            self.log("Clamp idle end until before discharge charge - idle end now {}".format(idle_end_minutes))
 
         # Avoid midnight span
-        if idle_start_minutes < 24 * 60:
-            idle_end_minutes = max(24 * 60 - 1, idle_end_minutes)
+        if idle_start_minutes < 24*60:
+            idle_end_minutes = max(24*60 - 1, idle_end_minutes)
+            self.log("clamp idle end at mightnight, now {}".format(idle_end_minutes))
 
         if idle_start_minutes > idle_end_minutes:
             # Not until tomorrow so skip for now
             idle_start_minutes = 0
             idle_end_minutes = 0
+            self.log("Reset idle start/end due to being no window")
 
         idle_start_time = self.base.midnight_utc + timedelta(minutes=idle_start_minutes)
-        idle_end_time = self.base.midnight_utc + timedelta(minutes=(idle_end_minutes))
+        idle_end_time = self.base.midnight_utc + timedelta(minutes=idle_end_minutes)
         idle_start = idle_start_time.strftime("%H:%M:%S")
         idle_end = idle_end_time.strftime("%H:%M:%S")
 
@@ -3315,7 +3321,7 @@ class Inverter:
             if entity_idle_start_time and entity_idle_end_time:
                 old_start = self.base.get_arg("idle_start_time", index=self.id)
                 old_end = self.base.get_arg("idle_end_time", index=self.id)
-
+                        
                 if old_start != idle_start:
                     self.base.log("Inverter {} set new idle start time to {}".format(self.id, idle_start))
                     self.write_and_poll_option("idle_start_time", entity_idle_start_time, idle_start)
@@ -3330,7 +3336,7 @@ class Inverter:
         start = datetime.strptime(start, format)
         end = datetime.strptime(end, format)
         start_minute = start.hour * 60 + start.minute
-        end_minute = end.hour * 60 + start.minute
+        end_minute = end.hour * 60 + end.minute
 
         if end_minute < start_minute:
             # As windows wrap, if end is in the future then move start back, otherwise forward
@@ -3768,7 +3774,7 @@ class Inverter:
             in_new_window = True
 
         # Some inverters have an idle time setting
-        self.adjust_idle_time(charge_start=new_start, charge_end=new_end)
+        self.adjust_idle_time(charge_start=new_start, charge_end=new_end)            
 
         # Disable charging if required, for REST no need as we change start and end together anyhow
         if not in_new_window and not self.rest_data and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
@@ -10636,8 +10642,8 @@ class PredBat(hass.Hass):
 
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
-                        minutes_end = 24 * 60 - 1
+                    if minutes_start < 24*60 and minutes_end >= 24*60:
+                        minutes_end = 24*60 - 1
 
                 # Check if start is within 24 hours of now and end is in the future
                 if ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
@@ -10750,8 +10756,8 @@ class PredBat(hass.Hass):
 
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
-                        minutes_end = 24 * 60 - 2
+                    if minutes_start < 24*60 and minutes_end >= 24*60:
+                        minutes_end = 24*60 - 2
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + 1))  # Add in 1 minute margin to allow Predbat to restore ECO mode
