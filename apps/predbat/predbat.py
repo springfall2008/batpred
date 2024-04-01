@@ -897,6 +897,8 @@ INVERTER_DEF = {
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -919,6 +921,32 @@ INVERTER_DEF = {
         "has_time_window": True,
         "support_charge_freeze": True,
         "support_discharge_freeze": True,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+    },
+    "GEE": {
+        "name": "GivEnergy EMC",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "has_service_api": False,
+        "output_charge_control": "power",
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "kWh",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%H:%M:%S",
+        "write_and_poll_sleep": 10,
+        "has_time_window": True,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": True,
+        "can_span_midnight": False,
     },
     "GS": {
         "name": "Ginlong Solis",
@@ -941,6 +969,8 @@ INVERTER_DEF = {
         "has_time_window": True,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
     "SE": {
         "name": "SolarEdge",
@@ -963,6 +993,8 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
     "SX4": {
         "name": "Solax Gen4 (Modbus Power Control)",
@@ -985,6 +1017,8 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
     "SF": {
         "name": "Sofar HYD",
@@ -1007,6 +1041,8 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
     "HU": {
         "name": "Huawei Solar",
@@ -1029,6 +1065,8 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
     },
 }
 
@@ -2075,6 +2113,8 @@ class Inverter:
         self.inv_has_ge_inverter_mode = INVERTER_DEF[self.inverter_type]["has_ge_inverter_mode"]
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
+        self.inv_has_idle_time = INVERTER_DEF[self.inverter_type]["has_idle_time"]
+        self.inv_can_span_midnight = INVERTER_DEF[self.inverter_type]["can_span_midnight"]
 
         # If it's not a GE inverter then turn Quiet off
         if self.inverter_type != "GE":
@@ -2688,6 +2728,10 @@ class Inverter:
                     )
                     raise ValueError
 
+            # Track charge start/end
+            self.track_charge_start = charge_start_time.strftime("%H:%M:%S")
+            self.track_charge_end = charge_end_time.strftime("%H:%M:%S")
+
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
             charge_end_time -= timedelta(seconds=self.base.inverter_clock_skew_end * 60)
@@ -2712,6 +2756,8 @@ class Inverter:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
             self.charge_end_time_minutes = self.base.forecast_minutes
+            self.track_charge_start = "00:00:00"
+            self.track_charge_end = "00:00:00"
 
         # Construct charge window from the GivTCP settings
         self.charge_window = []
@@ -2770,6 +2816,14 @@ class Inverter:
             self.log("ERROR: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
             self.base.record_status("Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
+
+        # Tracking for idle time
+        if self.discharge_enable_time:
+            self.track_discharge_start = discharge_start.strftime("%H:%M:%S")
+            self.track_discharge_end = discharge_end.strftime("%H:%M:%S")
+        else:
+            self.track_discharge_start = "00:00:00"
+            self.track_discharge_end = "00:00:00"
 
         # Reverse clock skew
         discharge_start -= timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -3198,6 +3252,99 @@ class Inverter:
 
             self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
 
+    def adjust_idle_time(self, charge_start=None, charge_end=None, discharge_start=None, discharge_end=None):
+        """
+        Adjust inverter idle time based on charge/discharge times
+        """
+        if charge_start:
+            self.track_charge_start = charge_start
+        if charge_end:
+            self.track_charge_end = charge_end
+        if discharge_start:
+            self.track_discharge_start = discharge_start
+        if discharge_end:
+            self.track_discharge_end = discharge_end
+
+        self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
+        
+        minutes_now = self.base.minutes_now
+        charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, "%H:%M:%S", minutes_now)
+        discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, "%H:%M:%S", minutes_now)
+
+        # Idle from now until midnight
+        idle_start_minutes = minutes_now
+        idle_end_minutes = 2*24*60 - 1
+
+        if charge_start_minutes <= minutes_now and charge_end_minutes > minutes_now:
+            # We are in a charge window so move on the idle start
+            idle_start_minutes = max(idle_start_minutes, charge_end_minutes)
+
+        if idle_end_minutes > charge_start_minutes and idle_start_minutes < charge_start_minutes:
+            # Avoid the end running over the charge start
+            idle_end_minutes = min(idle_end_minutes, charge_start_minutes)
+
+        if discharge_start_minutes <= minutes_now and discharge_end_minutes > minutes_now:
+            # We are in a discharge window so move on the idle start
+            idle_start_minutes = max(idle_start_minutes, discharge_start_minutes)
+
+        if idle_end_minutes > discharge_start_minutes and idle_start_minutes < discharge_start_minutes:
+            # Avoid the end running over the discharge start
+            idle_end_minutes = min(idle_end_minutes, discharge_start_minutes)
+
+        # Avoid midnight span
+        if idle_start_minutes < 24*60:
+            idle_end_minutes = max(24*60 - 1, idle_end_minutes)
+
+        if idle_start_minutes > idle_end_minutes:
+            # Not until tomorrow so skip for now
+            idle_start_minutes = 0
+            idle_end_minutes = 0
+
+        idle_start_time = self.base.midnight_utc + timedelta(minutes=idle_start_minutes)
+        idle_end_time = self.base.midnight_utc + timedelta(minutes=(idle_end_minutes))
+        idle_start = idle_start_time.strftime("%H:%M:%S")
+        idle_end = idle_end_time.strftime("%H:%M:%S")
+
+        self.base.log("Adjust idle time computed idle is {}-{}".format(idle_start, idle_end))
+
+        # Write idle start/end time
+        if self.inv_has_idle_time:
+            entity_idle_start_time = self.base.get_entity(self.base.get_arg("idle_start_time", indirect=False, index=self.id))
+            entity_idle_end_time = self.base.get_entity(self.base.get_arg("idle_end_time", indirect=False, index=self.id))
+
+            if entity_idle_start_time and entity_idle_end_time:
+                old_start = self.base.get_arg("idle_start_time", index=self.id)
+                old_end = self.base.get_arg("idle_end_time", index=self.id)
+                        
+                if old_start != idle_start:
+                    self.base.log("Inverter {} set new idle start time to {}".format(self.id, idle_start))
+                    self.write_and_poll_option("idle_start_time", entity_idle_start_time, idle_start)
+                if old_end != idle_end:
+                    self.base.log("Inverter {} set new idle end time to {}".format(self.id, idle_end))
+                    self.write_and_poll_option("idle_end_time", entity_idle_end_time, idle_end)
+
+    def window2minutes(self, start, end, format, minutes_now):
+        """
+        Convert time start/end window string into minutes
+        """
+        start = datetime.strptime(start, format)
+        end = datetime.strptime(end, format)
+        start_minute = start.hour * 60 + start.minute
+        end_minute = end.hour * 60 + start.minute
+
+        if end_minute < start_minute:
+            # As windows wrap, if end is in the future then move start back, otherwise forward
+            if end_minute > minutes_now:
+                start_minute -= 60 * 24
+            else:
+                end_minute += 60 * 24
+
+        # Window already passed, move it forward until the next one
+        if end_minute < minutes_now:
+            start_minute += 60 * 24
+            end_minute += 60 * 24
+        return start_minute, end_minute
+
     def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
         """
         Adjust force discharge on/off and set the time window correctly
@@ -3260,6 +3407,12 @@ class Inverter:
 
         self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, old_start, old_end, new_start, new_end))
         changed_start_end = False
+
+        # Some inverters have an idle time setting
+        if force_discharge:
+            self.adjust_idle_time(discharge_start=new_start, discharge_end=new_end)
+        else:
+            self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
         if new_start and new_start != old_start:
@@ -3368,6 +3521,8 @@ class Inverter:
                 old_charge_schedule_enable = self.rest_data["Control"]["Enable_Charge_Schedule"]
             else:
                 old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+
+        self.adjust_idle_time(charge_start="00:00:00", charge_end="00:00:00")
 
         if old_charge_schedule_enable == "on" or old_charge_schedule_enable == "enable":
             if not SIMULATE:
@@ -3611,6 +3766,9 @@ class Inverter:
         # If we are in the new window no need to disable
         if minutes_now >= new_start_minutes and minutes_now < new_end_minutes:
             in_new_window = True
+
+        # Some inverters have an idle time setting
+        self.adjust_idle_time(charge_start=new_start, charge_end=new_end)            
 
         # Disable charging if required, for REST no need as we change start and end together anyhow
         if not in_new_window and not self.rest_data and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
@@ -10584,6 +10742,11 @@ class PredBat(hass.Hass):
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
                     minutes_start = int(self.minutes_now / 30) * 30
                     self.log("Move on discharge window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
+
+                # Span midnight allowed?
+                if not inverter.inv_can_span_midnight:
+                    if minutes_start < 24*60 and minutes_end >= 24*60:
+                        minutes_end = 24*60 - 1
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + 1))  # Add in 1 minute margin to allow Predbat to restore ECO mode
