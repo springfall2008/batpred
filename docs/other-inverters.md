@@ -121,9 +121,9 @@ sensor:
 
 ## Givenergy with EMC
 
-This is experimental system, please discuss on the ticket: https://github.com/springfall2008/batpred/issues/905
+This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
-- First set up ge_cloud integration using your API key https://github.com/springfall2008/ge_cloud
+- First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
     - Set your API key here also for the historical data
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
