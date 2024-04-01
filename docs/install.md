@@ -14,7 +14,7 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 - [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=jzpm89956Pw)
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
-  
+
 If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
 ## Inverter Control Integration install
