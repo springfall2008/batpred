@@ -7,6 +7,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
 - Sofar inverters [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)
 - Huawei inverters [Huawei Solar](https://github.com/wlcrs/huawei_solar)
 - SolarEdge inverters - [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi)
+- Givenergy with EMC - [ge_cloud](https://github.com/springfall2008/ge_cloud)
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 Please also ensure you have set up enhanced logging in AppDaemon as described here.
@@ -117,6 +118,17 @@ sensor:
     unit_prefix: k
     name: solar_panel_production_kwh
 ```
+
+## Givenergy with EMC
+
+This is experimental system, please discuss on the ticket: https://github.com/springfall2008/batpred/issues/905
+
+- First set up ge_cloud integration using your API key https://github.com/springfall2008/ge_cloud
+- Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
+    - Set your API key here also for the historical data
+    - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
+    - Set geseriale to the EMS inverter serial number (look in HA for entity names)
+- Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
 
 ## I want to add an unsupported inverter to Predbat
 
