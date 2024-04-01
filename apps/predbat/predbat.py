@@ -3298,7 +3298,7 @@ class Inverter:
         # Avoid midnight span
         if idle_start_minutes < 24 * 60:
             idle_end_minutes = max(24 * 60 - 1, idle_end_minutes)
-            self.log("clamp idle end at mightnight, now {}".format(idle_end_minutes))
+            self.log("clamp idle end at midnight, now {}".format(idle_end_minutes))
 
         if idle_start_minutes > idle_end_minutes:
             # Not until tomorrow so skip for now
