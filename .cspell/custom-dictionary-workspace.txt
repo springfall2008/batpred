@@ -16,6 +16,8 @@ Batpred
 batteri
 batteryb
 bierner
+cexxxx
+ceyyyy
 chargedischarge
 Chrg
 citem
@@ -40,12 +42,14 @@ dstamp
 dstart
 dwindow
 elif
+emszzzz
 endt
 feedin
 firstparty
 futurerate
 gekey
 geserial
+geseriale
 Ginlong
 GivEnergy
 givtcp
