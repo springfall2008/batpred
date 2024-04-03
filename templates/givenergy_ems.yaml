@@ -41,7 +41,7 @@ pred_bat:
   export_today:
     - sensor.ge_inverter_{geseriale}_grid_export_today
   pv_today:
-    - sensor.ge_inverter_{geseriale}_grid_solar_today
+    - sensor.ge_inverter_{geseriale}_solar_today
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
