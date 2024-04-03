@@ -3578,7 +3578,7 @@ class Inverter:
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and discharging
 
-            modes_new = self.base.arg_arg("solax_modbus_new", True)
+            modes_new = self.base.get_arg("solax_modbus_new", True)
             solax_modes = SOLAX_SOLIS_MODES_NEW if modes_new else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
