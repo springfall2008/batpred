@@ -220,7 +220,7 @@ There are two ways that Predbat can control GivTCP to control the inverter, eith
 ### REST Interface inverter control
 
 - **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter).<BR>
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you haven't a second inverter, delete the second line).<BR>
 When enabled the Home Assistant GivTCP Inverter Controls below are not used
 and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
 If using Docker then change homeassistant.local to the Docker IP address.
@@ -234,6 +234,9 @@ and set the Self Run Loop Timer which controls how often GivTCP retrieves data f
 Do not set Self Run to too low a value (i.e. retrieve too often) as this may overload the inverter:
 
 ![image](images/GivTCP-recommended-settings.png)
+
+*TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
+This may improve reliability of the REST connection as it doesn't need to lookup the HA server IP address each time.
 
 ### Home Assistant GivTCP inverter control
 
