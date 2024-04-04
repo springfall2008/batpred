@@ -35,13 +35,13 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.ge_inverter_{geseriale}_consumption_today
+    - sensor.ge_inverter_{geseriale}_consumption_total
   import_today:
-    - sensor.ge_inverter_{geseriale}_grid_import_today
+    - sensor.ge_inverter_{geseriale}_grid_import_total
   export_today:
-    - sensor.ge_inverter_{geseriale}_grid_export_today
+    - sensor.ge_inverter_{geseriale}_grid_export_total
   pv_today:
-    - sensor.ge_inverter_{geseriale}_grid_solar_today
+    - sensor.ge_inverter_{geseriale}_grid_solar_total
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -54,14 +54,16 @@ pred_bat:
   # Set the serial to the inverter serial to pull the data from and the key to your API key
   # When this is set load_today, import_today and export_today are not used
   #
-  ge_cloud_data: True
+  ge_cloud_data: False
   ge_cloud_serial: '{geseriale}'
   ge_cloud_key: 'xxxx'
 
   # Controls/status - must by 1 per inverter
   #
-  num_inverters: 1
-  inverter_type: 'GEE'
+  num_inverters: 2
+  inverter_type: 
+   - 'GEE'
+   - 'GEE'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
@@ -114,9 +116,9 @@ pred_bat:
   reserve:
     - sensor.ge_inverter_{geserial}_battery_reserve_limit
     - sensor.ge_inverter_{geserial2}_battery_reserve_limit
-  #inverter_time:
-  # - sensor.givtcp_{geserial}_invertor_time
-  # - sensor.givtcp2_{geserial2}_invertor_time
+  inverter_time:
+   - sensor.ge_inverter_{geseriale}_inverter_time
+   - sensor.ge_inverter_{geseriale}_inverter_time
   charge_start_time:
    - select.ge_inverter_{geseriale}_charge_start_time_slot_1
    - select.ge_inverter_{geseriale}_charge_start_time_slot_1
