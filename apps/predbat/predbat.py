@@ -2295,10 +2295,10 @@ class Inverter:
         # Args are also set for these so that no entries are needed for the dummies in the config file
 
         if not self.inv_has_charge_enable_time:
-            self.base.args["scheduled_charge_enable"] = self.create_entity("scheduled_charge_enable", False)
+            self.base.args["scheduled_charge_enable"] = self.create_entity("scheduled_charge_enable", True)
 
         if not self.inv_has_discharge_enable_time:
-            self.base.args["scheduled_discharge_enable"] = self.create_entity("scheduled_discharge_enable", False)
+            self.base.args["scheduled_discharge_enable"] = self.create_entity("scheduled_discharge_enable", True)
 
         if not self.inv_has_reserve_soc:
             self.base.args["reserve"] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
@@ -4256,7 +4256,7 @@ class PredBat(hass.Hass):
         while days_prev <= self.max_days_previous:
             time_value = now_utc - timedelta(days=(self.max_days_previous - days_prev))
             datestr = time_value.strftime("%Y-%m-%d")
-            url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=1024".format(geserial, datestr)
+            url = "https://api.givenergy.cloud/v1/inverter/{}/data-points/{}?pageSize=4096".format(geserial, datestr)
             while url:
                 data = self.get_ge_url(url, headers, now_utc)
 
