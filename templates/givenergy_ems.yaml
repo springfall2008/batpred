@@ -61,7 +61,7 @@ pred_bat:
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 2
-  inverter_type: 
+  inverter_type:
    - 'GEE'
    - 'GEE'
   #
