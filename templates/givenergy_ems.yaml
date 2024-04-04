@@ -135,11 +135,11 @@ pred_bat:
    - number.ge_inverter_{geseriale}_charge_soc_limit_1
    - number.ge_inverter_{geseriale}_charge_soc_limit_1
   discharge_start_time:
-   - select.ge_inverter_{geseriale}_export_end_time_slot_1
-   - select.ge_inverter_{geseriale}_export_end_time_slot_1
+   - select.ge_inverter_{geseriale}_export_start_time_slot_1
+   - select.ge_inverter_{geseriale}_export_start_time_slot_1
   discharge_end_time:
-   - select.ge_inverter_{geseriale}_export_start_time_slot_1
-   - select.ge_inverter_{geseriale}_export_start_time_slot_1
+   - select.ge_inverter_{geseriale}_export_end_time_slot_1
+   - select.ge_inverter_{geseriale}_export_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
