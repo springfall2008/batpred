@@ -41,7 +41,7 @@ pred_bat:
   export_today:
     - sensor.ge_inverter_{geseriale}_grid_export_total
   pv_today:
-    - sensor.ge_inverter_{geseriale}_grid_solar_total
+    - sensor.ge_inverter_{geseriale}_solar_total
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -167,20 +167,20 @@ pred_bat:
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
-  battery_charge_power_curve:
-    100 : 0.15
-    99 : 0.15
-    98 : 0.22
-    97 : 0.31
-    96 : 0.42
-    95 : 0.48
-    94 : 0.58
-    93 : 0.68
-    92 : 0.77
-    91 : 0.85
-    90 : 0.94
-  battery_discharge_power_curve:
-    4: 1.0
+  #battery_charge_power_curve:
+  #  100 : 0.15
+  #  99 : 0.15
+  #  98 : 0.22
+  #  97 : 0.31
+  #  96 : 0.42
+  #  95 : 0.48
+  #  94 : 0.58
+  #  93 : 0.68
+  #  92 : 0.77
+  #  91 : 0.85
+  #  90 : 0.94
+  #battery_discharge_power_curve:
+  #  4: 1.0
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
@@ -355,8 +355,6 @@ pred_bat:
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous:
     - 7
-    - 14
-    - 21
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
