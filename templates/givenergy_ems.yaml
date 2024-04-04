@@ -35,13 +35,13 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.ge_inverter_{geseriale}_consumption_today
+    - sensor.ge_inverter_{geseriale}_consumption_total
   import_today:
-    - sensor.ge_inverter_{geseriale}_grid_import_today
+    - sensor.ge_inverter_{geseriale}_grid_import_total
   export_today:
-    - sensor.ge_inverter_{geseriale}_grid_export_today
+    - sensor.ge_inverter_{geseriale}_grid_export_total
   pv_today:
-    - sensor.ge_inverter_{geseriale}_solar_today
+    - sensor.ge_inverter_{geseriale}_solar_total
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -54,14 +54,16 @@ pred_bat:
   # Set the serial to the inverter serial to pull the data from and the key to your API key
   # When this is set load_today, import_today and export_today are not used
   #
-  ge_cloud_data: True
+  ge_cloud_data: False
   ge_cloud_serial: '{geseriale}'
   ge_cloud_key: 'xxxx'
 
   # Controls/status - must by 1 per inverter
   #
-  num_inverters: 1
-  inverter_type: 'GEE'
+  num_inverters: 2
+  inverter_type:
+   - 'GEE'
+   - 'GEE'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
@@ -112,11 +114,11 @@ pred_bat:
     - sensor.ge_inverter_{geserial}_battery_size
     - sensor.ge_inverter_{geserial2}_battery_size
   reserve:
-    - sensor.ge_inverter_{geserial}_battery_reserve_limit
-    - sensor.ge_inverter_{geserial2}_battery_reserve_limit
-  #inverter_time:
-  # - sensor.givtcp_{geserial}_invertor_time
-  # - sensor.givtcp2_{geserial2}_invertor_time
+    - number.ge_inverter_{geserial}_battery_reserve_limit
+    - number.ge_inverter_{geserial2}_battery_reserve_limit
+  inverter_time:
+   - sensor.ge_inverter_{geseriale}_inverter_time
+   - sensor.ge_inverter_{geseriale}_inverter_time
   charge_start_time:
    - select.ge_inverter_{geseriale}_charge_start_time_slot_1
    - select.ge_inverter_{geseriale}_charge_start_time_slot_1
@@ -133,15 +135,16 @@ pred_bat:
    - number.ge_inverter_{geseriale}_charge_soc_limit_1
    - number.ge_inverter_{geseriale}_charge_soc_limit_1
   discharge_start_time:
-   - select.ge_inverter_{geseriale}_export_end_time_slot_1
-   - select.ge_inverter_{geseriale}_export_end_time_slot_1
+   - select.ge_inverter_{geseriale}_export_start_time_slot_1
+   - select.ge_inverter_{geseriale}_export_start_time_slot_1
   discharge_end_time:
-   - select.ge_inverter_{geseriale}_export_start_time_slot_1
-   - select.ge_inverter_{geseriale}_export_start_time_slot_1
+   - select.ge_inverter_{geseriale}_export_end_time_slot_1
+   - select.ge_inverter_{geseriale}_export_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
+   - 3600
    - 3600
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
@@ -154,6 +157,7 @@ pred_bat:
   # The value can be set here in watts to model this (doesn't change operation)
   inverter_battery_rate_min:
     - 200
+    - 200
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
@@ -163,20 +167,20 @@ pred_bat:
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
-  battery_charge_power_curve:
-    100 : 0.15
-    99 : 0.15
-    98 : 0.22
-    97 : 0.31
-    96 : 0.42
-    95 : 0.48
-    94 : 0.58
-    93 : 0.68
-    92 : 0.77
-    91 : 0.85
-    90 : 0.94
-  battery_discharge_power_curve:
-    4: 1.0
+  #battery_charge_power_curve:
+  #  100 : 0.15
+  #  99 : 0.15
+  #  98 : 0.22
+  #  97 : 0.31
+  #  96 : 0.42
+  #  95 : 0.48
+  #  94 : 0.58
+  #  93 : 0.68
+  #  92 : 0.77
+  #  91 : 0.85
+  #  90 : 0.94
+  #battery_discharge_power_curve:
+  #  4: 1.0
 
   # Inverter clock skew in minutes, e.g. 1 means it's 1 minute fast and -1 is 1 minute slow
   # Separate start and end options are applied to the start and end time windows, mostly as you want to start late (not early) and finish early (not late)
@@ -351,8 +355,6 @@ pred_bat:
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous:
     - 7
-    - 14
-    - 21
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
@@ -371,6 +373,7 @@ pred_bat:
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling:
+    - 1.0
     - 1.0
 
   # Can be used to scale import and export data, used for workarounds
