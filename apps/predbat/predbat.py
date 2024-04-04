@@ -2293,13 +2293,6 @@ class Inverter:
 
         # Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type:
         # Args are also set for these so that no entries are needed for the dummies in the config file
-
-        if not self.inv_has_charge_enable_time:
-            self.base.args["scheduled_charge_enable"] = self.create_entity("scheduled_charge_enable", True)
-
-        if not self.inv_has_discharge_enable_time:
-            self.base.args["scheduled_discharge_enable"] = self.create_entity("scheduled_discharge_enable", True)
-
         if not self.inv_has_reserve_soc:
             self.base.args["reserve"] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
 
@@ -2653,8 +2646,15 @@ class Inverter:
             self.charge_rate_now = self.rest_data["Control"]["Battery_Charge_Rate"] / MINUTE_WATT
             self.discharge_rate_now = self.rest_data["Control"]["Battery_Discharge_Rate"] / MINUTE_WATT
         else:
-            self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
-            self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
+            if self.inv_has_charge_enable_time:
+                self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
+            else:
+                self.charge_enable_time = True
+
+            if self.inv_has_discharge_enable_time:
+                self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
+            else:
+                self.discharge_enable_time = True
             self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
             self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0) / MINUTE_WATT
 
@@ -3266,14 +3266,14 @@ class Inverter:
             self.track_discharge_end = discharge_end
 
         self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
-
+        
         minutes_now = self.base.minutes_now
         charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, "%H:%M:%S", minutes_now)
         discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, "%H:%M:%S", minutes_now)
 
         # Idle from now until midnight
         idle_start_minutes = minutes_now
-        idle_end_minutes = 2 * 24 * 60 - 1
+        idle_end_minutes = 2*24*60 - 1
 
         if charge_start_minutes <= minutes_now and charge_end_minutes > minutes_now:
             # We are in a charge window so move on the idle start
@@ -3296,8 +3296,8 @@ class Inverter:
             self.log("Clamp idle end until before discharge charge - idle end now {}".format(idle_end_minutes))
 
         # Avoid midnight span
-        if idle_start_minutes < 24 * 60:
-            idle_end_minutes = max(24 * 60 - 1, idle_end_minutes)
+        if idle_start_minutes < 24*60:
+            idle_end_minutes = max(24*60 - 1, idle_end_minutes)
             self.log("clamp idle end at midnight, now {}".format(idle_end_minutes))
 
         if idle_start_minutes > idle_end_minutes:
@@ -3321,7 +3321,7 @@ class Inverter:
             if entity_idle_start_time and entity_idle_end_time:
                 old_start = self.base.get_arg("idle_start_time", index=self.id)
                 old_end = self.base.get_arg("idle_end_time", index=self.id)
-
+                        
                 if old_start != idle_start:
                     self.base.log("Inverter {} set new idle start time to {}".format(self.id, idle_start))
                     self.write_and_poll_option("idle_start_time", entity_idle_start_time, idle_start)
@@ -3526,7 +3526,10 @@ class Inverter:
             if self.rest_data:
                 old_charge_schedule_enable = self.rest_data["Control"]["Enable_Charge_Schedule"]
             else:
-                old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+                if self.inv_has_charge_enable_time:
+                    old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+                else:
+                    old_charge_schedule_enable = True
 
         self.adjust_idle_time(charge_start="00:00:00", charge_end="00:00:00")
 
@@ -3536,8 +3539,12 @@ class Inverter:
                 if self.rest_data:
                     self.rest_enableChargeSchedule(False)
                 else:
-                    entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
-                    self.write_and_poll_switch("scheduled_charge_enable", entity, False)
+                    if self.inv_has_charge_enable_time:
+                        entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
+                        self.write_and_poll_switch("scheduled_charge_enable", entity, False)
+                    else:
+                        self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc)
+
                     # If there's no charge enable switch then we can enable using start and end time
                     if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                         self.enable_charge_discharge_with_time_current("charge", False)
@@ -3749,7 +3756,10 @@ class Inverter:
             elif "charge_start_time" in self.base.args:
                 old_start = self.base.get_arg("charge_start_time", index=self.id)
                 old_end = self.base.get_arg("charge_end_time", index=self.id)
-                old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+                if self.inv_has_charge_enable_time:
+                    old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
+                else:
+                    old_charge_schedule_enable = True
             else:
                 self.log("WARN: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
 
@@ -3774,7 +3784,7 @@ class Inverter:
             in_new_window = True
 
         # Some inverters have an idle time setting
-        self.adjust_idle_time(charge_start=new_start, charge_end=new_end)
+        self.adjust_idle_time(charge_start=new_start, charge_end=new_end)            
 
         # Disable charging if required, for REST no need as we change start and end together anyhow
         if not in_new_window and not self.rest_data and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
@@ -3846,13 +3856,11 @@ class Inverter:
                 # Enable scheduled charge if not turned on
                 if self.rest_data:
                     self.rest_enableChargeSchedule(True)
-                elif "scheduled_charge_enable" in self.base.args:
+                elif self.inv_has_charge_enable_time:
                     entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
                     self.write_and_poll_switch("scheduled_charge_enable", entity, True)
-                    if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
-                        self.enable_charge_discharge_with_time_current("charge", True)
-                else:
-                    self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
+                elif self.inv_output_charge_control == "current":
+                    self.enable_charge_discharge_with_time_current("charge", True)
 
                 # Only notify if it's a real change and not a temporary one
                 if (old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable") and self.base.set_inverter_notify:
@@ -10642,8 +10650,8 @@ class PredBat(hass.Hass):
 
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
-                        minutes_end = 24 * 60 - 1
+                    if minutes_start < 24*60 and minutes_end >= 24*60:
+                        minutes_end = 24*60 - 1
 
                 # Check if start is within 24 hours of now and end is in the future
                 if ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
@@ -10756,8 +10764,8 @@ class PredBat(hass.Hass):
 
                 # Span midnight allowed?
                 if not inverter.inv_can_span_midnight:
-                    if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
-                        minutes_end = 24 * 60 - 2
+                    if minutes_start < 24*60 and minutes_end >= 24*60:
+                        minutes_end = 24*60 - 2
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + 1))  # Add in 1 minute margin to allow Predbat to restore ECO mode
