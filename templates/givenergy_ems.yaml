@@ -114,8 +114,8 @@ pred_bat:
     - sensor.ge_inverter_{geserial}_battery_size
     - sensor.ge_inverter_{geserial2}_battery_size
   reserve:
-    - sensor.ge_inverter_{geserial}_battery_reserve_limit
-    - sensor.ge_inverter_{geserial2}_battery_reserve_limit
+    - number.ge_inverter_{geserial}_battery_reserve_limit
+    - number.ge_inverter_{geserial2}_battery_reserve_limit
   inverter_time:
    - sensor.ge_inverter_{geseriale}_inverter_time
    - sensor.ge_inverter_{geseriale}_inverter_time
