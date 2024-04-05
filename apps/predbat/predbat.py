@@ -512,13 +512,6 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
-        "name": "calculate_regions",
-        "friendly_name": "Calculate region optimisation",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": True,
-    },
-    {
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
         "type": "switch",
@@ -11869,7 +11862,7 @@ class PredBat(hass.Hass):
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
-        self.calculate_regions = self.get_arg("calculate_regions")
+        self.calculate_regions = True
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
