@@ -512,6 +512,13 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "calculate_secondary_order",
+        "friendly_name": "Calculate secondary order slots",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": True,
+    },
+    {
         "name": "calculate_inday_adjustment",
         "friendly_name": "Calculate in-day adjustment",
         "type": "switch",
@@ -876,7 +883,7 @@ INVERTER_DEF = {
         "has_service_api": False,
         "output_charge_control": "power",
         "has_charge_enable_time": True,
-        "has_discharge_enable_time": True,
+        "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": True,
         "charge_time_format": "HH:MM:SS",
@@ -2583,7 +2590,7 @@ class Inverter:
         else:
             prefix = "prefix"
 
-        entity_id = f"sensor.{prefix}_{self.inverter_type}_{entity_name}"
+        entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
         if not self.base.entity_exists(entity_id):
             attributes = {
@@ -9616,7 +9623,7 @@ class PredBat(hass.Hass):
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows], secondary_order=True
+            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows], secondary_order=self.calculate_secondary_order
         )
 
         self.rate_best_cost_threshold_charge = best_price
@@ -11863,6 +11870,7 @@ class PredBat(hass.Hass):
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
+        self.calculate_secondary_order = self.get_arg("calculate_secondary_order")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
