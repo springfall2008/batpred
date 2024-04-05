@@ -6591,6 +6591,9 @@ class PredBat(hass.Hass):
                 elif "rate_increment" in this_rate:
                     rate = this_rate.get("rate_increment", 0.0)
                     rate_increment = True
+                else:
+                    rate = 0
+                    rate_increment = False
 
                 # Resolve any sensor links
                 rate = self.resolve_arg("rate", rate, 0.0)
