@@ -2845,7 +2845,7 @@ class Inverter:
                 self.discharge_enable_time = True
             entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
             self.write_and_poll_switch("scheduled_discharge_enable", entity, self.discharge_enable_time)
-            self.log("Inverter {} scheduled_discharge_enable set to {}".format(self.id, self.discharge_enable_time))
+            self.log("Inverter {} {} set to {}".format(self.id, self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), self.discharge_enable_time))
 
         # Tracking for idle time
         if self.discharge_enable_time:
@@ -3515,12 +3515,12 @@ class Inverter:
         if force_discharge and (old_discharge_enable in ["off", "disable"]):
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
-                self.write_and_poll_switch("scheduled_discharge_enable", entity, "on")
+                self.write_and_poll_switch("scheduled_discharge_enable", entity, True)
                 self.log("Inverter {} Turning on scheduled discharge".format(self.id))
         elif not force_discharge and (old_discharge_enable in ["on", "enable"]):
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
-                self.write_and_poll_switch("scheduled_discharge_enable", entity, "off")
+                self.write_and_poll_switch("scheduled_discharge_enable", entity, False)
                 self.log("Inverter {} Turning off scheduled discharge".format(self.id))
 
         # REST version of writing slot
@@ -3924,7 +3924,8 @@ class Inverter:
             if (pytz.timezone("UTC").localize(datetime.now()) - time_pressed).seconds < 10:
                 self.base.log(f"Successfully pressed button {entity_id} on Inverter {self.id}")
                 return True
-        self.base.log(f"WARN: Inverter {self.id} Trying to press {entity_id} didn't complete")
+        self.base.log(f"WARN: Inverter {self.id} Trying to press {entity_id} 
+                      ")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
 
