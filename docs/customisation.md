@@ -299,7 +299,7 @@ You could even go to something like -0.1 to say you would charge less even if it
 
 **input_number.predbat_metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
 A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
-then discharges will become less common and shorter.
+then discharges will become less common and shorter. The value is in pence per 30 minutes of export time.
 
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
