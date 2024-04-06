@@ -9081,7 +9081,7 @@ class PredBat(hass.Hass):
             window_results[window_key] = self.dp2(metric)
 
             # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if ((metric + self.metric_min_improvement_discharge * window_size/30.0) <= off_metric) and (metric <= best_metric):
+            if ((metric + self.metric_min_improvement_discharge * window_size / 30.0) <= off_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
