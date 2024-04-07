@@ -23,7 +23,7 @@ You will need to install an integration to communicate with and control your inv
 
 | Brand     | Integration     | Github Link                                                                      |
 | :-------- | :-----------     | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp]>    |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp>    |
 | Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
 | Solax Gen4| Solax Modbus     | <https://github.com/wills106/homeassistant-solax-modbus> |
 | Sofar     | Sofar MQTT       | <https://github.com/cmcgerty/Sofar2mqtt> |
