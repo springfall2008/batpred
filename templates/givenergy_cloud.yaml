@@ -119,26 +119,26 @@ pred_bat:
   # - sensor.ge_inverter_{geserial}_inverter_time
   # - sensor.ge_inverter_{geserial2}_inverter_time
   charge_start_time:
-   - select.ge_inverter_{geserial}_ac_charge_1_start_time
-   - select.ge_inverter_{geserial2}_ac_charge_1_start_time
+    - select.ge_inverter_{geserial}_ac_charge_1_start_time
+    - select.ge_inverter_{geserial2}_ac_charge_1_start_time
   charge_end_time:
-   - select.ge_inverter_{geserial}_ac_charge_1_end_time
-   - select.ge_inverter_{geserial2}_ac_charge_1_end_time
+    - select.ge_inverter_{geserial}_ac_charge_1_end_time
+    - select.ge_inverter_{geserial2}_ac_charge_1_end_time
   charge_limit:
-   - number.ge_inverter_{geserial}_ac_charge_upper_limit
-   - number.ge_inverter_{geserial2}_ac_charge_upper_limit
+    - number.ge_inverter_{geserial}_ac_charge_upper_limit
+    - number.ge_inverter_{geserial2}_ac_charge_upper_limit
   discharge_start_time:
-   - select.ge_inverter_{geserial}_dc_discharge_1_start_time
-   - select.ge_inverter_{geserial2}_dc_discharge_1_start_time
+    - select.ge_inverter_{geserial}_dc_discharge_1_start_time
+    - select.ge_inverter_{geserial2}_dc_discharge_1_start_time
   discharge_end_time:
-   - select.ge_inverter_{geserial}_dc_discharge_1_end_time
-   - select.ge_inverter_{geserial2}_dc_discharge_1_end_time
+    - select.ge_inverter_{geserial}_dc_discharge_1_end_time
+    - select.ge_inverter_{geserial2}_dc_discharge_1_end_time
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-   - 3600
-   - 3600
+    - 3600
+    - 3600
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
