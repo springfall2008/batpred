@@ -133,6 +133,12 @@ pred_bat:
   discharge_end_time:
     - select.ge_inverter_{geserial}_dc_discharge_1_end_time
     - select.ge_inverter_{geserial2}_dc_discharge_1_end_time
+  scheduled_charge_enable:
+    - switch.ge_inverter_{geserial}_ac_charge_enable
+    - switch.ge_inverter_{geserial2}_ac_charge_enable
+  scheduled_discharge_enable:
+    - switch.ge_inverter_{geserial}_enable_dc_discharge
+    - switch.ge_inverter_{geserial2}_enable_dc_discharge
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
