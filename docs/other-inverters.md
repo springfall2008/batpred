@@ -134,7 +134,7 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
     - Set geserial to your inverter serial
-- Make sure discharge downto registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
+- Make sure discharge down to registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
 
 ## Givenergy with EMC
 
