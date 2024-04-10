@@ -106,6 +106,7 @@ pdetails
 perc
 ppdetails
 Pred
+Predai
 Predbat
 Predheat
 pwindow
