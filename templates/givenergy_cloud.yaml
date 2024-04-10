@@ -115,9 +115,9 @@ pred_bat:
   reserve:
     - number.ge_inverter_{geserial}_battery_reserve_limit
     - number.ge_inverter_{geserial2}_battery_reserve_limit
-  #inverter_time:
-  # - sensor.ge_inverter_{geserial}_inverter_time
-  # - sensor.ge_inverter_{geserial2}_inverter_time
+  inverter_time:
+   - sensor.ge_inverter_{geserial}_inverter_time
+   - sensor.ge_inverter_{geserial2}_inverter_time
   charge_start_time:
     - select.ge_inverter_{geserial}_ac_charge_1_start_time
     - select.ge_inverter_{geserial2}_ac_charge_1_start_time
@@ -294,7 +294,6 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-  #metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
@@ -353,7 +352,7 @@ pred_bat:
   # Recommended is 7 to capture day of the week but 1 can also be used
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous:
-    - 7
+    - 1
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
@@ -410,11 +409,11 @@ pred_bat:
 
   # Watch list, a list of sensors to watch for changes and then update the plan if they change
   # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in
-  watch_list:
-    - '{octopus_intelligent_slot}'
-    - '{octopus_ready_time}'
-    - '{octopus_charge_limit}'
-    - '{octopus_saving_session}'
-    - '+[car_charging_planned]'
-    - '+[car_charging_soc]'
-    # - '{car_charging_now}'
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{car_charging_now}'
