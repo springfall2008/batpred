@@ -3512,12 +3512,12 @@ class Inverter:
             self.press_and_poll_button(entity_id)
 
         # Change scheduled discharge enable
-        if force_discharge and (old_discharge_enable in ["off", "disable"]):
+        if force_discharge and not old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, True)
                 self.log("Inverter {} Turning on scheduled discharge".format(self.id))
-        elif not force_discharge and (old_discharge_enable in ["on", "enable"]):
+        elif not force_discharge and old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, False)
@@ -5663,9 +5663,7 @@ class PredBat(hass.Hass):
         else:
             return None
 
-    def step_data_history(
-        self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, scale_fixed=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None
-    ):
+    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, scale_fixed=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None):
         """
         Create cached step data for historical array
         """
@@ -9091,7 +9089,7 @@ class PredBat(hass.Hass):
             window_results[window_key] = self.dp2(metric)
 
             # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if ((metric + self.metric_min_improvement_discharge * window_size / 30.0) <= off_metric) and (metric <= best_metric):
+            if ((metric + self.metric_min_improvement_discharge * window_size/30.0) <= off_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
@@ -10059,7 +10057,7 @@ class PredBat(hass.Hass):
                     for key, value in data.items():
                         data_array.append({"energy": value, "last_updated": key})
                     data = data_array
-
+                    
                 # Load data
                 load_forecast = self.minute_data(
                     data,
@@ -10076,11 +10074,7 @@ class PredBat(hass.Hass):
                     accumulate=load_forecast,
                 )
 
-                self.log(
-                    "Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(
-                        entity_id, load_forecast[0], load_forecast[self.minutes_now], load_forecast[24 * 60]
-                    )
-                )
+                self.log("Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(entity_id, load_forecast[0], load_forecast[self.minutes_now], load_forecast[24*60]))
         return load_forecast
 
     def fetch_pv_forecast(self):
