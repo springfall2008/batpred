@@ -2,8 +2,8 @@
 
 PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other models:
 
-   | Name                     | Integration     | Template |
-   | : ---------------------- | :---------------- | :--------------- |
+   | Name                          | Integration     | Template |
+   | :---------------------------- | :------------- | :------------ |
    | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/giv_tcp) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
    | Solis Hybrid inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml)
    | Solax Gen4 inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
@@ -135,7 +135,7 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
     - Set geserial to your inverter serial
 - Make sure discharge downto registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
-
+      
 ## Givenergy with EMC
 
 This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
