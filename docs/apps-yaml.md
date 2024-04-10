@@ -21,17 +21,9 @@ You don't need to restart the AppDaemon add-on for your edits to take effect.
 
 ## Templates
 
-You can find template configurations in the following locations:
+You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
 
-| Template | Link |
-| ---------- | ----------------------------------------- |
-| GivEnergy | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/apps/predbat/config/apps.yaml) |
-| SolisX | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-| Sofar | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/solar_edge/templates/sofar_inverter.yml)
-| Huawei | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
-| SolarEdge | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
-
-The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into the directory
+The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
 where your `apps.yaml` is stored, and modify it from there.
 
 Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
@@ -465,14 +457,20 @@ SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 ## Load Forecast
 
 In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
-such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat):
+such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat) or via [Predai](https://github.com/springfall2008/predai)
 
-- **load_forecast** - this should be configured to point to a sensor and attribute that is in the format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+- **load_forecast** - this should be configured to point to a sensor and attribute. The attribute must in either
+    - The format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+    - The format of a dictionary of timestamps and energy data in incremental KWh.
 
 For example:<BR>
 ![IMAGE](images/load_forecast.png)
 
-`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above format) like this:
+Or
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/5ac60be6-7a96-4caf-b53c-f097674e347f)
+
+`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above formats) like this:
 
 ```yaml
 load_forecast:
@@ -484,6 +482,14 @@ So if using Predheat it would be configured as:
 ```yaml
 load_forecast:
   - predheat.heat_energy$external
+```
+
+Set **load_forecast_only** to True if you do not wish to use the Predbat forecast but instead want to use this as your only forecast data e.g using PredAi:
+
+```yaml
+  load_forecast_only: True
+  load_forecast:
+     - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
 ## Balance Inverters
