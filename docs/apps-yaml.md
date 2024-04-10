@@ -459,7 +459,7 @@ SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
 such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat) or via [Predai](https://github.com/springfall2008/predai)
 
-- **load_forecast** - this should be configured to point to a sensor and attribute. The atrribute must in either
+- **load_forecast** - this should be configured to point to a sensor and attribute. The attribute must in either
     - The format of 'last_updated' timestamp and 'energy' in incrementing kWh.
     - The format of a dictionary of timestamps and energy data in incremental KWh.
 
