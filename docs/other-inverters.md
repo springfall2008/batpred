@@ -135,7 +135,7 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 - Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
     - Set geserial to your inverter serial
 - Make sure discharge downto registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
-      
+
 ## Givenergy with EMC
 
 This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
