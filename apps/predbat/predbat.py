@@ -3512,12 +3512,12 @@ class Inverter:
             self.press_and_poll_button(entity_id)
 
         # Change scheduled discharge enable
-        if force_discharge and (old_discharge_enable in ["off", "disable"]):
+        if force_discharge and not old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, True)
                 self.log("Inverter {} Turning on scheduled discharge".format(self.id))
-        elif not force_discharge and (old_discharge_enable in ["on", "enable"]):
+        elif not force_discharge and old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, False)
