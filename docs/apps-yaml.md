@@ -21,7 +21,7 @@ You don't need to restart the AppDaemon add-on for your edits to take effect.
 
 ## Templates
 
-You can find template configurations in the following location: https://github.com/springfall2008/batpred/tree/main/templates
+You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
 
 The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
 where your `apps.yaml` is stored, and modify it from there.
@@ -460,8 +460,8 @@ In addition to the historical house load data that Predbat uses by default, you 
 such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat) or via [Predai](https://github.com/springfall2008/predai)
 
 - **load_forecast** - this should be configured to point to a sensor and attribute. The atrribute must in either
-  - The format of 'last_updated' timestamp and 'energy' in incrementing kWh.
-  - The format of a dictionary of timestamps and energy data in incremental KWh. 
+    - The format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+    - The format of a dictionary of timestamps and energy data in incremental KWh.
 
 For example:<BR>
 ![IMAGE](images/load_forecast.png)
@@ -469,7 +469,6 @@ For example:<BR>
 Or
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/5ac60be6-7a96-4caf-b53c-f097674e347f)
-
 
 `apps.yaml` should be configured to point to the forecast sensor and attribute (in the above formats) like this:
 
