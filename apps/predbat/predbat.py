@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.12"
+THIS_VERSION = "v7.16.13"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -4969,9 +4969,6 @@ class PredBat(hass.Hass):
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
-        if self.debug_enable:
-            self.log("Loading data from {}".format(history[0]))
-
         # Process history
         for item in history:
             # Ignore data without correct keys
@@ -7311,10 +7308,10 @@ class PredBat(hass.Hass):
         """
         Scan the gas rates and work out min/max
         """
-        rate_gas_min, rate_gas_max, rate_gas_average, rate_gas_min_minute, rate_gas_max_minute = self.rate_minmax(rates)
+        self.rate_gas_min, self.rate_gas_max, self.rate_gas_average, self.rate_gas_min_minute, self.rate_gas_max_minute = self.rate_minmax(rates)
 
         if print:
-            self.log("Gas rates min {} max {} average {}".format(rate_gas_min, rate_gas_max, rate_gas_average))
+            self.log("Gas rates min {} max {} average {}".format(self.rate_gas_min, self.rate_gas_max, self.rate_gas_average))
 
         return rates
 
@@ -7801,7 +7798,7 @@ class PredBat(hass.Hass):
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
-    def publish_rates(self, rates, export):
+    def publish_rates(self, rates, export, gas=False):
         """
         Publish the rates for charts
         Create rates/time every 30 minutes
@@ -7814,6 +7811,8 @@ class PredBat(hass.Hass):
 
         if export:
             self.publish_rates_export()
+        elif gas:
+            pass
         else:
             self.publish_rates_import()
 
@@ -7829,6 +7828,21 @@ class PredBat(hass.Hass):
                         "threshold": self.dp2(self.rate_export_cost_threshold),
                         "results": rates_time,
                         "friendly_name": "Export rates",
+                        "state_class": "measurement",
+                        "unit_of_measurement": self.currency_symbols[1],
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+            elif gas:
+                self.dashboard_item(
+                    self.prefix + ".rates_gas",
+                    state=self.dp2(rates[self.minutes_now]),
+                    attributes={
+                        "min": self.dp2(self.rate_gas_min),
+                        "max": self.dp2(self.rate_gas_max),
+                        "average": self.dp2(self.rate_gas_average),
+                        "results": rates_time,
+                        "friendly_name": "Gas rates",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
@@ -8345,6 +8359,11 @@ class PredBat(hass.Hass):
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
         self.rate_export_average = 0
+        self.rate_gas_min = 0
+        self.rate_gas_max = 0
+        self.rate_gas_average = 0
+        self.rate_gas_min_minute = 0
+        self.rate_gas_max_minute = 0
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.debug_enable = False
@@ -10076,11 +10095,14 @@ class PredBat(hass.Hass):
                     accumulate=load_forecast,
                 )
 
-                self.log(
-                    "Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(
-                        entity_id, load_forecast[0], load_forecast[self.minutes_now], load_forecast[24 * 60]
+                if load_forecast:
+                    self.log(
+                        "Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(
+                            entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)
+                        )
                     )
-                )
+                else:
+                    self.log("WARN: Unable to load load forecast from {}".format(entity_id))
         return load_forecast
 
     def fetch_pv_forecast(self):
@@ -11525,6 +11547,10 @@ class PredBat(hass.Hass):
                 self.log("Import threshold used for optimisation was {}p".format(self.rate_import_cost_threshold))
             self.publish_rates(self.rate_import, False)
 
+        # And gas
+        if self.rate_gas:
+            self.publish_rates(self.rate_gas, False, gas=True)
+
     def fetch_inverter_data(self):
         """
         Fetch data about the inverters
@@ -12043,7 +12069,7 @@ class PredBat(hass.Hass):
                 if (car_n == 0) and self.car_charging_manual_soc:
                     self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh", self.car_charging_soc_next[car_n])
+                        self.expose_config("car_charging_manual_soc_kwh", round(self.car_charging_soc_next[car_n], 2))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
