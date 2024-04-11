@@ -23,7 +23,7 @@ You will need to install an integration to communicate with and control your inv
 
 | Brand     | Integration     | Github Link                                                                      |
 | :-------- | :-----------     | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp]>    |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp>    |
 | GivEnergy | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | GivEnergy EMS | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
