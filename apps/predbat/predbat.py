@@ -11551,7 +11551,6 @@ class PredBat(hass.Hass):
         if self.rate_gas:
             self.publish_rates(self.rate_gas, False, gas=True)
 
-
     def fetch_inverter_data(self):
         """
         Fetch data about the inverters
