@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.11"
+THIS_VERSION = "v7.16.13"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -3512,12 +3512,12 @@ class Inverter:
             self.press_and_poll_button(entity_id)
 
         # Change scheduled discharge enable
-        if force_discharge and (old_discharge_enable in ["off", "disable"]):
+        if force_discharge and not old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, True)
                 self.log("Inverter {} Turning on scheduled discharge".format(self.id))
-        elif not force_discharge and (old_discharge_enable in ["on", "enable"]):
+        elif not force_discharge and old_discharge_enable:
             if not SIMULATE:
                 entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
                 self.write_and_poll_switch("scheduled_discharge_enable", entity, False)
@@ -4969,9 +4969,6 @@ class PredBat(hass.Hass):
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
-        if self.debug_enable:
-            self.log("Loading data from {}".format(history[0]))
-
         # Process history
         for item in history:
             # Ignore data without correct keys
@@ -5497,7 +5494,7 @@ class PredBat(hass.Hass):
             if minute < minutes_now:
                 for offset in range(step):
                     import_value_today += self.get_from_incrementing(import_minutes, minutes_now - minute - offset - 1)
-                load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
+                    load_value_today, load_value_today_raw = self.get_filtered_load_minute(load_minutes, minutes_now - minute - 1, historical=False, step=step)
 
             import_value_pred = 0
             forecast_value_pred = 0
@@ -5505,7 +5502,10 @@ class PredBat(hass.Hass):
                 import_value_pred += self.get_historical(import_minutes, minute - minutes_now + offset)
                 forecast_value_pred += self.get_from_incrementing(load_forecast, minute + offset, backwards=False)
 
-            load_value_pred, load_value_pred_raw = self.get_filtered_load_minute(load_minutes, minute - minutes_now, historical=True, step=step)
+            if self.load_forecast_only:
+                load_value_pred, load_value_pred_raw = (0, 0)
+            else:
+                load_value_pred, load_value_pred_raw = self.get_filtered_load_minute(load_minutes, minute - minutes_now, historical=True, step=step)
 
             # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
             car_value_actual = load_value_today_raw - load_value_today
@@ -5551,7 +5551,7 @@ class PredBat(hass.Hass):
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
         # Work out divergence
-        if not self.calculate_inday_adjustment:
+        if not self.calculate_inday_adjustment or self.load_forecast_only:
             difference_cap = 1.0
         else:
             # Apply damping factor to adjustment
@@ -5660,12 +5660,16 @@ class PredBat(hass.Hass):
         else:
             return None
 
-    def step_data_history(self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None):
+    def step_data_history(
+        self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, scale_fixed=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None
+    ):
         """
         Create cached step data for historical array
         """
         values = {}
         cloud_diff = 0
+        if type_load:
+            self.log("Creating step data for historical load data scale_today {} step {} minutes_now {} forward {}".format(scale_today, step, minutes_now, forward))
         for minute in range(0, self.forecast_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
@@ -5679,7 +5683,10 @@ class PredBat(hass.Hass):
                 scale_today = 1.0
 
             if type_load and not forward:
-                load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(item, minute, historical=True, step=step)
+                if self.load_forecast_only:
+                    load_yesterday, load_yesterday_raw = (0, 0)
+                else:
+                    load_yesterday, load_yesterday_raw = self.get_filtered_load_minute(item, minute, historical=True, step=step)
                 value += load_yesterday
             else:
                 for offset in range(step):
@@ -5693,7 +5700,7 @@ class PredBat(hass.Hass):
             if load_forecast:
                 for offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
-            values[minute] = (value * scale_today + load_extra) * scaling_dynamic
+            values[minute] = (value + load_extra) * scaling_dynamic * scale_today * scale_fixed
 
             # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
             if cloud_factor and cloud_factor > 0:
@@ -7301,10 +7308,10 @@ class PredBat(hass.Hass):
         """
         Scan the gas rates and work out min/max
         """
-        rate_gas_min, rate_gas_max, rate_gas_average, rate_gas_min_minute, rate_gas_max_minute = self.rate_minmax(rates)
+        self.rate_gas_min, self.rate_gas_max, self.rate_gas_average, self.rate_gas_min_minute, self.rate_gas_max_minute = self.rate_minmax(rates)
 
         if print:
-            self.log("Gas rates min {} max {} average {}".format(rate_gas_min, rate_gas_max, rate_gas_average))
+            self.log("Gas rates min {} max {} average {}".format(self.rate_gas_min, self.rate_gas_max, self.rate_gas_average))
 
         return rates
 
@@ -7791,7 +7798,7 @@ class PredBat(hass.Hass):
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
 
-    def publish_rates(self, rates, export):
+    def publish_rates(self, rates, export, gas=False):
         """
         Publish the rates for charts
         Create rates/time every 30 minutes
@@ -7804,6 +7811,8 @@ class PredBat(hass.Hass):
 
         if export:
             self.publish_rates_export()
+        elif gas:
+            pass
         else:
             self.publish_rates_import()
 
@@ -7819,6 +7828,21 @@ class PredBat(hass.Hass):
                         "threshold": self.dp2(self.rate_export_cost_threshold),
                         "results": rates_time,
                         "friendly_name": "Export rates",
+                        "state_class": "measurement",
+                        "unit_of_measurement": self.currency_symbols[1],
+                        "icon": "mdi:currency-usd",
+                    },
+                )
+            elif gas:
+                self.dashboard_item(
+                    self.prefix + ".rates_gas",
+                    state=self.dp2(rates[self.minutes_now]),
+                    attributes={
+                        "min": self.dp2(self.rate_gas_min),
+                        "max": self.dp2(self.rate_gas_max),
+                        "average": self.dp2(self.rate_gas_average),
+                        "results": rates_time,
+                        "friendly_name": "Gas rates",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
                         "icon": "mdi:currency-usd",
@@ -8335,6 +8359,11 @@ class PredBat(hass.Hass):
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
         self.rate_export_average = 0
+        self.rate_gas_min = 0
+        self.rate_gas_max = 0
+        self.rate_gas_average = 0
+        self.rate_gas_min_minute = 0
+        self.rate_gas_max_minute = 0
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.debug_enable = False
@@ -10026,7 +10055,7 @@ class PredBat(hass.Hass):
 
     def fetch_extra_load_forecast(self, now_utc):
         """
-        Fetch extra load forecast
+        Fetch extra load forecast, this is future load data
         """
         load_forecast = {}
         if "load_forecast" in self.args:
@@ -10043,6 +10072,14 @@ class PredBat(hass.Hass):
                 except (ValueError, TypeError):
                     data = None
 
+                # Convert format from dict to array
+                if isinstance(data, dict):
+                    data_array = []
+                    for key, value in data.items():
+                        data_array.append({"energy": value, "last_updated": key})
+                    data = data_array
+
+                # Load data
                 load_forecast = self.minute_data(
                     data,
                     self.forecast_days,
@@ -10053,10 +10090,19 @@ class PredBat(hass.Hass):
                     clean_increment=False,
                     smoothing=True,
                     divide_by=1.0,
-                    scale=1.0,
+                    scale=self.load_scaling,
                     required_unit="kWh",
+                    accumulate=load_forecast,
                 )
 
+                if load_forecast:
+                    self.log(
+                        "Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(
+                            entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)
+                        )
+                    )
+                else:
+                    self.log("WARN: Unable to load load forecast from {}".format(entity_id))
         return load_forecast
 
     def fetch_pv_forecast(self):
@@ -10393,6 +10439,7 @@ class PredBat(hass.Hass):
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
+            scale_fixed=1.0,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
@@ -10401,7 +10448,8 @@ class PredBat(hass.Hass):
             self.load_minutes,
             self.minutes_now,
             forward=False,
-            scale_today=self.load_inday_adjustment * self.load_scaling10,
+            scale_today=self.load_inday_adjustment,
+            scale_fixed=self.load_scaling10,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
@@ -11110,6 +11158,9 @@ class PredBat(hass.Hass):
                 self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("IBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
+        # Fetch extra load forecast
+        self.load_forecast = self.fetch_extra_load_forecast(self.now_utc)
+
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
             self.download_ge_data(self.now_utc)
@@ -11120,9 +11171,14 @@ class PredBat(hass.Hass):
                 self.log("Found {} load_today datapoints going back {} days".format(len(self.load_minutes), self.load_minutes_age))
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:
-                self.log("Error: You have not set load_today, you will have no load data")
-                self.record_status(message="Error - load_today not set correctly", had_errors=True)
-                raise ValueError
+                if self.load_forecast:
+                    self.log("Info: Using load forecast from load_forecast sensor as load_today is not set")
+                    self.load_minutes_now = self.load_forecast.get(0, 0)
+                    self.load_minutes_age = 0
+                else:
+                    self.log("Error: You have not set load_today or load_forecast, you will have no load data")
+                    self.record_status(message="Error - load_today not set correctly", had_errors=True)
+                    raise ValueError
 
             # Load import today data
             if "import_today" in self.args:
@@ -11462,16 +11518,16 @@ class PredBat(hass.Hass):
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
 
-        # Fetch extra load forecast
-        self.load_forecast = self.fetch_extra_load_forecast(self.now_utc)
-
         # Apply modal filter to historical data
-        self.previous_days_modal_filter(self.load_minutes)
-        self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
+        if self.load_minutes and not self.load_forecast_only:
+            self.previous_days_modal_filter(self.load_minutes)
+            self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
         # Load today vs actual
         if self.load_minutes:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
+        else:
+            self.load_inday_adjustment = 1.0
 
     def publish_rate_and_threshold(self):
         """
@@ -11490,6 +11546,10 @@ class PredBat(hass.Hass):
                 self.rate_import_cost_threshold = self.rate_best_cost_threshold_charge
                 self.log("Import threshold used for optimisation was {}p".format(self.rate_import_cost_threshold))
             self.publish_rates(self.rate_import, False)
+
+        # And gas
+        if self.rate_gas:
+            self.publish_rates(self.rate_gas, False, gas=True)
 
     def fetch_inverter_data(self):
         """
@@ -11721,6 +11781,8 @@ class PredBat(hass.Hass):
 
         # Days previous
         self.holiday_days_left = self.get_arg("holiday_days_left")
+        self.load_forecast_only = self.get_arg("load_forecast_only", False)
+
         self.days_previous = self.get_arg("days_previous", [7])
         self.days_previous_weight = self.get_arg("days_previous_weight", [1 for i in range(len(self.days_previous))])
         if len(self.days_previous) > len(self.days_previous_weight):
@@ -12007,7 +12069,7 @@ class PredBat(hass.Hass):
                 if (car_n == 0) and self.car_charging_manual_soc:
                     self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh", self.car_charging_soc_next[car_n])
+                        self.expose_config("car_charging_manual_soc_kwh", round(self.car_charging_soc_next[car_n], 2))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:

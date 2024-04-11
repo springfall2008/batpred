@@ -2,15 +2,23 @@
 
 PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other models:
 
-- Solis Hybrid inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus)
-- Solax Gen4 inverters [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode
-- Sofar inverters [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt)
-- Huawei inverters [Huawei Solar](https://github.com/wlcrs/huawei_solar)
-- SolarEdge inverters - [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi)
-- Givenergy with EMC - [ge_cloud](https://github.com/springfall2008/ge_cloud)
+   | Name                          | Integration     | Template |
+   | :---------------------------- | :------------- | :------------ |
+   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/giv_tcp) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
+   | Solis Hybrid inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml)
+   | Solax Gen4 inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
+   | Sofar inverters | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
+   | Huawei inverters | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
+   | SolarEdge inverters | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
+   | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
+   | Givenergy with GE Cloud EMC | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 Please also ensure you have set up enhanced logging in AppDaemon as described here.
+
+## GivEnergy with GivTCP
+
+Please see the main installation instructions, you will need to install GivTCP first and then use the supplied template
 
 ## Solis Inverters
 
@@ -119,13 +127,21 @@ sensor:
     name: solar_panel_production_kwh
 ```
 
+## Givenergy with ge_cloud
+
+This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
+
+- First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
+- Now copy the template givenergy_cloud.yaml from templates into your apps.yaml and edit
+    - Set geserial to your inverter serial
+- Make sure discharge down to registers are set to 4% and slots 2, 3 and 4 for charge and discharge are disabled (if you have them)
+
 ## Givenergy with EMC
 
 This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/905>
 
 - First set up ge_cloud integration using your API key <https://github.com/springfall2008/ge_cloud>
 - Now copy the template givenergy_emc.yaml from templates into your apps.yaml and edit
-    - Set your API key here also for the historical data
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for entity names)
 - Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
