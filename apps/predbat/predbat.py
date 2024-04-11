@@ -469,7 +469,7 @@ CONFIG_ITEMS = [
         "name": "car_charging_plan_max_price",
         "friendly_name": "Car Charging Plan max price",
         "type": "input_number",
-        "min": 0,
+        "min": -99,
         "max": 99,
         "step": 1,
         "unit": "p",
@@ -6725,7 +6725,7 @@ class PredBat(hass.Hass):
                 continue
 
             # Skip over prices when they are too high
-            if max_price > 0 and price > max_price:
+            if (max_price != 0) and price > max_price:
                 continue
 
             # Compute amount of charge
@@ -6885,11 +6885,14 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
-                    state="undefined",
+                    state="",
                     attributes={
                         "friendly_name": "Predbat car charge start time car" + postfix,
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "timestamp": None,
+                        "minutes_to": self.forecast_minutes,
+                        "state_class": None,
+                        "unit_of_measurement": None,
+                        "device_class": "timestamp",
                         "icon": "mdi:table-clock",
                     },
                 )
@@ -6903,13 +6906,17 @@ class PredBat(hass.Hass):
                 time_format_time = "%H:%M:%S"
                 car_startt = self.midnight_utc + timedelta(minutes=window["start"])
                 car_start_time_str = car_startt.strftime(time_format_time)
+                minutes_to = max(window["start"] - self.minutes_now, 0)
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
                     state=car_start_time_str,
                     attributes={
                         "friendly_name": "Predbat car charge start time car" + postfix,
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "timestamp": car_startt.strftime(TIME_FORMAT),
+                        "minutes_to": minutes_to,
+                        "state_class": None,
+                        "unit_of_measurement": None,
+                        "device_class": "timestamp",
                         "icon": "mdi:table-clock",
                     },
                 )
@@ -6956,6 +6963,8 @@ class PredBat(hass.Hass):
                 rate_high_start = window["start"]
                 rate_high_end = window["end"]
                 rate_high_average = window["average"]
+                rate_high_minutes_to_start = max(rate_high_start - self.minutes_now, 0)
+                rate_high_minutes_to_end = max(rate_high_end - self.minutes_now, 0)
 
                 if window_str:
                     window_str += ", "
@@ -6975,6 +6984,8 @@ class PredBat(hass.Hass):
                             "friendly_name": "Next high export rate start",
                             "state_class": "timestamp",
                             "icon": "mdi:table-clock",
+                            "minutes_to": rate_high_minutes_to_start,
+                            "rate": self.dp2(rate_high_average),
                         },
                     )
                     self.dashboard_item(
@@ -6985,6 +6996,8 @@ class PredBat(hass.Hass):
                             "friendly_name": "Next high export rate end",
                             "state_class": "timestamp",
                             "icon": "mdi:table-clock",
+                            "minutes_to": rate_high_minutes_to_end,
+                            "rate": self.dp2(rate_high_average),
                         },
                     )
                     self.dashboard_item(
@@ -7018,6 +7031,8 @@ class PredBat(hass.Hass):
                             "friendly_name": "Next+1 high export rate start",
                             "state_class": "timestamp",
                             "icon": "mdi:table-clock",
+                            "rate": self.dp2(rate_high_average),
+                            "minutes_to": rate_high_minutes_to_start,
                         },
                     )
                     self.dashboard_item(
@@ -7028,6 +7043,8 @@ class PredBat(hass.Hass):
                             "friendly_name": "Next+1 high export rate end",
                             "state_class": "timestamp",
                             "icon": "mdi:table-clock",
+                            "rate": self.dp2(rate_high_average),
+                            "minutes_to": rate_high_minutes_to_end,
                         },
                     )
                     self.dashboard_item(
@@ -7051,12 +7068,26 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next high export rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next high export rate start",
+                    "device_class": "timestamp",
+                    "icon": "mdi:table-clock",
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                },
             )
             self.dashboard_item(
                 self.prefix + ".high_rate_export_end",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next high export rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next high export rate end",
+                    "device_class": "timestamp",
+                    "icon": "mdi:table-clock",
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                },
             )
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost",
@@ -7082,12 +7113,26 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start_2",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next+1 high export rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next+1 high export rate start",
+                    "device_class": "timestamp",
+                    "icon": "mdi:table-clock",
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                },
             )
             self.dashboard_item(
                 self.prefix + ".high_rate_export_end_2",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next+1 high export rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next+1 high export rate end",
+                    "device_class": "timestamp",
+                    "icon": "mdi:table-clock",
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                },
             )
             self.dashboard_item(
                 self.prefix + ".high_rate_export_cost_2",
@@ -7327,6 +7372,8 @@ class PredBat(hass.Hass):
                 rate_low_start = window["start"]
                 rate_low_end = window["end"]
                 rate_low_average = window["average"]
+                rate_low_minutes_to_start = max(rate_low_start - self.minutes_now, 0)
+                rate_low_minutes_to_end = max(rate_low_end - self.minutes_now, 0)
 
                 if window_str:
                     window_str += ", "
@@ -7343,18 +7390,29 @@ class PredBat(hass.Hass):
                         attributes={
                             "date": rate_low_start_date.strftime(TIME_FORMAT),
                             "friendly_name": "Next low rate start",
-                            "state_class": "timestamp",
+                            "minutes_to": rate_low_minutes_to_start,
+                            "device_class": "timestamp",
+                            "state_class": None,
+                            "rate": self.dp2(rate_low_average),
                             "icon": "mdi:table-clock",
                         },
                     )
                     self.dashboard_item(
                         self.prefix + ".low_rate_end",
                         state=rate_low_end_date.strftime(time_format_time),
-                        attributes={"date": rate_low_end_date.strftime(TIME_FORMAT), "friendly_name": "Next low rate end", "state_class": "timestamp", "icon": "mdi:table-clock"},
+                        attributes={
+                            "date": rate_low_end_date.strftime(TIME_FORMAT),
+                            "minutes_to": rate_low_minutes_to_end,
+                            "friendly_name": "Next low rate end",
+                            "device_class": "timestamp",
+                            "state_class": None,
+                            "rate": self.dp2(rate_low_average),
+                            "icon": "mdi:table-clock",
+                        },
                     )
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost",
-                        state=rate_low_average,
+                        state=self.dp2(rate_low_average),
                         attributes={
                             "friendly_name": "Next low rate cost",
                             "state_class": "measurement",
@@ -7381,14 +7439,25 @@ class PredBat(hass.Hass):
                         attributes={
                             "date": rate_low_start_date.strftime(TIME_FORMAT),
                             "friendly_name": "Next+1 low rate start",
-                            "state_class": "timestamp",
+                            "device_class": "timestamp",
+                            "state_class": None,
+                            "rate": self.dp2(rate_low_average),
+                            "minutes_to": rate_low_minutes_to_start,
                             "icon": "mdi:table-clock",
                         },
                     )
                     self.dashboard_item(
                         self.prefix + ".low_rate_end_2",
                         state=rate_low_end_date.strftime(time_format_time),
-                        attributes={"date": rate_low_end_date.strftime(TIME_FORMAT), "friendly_name": "Next+1 low rate end", "state_class": "timestamp", "icon": "mdi:table-clock"},
+                        attributes={
+                            "date": rate_low_end_date.strftime(TIME_FORMAT),
+                            "friendly_name": "Next+1 low rate end",
+                            "device_class": "timestamp",
+                            "state_class": None,
+                            "rate": self.dp2(rate_low_average),
+                            "minutes_to": rate_low_minutes_to_end,
+                            "icon": "mdi:table-clock",
+                        },
                     )
                     self.dashboard_item(
                         self.prefix + ".low_rate_cost_2",
@@ -7410,12 +7479,28 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next low rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next low rate start",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                    "icon": "mdi:table-clock",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_end",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next low rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next low rate end",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                    "icon": "mdi:table-clock",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_cost",
@@ -7434,12 +7519,28 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next+1 low rate start", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next+1 low rate start",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                    "icon": "mdi:table-clock",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_end_2",
                 state="undefined",
-                attributes={"date": None, "friendly_name": "Next+1 low rate end", "device_class": "timestamp", "icon": "mdi:table-clock"},
+                attributes={
+                    "date": None,
+                    "friendly_name": "Next+1 low rate end",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "minutes_to": self.forecast_minutes,
+                    "rate": None,
+                    "icon": "mdi:table-clock",
+                },
             )
             self.dashboard_item(
                 self.prefix + ".low_rate_cost_2",
@@ -7998,16 +8099,19 @@ class PredBat(hass.Hass):
             prev_limit = soc_perc
 
         if not SIMULATE:
-            discharge_start_str = "undefined"
-            discharge_end_str = "undefined"
+            discharge_start_str = ""
+            discharge_end_str = ""
             discharge_start_date = None
             discharge_end_date = None
             discharge_average = None
+            discharge_start_in_minutes = self.forecast_minutes
 
             if discharge_window and (discharge_window[0]["end"] < (24 * 60 + self.minutes_now)):
                 discharge_start_minutes = discharge_window[0]["start"]
                 discharge_end_minutes = discharge_window[0]["end"]
                 discharge_average = discharge_window[0].get("average", None)
+                discharge_start_in_minutes = max(discharge_start_minutes - self.minutes_now, 0)
+                discharge_end_in_minutes = max(discharge_end_minutes - self.minutes_now, 0)
 
                 time_format_time = "%H:%M:%S"
                 discharge_startt = self.midnight_utc + timedelta(minutes=discharge_start_minutes)
@@ -8045,24 +8149,28 @@ class PredBat(hass.Hass):
                     self.prefix + ".best_discharge_start",
                     state=discharge_start_str,
                     attributes={
+                        "minutes_to": discharge_start_in_minutes,
                         "timestamp": discharge_start_date,
                         "friendly_name": "Predicted discharge start time best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": discharge_average,
                     },
                 )
                 self.dashboard_item(
                     self.prefix + ".best_discharge_end",
                     state=discharge_end_str,
                     attributes={
+                        "minutes_to": discharge_end_in_minutes,
                         "timestamp": discharge_end_date,
                         "friendly_name": "Predicted discharge end time best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": discharge_average,
                     },
                 )
             else:
@@ -8093,24 +8201,28 @@ class PredBat(hass.Hass):
                     self.prefix + ".discharge_start",
                     state=discharge_start_str,
                     attributes={
+                        "minutes_to": discharge_start_in_minutes,
                         "timestamp": discharge_start_date,
                         "friendly_name": "Predicted discharge start time",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": discharge_average,
                     },
                 )
                 self.dashboard_item(
                     self.prefix + ".discharge_end",
                     state=discharge_end_str,
                     attributes={
+                        "minutes_to": discharge_end_in_minutes,
                         "timestamp": discharge_end_date,
                         "friendly_name": "Predicted discharge end time",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": discharge_average,
                     },
                 )
 
@@ -8156,10 +8268,12 @@ class PredBat(hass.Hass):
             charge_limit_first = 0
             charge_limit_percent_first = 0
             charge_average_first = None
-            charge_start_str = "undefined"
-            charge_end_str = "undefined"
+            charge_start_str = ""
+            charge_end_str = ""
             charge_start_date = None
             charge_end_date = None
+            charge_start_in_minutes = self.forecast_days * 24 * 60
+            charge_end_in_minutes = self.forecast_days * 24 * 60
 
             if charge_limit and charge_window[0]["end"] <= (24 * 60 + self.minutes_now):
                 charge_limit_first = charge_limit[0]
@@ -8167,6 +8281,8 @@ class PredBat(hass.Hass):
                 charge_start_minutes = charge_window[0]["start"]
                 charge_end_minutes = charge_window[0]["end"]
                 charge_average_first = charge_window[0].get("average", None)
+                charge_start_in_minutes = max(charge_start_minutes - self.minutes_now, 0)
+                charge_end_in_minutes = max(charge_end_minutes - self.minutes_now, 0)
 
                 time_format_time = "%H:%M:%S"
                 charge_startt = self.midnight_utc + timedelta(minutes=charge_start_minutes)
@@ -8205,11 +8321,13 @@ class PredBat(hass.Hass):
                     state=charge_start_str,
                     attributes={
                         "timestamp": charge_start_date,
+                        "minutes_to": charge_start_in_minutes,
                         "friendly_name": "Predicted charge start time best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -8217,11 +8335,13 @@ class PredBat(hass.Hass):
                     state=charge_end_str,
                     attributes={
                         "timestamp": charge_end_date,
+                        "minutes_to": charge_end_in_minutes,
                         "friendly_name": "Predicted charge end time best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": charge_average_first,
                     },
                 )
             else:
@@ -8253,11 +8373,13 @@ class PredBat(hass.Hass):
                     state=charge_start_str,
                     attributes={
                         "timestamp": charge_start_date,
+                        "minutes_to": charge_start_in_minutes,
                         "friendly_name": "Predicted charge start time",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": charge_average_first,
                     },
                 )
                 self.dashboard_item(
@@ -8265,11 +8387,13 @@ class PredBat(hass.Hass):
                     state=charge_end_str,
                     attributes={
                         "timestamp": charge_end_date,
+                        "minutes_to": charge_end_in_minutes,
                         "friendly_name": "Predicted charge end time",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "timestamp",
+                        "device_class": "timestamp",
+                        "state_class": None,
+                        "unit_of_measurement": None,
                         "icon": "mdi:table-clock",
-                        "rate": None,
+                        "rate": charge_average_first,
                     },
                 )
 
@@ -10711,6 +10835,7 @@ class PredBat(hass.Hass):
             resetReserve = False
             setReserve = False
             disabled_charge_window = False
+            disabled_discharge = False
 
             # Re-programme charge window based on low rates?
             if self.set_charge_window and self.charge_window_best:
@@ -10885,6 +11010,7 @@ class PredBat(hass.Hass):
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
                         inverter.adjust_force_discharge(False)
+                        disabled_discharge = True
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
@@ -11038,7 +11164,7 @@ class PredBat(hass.Hass):
                 inverter.adjust_reserve(0)
 
         # Set the charge/discharge status information
-        self.set_charge_discharge_status(isCharging, isDischarging)
+        self.set_charge_discharge_status(isCharging and not disabled_charge_window, isDischarging and not disabled_discharge)
         return status, status_extra
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
