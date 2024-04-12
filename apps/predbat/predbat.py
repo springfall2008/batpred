@@ -9352,7 +9352,7 @@ class PredBat(hass.Hass):
                     average_import = self.dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_import = 0
-                self.log("Sort key {} for average {} average_import {}".format(sort_key, average, average_import))
+                sort_key = "%04.2f_%04.2f_%03d_d%02d" % (5000 - average, 5000 - average_import, 999 - id, id)
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
