@@ -1669,7 +1669,7 @@ class Prediction:
                 iboost_today_kwh += iboost_amount
 
                 # Model Iboost reset
-                if (minute_absolute % (24 * 60)) >= (23 * 60 + 30):
+                if (minute_absolute % (24 * 60)) == (24 * 60 - step):
                     iboost_today_kwh = 0
 
                 # Save Iboost next prediction
@@ -7860,12 +7860,12 @@ class PredBat(hass.Hass):
             iboost_amount_str = ""
             iboost_color = "#FFFFFF"
             if self.iboost_enable:
+                iboost_slot_end = minute_relative_slot_end
                 iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
-                iboost_change = self.predict_iboost_best.get(minute_relative_slot_end, 0) - iboost_amount
-                iboost_amount_str = str(self.dp2(iboost_amount))
+                iboost_change = max(self.predict_iboost_best.get(minute_relative_slot_end, 0) - iboost_amount, 0)
+                iboost_amount_str = str(self.dp2(iboost_change))
                 if iboost_change > 0:
                     iboost_color = "#FFFF00"
-                    iboost_amount_str += " &nearr;"
 
             # Table row
             html += '<tr style="color:black">'
@@ -12182,8 +12182,8 @@ class PredBat(hass.Hass):
             if self.iboost_energy_today:
                 # If we have a realtime sensor just use that data
                 self.iboost_next = self.iboost_today
-            elif self.minutes_now >= (23 * 60 + 30):
-                # Reset after 11:30pm
+            elif recompute and (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every):
+                # Reset at midnight
                 self.iboost_next = 0
             # Save next IBoost model value
             self.expose_config("iboost_today", self.iboost_next)
