@@ -1669,7 +1669,7 @@ class Prediction:
                 iboost_today_kwh += iboost_amount
 
                 # Model Iboost reset
-                if (minute_absolute % (24 * 60)) == (24 * 60 - step):
+                if (minute_absolute % (24 * 60)) == ((24 * 60) - step):
                     iboost_today_kwh = 0
 
                 # Save Iboost next prediction
@@ -7862,7 +7862,17 @@ class PredBat(hass.Hass):
             if self.iboost_enable:
                 iboost_slot_end = minute_relative_slot_end
                 iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
-                iboost_change = max(self.predict_iboost_best.get(minute_relative_slot_end, 0) - iboost_amount, 0)
+                iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
+                iboost_amount_prev = self.predict_iboost_best.get(minute_relative_slot_end - PREDICT_STEP, 0)
+                if iboost_amount_prev > iboost_amount_end:
+                    # Reset condition, scale to full slot size as last 5 minutes is missing in data
+                    iboost_change = (
+                        (iboost_amount_prev - iboost_amount)
+                        * (minute_relative_slot_end - minute_relative_start)
+                        / (minute_relative_slot_end - PREDICT_STEP - minute_relative_start)
+                    )
+                else:
+                    iboost_change = max(iboost_amount_end - iboost_amount, 0.0)
                 iboost_amount_str = str(self.dp2(iboost_change))
                 if iboost_change > 0:
                     iboost_color = "#FFFF00"
