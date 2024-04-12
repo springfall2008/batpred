@@ -9330,7 +9330,7 @@ class PredBat(hass.Hass):
                 else:
                     average = self.dp2(window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle)
                 if secondary_order:
-                    average_export = (self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"], 0) - 5) / 2
+                    average_export = self.dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_export = 0
                 sort_key = "%04.2f_%04.2f_%03d_c%02d" % (5000 - average, 5000 - average_export, 999 - id, id)
@@ -9349,10 +9349,10 @@ class PredBat(hass.Hass):
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
                 if secondary_order:
-                    average_import = (self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"], 0) - 5) / 2
+                    average_import = self.dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_import = 0
-                sort_key = "%04.2f_%04.2f_%03d_d%02d" % (5000 - average, 5000 - average_import, 999 - id, id)
+                self.log("Sort key {} for average {} average_import {}".format(sort_key, average, average_import))
                 if not self.calculate_discharge_first:
                     # Push discharge last if first is not set
                     sort_key = "zz_" + sort_key
