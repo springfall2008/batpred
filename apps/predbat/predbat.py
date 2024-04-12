@@ -9369,10 +9369,7 @@ class PredBat(hass.Hass):
 
         # Create price ordered links by set
         for key in window_sort:
-            if secondary_order:
-                average = str(window_links[key]["average"]) + "_" + str(window_links[key]["average_seconary"])
-            else:
-                average = window_links[key]["average"]
+            average = window_links[key]["average"]
             if average not in price_set:
                 price_set.append(average)
                 price_links[average] = []
