@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.14"
+THIS_VERSION = "v7.16.15"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -2294,12 +2294,12 @@ class Inverter:
         # Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type:
         # Args are also set for these so that no entries are needed for the dummies in the config file
         if not self.inv_has_charge_enable_time:
-            if "scheduled_charge_enable" not in self.base.args:
+            if ("scheduled_charge_enable" not in self.base.args) or (not isinstance(self.base.args["scheduled_charge_enable"], list)):
                 self.base.args["scheduled_charge_enable"] = ["on", "on", "on", "on"]
             self.base.args["scheduled_charge_enable"][id] = self.create_entity("scheduled_charge_enable", "on")
 
         if not self.inv_has_discharge_enable_time:
-            if "scheduled_discharge_enable" not in self.base.args:
+            if ("scheduled_discharge_enable" not in self.base.args) or (not isinstance(self.base.args["scheduled_discharge_enable"], list)):
                 self.base.args["scheduled_discharge_enable"] = ["on", "on", "on", "on"]
             self.base.args["scheduled_discharge_enable"][id] = self.create_entity("scheduled_discharge_enable", "on")
 
