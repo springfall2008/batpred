@@ -9339,7 +9339,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
                 window_links[sort_key]["average"] = self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
-                window_links[sort_key]["average_seconary"] = self.dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average_secondary"] = self.dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
                 id += 1
 
         # Add discharge windows
@@ -9361,7 +9361,7 @@ class PredBat(hass.Hass):
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
                 window_links[sort_key]["average"] = self.dp1(average)  # Round to nearest 0.1 penny to avoid too many bands
-                window_links[sort_key]["average_seconary"] = self.dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average_secondary"] = self.dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
                 id += 1
 
         if window_sort:
