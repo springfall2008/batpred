@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.13"
+THIS_VERSION = "v7.16.14"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -8115,6 +8115,7 @@ class PredBat(hass.Hass):
             discharge_end_date = None
             discharge_average = None
             discharge_start_in_minutes = self.forecast_minutes
+            discharge_end_in_minutes = self.forecast_minutes
 
             if discharge_window and (discharge_window[0]["end"] < (24 * 60 + self.minutes_now)):
                 discharge_start_minutes = discharge_window[0]["start"]
