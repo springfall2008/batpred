@@ -9675,11 +9675,17 @@ class PredBat(hass.Hass):
             )
 
         if pv_forecast_data:
+            pv_estimate = self.get_arg("pv_estimate", default="")
+            if pv_estimate is None:
+                pv_estimate = "pv_estimate"
+            else:
+                pv_estimate = "pv_estimate" + str(pv_estimate)
+
             pv_forecast_minute = self.minute_data(
                 pv_forecast_data,
                 self.forecast_days + 1,
                 self.midnight_utc,
-                "pv_estimate" + str(self.get_arg("pv_estimate", "")),
+                pv_estimate,
                 "period_start",
                 backwards=False,
                 divide_by=divide_by,
