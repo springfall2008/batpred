@@ -186,17 +186,19 @@ you may find these automations useful to monitor that GivTCP and Predbat are run
 
 This automation will raise an alert if any of the following occur:
 
-- The inverter goes offline for more than 30 minutes
-- No last_updated_time received from the inverter for more than 30 minutes
-- Inverter temperature less than 5 degrees for more than 30 minutes (should never happen)
-- The battery goes offline to the inverter for more than 30 minutes
+- The inverter goes offline for more than 15 minutes
+- No last_updated_time received from the inverter for more than 15 minutes
+- Inverter temperature less than 5 degrees for more than 15 minutes (should never happen)
+- The battery goes offline to the inverter for more than 15 minutes
+- GivTCP add-on is not running
+- Mosquitto broker add-on is not running
 
 The script will need to be customised for your inverter id, battery id and mobile details,
 and can be extended for multiple inverters and batteries by duplicating the triggers and adding appropriate battery and inverter id's.
 
 ```yaml
 alias: GivTCP activity monitor
-description: Alert when communications to GivTCP have ceased for 30 minutes
+description: Alert when communications to GivTCP have ceased for 15 minutes
 trigger:
   - platform: state
     entity_id: sensor.givtcp_<inverter id>_last_updated_time
@@ -229,13 +231,29 @@ trigger:
       minutes: 15
     variables:
       alert_text: Battery <battery_id> is offline to GivTCP
+  - platform: state
+    entity_id:
+      - binary_sensor.givtcp_running
+    to: "off"
+    for:
+      minutes: 15
+    variables:
+      alert_text: GivTCP add-on is not running
+  - platform: state
+    entity_id:
+      - binary_sensor.mosquitto_broker_running
+    to: "off"
+    for:
+      minutes: 15
+    variables:
+      alert_text: Mosquitto Broker add-on is not running
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: GivTCP communication issue
       message: |
         {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-        {{ alert_text }} for the past 30 minutes.
+        {{ alert_text }} for the past 15 minutes.
       data:
         visibility: public
         persistent: true
@@ -248,6 +266,13 @@ action:
           color: red
 mode: single
 ```
+
+The last two triggers (GivTCP and Mosquitto running) check that the add-on that Predbat is dependent upon is running.<BR>
+You will need to enable a binary sensor for each add-on to be able to use these triggers:
+Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'.
+Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'.
+Click the 'Running' sensor, then the cogwheel, and Enable the sensor.
+Repeat these steps for the Mosquitto add-on.
 
 As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
