@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.15"
+THIS_VERSION = "v7.16.16"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -6734,7 +6734,7 @@ class PredBat(hass.Hass):
             kwh = self.car_charging_rate[car_n] * hours
 
             kwh_add = kwh * self.car_charging_loss
-            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
+            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0) / self.car_charging_loss
 
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
@@ -10207,8 +10207,10 @@ class PredBat(hass.Hass):
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
                 try:
+                    self.log("Loading extra load forecast from {} attribute {}".format(entity_id, attribute))
                     data = self.get_state(entity_id=entity_id, attribute=attribute)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as e:
+                    self.log("Error: Unable to fetch load forecast data from sensor {} exception {}".format(entity_id, e))
                     data = None
 
                 # Convert format from dict to array
