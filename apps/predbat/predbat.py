@@ -3619,12 +3619,12 @@ class Inverter:
             entity = self.base.get_entity(entity_id)
             switch = solax_modes.get(entity.get_state(), 0)
 
-            if direction == 'charge':
+            if direction == "charge":
                 if enable:
                     new_switch = 35
                 else:
                     new_switch = 33
-            elif direction == 'discharge':
+            elif direction == "discharge":
                 if enable:
                     new_switch = 35
                 else:
