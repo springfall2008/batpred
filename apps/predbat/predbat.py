@@ -3619,12 +3619,12 @@ class Inverter:
             entity = self.base.get_entity(entity_id)
             switch = solax_modes.get(entity.get_state(), 0)
 
-            if direction == "charge":
+            if direction == 'charge':
                 if enable:
                     new_switch = 35
                 else:
                     new_switch = 33
-            elif direction == "discharge":
+            elif direction == 'discharge':
                 if enable:
                     new_switch = 35
                 else:
@@ -3640,10 +3640,8 @@ class Inverter:
 
                 self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
                 self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
-                return True
             else:
                 self.base.log(f"Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
-                return True
 
         # MQTT
         if direction == "charge" and enable:
