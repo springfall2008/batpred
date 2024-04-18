@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.15"
+THIS_VERSION = "v7.16.16"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -8750,6 +8750,9 @@ class PredBat(hass.Hass):
                         # Adjustment for battery cycles metric
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
+                        # Round to 2dp
+                        metric = self.dp2(metric)
+
                         # Optimise
                         if self.debug_enable and 0:
                             if discharge_enable:
@@ -8856,11 +8859,14 @@ class PredBat(hass.Hass):
         result10 = {}
 
         # For single windows, if the size is 30 minutes or less then use a larger step
+        min_improvement_scaled = self.metric_min_improvement
         if not all_n:
             start = charge_window[window_n]["start"]
             end = charge_window[window_n]["end"]
-            if (end - start) <= 30 and best_soc_step < 1:
+            window_size = end - start
+            if window_size <= 30 and best_soc_step < 1:
                 best_soc_step *= 2
+            min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
 
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
@@ -8946,9 +8952,9 @@ class PredBat(hass.Hass):
         # Assemble list of SOCs to try
         try_socs = []
         loop_step = max(best_soc_step, 0.1)
-        best_soc_min = self.best_soc_min
-        if best_soc_min > 0:
-            best_soc_min = max(self.reserve, best_soc_min)
+        best_soc_min_setting = self.best_soc_min
+        if best_soc_min_setting > 0:
+            best_soc_min_setting = max(self.reserve, best_soc_min_setting)
         while loop_soc > self.reserve:
             skip = False
             try_soc = max(best_soc_min, loop_soc)
@@ -8964,8 +8970,8 @@ class PredBat(hass.Hass):
                 try_socs.append(self.dp2(try_soc))
             loop_soc -= loop_step
         # Give priority to off to avoid spurious charge freezes
-        if best_soc_min not in try_socs:
-            try_socs.append(best_soc_min)
+        if best_soc_min_setting not in try_socs:
+            try_socs.append(best_soc_min_setting)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
 
@@ -9041,8 +9047,11 @@ class PredBat(hass.Hass):
                 metric += 0.1
 
             # Very minor preference to 100% or 0% so that slots are contiguous
-            if (try_soc == self.soc_max) or (try_soc == 0):
+            if (try_soc == self.soc_max) or (try_soc == best_soc_min_setting):
                 metric -= 0.01
+
+            # Round metric to 2 DP
+            metric = self.dp2(metric)
 
             if self.debug_enable and 0:
                 self.log(
@@ -9063,11 +9072,11 @@ class PredBat(hass.Hass):
                     )
                 )
 
-            window_results[try_soc] = self.dp2(metric)
+            window_results[try_soc] = metric
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if (metric + self.metric_min_improvement) <= best_metric:
+            if (metric + min_improvement_scaled) <= best_metric:
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -9218,6 +9227,9 @@ class PredBat(hass.Hass):
                 ):
                     metric -= max(0.5, self.metric_min_improvement_discharge)
 
+            # Round metric to 2 DP
+            metric = self.dp2(metric)
+
             if self.debug_enable:
                 self.log(
                     "Sim: Discharge {} window {} start {} end {}, imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} metricmid {} metric10 {} cycle {} end_record {}".format(
@@ -9244,8 +9256,13 @@ class PredBat(hass.Hass):
             window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
             window_results[window_key] = self.dp2(metric)
 
+            if all_n:
+                min_improvement_scaled = self.metric_min_improvement_discharge
+            else:
+                min_improvement_scaled = self.metric_min_improvement_discharge * window_size / 30.0
+
             # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if ((metric + self.metric_min_improvement_discharge * window_size / 30.0) <= off_metric) and (metric <= best_metric):
+            if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
