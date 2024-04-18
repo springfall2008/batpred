@@ -3633,11 +3633,11 @@ class Inverter:
                 # ECO
                 new_switch = 35
 
-            if new_switch != switch:
-                # Now lookup the new mode in an inverted dict:
-                new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
-                old_mode = {solax_modes[x]: x for x in solax_modes}[switch]
+            # Find mode names
+            old_mode = {solax_modes[x]: x for x in solax_modes}[switch]
+            new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
 
+            if new_switch != switch:
                 self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
                 self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
             else:
