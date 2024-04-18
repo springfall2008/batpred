@@ -1575,7 +1575,7 @@ class Prediction:
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             if ((minute % 10) == 0) and (self.debug_enable or save):
                 predict_soc_time[stamp] = round(soc, 3)
-                metric_time[stamp] = round(metric, 2)
+                metric_time[stamp] = round(metric, 3)
                 load_kwh_time[stamp] = round(load_kwh, 3)
                 pv_kwh_time[stamp] = round(pv_kwh, 2)
                 import_kwh_time[stamp] = round(import_kwh, 2)
@@ -1589,7 +1589,7 @@ class Prediction:
             self.predict_soc[minute] = round(soc, 3)
             if save and save == "best":
                 self.predict_soc_best[minute] = round(soc, 3)
-                self.predict_metric_best[minute] = round(metric, 2)
+                self.predict_metric_best[minute] = round(metric, 3)
                 self.predict_iboost_best[minute] = iboost_today_kwh
 
             # Get load and pv forecast, total up for all values in the step
@@ -1749,6 +1749,9 @@ class Prediction:
                 # So move more of the PV into PV DC
                 if pv_dc < charge_rate_now_curve * step:
                     extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
+                    # Clamp to remaining energy to charge limit
+                    if (extra_pv + pv_dc) > (charge_limit_n - soc):
+                        extra_pv = max((charge_limit_n - soc) - pv_dc, 0)
                     pv_ac -= extra_pv
                     pv_dc += extra_pv
 
@@ -9012,6 +9015,12 @@ class PredBat(hass.Hass):
             metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[
                 try_soc
             ]
+            if self.debug_enable:
+                self.log(
+                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(
+                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10
+                    )
+                )
 
             # Store simulated mid value
             metric = metricmid
@@ -9053,7 +9062,7 @@ class PredBat(hass.Hass):
             # Round metric to 2 DP
             metric = self.dp2(metric)
 
-            if self.debug_enable and 0:
+            if self.debug_enable:
                 self.log(
                     "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
                         try_soc,
