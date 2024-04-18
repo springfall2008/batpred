@@ -8859,11 +8859,14 @@ class PredBat(hass.Hass):
         result10 = {}
 
         # For single windows, if the size is 30 minutes or less then use a larger step
+        min_improvement_scaled = self.metric_min_improvement
         if not all_n:
             start = charge_window[window_n]["start"]
             end = charge_window[window_n]["end"]
-            if (end - start) <= 30 and best_soc_step < 1:
+            window_size = end - start
+            if window_size <= 30 and best_soc_step < 1:
                 best_soc_step *= 2
+            min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
 
         # Start the loop at the max soc setting
         if self.best_soc_max > 0:
@@ -9073,7 +9076,7 @@ class PredBat(hass.Hass):
 
             # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
-            if (metric + self.metric_min_improvement) <= best_metric:
+            if (metric + min_improvement_scaled) <= best_metric:
                 best_metric = metric
                 best_soc = try_soc
                 best_cost = cost
@@ -9252,10 +9255,14 @@ class PredBat(hass.Hass):
             window_size = try_discharge_window[window_n]["end"] - start
             window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
             window_results[window_key] = self.dp2(metric)
-            min_improvemented_scaled = self.metric_min_improvement_discharge * window_size / 30.0
+
+            if all_n:
+                min_improvement_scaled = self.metric_min_improvement_discharge
+            else:
+                min_improvement_scaled = self.metric_min_improvement_discharge * window_size / 30.0
 
             # Only select a discharge if it makes a notable improvement has defined by min_improvement (divided in M windows)
-            if ((metric + min_improvemented_scaled) <= off_metric) and (metric <= best_metric):
+            if ((metric + min_improvement_scaled) <= off_metric) and (metric <= best_metric):
                 best_metric = metric
                 best_discharge = this_discharge_limit
                 best_cost = cost
