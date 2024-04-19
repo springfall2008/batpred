@@ -124,7 +124,6 @@ rtype
 saverestore
 searr
 Selfuse
-sunsynx
 socb
 socs
 sofar
@@ -139,6 +138,7 @@ springfall
 startt
 stdlib
 stepline
+sunsynx
 tasmota
 tdata
 tdiff
