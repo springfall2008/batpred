@@ -124,6 +124,7 @@ rtype
 saverestore
 searr
 Selfuse
+sunsynx
 socb
 socs
 sofar
