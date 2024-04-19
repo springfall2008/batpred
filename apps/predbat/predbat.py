@@ -1068,6 +1068,30 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": True,
     },
+    "SK": {
+        "name": "Sunsynk",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "has_service_api": True,
+        "output_charge_control": "power",
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": True,
+        "has_reserve_soc": False,
+        "charge_time_format": "S",
+        "charge_time_entity_is_option": False,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": True,
+    },
 }
 
 # Control modes for Solax inverters
@@ -9016,11 +9040,7 @@ class PredBat(hass.Hass):
                 try_soc
             ]
             if self.debug_enable:
-                self.log(
-                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(
-                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10
-                    )
-                )
+                self.log("Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10))
 
             # Store simulated mid value
             metric = metricmid
@@ -11042,6 +11062,7 @@ class PredBat(hass.Hass):
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(self.discharge_limits_best[0])
                             setReserve = True
+                            
                         status = "Discharging"
                         status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                         if self.set_discharge_freeze:
@@ -11122,7 +11143,11 @@ class PredBat(hass.Hass):
 
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
-                if (
+                if isDischarging and not self.set_reserve_enable:
+                    # If we are discharging and not setting reserve then we should reset the target SOC to 0% 
+                    # as some inverters can use this as a target for discharge
+                    inverter.adjust_battery_target(self.discharge_limits_best[0], False)
+                elif (
                     self.charge_limit_best
                     and (self.minutes_now < inverter.charge_end_time_minutes)
                     and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes)
