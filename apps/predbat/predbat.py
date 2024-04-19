@@ -9040,7 +9040,11 @@ class PredBat(hass.Hass):
                 try_soc
             ]
             if self.debug_enable:
-                self.log("Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10))
+                self.log(
+                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(
+                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10
+                    )
+                )
 
             # Store simulated mid value
             metric = metricmid
@@ -11062,7 +11066,7 @@ class PredBat(hass.Hass):
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(self.discharge_limits_best[0])
                             setReserve = True
-                            
+
                         status = "Discharging"
                         status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                         if self.set_discharge_freeze:
@@ -11144,7 +11148,7 @@ class PredBat(hass.Hass):
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
                 if isDischarging and not self.set_reserve_enable:
-                    # If we are discharging and not setting reserve then we should reset the target SOC to 0% 
+                    # If we are discharging and not setting reserve then we should reset the target SOC to 0%
                     # as some inverters can use this as a target for discharge
                     inverter.adjust_battery_target(self.discharge_limits_best[0], False)
                 elif (

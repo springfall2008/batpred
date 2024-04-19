@@ -8,10 +8,10 @@ pred_bat:
 
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
-  
+
   soc_max:
    - 28.8
-   
+
   battery_rate_max:
    - 8000
 
@@ -65,7 +65,7 @@ pred_bat:
   #
   # Controls/status - must by 1 per inverter
   #
-  num_inverters: 1  
+  num_inverters: 1
   inverter_type: SK
 
   # Services to control charging/discharging
@@ -80,8 +80,8 @@ pred_bat:
     service: select.select_option
     entity_id: "select.sunsynk_inverter_work_mode."
     option: "Selling first"
-    
-  
+
+
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
@@ -100,9 +100,9 @@ pred_bat:
 
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
-  charge_rate: 
+  charge_rate:
      - sensor.max_battery_charge_rate
-  discharge_rate: 
+  discharge_rate:
      - sensor.max_battery_discharge_rate
   battery_power:
      - number.sunsynk_inverter_battery_power
@@ -395,7 +395,7 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
-  
+
   # Gas rates for comparison
   metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
 
