@@ -10971,12 +10971,16 @@ class PredBat(hass.Hass):
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
-                    self.log(
-                        "Include original discharge start {} with our start which is {}".format(
-                            self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)
-                        )
-                    )
                     minutes_start = inverter.discharge_start_time_minutes
+                    # Don't allow overlap with charge window
+                    if minutes_start >= inverter.charge_start_time_minutes and minutes_start < inverter.charge_end_time_minutes:
+                        minutes_start = window["start"]
+                    else:
+                        self.log(
+                            "Include original discharge start {} with our start which is {}".format(
+                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)
+                            )
+                        )
 
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
