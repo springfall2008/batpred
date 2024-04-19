@@ -2912,18 +2912,20 @@ class Inverter:
             None
         """
         charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-        if self.soc_percent > float(current_charge_limit):
+        if current_charge_limit == 0:
+            self.alt_charge_discharge_enable("eco", True)  # ECO Mode
+        elif self.soc_percent > float(current_charge_limit):
             # If current SOC is above Target SOC, turn Grid Charging off
-            self.alt_charge_discharge_enable("charge", False, grid=True, timed=True)
+            self.alt_charge_discharge_enable("charge", False)
             self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
         elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)  # Make sure charging is on
+            self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
             if self.inv_output_charge_control == "current":
                 self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
                 self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
         else:
             # If we drop below the target, turn grid charging back on and make sure the charge current is correct
-            self.alt_charge_discharge_enable("charge", True, grid=True, timed=True)
+            self.alt_charge_discharge_enable("charge", True)
             if self.inv_output_charge_control == "current":
                 self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                 self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
@@ -3605,59 +3607,44 @@ class Inverter:
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_end_time_minutes = self.base.forecast_minutes
 
-    def alt_charge_discharge_enable(self, direction, enable, grid=True, timed=False):
+    def alt_charge_discharge_enable(self, direction, enable):
         """
         Alternative enable and disable of timed charging for non-GE inverters
         """
-        if not grid and not timed:
-            self.base.log("WARN: Unable to set Solis Energy Controls Switch: both Grid and Timed are False")
-            return False
-
-        if enable:
-            str_enable = "enable"
-        else:
-            str_enable = "disable"
-
-        str_type = ""
-        if grid:
-            str_type += "grid "
-        if timed:
-            if grid:
-                str_type += "and "
-            str_type += "timed "
 
         if self.inverter_type == "GS":
             # Solis just has a single switch for both directions
             # Need to check the logic of how this is called if both charging and discharging
 
-            modes_new = self.base.get_arg("solax_modbus_new", True)
-            solax_modes = SOLAX_SOLIS_MODES_NEW if modes_new else SOLAX_SOLIS_MODES
+            solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
             entity = self.base.get_entity(entity_id)
             switch = solax_modes.get(entity.get_state(), 0)
-            # Grid charging is Bit 1(2) and Timed Charging is Bit 5(32)
-            mask = 2 * timed + 32 * grid
-            if switch > 0:
-                # Timed charging is Bit 1 so we OR with 2 to set and AND with ~2 to clear
+
+            if direction == "charge":
                 if enable:
-                    new_switch = switch | mask
+                    new_switch = 35
                 else:
-                    new_switch = switch & ~mask
-
-                if new_switch != switch:
-                    # Now lookup the new mode in an inverted dict:
-                    new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
-
-                    self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} to {str_enable} {str_type} charging")
-                    self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
-                    return True
+                    new_switch = 33
+            elif direction == "discharge":
+                if enable:
+                    new_switch = 35
                 else:
-                    self.base.log(f"Solis Energy Control Switch setting {switch} is correct for {str_enable} {str_type} charging")
-                    return True
+                    new_switch = 33
             else:
-                self.base.log(f"WARN: Unable to read current value of Solis Mode switch {entity_id}. Unable to {str_enable} {str_type} charging")
-                return False
+                # ECO
+                new_switch = 35
+
+            # Find mode names
+            old_mode = {solax_modes[x]: x for x in solax_modes}[switch]
+            new_mode = {solax_modes[x]: x for x in solax_modes}[new_switch]
+
+            if new_switch != switch:
+                self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
+                self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
+            else:
+                self.base.log(f"Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
 
         # MQTT
         if direction == "charge" and enable:
@@ -10233,8 +10220,10 @@ class PredBat(hass.Hass):
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
                 try:
+                    self.log("Loading extra load forecast from {} attribute {}".format(entity_id, attribute))
                     data = self.get_state(entity_id=entity_id, attribute=attribute)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as e:
+                    self.log("Error: Unable to fetch load forecast data from sensor {} exception {}".format(entity_id, e))
                     data = None
 
                 # Convert format from dict to array
@@ -11008,12 +10997,16 @@ class PredBat(hass.Hass):
 
                 # Avoid adjust avoid start time forward when it's already started
                 if (inverter.discharge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
-                    self.log(
-                        "Include original discharge start {} with our start which is {}".format(
-                            self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)
-                        )
-                    )
                     minutes_start = inverter.discharge_start_time_minutes
+                    # Don't allow overlap with charge window
+                    if minutes_start >= inverter.charge_start_time_minutes and minutes_start < inverter.charge_end_time_minutes:
+                        minutes_start = window["start"]
+                    else:
+                        self.log(
+                            "Include original discharge start {} with our start which is {}".format(
+                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)
+                            )
+                        )
 
                 # Avoid having too long a period to configure as registers only support 24-hours
                 if (minutes_start < self.minutes_now) and ((minutes_end - minutes_start) >= 24 * 60):
