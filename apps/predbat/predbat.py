@@ -421,6 +421,18 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {
+        "name": "combine_rate_threshold",
+        "friendly_name": "Combine Rate Threshold",
+        "type": "input_number",
+        "min": 0,
+        "max": 5.0,
+        "step": 0.1,
+        "unit": "p",
+        "icon": "mdi:table-merge-cells",
+        "enable": "expert_mode",
+        "default": 0.0,
+    },
+    {
         "name": "car_charging_hold",
         "friendly_name": "Car charging hold",
         "type": "switch",
@@ -6485,8 +6497,9 @@ class PredBat(hass.Hass):
                     or minute in self.manual_all_times
                     or rate_low_start in self.manual_all_times
                 ):
-                    if (not self.combine_mixed_rates) and (rate_low_start >= 0) and (int(self.dp2(rate) + 0.5) != int(self.dp2(rate_low_rate) + 0.5)):
-                        # Refuse mixed rates that are different by more than 0.5p
+                    rate_diff = abs(rate - rate_low_rate)
+                    if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
+                        # Refuse mixed rates that are different by more than threshold
                         rate_low_end = minute
                         break
                     if find_high and (not self.combine_discharge_slots) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.discharge_slot_split):
@@ -6703,6 +6716,7 @@ class PredBat(hass.Hass):
             start = max(window["start"], self.minutes_now)
             end = min(window["end"], ready_minutes)
             price = window["average"]
+
             length = 0
             kwh = 0
 
@@ -10502,6 +10516,7 @@ class PredBat(hass.Hass):
         opts += "set_discharge_during_charge({}) ".format(self.set_discharge_during_charge)
         opts += "combine_charge_slots({}) ".format(self.combine_charge_slots)
         opts += "combine_discharge_slots({}) ".format(self.combine_discharge_slots)
+        opts += "combine_rate_threshold({}) ".format(self.combine_rate_threshold)
         opts += "best_soc_min({} kWh) ".format(self.best_soc_min)
         opts += "best_soc_max({} kWh) ".format(self.best_soc_max)
         opts += "best_soc_keep({} kWh) ".format(self.best_soc_keep)
@@ -12031,7 +12046,7 @@ class PredBat(hass.Hass):
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
-        self.combine_mixed_rates = False
+        self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
         self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
         self.charge_slot_split = 60

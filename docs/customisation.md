@@ -283,7 +283,10 @@ If you set this to a non-zero value you will need to use the low rate threshold 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
 
-**switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
+**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or discharge slots together into a single larger average rate slot.
+The default is 0p which disables this feature and all rate changes result in a new slot.
+
+**switch.predbat_combine_charge_slots** Controls if charge slots of > 60 minutes can be combined. When disabled they will be split up,
 increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
 a saving session). The default is enable (True)
