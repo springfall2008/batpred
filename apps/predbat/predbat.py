@@ -6621,8 +6621,8 @@ class PredBat(hass.Hass):
                 end_minutes = min(self.minutes_to_time(end, midnight), 24 * 60 - 1)
 
                 self.log(
-                    "Adding rate {} => {} to {} @ {} date {} increment {}".format(
-                        this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment
+                    "Adding rate {}: {} => {} to {} @ {} date {} increment {}".format(
+                        rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment
                     )
                 )
 
@@ -11412,6 +11412,10 @@ class PredBat(hass.Hass):
                 raise ValueError
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
+        elif "rates_gas" in self.args:
+            self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "gas")
+            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+            self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
 
         # Work out current car SOC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
@@ -12046,7 +12050,7 @@ class PredBat(hass.Hass):
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
-        self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
+        self.combine_rate_threshold = self.get_arg('combine_rate_threshold')
         self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
         self.charge_slot_split = 60
