@@ -12046,7 +12046,7 @@ class PredBat(hass.Hass):
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
-        self.combine_rate_threshold = self.get_arg('combine_rate_threshold')
+        self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
         self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
         self.charge_slot_split = 60
