@@ -346,6 +346,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **metric_standing_charge** - Standing charge in pounds
 - **rates_import** - Import rates over a 24-hour period with start and end times
 - **rates_export** - Export rates over a 24-hour period with start and end times
+- **rates_gas** - Gas rates over a 24-hour period with start and end times
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
