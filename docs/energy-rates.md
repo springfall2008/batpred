@@ -142,7 +142,7 @@ Configuring the Octopus rates URL is an expert feature and for most users the Oc
 
 ## Rate Bands to manually configure Energy Rates
 
-If you are not an Octopus Energy customer, or you are but your energy rates repeat in a simple manner, you can configure your rate bands in apps.yaml using rates_import/rates_export.
+If you are not an Octopus Energy customer, or you are but your energy rates repeat in a simple manner, you can configure your rate bands in apps.yaml using rates_import/rates_export/rates_gas.
 
 Add the following entries to apps.yaml to define the pattern of rates over a 24-hour period:
 
@@ -155,6 +155,10 @@ rates_export:
   - start: "HH:MM:SS"
     end: "HH:MM:SS"
     rate: pence
+rates_gas:
+  - start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
@@ -163,6 +167,8 @@ rates_export:
 start and end can be omitted and Predbat will assume that you are on a single flat rate tariff.
 
 If there are any gaps in the 24-hour period then a zero rate will be assumed.
+
+If you don't use gas then you can not put this one in the configuration.
 
 ## Manually over-riding energy rates
 
