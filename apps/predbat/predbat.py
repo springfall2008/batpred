@@ -1303,6 +1303,7 @@ class Prediction:
     def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
         if base:
+            self.log = base.log
             self.minutes_now = base.minutes_now
             self.forecast_minutes = base.forecast_minutes
             self.midnight_utc = base.midnight_utc
@@ -1658,24 +1659,26 @@ class Prediction:
             load_kwh += load_yesterday
             if record:
                 final_load_kwh = load_kwh
-
-            # Work out how much PV is used to satisfy home demand
-            pv_ac = min(load_yesterday / self.inverter_loss, pv_now, self.inverter_limit * step)
-
-            # And hence how much maybe left for DC charging
-            pv_dc = pv_now - pv_ac
-
-            # Scale down PV AC and DC for inverter loss (if hybrid we will reverse the DC loss later)
-            pv_ac *= self.inverter_loss
-            pv_dc *= self.inverter_loss
+        
+            # For AC coupled the PV is inverted onto the house
+            # While for hybrid its connected to the battery input pin
+            battery_dc = 0
+            if not self.inverter_hybrid:
+                load_yesterday -= pv_now * self.inverter_loss
+            else:
+                battery_dc = -pv_now
 
             # IBoost model
             if self.iboost_enable:
+                boost_avail = 0
+                if load_yesterday < 0:
+                    boost_avail = min(abs(load_yesterday), self.iboost_max_power * step)
+
                 if iboost_today_kwh < self.iboost_max_energy and (
-                    self.iboost_solar and pv_dc > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
+                    self.iboost_solar and boost_avail > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
                 ):
-                    iboost_amount = min(pv_dc, self.iboost_max_power * step)
-                    pv_dc -= iboost_amount
+                    iboost_amount = min(boost_avail, self.iboost_max_power * step)
+                    load_yesterday += iboost_amount
 
                 # Cumulative energy
                 iboost_today_kwh += iboost_amount
@@ -1710,6 +1713,7 @@ class Prediction:
 
             # Battery behaviour
             battery_draw = 0
+            ac_output = 0
             charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
             discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
             if (
@@ -1722,25 +1726,14 @@ class Prediction:
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
                 discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
 
+                battery_draw = discharge_rate_now_curve * step + battery_dc
+                battery_draw_charge = battery_draw / self.battery_loss_discharge
+
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
-                battery_draw = discharge_rate_now_curve * step
-                if (soc - reserve_expected) < battery_draw:
-                    battery_draw = max(soc - reserve_expected, 0)
-
-                # Account for export limit, clip battery draw if possible to avoid going over
-                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
-                if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
-                    above_limit = abs(diff_tmp + self.export_limit * step)
-                    battery_draw = max(0, battery_draw - above_limit)
-
-                # Account for inverter limit, clip battery draw if possible to avoid going over
-                total_inverted = pv_ac + pv_dc + battery_draw
-                if total_inverted > self.inverter_limit * step:
-                    reduce_by = total_inverted - (self.inverter_limit * step)
-                    battery_draw = max(0, battery_draw - reduce_by)
-
                 battery_state = "f-"
+                if save == 'best':
+                  self.log("Minute {} charging battery_draw {} soc {}".format(minute, battery_draw, soc))
 
                 # Once force discharge starts the four hour rule is disabled
                 four_hour_rule = False
@@ -1757,73 +1750,100 @@ class Prediction:
                 # Apply the charging curve
                 charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
 
-                # If the battery is charging then solar will be used to charge as a priority
-                # So move more of the PV into PV DC
-                if pv_dc < charge_rate_now_curve * step:
-                    extra_pv = min(charge_rate_now_curve * step - pv_dc, pv_ac)
-                    # Clamp to remaining energy to charge limit
-                    if (extra_pv + pv_dc) > (charge_limit_n - soc):
-                        extra_pv = max((charge_limit_n - soc) - pv_dc, 0)
-                    pv_ac -= extra_pv
-                    pv_dc += extra_pv
+                battery_draw = -charge_rate_now_curve * step + battery_dc
+                battery_draw_charge = battery_draw / self.battery_loss
+
+                if save == 'best':
+                    self.log("Minute {} charging battery draw {} draw_charge {} soc {}".format(minute, battery_draw, battery_draw_charge, soc))
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
-                charge_rate_now_curve /= self.inverter_loss
-                battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
             else:
                 # ECO Mode
-                if load_yesterday - pv_ac - pv_dc > 0:
-                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac)
+                battery_draw = load_yesterday / self.inverter_loss + battery_dc
+                if battery_draw > 0:
+                    battery_draw = min(battery_draw, discharge_rate_now_curve * step, self.inverter_limit * step)
+                    battery_draw_charge = battery_draw / self.battery_loss_discharge
                     battery_state = "e-"
                 else:
-                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step)
+                    battery_draw = max(battery_draw, -charge_rate_now_curve * step)
                     if battery_draw < 0:
                         battery_state = "e+"
                     else:
                         battery_state = "e~"
+                    battery_draw_charge = battery_draw / self.battery_loss
 
-            # Clamp battery at reserve for discharge
-            if battery_draw > 0:
-                # All battery discharge must go through the inverter too
-                soc -= battery_draw / (self.battery_loss_discharge * self.inverter_loss)
-                if soc < reserve_expected:
-                    battery_draw -= (reserve_expected - soc) * self.battery_loss_discharge * self.inverter_loss
-                    soc = reserve_expected
+            # Work out ac output
+            ac_output = (battery_draw + battery_dc) * self.inverter_loss
 
-            # Clamp battery at max when charging
-            if battery_draw < 0:
-                battery_draw_dc = max(-pv_dc, battery_draw)
-                battery_draw_ac = battery_draw - battery_draw_dc
+            # Account for export limit, clip battery draw if possible to avoid going over
+            diff_tmp = load_yesterday - ac_output
+            if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
+                above_limit = abs(diff_tmp + self.export_limit * step)
+                battery_draw = max(0, battery_draw - above_limit / self.inverter_loss)
+                battery_draw_charge = battery_draw / self.battery_loss
+                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                if save == 'best':
+                    self.log("Minute {} clamping on export limit to battery_draw {} ac_output {} draw_charge {}".format(minute, battery_draw, ac_output, battery_draw_charge))
 
-                if self.inverter_hybrid:
-                    inverter_loss = self.inverter_loss
-                else:
-                    inverter_loss = 1.0
+            # Account for inverter limit, clip battery draw if possible to avoid going over
+            if ac_output > self.inverter_limit * step:
+                ac_old = ac_output
+                reduce_by = ac_output - (self.inverter_limit * step)
+                battery_draw = max(0, battery_draw - reduce_by / self.inverter_loss)
+                battery_draw_charge = battery_draw / self.battery_loss
+                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                if save == 'best':
+                    self.log("Minute {} clamping max inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
 
-                # In the hybrid case only we remove the inverter loss for PV charging (as it's DC to DC), and inverter loss was already applied
-                soc -= battery_draw_dc * self.battery_loss / inverter_loss
-                if soc > self.soc_max:
-                    battery_draw_dc += ((soc - self.soc_max) / self.battery_loss) * inverter_loss
-                    soc = self.soc_max
+            if ac_output < -self.inverter_limit * step:
+                ac_old = ac_output
+                reduce_by = ac_output + (self.inverter_limit * step)
+                battery_draw = min(0, battery_draw - reduce_by / self.inverter_loss)
+                battery_draw_charge = battery_draw / self.battery_loss
+                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                if save == 'best':
+                    self.log("Minute {} clamping min inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
 
-                # The rest of this charging must be from the grid (pv_dc was the left over PV)
-                soc -= battery_draw_ac * self.battery_loss * self.inverter_loss
-                if soc > self.soc_max:
-                    battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
-                    soc = self.soc_max
+            # New SOC?
+            new_soc = soc - battery_draw_charge
 
-                # if (minute % 30) == 0:
-                #    self.log("Minute {} pv_ac {} pv_dc {} battery_ac {} battery_dc {} battery b4 {} after {} soc {}".format(minute, pv_ac, pv_dc, battery_draw_ac, battery_draw_dc, battery_draw, battery_draw_ac + battery_draw_dc, soc))
+            # Below reserve?
+            if new_soc < reserve_expected and battery_draw_charge > 0:
+                over = new_soc - reserve_expected
+                battery_draw_charge = max(battery_draw_charge + over * self.battery_loss, 0)
+                battery_draw = max(battery_draw_charge + over, 0)
+                new_soc = soc - battery_draw_charge
+                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                #if save == 'best':
+                #    self.log("Minute {} clamping reserve limit to battery_draw {} ac_output {} draw_charge {} new_soc {}".format(minute, battery_draw, ac_output, battery_draw_charge, new_soc))
 
-                battery_draw = battery_draw_ac + battery_draw_dc
+            # Above max?
+            if new_soc > self.soc_max and battery_draw_charge < 0:
+                over = new_soc - self.soc_max
+                battery_draw_charge = min(battery_draw_charge + over * self.battery_loss, 0)
+                battery_draw = min(battery_draw_charge + over * self.battery_loss, 0)
+                new_soc = soc - battery_draw_charge
+                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                #if save == 'best':
+                #    self.log("Minute {} clamping soc max limit to battery_draw {} ac_output {} draw_charge {} new_soc {}".format(minute, battery_draw, ac_output, battery_draw_charge, new_soc))
+
+            # Store new SOC
+            soc = new_soc
+
+            if save == 'best':
+                self.log("Minute {} battery DC {} ac_output {} soc {} battery_draw {} load {} state {}".format(minute, battery_dc, ac_output, soc, battery_draw, load_yesterday, battery_state))
+
+            # Final SOC clamp to catch any rounding issues
+            soc = max(soc, 0)
+            soc = min(soc, self.soc_max)
 
             # Count battery cycles
-            battery_cycle += abs(battery_draw)
+            battery_cycle += abs(battery_draw_charge)
 
             # Work out left over energy after battery adjustment
-            diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
+            diff = load_yesterday - ac_output
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
                 # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
@@ -1845,7 +1865,7 @@ class Prediction:
             elif soc < self.best_soc_keep:
                 # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
                 # and end up forcing it all to zero
-                keep_diff = load_yesterday - (0 + pv_dc + pv_ac)
+                keep_diff = load_yesterday
                 if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
 
