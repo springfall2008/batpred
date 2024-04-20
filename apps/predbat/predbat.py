@@ -1753,8 +1753,8 @@ class Prediction:
                 battery_draw = -charge_rate_now_curve * step + battery_dc
                 battery_draw_charge = battery_draw / self.battery_loss
 
-                if save == 'best':
-                    self.log("Minute {} charging battery draw {} draw_charge {} soc {}".format(minute, battery_draw, battery_draw_charge, soc))
+                #if save == 'best':
+                #    self.log("Minute {} charging battery draw {} draw_charge {} soc {}".format(minute, battery_draw, battery_draw_charge, soc))
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 battery_state = "f+"
@@ -1775,7 +1775,7 @@ class Prediction:
                     battery_draw_charge = battery_draw / self.battery_loss
 
             # Work out ac output
-            ac_output = (battery_draw + battery_dc) * self.inverter_loss
+            ac_output = (-battery_draw + battery_dc) * self.inverter_loss
 
             # Account for export limit, clip battery draw if possible to avoid going over
             diff_tmp = load_yesterday - ac_output
@@ -1783,9 +1783,9 @@ class Prediction:
                 above_limit = abs(diff_tmp + self.export_limit * step)
                 battery_draw = max(0, battery_draw - above_limit / self.inverter_loss)
                 battery_draw_charge = battery_draw / self.battery_loss
-                ac_output = (battery_draw + battery_dc) * self.inverter_loss
-                if save == 'best':
-                    self.log("Minute {} clamping on export limit to battery_draw {} ac_output {} draw_charge {}".format(minute, battery_draw, ac_output, battery_draw_charge))
+                ac_output = (-battery_draw + battery_dc) * self.inverter_loss
+                #if save == 'best':
+                #    self.log("Minute {} clamping on export limit to battery_draw {} ac_output {} draw_charge {}".format(minute, battery_draw, ac_output, battery_draw_charge))
 
             # Account for inverter limit, clip battery draw if possible to avoid going over
             if ac_output > self.inverter_limit * step:
@@ -1793,18 +1793,18 @@ class Prediction:
                 reduce_by = ac_output - (self.inverter_limit * step)
                 battery_draw = max(0, battery_draw - reduce_by / self.inverter_loss)
                 battery_draw_charge = battery_draw / self.battery_loss
-                ac_output = (battery_draw + battery_dc) * self.inverter_loss
-                if save == 'best':
-                    self.log("Minute {} clamping max inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
+                ac_output = (-battery_draw + battery_dc) * self.inverter_loss
+                #if save == 'best':
+                #    self.log("Minute {} clamping max inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
 
             if ac_output < -self.inverter_limit * step:
                 ac_old = ac_output
                 reduce_by = ac_output + (self.inverter_limit * step)
                 battery_draw = min(0, battery_draw - reduce_by / self.inverter_loss)
                 battery_draw_charge = battery_draw / self.battery_loss
-                ac_output = (battery_draw + battery_dc) * self.inverter_loss
-                if save == 'best':
-                    self.log("Minute {} clamping min inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
+                ac_output = (-battery_draw + battery_dc) * self.inverter_loss
+                #if save == 'best':
+                #    self.log("Minute {} clamping min inverter limit battery_dc {} battery_draw {} was_ac_output {} ac_output {} draw_charge {}".format(minute, battery_dc, battery_draw, ac_old, ac_output, battery_draw_charge))
 
             # New SOC?
             new_soc = soc - battery_draw_charge
@@ -1815,7 +1815,7 @@ class Prediction:
                 battery_draw_charge = max(battery_draw_charge + over * self.battery_loss, 0)
                 battery_draw = max(battery_draw_charge + over, 0)
                 new_soc = soc - battery_draw_charge
-                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                ac_output = (-battery_draw + battery_dc) * self.inverter_loss
                 #if save == 'best':
                 #    self.log("Minute {} clamping reserve limit to battery_draw {} ac_output {} draw_charge {} new_soc {}".format(minute, battery_draw, ac_output, battery_draw_charge, new_soc))
 
@@ -1825,15 +1825,13 @@ class Prediction:
                 battery_draw_charge = min(battery_draw_charge + over * self.battery_loss, 0)
                 battery_draw = min(battery_draw_charge + over * self.battery_loss, 0)
                 new_soc = soc - battery_draw_charge
-                ac_output = (battery_draw + battery_dc) * self.inverter_loss
+                ac_output = (-battery_draw + battery_dc) * self.inverter_loss
                 #if save == 'best':
                 #    self.log("Minute {} clamping soc max limit to battery_draw {} ac_output {} draw_charge {} new_soc {}".format(minute, battery_draw, ac_output, battery_draw_charge, new_soc))
 
             # Store new SOC
             soc = new_soc
 
-            if save == 'best':
-                self.log("Minute {} battery DC {} ac_output {} soc {} battery_draw {} load {} state {}".format(minute, battery_dc, ac_output, soc, battery_draw, load_yesterday, battery_state))
 
             # Final SOC clamp to catch any rounding issues
             soc = max(soc, 0)
@@ -1843,7 +1841,9 @@ class Prediction:
             battery_cycle += abs(battery_draw_charge)
 
             # Work out left over energy after battery adjustment
-            diff = load_yesterday - ac_output
+            diff = load_yesterday + ac_output
+            #if save == 'best':
+            #    self.log("Minute {} battery DC {} ac_output {} soc {} battery_draw {} load {} state {} diff {}".format(minute, battery_dc, ac_output, soc, battery_draw, load_yesterday, battery_state, diff))
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
                 # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
