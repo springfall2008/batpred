@@ -26,7 +26,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.16"
+THIS_VERSION = "v7.16.17"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -6729,14 +6729,12 @@ class PredBat(hass.Hass):
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
                 percent = kwh_left / kwh_add
-                length = min(int(((length * percent) / 5) + 0.5) * 5, end - start)
+                length = min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start)
                 end = start + length
                 hours = length / 60
                 kwh = self.car_charging_rate[car_n] * hours
-                kwh_add = kwh * self.car_charging_loss
-
-            # Work out how much to add to the battery, include losses
-            kwh = kwh_add / self.car_charging_loss
+                kwh_add = min(kwh * self.car_charging_loss, kwh_left)
+                kwh = kwh_add / self.car_charging_loss
 
             # Work out charging amounts
             if kwh > 0:
