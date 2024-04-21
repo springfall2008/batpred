@@ -1,4 +1,4 @@
-:q"""
+"""
 Battery Prediction app
 see Readme for information
 """
