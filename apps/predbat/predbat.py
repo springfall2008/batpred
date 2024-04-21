@@ -30,7 +30,8 @@ from predbat_inverter_const import *
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
-    
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
     Filters and removes intersecting charge windows
