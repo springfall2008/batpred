@@ -1,0 +1,9 @@
+predbat_const_global module:
+  module: predbat_const
+  global: true
+predbat_inverter_const_global module:
+  module: predbat_inverter_const
+  global: true
+predbat_version_global module:
+  module: predbat_version
+  global: true
