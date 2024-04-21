@@ -9015,8 +9015,8 @@ class PredBat(hass.Hass):
             ]
             if self.debug_enable:
                 self.log(
-                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(
-                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10
+                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
+                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10, battery_cycle, battery_cycle10
                     )
                 )
 
