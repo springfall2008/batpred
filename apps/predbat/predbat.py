@@ -1414,7 +1414,21 @@ class Prediction:
             if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
                 max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
 
-        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, min_soc, max_soc, 
+        return (
+            metricmid,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            min_soc,
+            max_soc,
+        )
 
     def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1893,7 +1907,7 @@ class Prediction:
                 export_kwh += energy
                 if self.carbon_enable:
                     carbon_g -= energy * self.carbon_intensity.get(minute_absolute, 0)
-                
+
                 if minute_absolute in rate_export:
                     metric -= rate_export[minute_absolute] * energy
                 if diff != 0:
@@ -2007,7 +2021,19 @@ class Prediction:
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
 
-        return round(final_metric, 4), round(import_kwh_battery, 4), round(import_kwh_house, 4), round(export_kwh, 4), soc_min, round(final_soc, 4), soc_min_minute, round(final_battery_cycle, 4), round(final_metric_keep, 4), round(final_iboost_kwh, 4), round(final_carbon_g, 4)
+        return (
+            round(final_metric, 4),
+            round(import_kwh_battery, 4),
+            round(import_kwh_house, 4),
+            round(export_kwh, 4),
+            soc_min,
+            round(final_soc, 4),
+            soc_min_minute,
+            round(final_battery_cycle, 4),
+            round(final_metric_keep, 4),
+            round(final_iboost_kwh, 4),
+            round(final_carbon_g, 4),
+        )
 
 
 class Inverter:
@@ -5198,7 +5224,7 @@ class PredBat(hass.Hass):
         Round to 3 decimal places
         """
         return round(value, 3)
-    
+
     def dp4(self, value):
         """
         Round to 4 decimal places
@@ -5701,16 +5727,20 @@ class PredBat(hass.Hass):
             load_diff = abs(load - load_mean)
             load_diff *= load_diff
             load_diff_total += load_diff
-        
+
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = (load_std_dev / load_mean)
+        load_divergence = load_std_dev / load_mean
         load_divergence = min(load_divergence, 2.0)
-        self.log("Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over/ 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)))   
-        if self.metric_load_divergence_enable:    
+        self.log(
+            "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
+                look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
+            )
+        )
+        if self.metric_load_divergence_enable:
             return self.dp2(load_divergence)
         else:
             return None
-            
+
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor
@@ -5745,7 +5775,11 @@ class PredBat(hass.Hass):
         values = {}
         cloud_diff = 0
         if type_load:
-            self.log("Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(scale_today, step, minutes_now, forward, cloud_factor))
+            self.log(
+                "Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(
+                    scale_today, step, minutes_now, forward, cloud_factor
+                )
+            )
 
         for minute in range(0, self.forecast_minutes, step):
             value = 0
@@ -6501,7 +6535,19 @@ class PredBat(hass.Hass):
                     },
                 )
 
-        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh, final_carbon_g
+        return (
+            final_metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            final_battery_cycle,
+            final_metric_keep,
+            final_iboost_kwh,
+            final_carbon_g,
+        )
 
     def time_now_str(self):
         """
@@ -7858,7 +7904,7 @@ class PredBat(hass.Hass):
                 load_color = "#FFFF00"
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
-            
+
             load_forecast = str(load_forecast)
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
@@ -8866,7 +8912,19 @@ class PredBat(hass.Hass):
                         self.debug_enable = False
 
                         # Simulate with medium PV
-                        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                        (
+                            metricmid,
+                            import_kwh_battery,
+                            import_kwh_house,
+                            export_kwh,
+                            soc_min,
+                            soc,
+                            soc_min_minute,
+                            battery_cycle,
+                            metric_keep,
+                            final_iboost,
+                            final_carbon_g,
+                        ) = self.run_prediction(
                             try_charge_limit,
                             charge_window,
                             discharge_window,
@@ -9027,7 +9085,21 @@ class PredBat(hass.Hass):
             hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
             id = 0
             for han in hans:
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, min_soc, max_soc = han.get()
+                (
+                    metricmid,
+                    import_kwh_battery,
+                    import_kwh_house,
+                    export_kwh,
+                    soc_min,
+                    soc,
+                    soc_min_minute,
+                    battery_cycle,
+                    metric_keep,
+                    final_iboost,
+                    final_carbon_g,
+                    min_soc,
+                    max_soc,
+                ) = han.get()
                 all_min_soc = min(all_min_soc, min_soc)
                 all_max_soc = max(all_max_soc, max_soc)
                 if id == 0:
@@ -9153,12 +9225,36 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g, min_soc, max_soc = resultmid[
-                try_soc
-            ]
-            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10, min_soc, max_soc = result10[
-                try_soc
-            ]
+            (
+                metricmid,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+                min_soc,
+                max_soc,
+            ) = resultmid[try_soc]
+            (
+                metric10,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc10,
+                soc_min_minute,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+                min_soc,
+                max_soc,
+            ) = result10[try_soc]
             # Store simulated mid value
             metric = metricmid
             cost = metricmid
@@ -9202,7 +9298,20 @@ class PredBat(hass.Hass):
             if self.debug_enable:
                 self.log(
                     "Sim: SOC {} window {} metric {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
-                        try_soc, window_n, metric, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, final_carbon_g, metric_keep, metric_keep10, battery_cycle, battery_cycle10
+                        try_soc,
+                        window_n,
+                        metric,
+                        metricmid,
+                        metric10,
+                        soc,
+                        soc10,
+                        final_iboost,
+                        final_iboost10,
+                        final_carbon_g,
+                        metric_keep,
+                        metric_keep10,
+                        battery_cycle,
+                        battery_cycle10,
                     )
                 )
 
@@ -9346,7 +9455,19 @@ class PredBat(hass.Hass):
 
             # Simulate with medium PV
             metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
-            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = hanres10
+            (
+                metric10,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
+                soc10,
+                soc_min_minute10,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+            ) = hanres10
 
             # Store simulated mid value
             metric = metricmid
@@ -10821,7 +10942,19 @@ class PredBat(hass.Hass):
                 # Clipping windows
                 if self.discharge_window_best:
                     # Re-run prediction to get data for clipping
-                    best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                    (
+                        best_metric,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        final_carbon_g,
+                    ) = self.run_prediction(
                         self.charge_limit_best,
                         self.charge_window_best,
                         self.discharge_window_best,
@@ -10845,7 +10978,19 @@ class PredBat(hass.Hass):
             # Filter out any unused charge slots
             if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
-                best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                (
+                    best_metric,
+                    import_kwh_battery,
+                    import_kwh_house,
+                    export_kwh,
+                    soc_min,
+                    soc,
+                    soc_min_minute,
+                    battery_cycle,
+                    metric_keep,
+                    final_iboost,
+                    final_carbon_g,
+                ) = self.run_prediction(
                     self.charge_limit_best,
                     self.charge_window_best,
                     self.discharge_window_best,
@@ -10916,7 +11061,7 @@ class PredBat(hass.Hass):
                 battery_cycle10,
                 metric_keep10,
                 final_iboost10,
-                final_carbon_g10
+                final_carbon_g10,
             ) = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
@@ -10926,7 +11071,19 @@ class PredBat(hass.Hass):
                 save="best10",
                 end_record=self.end_record,
             )
-            best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+            (
+                best_metric,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+            ) = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.discharge_window_best,
