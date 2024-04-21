@@ -389,7 +389,7 @@ CONFIG_ITEMS = [
         "name": "metric_load_divergence_enable",
         "friendly_name": "Enable Load Divergence Model",
         "type": "switch",
-        "default": False,
+        "default": True,
         "enable": "expert_mode",
     },
     {
@@ -1983,18 +1983,7 @@ class Prediction:
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
 
-        return (
-            round(final_metric, 4),
-            round(import_kwh_battery, 4),
-            round(import_kwh_house, 4),
-            round(export_kwh, 4),
-            soc_min,
-            round(final_soc, 4),
-            soc_min_minute,
-            round(final_battery_cycle, 4),
-            round(final_metric_keep, 4),
-            round(final_iboost_kwh, 4),
-        )
+        return round(final_metric, 4), round(import_kwh_battery, 4), round(import_kwh_house, 4), round(export_kwh, 4), soc_min, round(final_soc, 4), soc_min_minute, round(final_battery_cycle, 4), round(final_metric_keep, 4), round(final_iboost_kwh, 4)
 
 
 class Inverter:
@@ -5185,7 +5174,7 @@ class PredBat(hass.Hass):
         Round to 3 decimal places
         """
         return round(value, 3)
-
+    
     def dp4(self, value):
         """
         Round to 4 decimal places
@@ -5688,20 +5677,16 @@ class PredBat(hass.Hass):
             load_diff = abs(load - load_mean)
             load_diff *= load_diff
             load_diff_total += load_diff
-
+        
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = load_std_dev / load_mean
+        load_divergence = (load_std_dev / load_mean)
         load_divergence = min(load_divergence, 2.0)
-        self.log(
-            "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
-                look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
-            )
-        )
-        if self.metric_load_divergence_enable:
+        self.log("Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over/ 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)))   
+        if self.metric_load_divergence_enable:    
             return self.dp2(load_divergence)
         else:
             return None
-
+            
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor
@@ -5736,11 +5721,7 @@ class PredBat(hass.Hass):
         values = {}
         cloud_diff = 0
         if type_load:
-            self.log(
-                "Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(
-                    scale_today, step, minutes_now, forward, cloud_factor
-                )
-            )
+            self.log("Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(scale_today, step, minutes_now, forward, cloud_factor))
 
         for minute in range(0, self.forecast_minutes, step):
             value = 0
@@ -7820,7 +7801,7 @@ class PredBat(hass.Hass):
                 load_color = "#FFFF00"
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
-
+            
             load_forecast = str(load_forecast)
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
