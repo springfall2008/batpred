@@ -8,6 +8,7 @@ import copy
 import os
 import re
 import time
+import math
 
 # fmt off
 # pylint: disable=consider-using-f-string
@@ -26,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.16.17"
+THIS_VERSION = "v7.17.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -382,6 +383,13 @@ CONFIG_ITEMS = [
         "friendly_name": "Enable Cloud Model",
         "type": "switch",
         "default": True,
+        "enable": "expert_mode",
+    },
+    {
+        "name": "metric_load_divergence_enable",
+        "friendly_name": "Enable Load Divergence Model",
+        "type": "switch",
+        "default": False,
         "enable": "expert_mode",
     },
     {
@@ -1975,18 +1983,7 @@ class Prediction:
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
 
-        return (
-            round(final_metric, 4),
-            round(import_kwh_battery, 4),
-            round(import_kwh_house, 4),
-            round(export_kwh, 4),
-            soc_min,
-            round(final_soc, 4),
-            soc_min_minute,
-            round(final_battery_cycle, 4),
-            round(final_metric_keep, 4),
-            round(final_iboost_kwh, 4),
-        )
+        return round(final_metric, 4), round(import_kwh_battery, 4), round(import_kwh_house, 4), round(export_kwh, 4), soc_min, round(final_soc, 4), soc_min_minute, round(final_battery_cycle, 4), round(final_metric_keep, 4), round(final_iboost_kwh, 4)
 
 
 class Inverter:
@@ -5177,7 +5174,7 @@ class PredBat(hass.Hass):
         Round to 3 decimal places
         """
         return round(value, 3)
-
+    
     def dp4(self, value):
         """
         Round to 4 decimal places
@@ -5654,6 +5651,42 @@ class PredBat(hass.Hass):
 
         return difference_cap
 
+    def get_load_divergence(self, minutes_now, load_minutes):
+        """
+        Work out the divergence between peak and average load over the next period
+        """
+        load_total = 0
+        load_count = 0
+        load_min = 99999
+        load_max = 0
+        look_over = 60 * 4
+
+        for minute in range(0, look_over, PREDICT_STEP):
+            load, load_raw = self.get_filtered_load_minute(load_minutes, minute, historical=True, step=PREDICT_STEP)
+            load *= 1000 * 60 / PREDICT_STEP
+            load_total += load
+            load_count += 1
+            load_min = min(load_min, load)
+            load_max = max(load_max, load)
+        load_mean = load_total / load_count
+        load_diff_total = 0
+        for minute in range(0, look_over, PREDICT_STEP):
+            load = 0
+            load, load_raw = self.get_filtered_load_minute(load_minutes, minute, historical=True, step=PREDICT_STEP)
+            load *= 1000 * 60 / PREDICT_STEP
+            load_diff = abs(load - load_mean)
+            load_diff *= load_diff
+            load_diff_total += load_diff
+        
+        load_std_dev = math.sqrt(load_diff_total / load_count)
+        load_divergence = (load_std_dev / load_mean)
+        load_divergence = min(load_divergence, 2.0)
+        self.log("Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over/ 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)))   
+        if self.metric_load_divergence_enable:    
+            return self.dp2(load_divergence)
+        else:
+            return None
+            
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
         Work out approximated cloud factor
@@ -5688,7 +5721,8 @@ class PredBat(hass.Hass):
         values = {}
         cloud_diff = 0
         if type_load:
-            self.log("Creating step data for historical load data scale_today {} step {} minutes_now {} forward {}".format(scale_today, step, minutes_now, forward))
+            self.log("Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(scale_today, step, minutes_now, forward, cloud_factor))
+
         for minute in range(0, self.forecast_minutes, step):
             value = 0
             minute_absolute = minute + minutes_now
@@ -5721,15 +5755,16 @@ class PredBat(hass.Hass):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
             values[minute] = (value + load_extra) * scaling_dynamic * scale_today * scale_fixed
 
-            # Simple cloud model keeps the same generation but brings PV generation up and down every 5 minutes
-            if cloud_factor and cloud_factor > 0:
+        # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
+        if cloud_factor and cloud_factor > 0:
+            for minute in range(0, self.forecast_minutes, step):
                 cloud_on = int(minute / 5) % 2
                 if cloud_on > 0:
-                    cloud_diff += values[minute] * cloud_factor
+                    cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
                     values[minute] += cloud_diff
                 else:
-                    cloud_diff = min(cloud_diff, values[minute])
-                    values[minute] -= cloud_diff
+                    subtract = min(cloud_diff, values[minute])
+                    values[minute] -= subtract
                     cloud_diff = 0
 
         return values
@@ -7607,8 +7642,12 @@ class PredBat(hass.Hass):
             html += "<td><b>Export {}</b></td>".format(self.currency_symbols[1])
         html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
-        html += "<td><b>PV kWh</b></td>"
-        html += "<td><b>Load kWh</b></td>"
+        if plan_debug:
+            html += "<td><b>PV kWh (10%)</b></td>"
+            html += "<td><b>Load kWh (10%)</b></td>"
+        else:
+            html += "<td><b>PV kWh</b></td>"
+            html += "<td><b>Load kWh</b></td>"
         if self.num_cars > 0:
             html += "<td><b>Car kWh</b></td>"
         if self.iboost_enable:
@@ -7619,7 +7658,7 @@ class PredBat(hass.Hass):
         html += "</tr>"
         return html
 
-    def publish_html_plan(self, pv_forecast_minute_step, load_minutes_step, end_record):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
         """
         Publish the current plan in HTML format
         """
@@ -7692,11 +7731,18 @@ class PredBat(hass.Hass):
 
             pv_forecast = 0
             load_forecast = 0
+            pv_forecast10 = 0
+            load_forecast10 = 0
             for offset in range(0, 30, PREDICT_STEP):
                 pv_forecast += pv_forecast_minute_step.get(minute_relative + offset, 0.0)
                 load_forecast += load_minutes_step.get(minute_relative + offset, 0.0)
+                pv_forecast10 += pv_forecast_minute_step10.get(minute_relative + offset, 0.0)
+                load_forecast10 += load_minutes_step10.get(minute_relative + offset, 0.0)
+
             pv_forecast = self.dp2(pv_forecast)
             load_forecast = self.dp2(load_forecast)
+            pv_forecast10 = self.dp2(pv_forecast)
+            load_forecast10 = self.dp2(load_forecast)
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative_start, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative_slot_end, 0.0) / self.soc_max) * 100.0) + 0.5)
@@ -7745,12 +7791,20 @@ class PredBat(hass.Hass):
             elif pv_forecast == 0.0:
                 pv_forecast = ""
 
+            pv_forecast = str(pv_forecast)
+            if plan_debug and pv_forecast10 > 0.0:
+                pv_forecast += " (%f)" % (pv_forecast10)
+
             if load_forecast >= 0.5:
                 load_color = "#F18261"
             elif load_forecast >= 0.25:
                 load_color = "#FFFF00"
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
+            
+            load_forecast = str(load_forecast)
+            if plan_debug and load_forecast10 > 0.0:
+                load_forecast += " (%f)" % (load_forecast10)
 
             if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
                 rate_color_import = "#74C1FF"
@@ -10617,6 +10671,7 @@ class PredBat(hass.Hass):
 
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
+        self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -10626,6 +10681,7 @@ class PredBat(hass.Hass):
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=self.metric_load_divergence,
         )
         load_minutes_step10 = self.step_data_history(
             self.load_minutes,
@@ -10636,6 +10692,7 @@ class PredBat(hass.Hass):
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=self.metric_load_divergence,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
@@ -10823,7 +10880,7 @@ class PredBat(hass.Hass):
             self.publish_discharge_limit(self.discharge_window_best, self.discharge_limits_best, best=True)
 
             # HTML data
-            self.publish_html_plan(pv_forecast_minute_step, load_minutes_step, self.end_record)
+            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
         # Destroy pool
         if self.pool:
@@ -12023,6 +12080,7 @@ class PredBat(hass.Hass):
 
         self.best_soc_step = 0.25
         self.metric_cloud_enable = self.get_arg("metric_cloud_enable")
+        self.metric_load_divergence_enable = self.get_arg("metric_load_divergence_enable")
 
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
