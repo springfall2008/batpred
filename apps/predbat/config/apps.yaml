@@ -9,7 +9,7 @@ pred_bat:
     - predbat_version
     - predbat_const
     - predbat_inverter_const
-    
+
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
