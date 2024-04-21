@@ -7741,8 +7741,8 @@ class PredBat(hass.Hass):
 
             pv_forecast = self.dp2(pv_forecast)
             load_forecast = self.dp2(load_forecast)
-            pv_forecast10 = self.dp2(pv_forecast)
-            load_forecast10 = self.dp2(load_forecast)
+            pv_forecast10 = self.dp2(pv_forecast10)
+            load_forecast10 = self.dp2(load_forecast10)
 
             soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative_start, 0.0) / self.soc_max) * 100.0) + 0.5)
             soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative_slot_end, 0.0) / self.soc_max) * 100.0) + 0.5)
@@ -7793,7 +7793,7 @@ class PredBat(hass.Hass):
 
             pv_forecast = str(pv_forecast)
             if plan_debug and pv_forecast10 > 0.0:
-                pv_forecast += " (%f)" % (pv_forecast10)
+                pv_forecast += " (%s)" % (str(pv_forecast10))
 
             if load_forecast >= 0.5:
                 load_color = "#F18261"
@@ -7804,7 +7804,7 @@ class PredBat(hass.Hass):
             
             load_forecast = str(load_forecast)
             if plan_debug and load_forecast10 > 0.0:
-                load_forecast += " (%f)" % (load_forecast10)
+                load_forecast += " (%s)" % (str(load_forecast10))
 
             if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
                 rate_color_import = "#74C1FF"
