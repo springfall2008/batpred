@@ -1975,7 +1975,18 @@ class Prediction:
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
 
-        return round(final_metric, 4), round(import_kwh_battery, 4), round(import_kwh_house, 4), round(export_kwh, 4), soc_min, round(final_soc, 4), soc_min_minute, round(final_battery_cycle, 4), round(final_metric_keep, 4), round(final_iboost_kwh, 4)
+        return (
+            round(final_metric, 4),
+            round(import_kwh_battery, 4),
+            round(import_kwh_house, 4),
+            round(export_kwh, 4),
+            soc_min,
+            round(final_soc, 4),
+            soc_min_minute,
+            round(final_battery_cycle, 4),
+            round(final_metric_keep, 4),
+            round(final_iboost_kwh, 4),
+        )
 
 
 class Inverter:
@@ -5166,7 +5177,7 @@ class PredBat(hass.Hass):
         Round to 3 decimal places
         """
         return round(value, 3)
-    
+
     def dp4(self, value):
         """
         Round to 4 decimal places
