@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from version import THIS_VERSION
+from predbat_version import THIS_VERSION
 
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
