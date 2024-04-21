@@ -428,4 +428,3 @@ predbat_inverter_const_global module:
 predbat_version_global module:
   module: predbat_version
   global: true
-
