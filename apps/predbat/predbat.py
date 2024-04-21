@@ -1975,7 +1975,18 @@ class Prediction:
         self.import_kwh_time = import_kwh_time
         self.export_kwh_time = export_kwh_time
 
-        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
+        return (
+            round(final_metric, 4),
+            round(import_kwh_battery, 4),
+            round(import_kwh_house, 4),
+            round(export_kwh, 4),
+            soc_min,
+            round(final_soc, 4),
+            soc_min_minute,
+            round(final_battery_cycle, 4),
+            round(final_metric_keep, 4),
+            round(final_iboost_kwh, 4),
+        )
 
 
 class Inverter:
@@ -5166,6 +5177,12 @@ class PredBat(hass.Hass):
         Round to 3 decimal places
         """
         return round(value, 3)
+
+    def dp4(self, value):
+        """
+        Round to 4 decimal places
+        """
+        return round(value, 4)
 
     def hit_charge_window(self, charge_window, start, end):
         """
@@ -8751,21 +8768,21 @@ class PredBat(hass.Hass):
                         # Adjustment for battery cycles metric
                         metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
-                        # Round to 2dp
-                        metric = self.dp2(metric)
+                        # Round to 4dp
+                        metric = self.dp4(metric)
 
                         # Optimise
                         if self.debug_enable and 0:
                             if discharge_enable:
                                 self.log(
                                     "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {}".format(
-                                        loop_price, divide, modulo, self.dp2(metric), self.dp2(metric_keep), self.dp2(soc_min), all_n, all_d
+                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n, all_d
                                     )
                                 )
                             else:
                                 self.log(
                                     "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} windows {} discharge off".format(
-                                        loop_price, self.dp2(metric), self.dp2(metric_keep), self.dp2(soc_min), all_n
+                                        loop_price, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n
                                     )
                                 )
 
@@ -8783,17 +8800,17 @@ class PredBat(hass.Hass):
                             if not quiet:
                                 self.log(
                                     "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} keep {} cost {} limits {} discharge {}".format(
-                                        loop_price, best_price_charge, self.dp2(best_metric), self.dp2(best_keep), self.dp2(best_cost), best_limits, best_discharge
+                                        loop_price, best_price_charge, self.dp4(best_metric), self.dp4(best_keep), self.dp4(best_cost), best_limits, best_discharge
                                     )
                                 )
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
-                self.dp2(best_price),
-                self.dp2(best_price_charge),
-                self.dp2(best_metric),
-                self.dp2(best_keep),
-                self.dp2(best_cost),
-                self.dp2(best_soc_min),
+                self.dp4(best_price),
+                self.dp4(best_price_charge),
+                self.dp4(best_metric),
+                self.dp4(best_keep),
+                self.dp4(best_cost),
+                self.dp4(best_soc_min),
                 best_limits,
                 best_discharge,
             )
@@ -9013,13 +9030,6 @@ class PredBat(hass.Hass):
             metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[
                 try_soc
             ]
-            if self.debug_enable:
-                self.log(
-                    "Sim: SOC {} window {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10".format(
-                        try_soc, window_n, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10
-                    )
-                )
-
             # Store simulated mid value
             metric = metricmid
             cost = metricmid
@@ -9057,25 +9067,32 @@ class PredBat(hass.Hass):
             if (try_soc == self.soc_max) or (try_soc == best_soc_min_setting):
                 metric -= 0.01
 
-            # Round metric to 2 DP
-            metric = self.dp2(metric)
+            # Round metric to 4 DP
+            metric = self.dp4(metric)
+
+            if self.debug_enable:
+                self.log(
+                    "Sim: SOC {} window {} metric {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
+                        try_soc, window_n, metric, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10, battery_cycle, battery_cycle10
+                    )
+                )
 
             if self.debug_enable:
                 self.log(
                     "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
                         try_soc,
                         window_n,
-                        self.dp2(import_kwh_battery),
-                        self.dp2(import_kwh_house),
-                        self.dp2(export_kwh),
-                        self.dp2(soc_min),
+                        self.dp4(import_kwh_battery),
+                        self.dp4(import_kwh_house),
+                        self.dp4(export_kwh),
+                        self.dp4(soc_min),
                         self.time_abs_str(soc_min_minute),
-                        self.dp2(soc),
-                        self.dp2(cost),
-                        self.dp2(metric),
-                        self.dp2(metric_keep),
-                        self.dp2(metricmid),
-                        self.dp2(metric10),
+                        self.dp4(soc),
+                        self.dp4(cost),
+                        self.dp4(metric),
+                        self.dp4(metric_keep),
+                        self.dp4(metricmid),
+                        self.dp4(metric10),
                     )
                 )
 
@@ -9102,9 +9119,9 @@ class PredBat(hass.Hass):
                         self.time_abs_str(window["start"]),
                         self.time_abs_str(window["end"]),
                         charge_window[window_n]["average"],
-                        self.dp2(best_cost),
-                        self.dp2(best_metric),
-                        self.dp2(best_keep),
+                        self.dp4(best_cost),
+                        self.dp4(best_metric),
+                        self.dp4(best_keep),
                         best_soc,
                         charge_limit[window_n],
                         window_results,
@@ -9234,8 +9251,8 @@ class PredBat(hass.Hass):
                 ):
                     metric -= max(0.5, self.metric_min_improvement_discharge)
 
-            # Round metric to 2 DP
-            metric = self.dp2(metric)
+            # Round metric to 4 DP
+            metric = self.dp4(metric)
 
             if self.debug_enable:
                 self.log(
@@ -9244,17 +9261,17 @@ class PredBat(hass.Hass):
                         window_n,
                         self.time_abs_str(start),
                         self.time_abs_str(try_discharge_window[window_n]["end"]),
-                        self.dp2(import_kwh_battery),
-                        self.dp2(import_kwh_house),
-                        self.dp2(export_kwh),
-                        self.dp2(soc_min),
+                        self.dp4(import_kwh_battery),
+                        self.dp4(import_kwh_house),
+                        self.dp4(export_kwh),
+                        self.dp4(soc_min),
                         self.time_abs_str(soc_min_minute),
-                        self.dp2(soc),
-                        self.dp2(cost),
-                        self.dp2(metric),
-                        self.dp2(metricmid),
-                        self.dp2(metric10),
-                        self.dp2(battery_cycle * self.metric_battery_cycle),
+                        self.dp4(soc),
+                        self.dp4(cost),
+                        self.dp4(metric),
+                        self.dp4(metricmid),
+                        self.dp4(metric10),
+                        self.dp4(battery_cycle * self.metric_battery_cycle),
                         end_record,
                     )
                 )
@@ -9291,9 +9308,9 @@ class PredBat(hass.Hass):
                         self.time_abs_str(window["start"]),
                         self.time_abs_str(window["end"]),
                         window["average"],
-                        self.dp2(best_cost),
-                        self.dp2(best_metric),
-                        self.dp2(best_keep),
+                        self.dp4(best_cost),
+                        self.dp4(best_metric),
+                        self.dp4(best_keep),
                         best_discharge,
                         best_size,
                         discharge_limit[window_n],
@@ -9305,9 +9322,9 @@ class PredBat(hass.Hass):
                     "Try optimising discharge window(s) {} price {} selected {}% size {} cost {} metric {} keep {} results {}".format(
                         all_n,
                         window["average"],
-                        self.dp2(best_cost),
-                        self.dp2(best_metric),
-                        self.dp2(best_keep),
+                        self.dp4(best_cost),
+                        self.dp4(best_metric),
+                        self.dp4(best_keep),
                         best_discharge,
                         best_size,
                         window_results,
