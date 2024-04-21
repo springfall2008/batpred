@@ -2100,7 +2100,7 @@ class Inverter:
                 self.log("WARN: Inverter {}: inverter definition is not a dictionary".format(self.id))
 
         if self.inverter_type in INVERTER_DEF:
-            self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']})")
+            self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']}")
         else:
             raise ValueError("Inverter type {} not defined".format(self.inverter_type))
 
