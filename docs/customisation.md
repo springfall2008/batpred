@@ -400,7 +400,7 @@ The amount of modulation depends on the difference between the PV50% (default) a
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**
 
-Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down whiel retaining the same
+Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same
 predicted total. The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
 
 You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**
