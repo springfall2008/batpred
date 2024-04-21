@@ -8652,6 +8652,8 @@ class PredBat(hass.Hass):
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
+        self.isCharging = False
+        self.isDischarging = False
 
     def optimise_charge_limit_price(
         self,
@@ -9106,7 +9108,7 @@ class PredBat(hass.Hass):
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target
-            if not all_n and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
+            if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
                 try_percent = calc_percent_limit(try_soc, self.soc_max)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
@@ -10906,11 +10908,13 @@ class PredBat(hass.Hass):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                     inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0, False)
+                    self.isCharging = False
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_force_discharge(False)
+                    self.isDischarging = False
 
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -11285,6 +11289,8 @@ class PredBat(hass.Hass):
 
         # Set the charge/discharge status information
         self.set_charge_discharge_status(isCharging and not disabled_charge_window, isDischarging and not disabled_discharge)
+        self.isCharging = isCharging
+        self.isDischarging = isDischarging
         return status, status_extra
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
