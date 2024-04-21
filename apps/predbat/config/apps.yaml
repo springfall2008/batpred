@@ -1,13 +1,3 @@
-predbat_const_global module:
-  module: predbat_const
-  global: true
-predbat_inverter_const_global module:
-  module: predbat_inverter_const
-  global: true
-predbat_version_global module:
-  module: predbat_version
-  global: true
-
 # ------------------------------------------------------------------
 # This is an example configuration, please modify it
 # ------------------------------------------------------------------
@@ -428,3 +418,14 @@ pred_bat:
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
   #  - '{car_charging_now}'
+
+predbat_const_global module:
+  module: predbat_const
+  global: true
+predbat_inverter_const_global module:
+  module: predbat_inverter_const
+  global: true
+predbat_version_global module:
+  module: predbat_version
+  global: true
+
