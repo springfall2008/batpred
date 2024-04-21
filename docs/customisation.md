@@ -393,6 +393,18 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
 
+## Cloud coverage and load variance
+
+Predbat tries to model passing clouds by modulating the PV forecast data on a 5 minute interval up and down while retaining the same predicted total.
+The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+
+You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**
+
+Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same
+predicted total. The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
+
+You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**
+
 ## iBoost model options
 
 iBoost model, when enabled with **switch.predbat_iboost_enable** tries to model excess solar energy being used to heat
