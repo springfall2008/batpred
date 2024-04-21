@@ -3,11 +3,12 @@ title: Predbat 🦇
 cards:
   - type: entities
     entities:
-    - entity: predbat.status
-    - entity: update.predbat_version
-    - entity: select.predbat_update
-    - entity: select.predbat_mode
-    - entity: select.predbat_saverestore
+      - entity: predbat.status
+      - entity: update.predbat_version
+      - entity: select.predbat_update
+      - entity: select.predbat_mode
+      - entity: select.predbat_saverestore
+      - entity: switch.predbat_active
   - type: custom:collapsable-cards
     title: 🔀 Control
     defaultOpen: false
@@ -37,6 +38,21 @@ cards:
             filter:
               include:
                 - entity_id: switch.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🔢 Selectors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: select.predbat*
               exclude: []
             unique: true
             sort:
