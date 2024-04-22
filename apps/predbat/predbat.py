@@ -9307,12 +9307,11 @@ class PredBat(hass.Hass):
                 if compare_with == try_percent:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            # Minor weighting against charge freeze to avoid spurious ones
-            if self.set_charge_freeze and try_soc == self.reserve:
-                metric += 0.1
-
-            # Very minor preference to 100% or 0% so that slots are contiguous
-            if (try_soc == self.soc_max) or (try_soc == best_soc_min_setting):
+            if (try_soc == best_soc_min_setting):
+                # Minor weighting to 0%
+                metric -= 0.02
+            elif (try_soc == self.soc_max):
+                # Minor weighting to 100%
                 metric -= 0.01
 
             # Round metric to 4 DP
@@ -9514,7 +9513,7 @@ class PredBat(hass.Hass):
             metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
             # Adjust to try to keep existing windows
-            if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
+            if window_n < 2 and self.discharge_window and self.isDischarging:
                 pwindow = discharge_window[window_n]
                 dwindow = self.discharge_window[0]
                 if (
