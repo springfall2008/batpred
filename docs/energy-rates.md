@@ -278,12 +278,12 @@ Predbat can also track Carbon intensity by linking it to an integration which pr
 
 ### UK Grid Carbon intensity
 
-The National Grid provides this data, please install this integration: https://github.com/jfparis/sensor.carbon_intensity_uk
+The National Grid provides this data, please install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
 
 Once it is active update apps.yaml to link Predbat to the Sensor (if its not already in your template):
 
 ```
-# Carbon Intensity data from National grid 
+# Carbon Intensity data from National grid
 carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 ```
 
