@@ -9307,10 +9307,10 @@ class PredBat(hass.Hass):
                 if compare_with == try_percent:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            if (try_soc == best_soc_min_setting):
+            if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
                 metric -= 0.02
-            elif (try_soc == self.soc_max):
+            elif try_soc == self.soc_max:
                 # Minor weighting to 100%
                 metric -= 0.01
 
