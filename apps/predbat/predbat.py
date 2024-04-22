@@ -7739,8 +7739,6 @@ class PredBat(hass.Hass):
         else:
             html += "<td><b>Import {}</b></td>".format(self.currency_symbols[1])
             html += "<td><b>Export {}</b></td>".format(self.currency_symbols[1])
-        if self.carbon_enable:
-            html += "<td><b>Carbon g/kWh</b></td>"
         html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
         if plan_debug:
@@ -7757,7 +7755,8 @@ class PredBat(hass.Hass):
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
         if self.carbon_enable:
-            html += "<td><b>Carbon kg</b></td>"
+            html += "<td><b>CO2 g/kWh</b></td>"
+            html += "<td><b>CO2 kg</b></td>"
         html += "</tr>"
         return html
 
@@ -7926,17 +7925,17 @@ class PredBat(hass.Hass):
                 limit_percent = int(self.charge_limit_percent_best[charge_window_n])
                 if limit > 0.0:
                     if self.set_charge_freeze and (limit == self.reserve):
-                        state = "FreezeChrg&rarr;"
+                        state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         limit_percent = soc_percent
                     elif limit_percent == soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
                     elif limit_percent < soc_percent_min_window:
-                        state = "NoCharge&searr;"
+                        state = "NoChrg&searr;"
                         state_color = "#FFFFFF"
                     else:
-                        state = "Charge&nearr;"
+                        state = "Chrg&nearr;"
                         state_color = "#3AEE85"
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         state += " &#8526;"
@@ -7952,7 +7951,7 @@ class PredBat(hass.Hass):
                         split = True
                     else:
                         state_color = "#AAAAAA"
-                    state += "FreezeDis&rarr;"
+                    state += "FrzDis&rarr;"
                 elif limit < 100:
                     if state == soc_sym:
                         state = ""
@@ -7961,7 +7960,7 @@ class PredBat(hass.Hass):
                         split = True
                     else:
                         state_color = "#FFFF00"
-                    state += "Discharge&searr;"
+                    state += "Dis&searr;"
                     show_limit = str(int(limit))
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
                     state += " &#8526;"
@@ -8089,8 +8088,6 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
             html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
-            if self.carbon_enable:
-                html += "<td bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and discharging, just output the (split cell) state
                     html += "<td "
@@ -8115,6 +8112,7 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
             if self.carbon_enable:
+                html += "<td bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
                 html += "<td bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
             html += "</tr>"
         html += "</table>"
