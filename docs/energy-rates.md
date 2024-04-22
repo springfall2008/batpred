@@ -282,7 +282,7 @@ The National Grid provides this data, please install this integration: <https://
 
 Once it is active update apps.yaml to link Predbat to the Sensor (if its not already in your template):
 
-```
+```yaml
 # Carbon Intensity data from National grid
 carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 ```
