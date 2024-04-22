@@ -353,6 +353,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - price premium to be added during the peak period
+- **carbon_intensity** - Carbon intensity of the grid in half hour slots from an integration.
 
 ## Car Charging Integration
 

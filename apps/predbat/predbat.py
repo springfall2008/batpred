@@ -769,6 +769,12 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "carbon_enable",
+        "friendly_name": "Carbon enable",
+        "type": "switch",
+        "default": False,
+    },
+    {
         "name": "iboost_solar",
         "friendly_name": "IBoost on solar power",
         "type": "switch",
@@ -1342,6 +1348,7 @@ class Prediction:
             self.car_charging_limit = base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
             self.iboost_enable = base.iboost_enable
+            self.carbon_enable = base.carbon_enable
             self.iboost_next = base.iboost_next
             self.iboost_max_energy = base.iboost_max_energy
             self.iboost_gas = base.iboost_gas
@@ -1376,6 +1383,7 @@ class Prediction:
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
+            self.carbon_intensity = base.carbon_intensity
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -1392,7 +1400,7 @@ class Prediction:
         else:
             try_charge_limit[window_n] = try_soc
 
-        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
         min_soc = 0
@@ -1406,7 +1414,21 @@ class Prediction:
             if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
                 max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
 
-        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc
+        return (
+            metricmid,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            min_soc,
+            max_soc,
+        )
 
     def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1423,10 +1445,10 @@ class Prediction:
             start = min(start, window["end"] - 5)
             discharge_window[window_n]["start"] = start
 
-        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
-        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost
+        return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
     def find_charge_window_optimised(self, charge_windows):
         """
@@ -1481,6 +1503,7 @@ class Prediction:
         self.predict_soc_best = {}
         self.predict_metric_best = {}
         self.predict_iboost_best = {}
+        self.predict_carbon_best = {}
 
         predict_export = {}
         predict_battery_power = {}
@@ -1492,6 +1515,7 @@ class Prediction:
         predict_grid_power = {}
         predict_load_power = {}
         predict_iboost = {}
+        predict_carbon_g = {}
         minute = 0
         minute_left = self.forecast_minutes
         soc = self.soc_kw
@@ -1511,6 +1535,7 @@ class Prediction:
         iboost_today_kwh = self.iboost_today
         import_kwh_house = 0
         import_kwh_battery = 0
+        carbon_g = 0
         battery_cycle = 0
         metric_keep = 0
         four_hour_rule = True
@@ -1523,6 +1548,7 @@ class Prediction:
         final_import_kwh_battery = import_kwh_battery
         final_battery_cycle = battery_cycle
         final_metric_keep = metric_keep
+        final_carbon_g = carbon_g
         metric = self.cost_today_sofar
         final_soc = soc
         first_charge_soc = soc
@@ -1611,6 +1637,7 @@ class Prediction:
                 self.predict_soc_best[minute] = round(soc, 3)
                 self.predict_metric_best[minute] = round(metric, 3)
                 self.predict_iboost_best[minute] = iboost_today_kwh
+                self.predict_carbon_best[minute] = carbon_g
 
             # Get load and pv forecast, total up for all values in the step
             pv_now = 0
@@ -1861,6 +1888,10 @@ class Prediction:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
                 import_kwh += diff
+
+                if self.carbon_enable:
+                    carbon_g += diff * self.carbon_intensity.get(minute_absolute, 0)
+
                 if charge_window_n >= 0:
                     # If the battery is on charge anyhow then imports are at battery charging rate
                     import_kwh_battery += diff
@@ -1874,6 +1905,9 @@ class Prediction:
                 # Export
                 energy = -diff
                 export_kwh += energy
+                if self.carbon_enable:
+                    carbon_g -= energy * self.carbon_intensity.get(minute_absolute, 0)
+
                 if minute_absolute in rate_export:
                     metric -= rate_export[minute_absolute] * energy
                 if diff != 0:
@@ -1902,6 +1936,7 @@ class Prediction:
                 final_iboost_kwh = iboost_today_kwh
                 final_battery_cycle = battery_cycle
                 final_metric_keep = metric_keep
+                final_carbon_g = carbon_g
 
                 # Store export data
                 if diff < 0:
@@ -1937,6 +1972,8 @@ class Prediction:
                 predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (30 / step), 3)
                 predict_grid_power[stamp] = round(diff * (60 / step), 3)
                 predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
+                if self.carbon_enable:
+                    predict_carbon_g[stamp] = round(carbon_g, 3)
 
             minute += step
 
@@ -1969,6 +2006,7 @@ class Prediction:
         self.predict_grid_power = predict_grid_power
         self.predict_load_power = predict_load_power
         self.predict_iboost = predict_iboost
+        self.predict_carbon_g = predict_carbon_g
         self.predict_export = predict_export
         self.metric_time = metric_time
         self.record_time = record_time
@@ -1994,6 +2032,7 @@ class Prediction:
             round(final_battery_cycle, 4),
             round(final_metric_keep, 4),
             round(final_iboost_kwh, 4),
+            round(final_carbon_g, 4),
         )
 
 
@@ -5817,6 +5856,7 @@ class PredBat(hass.Hass):
             final_battery_cycle,
             final_metric_keep,
             final_iboost_kwh,
+            final_carbon_g,
         ) = pred.run_prediction(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save, step)
         self.predict_soc = pred.predict_soc
         self.car_charging_soc_next = pred.car_charging_soc_next
@@ -5840,6 +5880,7 @@ class PredBat(hass.Hass):
             metric_time = pred.metric_time
             record_time = pred.record_time
             predict_iboost = pred.predict_iboost
+            predict_carbon_g = pred.predict_carbon_g
             load_kwh_time = pred.load_kwh_time
             pv_kwh_time = pred.pv_kwh_time
             import_kwh_time = pred.import_kwh_time
@@ -5859,6 +5900,7 @@ class PredBat(hass.Hass):
                 self.predict_soc_best = pred.predict_soc_best
                 self.predict_iboost_best = pred.predict_iboost_best
                 self.predict_metric_best = pred.predict_metric_best
+                self.predict_carbon_best = pred.predict_carbon_best
 
             if self.debug_enable or save:
                 self.log(
@@ -5884,6 +5926,8 @@ class PredBat(hass.Hass):
                 self.log(" EXPORT: [{}]".format(self.scenario_summary(record_time, export_kwh_time)))
                 if self.iboost_enable:
                     self.log(" IBOOST: [{}]".format(self.scenario_summary(record_time, predict_iboost)))
+                if self.carbon_enable:
+                    self.log(" CARBON: [{}]".format(self.scenario_summary(record_time, predict_carbon_g)))
                 for car_n in range(self.num_cars):
                     self.log("   CAR{}: [{}]".format(car_n, self.scenario_summary(record_time, predict_car_soc_time[car_n])))
                 self.log(" METRIC: [{}]".format(self.scenario_summary(record_time, metric_time)))
@@ -6084,6 +6128,18 @@ class PredBat(hass.Hass):
                     state=self.dp2(end_record / 60),
                     attributes={"friendly_name": "Prediction duration", "state_class": "measurement", "unit_of_measurement": "hours", "icon": "mdi:arrow-split-vertical"},
                 )
+                if self.carbon_enable:
+                    self.dashboard_item(
+                        self.prefix + ".carbon",
+                        state=self.dp2(final_carbon_g),
+                        attributes={
+                            "results": predict_carbon_g,
+                            "friendly_name": "Predicted Carbon energy",
+                            "state_class": "measurement",
+                            "unit_of_measurement": "g/kWh",
+                            "icon": "mdi:molecule-co2",
+                        },
+                    )
 
             if save and save == "best" and not SIMULATE:
                 self.dashboard_item(
@@ -6293,6 +6349,18 @@ class PredBat(hass.Hass):
                     attributes={"friendly_name": "IBoost active", "icon": "mdi:water-boiler"},
                 )
                 self.find_spare_energy(self.predict_soc, predict_export, step, first_charge)
+                if self.carbon_enable:
+                    self.dashboard_item(
+                        self.prefix + ".carbon_best",
+                        state=self.dp2(final_carbon_g),
+                        attributes={
+                            "results": predict_carbon_g,
+                            "friendly_name": "Predicted Carbon energy best",
+                            "state_class": "measurement",
+                            "unit_of_measurement": "g/kWh",
+                            "icon": "mdi:molecule-co2",
+                        },
+                    )
 
             if save and save == "debug" and not SIMULATE:
                 self.dashboard_item(
@@ -6467,7 +6535,19 @@ class PredBat(hass.Hass):
                     },
                 )
 
-        return final_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, final_battery_cycle, final_metric_keep, final_iboost_kwh
+        return (
+            final_metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            final_battery_cycle,
+            final_metric_keep,
+            final_iboost_kwh,
+            final_carbon_g,
+        )
 
     def time_now_str(self):
         """
@@ -7659,6 +7739,8 @@ class PredBat(hass.Hass):
         else:
             html += "<td><b>Import {}</b></td>".format(self.currency_symbols[1])
             html += "<td><b>Export {}</b></td>".format(self.currency_symbols[1])
+        if self.carbon_enable:
+            html += "<td><b>Carbon g/kWh</b></td>"
         html += "<td><b>State</b></td><td></td>"  # state can potentially be two cells for charging and discharging in the same slot
         html += "<td><b>Limit %</b></td>"
         if plan_debug:
@@ -7674,6 +7756,8 @@ class PredBat(hass.Hass):
         html += "<td><b>SOC %</b></td>"
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
+        if self.carbon_enable:
+            html += "<td><b>Carbon kg</b></td>"
         html += "</tr>"
         return html
 
@@ -7968,11 +8052,45 @@ class PredBat(hass.Hass):
                 if iboost_change > 0:
                     iboost_color = "#FFFF00"
 
+            if self.carbon_enable:
+                # Work out carbon intensity and carbon use
+                carbon_amount = self.predict_carbon_best.get(minute_relative_start, 0)
+                carbon_amount_end = self.predict_carbon_best.get(minute_relative_slot_end, 0)
+                carbon_change = carbon_amount_end - carbon_amount
+                carbon_change = self.dp2(carbon_change)
+                carbon_intensity = self.dp0(self.carbon_intensity.get(minute_relative_start, 0))
+
+                if carbon_intensity >= 450:
+                    carbon_intensity_color = "#8B0000"
+                elif carbon_intensity >= 290:
+                    carbon_intensity_color = "#FF0000"
+                elif carbon_intensity >= 200:
+                    carbon_intensity_color = "#FFA500"
+                elif carbon_intensity >= 120:
+                    carbon_intensity_color = "#FFFF00"
+                elif carbon_intensity >= 40:
+                    carbon_intensity_color = "#90EE90"
+                else:
+                    carbon_intensity_color = "#00FF00"
+
+                carbon_str = str(self.dp2(carbon_amount / 1000.0))
+                if carbon_change >= 10:
+                    carbon_str += " &nearr;"
+                    carbon_color = "#FFAA00"
+                elif carbon_change <= -10:
+                    carbon_str += " &searr;"
+                    carbon_color = "#00FF00"
+                else:
+                    carbon_str += " &rarr;"
+                    carbon_color = "#FFFFFF"
+
             # Table row
             html += '<tr style="color:black">'
             html += "<td bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
             html += "<td bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
+            if self.carbon_enable:
+                html += "<td bgcolor=" + carbon_intensity_color + ">" + str(carbon_intensity) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and discharging, just output the (split cell) state
                     html += "<td "
@@ -7996,6 +8114,8 @@ class PredBat(hass.Hass):
             html += "<td bgcolor=" + soc_color + ">" + str(soc_percent) + soc_sym + "</td>"
             html += "<td bgcolor=" + cost_color + ">" + str(cost_str) + "</td>"
             html += "<td bgcolor=#FFFFFF>" + str(total_str) + "</td>"
+            if self.carbon_enable:
+                html += "<td bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
@@ -8816,7 +8936,19 @@ class PredBat(hass.Hass):
                         self.debug_enable = False
 
                         # Simulate with medium PV
-                        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+                        (
+                            metricmid,
+                            import_kwh_battery,
+                            import_kwh_house,
+                            export_kwh,
+                            soc_min,
+                            soc,
+                            soc_min_minute,
+                            battery_cycle,
+                            metric_keep,
+                            final_iboost,
+                            final_carbon_g,
+                        ) = self.run_prediction(
                             try_charge_limit,
                             charge_window,
                             discharge_window,
@@ -8977,7 +9109,21 @@ class PredBat(hass.Hass):
             hans.append(self.launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
             id = 0
             for han in hans:
-                metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = han.get()
+                (
+                    metricmid,
+                    import_kwh_battery,
+                    import_kwh_house,
+                    export_kwh,
+                    soc_min,
+                    soc,
+                    soc_min_minute,
+                    battery_cycle,
+                    metric_keep,
+                    final_iboost,
+                    final_carbon_g,
+                    min_soc,
+                    max_soc,
+                ) = han.get()
                 all_min_soc = min(all_min_soc, min_soc)
                 all_max_soc = max(all_max_soc, max_soc)
                 if id == 0:
@@ -8992,6 +9138,7 @@ class PredBat(hass.Hass):
                         battery_cycle,
                         metric_keep,
                         final_iboost,
+                        final_carbon_g,
                         min_soc,
                         max_soc,
                     ]
@@ -9007,6 +9154,7 @@ class PredBat(hass.Hass):
                         battery_cycle,
                         metric_keep,
                         final_iboost,
+                        final_carbon_g,
                         min_soc,
                         max_soc,
                     ]
@@ -9022,6 +9170,7 @@ class PredBat(hass.Hass):
                         battery_cycle,
                         metric_keep,
                         final_iboost,
+                        final_carbon_g,
                         min_soc,
                         max_soc,
                     ]
@@ -9037,6 +9186,7 @@ class PredBat(hass.Hass):
                         battery_cycle,
                         metric_keep,
                         final_iboost,
+                        final_carbon_g,
                         min_soc,
                         max_soc,
                     ]
@@ -9099,12 +9249,36 @@ class PredBat(hass.Hass):
                 try_charge_limit[window_n] = try_soc
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, min_soc, max_soc = resultmid[
-                try_soc
-            ]
-            metric10, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc10, soc_min_minute, battery_cycle10, metric_keep10, final_iboost10, min_soc, max_soc = result10[
-                try_soc
-            ]
+            (
+                metricmid,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+                min_soc,
+                max_soc,
+            ) = resultmid[try_soc]
+            (
+                metric10,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc10,
+                soc_min_minute,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+                min_soc,
+                max_soc,
+            ) = result10[try_soc]
             # Store simulated mid value
             metric = metricmid
             cost = metricmid
@@ -9126,12 +9300,13 @@ class PredBat(hass.Hass):
             metric10 += battery_cycle10 * self.metric_battery_cycle + metric_keep10
 
             # Metric adjustment based on current charge limit when inside the window
-            # to try to avoid constant small changes to SOC target
+            # to try to avoid constant small changes to SOC target by forcing to keep the current % during a charge period
+            # if changing it has little impact
             if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
                 try_percent = calc_percent_limit(try_soc, self.soc_max)
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
-                if abs(compare_with - try_percent) <= 2:
+                if compare_with == try_percent:
                     metric -= max(0.5, self.metric_min_improvement)
 
             # Minor weighting against charge freeze to avoid spurious ones
@@ -9147,8 +9322,21 @@ class PredBat(hass.Hass):
 
             if self.debug_enable:
                 self.log(
-                    "Sim: SOC {} window {} metric {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
-                        try_soc, window_n, metric, metricmid, metric10, soc, soc10, final_iboost, final_iboost10, metric_keep, metric_keep10, battery_cycle, battery_cycle10
+                    "Sim: SOC {} window {} metric {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
+                        try_soc,
+                        window_n,
+                        metric,
+                        metricmid,
+                        metric10,
+                        soc,
+                        soc10,
+                        final_iboost,
+                        final_iboost10,
+                        final_carbon_g,
+                        metric_keep,
+                        metric_keep10,
+                        battery_cycle,
+                        battery_cycle10,
                     )
                 )
 
@@ -9291,8 +9479,20 @@ class PredBat(hass.Hass):
             start, this_discharge_limit, hanres, hanres10 = try_option
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = hanres
-            metric10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10 = hanres10
+            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
+            (
+                metric10,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
+                soc10,
+                soc_min_minute10,
+                battery_cycle10,
+                metric_keep10,
+                final_iboost10,
+                final_carbon_g10,
+            ) = hanres10
 
             # Store simulated mid value
             metric = metricmid
@@ -10734,7 +10934,7 @@ class PredBat(hass.Hass):
                 self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record
         )
 
@@ -10767,7 +10967,19 @@ class PredBat(hass.Hass):
                 # Clipping windows
                 if self.discharge_window_best:
                     # Re-run prediction to get data for clipping
-                    best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+                    (
+                        best_metric,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        final_carbon_g,
+                    ) = self.run_prediction(
                         self.charge_limit_best,
                         self.charge_window_best,
                         self.discharge_window_best,
@@ -10791,7 +11003,19 @@ class PredBat(hass.Hass):
             # Filter out any unused charge slots
             if self.calculate_best_charge and self.charge_window_best:
                 # Re-run prediction to get data for clipping
-                best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+                (
+                    best_metric,
+                    import_kwh_battery,
+                    import_kwh_house,
+                    export_kwh,
+                    soc_min,
+                    soc,
+                    soc_min_minute,
+                    battery_cycle,
+                    metric_keep,
+                    final_iboost,
+                    final_carbon_g,
+                ) = self.run_prediction(
                     self.charge_limit_best,
                     self.charge_window_best,
                     self.discharge_window_best,
@@ -10824,7 +11048,7 @@ class PredBat(hass.Hass):
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, save="base", end_record=self.end_record
         )
         (
@@ -10838,6 +11062,7 @@ class PredBat(hass.Hass):
             battery_cycle10,
             metric_keep10,
             final_iboost10,
+            final_carbon_g10,
         ) = self.run_prediction(
             self.charge_limit,
             self.charge_window,
@@ -10861,6 +11086,7 @@ class PredBat(hass.Hass):
                 battery_cycle10,
                 metric_keep10,
                 final_iboost10,
+                final_carbon_g10,
             ) = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
@@ -10870,7 +11096,19 @@ class PredBat(hass.Hass):
                 save="best10",
                 end_record=self.end_record,
             )
-            best_metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost = self.run_prediction(
+            (
+                best_metric,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+            ) = self.run_prediction(
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.discharge_window_best,
@@ -11312,6 +11550,23 @@ class PredBat(hass.Hass):
         self.isDischarging = isDischarging
         return status, status_extra
 
+    def fetch_carbon_intensity(self, entity_id):
+        """
+        Fetch the carbon intensity from the sensor
+        Returns a dictionary with the carbon intensity data for the next 24 hours
+
+        :param entity_id: The entity_id of the sensor
+        """
+        data_all = []
+        carbon_data = {}
+
+        if entity_id:
+            self.log("Fetching carbon intensity data from {}".format(entity_id))
+            data_all = self.get_state(entity_id=entity_id, attribute="forecast")
+            if data_all:
+                carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
+        return carbon_data
+
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
         """
         Fetch the Octopus rates from the sensor
@@ -11421,6 +11676,7 @@ class PredBat(hass.Hass):
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
+        self.carbon_intensity = {}
 
         # Iboost load data
         if self.iboost_enable and "iboost_energy_today" in self.args:
@@ -11515,6 +11771,11 @@ class PredBat(hass.Hass):
             self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
+
+        # Carbon intensity data
+        if self.carbon_enable and ("carbon_intensity" in self.args):
+            entity_id = self.get_arg("carbon_intensity", None, indirect=False)
+            self.carbon_intensity = self.fetch_carbon_intensity(entity_id)
 
         # Work out current car SOC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
@@ -12225,6 +12486,7 @@ class PredBat(hass.Hass):
 
         # Iboost model
         self.iboost_enable = self.get_arg("iboost_enable")
+        self.carbon_enable = self.get_arg("carbon_enable")
         self.iboost_solar = self.get_arg("iboost_solar")
         self.iboost_gas = self.get_arg("iboost_gas")
         self.iboost_charging = self.get_arg("iboost_charging")
