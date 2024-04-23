@@ -7846,9 +7846,9 @@ class PredBat(hass.Hass):
             pv_forecast10 = self.dp2(pv_forecast10)
             load_forecast10 = self.dp2(load_forecast10)
 
-            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max) 
-            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max) 
-            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max) 
+            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
+            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
+            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
             soc_percent_max_window = max(soc_percent, soc_percent_end_window)
@@ -9307,10 +9307,10 @@ class PredBat(hass.Hass):
                 if compare_with == try_percent:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            if (try_soc == best_soc_min_setting):
+            if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
                 metric -= 0.02
-            elif (try_soc == self.soc_max):
+            elif try_soc == self.soc_max:
                 # Minor weighting to 100%
                 metric -= 0.01
 
