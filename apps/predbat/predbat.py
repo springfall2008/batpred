@@ -9,6 +9,7 @@ import os
 import re
 import time
 import math
+import json
 
 # fmt off
 # pylint: disable=consider-using-f-string
@@ -12753,7 +12754,7 @@ class PredBat(hass.Hass):
             if updates_json:
                 updates = json.loads(updates_json)
                 file_list = ", ".join(updates)
-                self.log(f"Predbat update files: {file_list}"
+                self.log(f"Predbat update files: {file_list}")
                          
                 for file in updates:
                     self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
