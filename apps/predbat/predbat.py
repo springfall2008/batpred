@@ -12755,7 +12755,7 @@ class PredBat(hass.Hass):
                 updates = json.loads(updates_json)
                 file_list = ", ".join(updates)
                 self.log(f"Predbat update files: {file_list}")
-                         
+
                 for file in updates:
                     self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
 
