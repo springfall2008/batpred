@@ -2473,7 +2473,7 @@ class Inverter:
 
                 soc_percent = {}
                 for minute in range(0, min_len):
-                    soc_percent[minute] = calc_percent_limit(soc_kwh[minutes], self.soc_max)
+                    soc_percent[minute] = calc_percent_limit(soc_kwh[minute], self.soc_max)
 
                 if discharge:
                     search_range = range(5, 20, 1)
@@ -5189,6 +5189,11 @@ class PredBat(hass.Hass):
 
         if adjust_key:
             self.io_adjusted = adata
+
+        # Rounding
+        for minute in mdata.keys():
+            mdata[minute] = self.dp4(mdata[minute])
+
         return mdata
 
     def minutes_since_yesterday(self, now):
@@ -5811,12 +5816,12 @@ class PredBat(hass.Hass):
             if load_forecast:
                 for offset in range(step):
                     load_extra += self.get_from_incrementing(load_forecast, minute_absolute, backwards=False)
-            values[minute] = (value + load_extra) * scaling_dynamic * scale_today * scale_fixed
+            values[minute] = self.dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
 
         # Simple divergence model keeps the same total but brings PV/Load up and down every 5 minutes
         if cloud_factor and cloud_factor > 0:
             for minute in range(0, self.forecast_minutes, step):
-                cloud_on = int(minute / 5) % 2
+                cloud_on = int((minute + self.minutes_now) / 5) % 2
                 if cloud_on > 0:
                     cloud_diff += min(values[minute] * cloud_factor, values.get(minute + 5, 0) * cloud_factor)
                     values[minute] += cloud_diff
@@ -5824,6 +5829,7 @@ class PredBat(hass.Hass):
                     subtract = min(cloud_diff, values[minute])
                     values[minute] -= subtract
                     cloud_diff = 0
+                values[minute] = self.dp4(values[minute])
 
         return values
 
@@ -7767,7 +7773,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M:%S"), THIS_VERSION)
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -10637,25 +10643,15 @@ class PredBat(hass.Hass):
                 self.balance_inverters_threshold_discharge,
             )
         )
+        self.update_time(print=False)
 
         # For each inverter get the details
-        skew = self.get_arg("clock_skew", 0)
-        local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
-        now = datetime.now() + timedelta(minutes=skew)
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        minutes_now = int((now - midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         num_inverters = int(self.get_arg("num_inverters", 1))
-        self.now_utc = now_utc
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
-        self.minutes_to_midnight = 24 * 60 - self.minutes_now
 
         inverters = []
         for id in range(num_inverters):
             inverter = Inverter(self, id, quiet=True)
-            inverter.update_status(minutes_now, quiet=True)
+            inverter.update_status(self.minutes_now, quiet=True)
             if inverter.in_calibration:
                 self.log("Inverter {} is in calibration mode, not balancing".format(id))
                 return
@@ -10915,6 +10911,13 @@ class PredBat(hass.Hass):
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0))
 
+        # Save step data for debug
+        if self.debug_enable:
+            self.load_minutes_step = load_minutes_step
+            self.load_minutes_step10 = load_minutes_step10
+            self.pv_forecast_minute_step = pv_forecast_minute_step
+            self.pv_forecast_minute10_step = pv_forecast_minute10_step
+    
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
@@ -12512,20 +12515,19 @@ class PredBat(hass.Hass):
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
-    @ad.app_lock
-    def update_pred(self, scheduled=True):
+    def update_time(self, print=True):
         """
-        Update the prediction state, everything is called from here right now
+        Update the current time/date
         """
-        status_extra = ""
-        self.had_errors = False
-        self.dashboard_index = []
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
         skew = self.get_arg("clock_skew", 0)
         if skew:
             self.log("WARN: Clock skew is set to {} minutes".format(skew))
-        now_utc = datetime.now(local_tz) + timedelta(minutes=skew)
+        self.now_utc_real = datetime.now(local_tz)
+        now_utc = self.now_utc_real + timedelta(minutes=skew)
         now = datetime.now() + timedelta(minutes=skew)
+        now = now.replace(second=0, microsecond=0, minute=(now.minute - (now.minute % PREDICT_STEP)))
+        now_utc = now_utc.replace(second=0, microsecond=0, minute=(now_utc.minute - (now_utc.minute % PREDICT_STEP)))
         if SIMULATE:
             now += timedelta(minutes=self.simulate_offset)
             now_utc += timedelta(minutes=self.simulate_offset)
@@ -12537,8 +12539,19 @@ class PredBat(hass.Hass):
         self.difference_minutes = self.minutes_since_yesterday(now)
         self.minutes_now = int((now - self.midnight).seconds / 60 / PREDICT_STEP) * PREDICT_STEP
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
-
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
+
+    @ad.app_lock
+    def update_pred(self, scheduled=True):
+        """
+        Update the prediction state, everything is called from here right now
+        """
+        status_extra = ""
+        self.had_errors = False
+        self.dashboard_index = []
+
+        self.update_time()
+
         self.expose_config("active", True)
 
         # Check our version
@@ -13077,12 +13090,15 @@ class PredBat(hass.Hass):
         """
         Write out a debug info yaml
         """
-        basename = "/predbat_debug.yaml"
+        time_now = self.now_utc_real.strftime("%H_%M_%S")
+        basename = "/debug/predbat_debug_{}.yaml".format(time_now)
         filename = None
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
                 filename = root + basename
+                break
         if filename:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
             debug = {}
             debug["TIME"] = self.time_now_str()
             debug["THIS_VERSION"] = THIS_VERSION
@@ -13094,6 +13110,12 @@ class PredBat(hass.Hass):
             debug["discharge_limits_best"] = self.discharge_limits_best
             debug["low_rates"] = self.low_rates
             debug["high_export_rates"] = self.high_export_rates
+            debug["load_forecast"] = self.load_forecast
+            debug["load_minutes_step"] = self.load_minutes_step
+            debug["load_minutes_step10"] = self.load_minutes_step10
+            debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
+            debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
+
             with open(filename, "w") as file:
                 yaml.dump(debug, file)
             self.log("Wrote debug yaml to {}".format(filename))
@@ -13131,6 +13153,7 @@ class PredBat(hass.Hass):
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
                 filename = root + basename
+                break
 
         # Write
         if filename:
