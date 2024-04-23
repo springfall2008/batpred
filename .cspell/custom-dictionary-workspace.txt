@@ -31,6 +31,8 @@ Daeamon
 darray
 datap
 datapoints
+darkgreen
+darkred
 dend
 devcontainer
 devcontainers
