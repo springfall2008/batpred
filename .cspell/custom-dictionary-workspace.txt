@@ -28,6 +28,8 @@ customisation
 Customise
 cvalue
 Daeamon
+darkgreen
+darkred
 darray
 datap
 datapoints

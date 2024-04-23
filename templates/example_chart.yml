@@ -586,3 +586,71 @@ series:
       b[0]  })
     show:
       in_header: raw
+
+###############################################
+# Carbon chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Home cost prediction
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: day
+  offset: +0h
+now:
+  show: true
+series:
+  - entity: predbat.carbon_today
+    stroke_width: 1
+    curve: smooth
+    name: co2
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    extend_to: now
+    show:
+      in_header: raw
+  - entity: predbat.carbon_best
+    stroke_width: 2
+    curve: smooth
+    name: co2 best
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.carbon_now
+    stroke_width: 4
+    curve: smooth
+    name: Carbon Intensity history
+    show:
+      in_header: raw
+    extend_to: now
+  - entity: sensor.carbon_intensity_uk
+    unit: g/kWh
+    name: Carbon Intensity future
+    show:
+      legend_value: false
+    data_generator: |
+      return entity.attributes.forecast.map(obj => {
+        return [new Date(obj.from).getTime(), obj.intensity];
+      });
+    color_threshold:
+      - value: 25
+        color: darkgreen
+        opacity: 1
+      - value: 95
+        color: green
+      - value: 180
+        color: gold
+      - value: 279
+        color: red
+      - value: 330
+        color: darkred
