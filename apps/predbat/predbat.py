@@ -12752,9 +12752,10 @@ class PredBat(hass.Hass):
             updates_json = download_predbat_file_from_github(tag, "updates.json", os.path.join(this_path, f"updates.json.{tag}"))
             if updates_json:
                 updates = json.loads(updates_json)
-
+                file_list = ", ".join(updates)
+                self.log(f"Predbat update files: {file_list}"
+                         
                 for file in updates:
-                    self.log("Predbat update files{}".format(f["file"]))
                     self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
 
                 # Kill the current threads
