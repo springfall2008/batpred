@@ -1330,6 +1330,7 @@ class Prediction:
             self.charge_rate_now = base.charge_rate_now
             self.discharge_rate_now = base.discharge_rate_now
             self.cost_today_sofar = base.cost_today_sofar
+            self.carbon_today_sofar = base.carbon_today_sofar
             self.debug_enable = base.debug_enable
             self.num_cars = base.num_cars
             self.car_charging_soc = base.car_charging_soc
@@ -1535,7 +1536,7 @@ class Prediction:
         iboost_today_kwh = self.iboost_today
         import_kwh_house = 0
         import_kwh_battery = 0
-        carbon_g = 0
+        carbon_g = self.carbon_today_sofar
         battery_cycle = 0
         metric_keep = 0
         four_hour_rule = True
@@ -4850,11 +4851,15 @@ class PredBat(hass.Hass):
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
 
-    def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None):
+    def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
         """
         Download one or more entities for import/export data
         """
-        entity_ids = self.get_arg(key, indirect=False)
+        if "." not in key:
+            entity_ids = self.get_arg(key, indirect=False)
+        else:
+            entity_ids = key
+
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
 
@@ -4873,9 +4878,9 @@ class PredBat(hass.Hass):
                     "state",
                     "last_updated",
                     backwards=True,
-                    smoothing=True,
+                    smoothing=smoothing,
                     scale=scale,
-                    clean_increment=True,
+                    clean_increment=increment,
                     accumulate=import_today,
                     required_unit=required_unit,
                 )
@@ -5053,9 +5058,9 @@ class PredBat(hass.Hass):
                 if "unit_of_measurement" in item["attributes"]:
                     unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ["kW", "kWh"] and unit in ["W", "Wh"]:
+                        if required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
                             state = state / 1000.0
-                        elif required_unit in ["W", "Wh"] and unit in ["kW", "kWh"]:
+                        elif required_unit in ["W", "Wh", "g", "g/kWh"] and unit in ["kW", "kWh", "kg", "kg/kWh"]:
                             state = state * 1000.0
                         else:
                             # Ignore data in wrong units if we can't converter
@@ -5779,12 +5784,6 @@ class PredBat(hass.Hass):
         """
         values = {}
         cloud_diff = 0
-        if type_load:
-            self.log(
-                "Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(
-                    scale_today, step, minutes_now, forward, cloud_factor
-                )
-            )
 
         for minute in range(0, self.forecast_minutes, step):
             value = 0
@@ -6141,6 +6140,16 @@ class PredBat(hass.Hass):
                         attributes={
                             "results": predict_carbon_g,
                             "friendly_name": "Predicted Carbon energy",
+                            "state_class": "measurement",
+                            "unit_of_measurement": "g",
+                            "icon": "mdi:molecule-co2",
+                        },
+                    )
+                    self.dashboard_item(
+                        self.prefix + ".carbon_now",
+                        state=self.dp2(self.carbon_intensity.get(0)),
+                        attributes={
+                            "friendly_name": "Grid carbon intensity now",
                             "state_class": "measurement",
                             "unit_of_measurement": "g/kWh",
                             "icon": "mdi:molecule-co2",
@@ -8206,6 +8215,8 @@ class PredBat(hass.Hass):
         day_cost_time = {}
         day_cost_time_import = {}
         day_cost_time_export = {}
+        day_carbon_time = {}
+        carbon_g = 0
 
         for minute in range(self.minutes_now):
             # Add in standing charge
@@ -8231,12 +8242,17 @@ class PredBat(hass.Hass):
                 day_cost -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
 
+            if self.carbon_enable:
+                carbon_g += self.carbon_history.get(minute_back, 0) * energy
+                carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
+
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 day_cost_time[stamp] = self.dp2(day_cost)
                 day_cost_time_import[stamp] = self.dp2(day_cost_import)
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
+                day_carbon_time[stamp] = self.dp2(carbon_g)
 
         if not SIMULATE:
             self.dashboard_item(
@@ -8250,6 +8266,18 @@ class PredBat(hass.Hass):
                     "icon": "mdi:currency-usd",
                 },
             )
+            if self.carbon_enable:
+                self.dashboard_item(
+                    self.prefix + ".carbon_today",
+                    state=self.dp2(carbon_g),
+                    attributes={
+                        "results": day_carbon_time,
+                        "friendly_name": "Carbon today so far",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "g",
+                        "icon": "mdi:carbon-molecule",
+                    },
+                )
             self.dashboard_item(
                 self.prefix + ".cost_today_import",
                 state=self.dp2(day_cost_import),
@@ -8273,7 +8301,7 @@ class PredBat(hass.Hass):
                 },
             )
         self.log(
-            "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {}".format(
+            "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
                 self.dp2(day_energy),
                 self.dp2(day_energy_export),
                 self.dp2(day_cost),
@@ -8282,9 +8310,10 @@ class PredBat(hass.Hass):
                 self.currency_symbols[1],
                 self.dp2(day_cost_export),
                 self.currency_symbols[1],
+                self.dp2(carbon_g / 1000.0),
             )
         )
-        return day_cost
+        return day_cost, carbon_g
 
     def publish_discharge_limit(self, discharge_window, discharge_limits, best):
         """
@@ -8683,6 +8712,7 @@ class PredBat(hass.Hass):
         self.low_rates = []
         self.high_export_rates = []
         self.cost_today_sofar = 0
+        self.carbon_today_sofar = 0
         self.octopus_slots = []
         self.car_charging_slots = []
         self.reserve = 0
@@ -11556,6 +11586,7 @@ class PredBat(hass.Hass):
         """
         Fetch the carbon intensity from the sensor
         Returns a dictionary with the carbon intensity data for the next 24 hours
+        And a secondary dictionary with the carbon intensity data for the last 24 hours
 
         :param entity_id: The entity_id of the sensor
         """
@@ -11567,7 +11598,9 @@ class PredBat(hass.Hass):
             data_all = self.get_state(entity_id=entity_id, attribute="forecast")
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
-        return carbon_data
+
+        carbon_history = self.minute_data_import_export(self.now_utc, "predbat.carbon_now", required_unit="g/kWh", increment=False, smoothing=False)
+        return carbon_data, carbon_history
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
         """
@@ -11669,6 +11702,7 @@ class PredBat(hass.Hass):
         self.high_export_rates = []
         self.octopus_slots = []
         self.cost_today_sofar = 0
+        self.carbon_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
         self.pv_today = {}
@@ -11679,6 +11713,7 @@ class PredBat(hass.Hass):
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
+        self.carbon_history = {}
 
         # Iboost load data
         if self.iboost_enable and "iboost_energy_today" in self.args:
@@ -11777,7 +11812,7 @@ class PredBat(hass.Hass):
         # Carbon intensity data
         if self.carbon_enable and ("carbon_intensity" in self.args):
             entity_id = self.get_arg("carbon_intensity", None, indirect=False)
-            self.carbon_intensity = self.fetch_carbon_intensity(entity_id)
+            self.carbon_intensity, self.carbon_history = self.fetch_carbon_intensity(entity_id)
 
         # Work out current car SOC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
@@ -12051,7 +12086,7 @@ class PredBat(hass.Hass):
 
         # Work out cost today
         if self.import_today:
-            self.cost_today_sofar = self.today_cost(self.import_today, self.export_today)
+            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
