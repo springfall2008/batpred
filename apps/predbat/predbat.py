@@ -4855,7 +4855,7 @@ class PredBat(hass.Hass):
         """
         Download one or more entities for import/export data
         """
-        if "." not in key:
+        if '.' not in key:
             entity_ids = self.get_arg(key, indirect=False)
         else:
             entity_ids = key
@@ -5163,7 +5163,6 @@ class PredBat(hass.Hass):
                         mdata[minute] = state
                 else:
                     mdata[minutes] = state
-                    self.log("Store minute {} state {}".format(minutes, state))
 
             # Store previous time & state
             if to_time and not backwards:
@@ -5785,12 +5784,6 @@ class PredBat(hass.Hass):
         """
         values = {}
         cloud_diff = 0
-        if type_load:
-            self.log(
-                "Creating step data for historical load data scale_today {} step {} minutes_now {} forward {} divergence {}".format(
-                    scale_today, step, minutes_now, forward, cloud_factor
-                )
-            )
 
         for minute in range(0, self.forecast_minutes, step):
             value = 0
@@ -7789,9 +7782,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
-            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
-        )
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -10956,7 +10947,7 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
-
+    
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
