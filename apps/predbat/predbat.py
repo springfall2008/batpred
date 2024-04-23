@@ -6372,7 +6372,7 @@ class PredBat(hass.Hass):
                             "results": predict_carbon_g,
                             "friendly_name": "Predicted Carbon energy best",
                             "state_class": "measurement",
-                            "unit_of_measurement": "g/kWh",
+                            "unit_of_measurement": "g",
                             "icon": "mdi:molecule-co2",
                         },
                     )
