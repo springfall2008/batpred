@@ -2473,7 +2473,7 @@ class Inverter:
 
                 soc_percent = {}
                 for minute in range(0, min_len):
-                    soc_percent[minute] = int((soc_kwh[minute] / self.soc_max) * 100.0 + 0.5)
+                    soc_percent[minute] = calc_percent_limit(soc_kwh[minutes], self.soc_max)
 
                 if discharge:
                     search_range = range(5, 20, 1)
@@ -2759,7 +2759,7 @@ class Inverter:
         if self.soc_max <= 0.0:
             self.soc_percent = 0
         else:
-            self.soc_percent = round((self.soc_kw / self.soc_max) * 100.0)
+            self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
         if self.rest_data and ("Power" in self.rest_data):
             pdetails = self.rest_data["Power"]
@@ -7846,9 +7846,9 @@ class PredBat(hass.Hass):
             pv_forecast10 = self.dp2(pv_forecast10)
             load_forecast10 = self.dp2(load_forecast10)
 
-            soc_percent = int(self.dp2((self.predict_soc_best.get(minute_relative_start, 0.0) / self.soc_max) * 100.0) + 0.5)
-            soc_percent_end = int(self.dp2((self.predict_soc_best.get(minute_relative_slot_end, 0.0) / self.soc_max) * 100.0) + 0.5)
-            soc_percent_end_window = int(self.dp2((self.predict_soc_best.get(minute_relative_end, 0.0) / self.soc_max) * 100.0) + 0.5)
+            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
+            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
+            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
             soc_percent_max_window = max(soc_percent, soc_percent_end_window)
@@ -9307,12 +9307,11 @@ class PredBat(hass.Hass):
                 if compare_with == try_percent:
                     metric -= max(0.5, self.metric_min_improvement)
 
-            # Minor weighting against charge freeze to avoid spurious ones
-            if self.set_charge_freeze and try_soc == self.reserve:
-                metric += 0.1
-
-            # Very minor preference to 100% or 0% so that slots are contiguous
-            if (try_soc == self.soc_max) or (try_soc == best_soc_min_setting):
+            if try_soc == best_soc_min_setting:
+                # Minor weighting to 0%
+                metric -= 0.02
+            elif try_soc == self.soc_max:
+                # Minor weighting to 100%
                 metric -= 0.01
 
             # Round metric to 4 DP
@@ -9514,7 +9513,7 @@ class PredBat(hass.Hass):
             metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
 
             # Adjust to try to keep existing windows
-            if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window:
+            if window_n < 2 and this_discharge_limit <= 99.0 and self.discharge_window and self.isDischarging:
                 pwindow = discharge_window[window_n]
                 dwindow = self.discharge_window[0]
                 if (
@@ -10911,10 +10910,10 @@ class PredBat(hass.Hass):
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
-            cloud_factor=self.metric_load_divergence,
+            cloud_factor=min(self.metric_load_divergence + 0.5, 1.0),
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0))
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
@@ -12171,9 +12170,9 @@ class PredBat(hass.Hass):
         self.soc_max = self.dp2(self.soc_max)
         self.soc_kw = self.dp2(self.soc_kw)
         self.reserve = self.dp2(self.reserve)
-        self.reserve_percent = int(self.reserve / self.soc_max * 100.0 + 0.5)
+        self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current = self.dp2(self.reserve_current)
-        self.reserve_current_percent = int(self.reserve_current / self.soc_max * 100.0 + 0.5)
+        self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
 
         self.log(
             "Found {} inverters totals: min reserve {} current reserve {} soc_max {} soc {} charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} export limit {} kW loss charge {} % loss discharge {} % inverter loss {} %".format(
