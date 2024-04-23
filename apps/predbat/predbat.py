@@ -28,7 +28,6 @@ if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
 THIS_VERSION = "v7.17.0"
-PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -12715,7 +12714,7 @@ class PredBat(hass.Hass):
         Returns:
             str: The contents of the file
         """
-        url = "https://raw.githubusercontent.com/springfall2008/batpred/" + tag + "/apps/predbat/{}".format(filename)
+        url = f"https://raw.githubusercontent.com/springfall2008/batpred/{tag}/{filename}"
         self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
         r = requests.get(url, headers={})
         if r.ok:
@@ -12750,28 +12749,13 @@ class PredBat(hass.Hass):
         if tag_split:
             tag = tag_split[0]
 
-            # Download predbat.py
-            file = "predbat.py"
-            predbat_code = self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
-            if predbat_code:
-                # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
-                files = ["predbat.py"]
-                for line in predbat_code.split("\n"):
-                    if line.startswith("PREDBAT_FILES"):
-                        files = line.split("=")[1].strip()
-                        files = files.replace("[", "")
-                        files = files.replace("]", "")
-                        files = files.replace('"', "")
-                        files = files.split(",")
-                        self.log("Predbat update files are {}".format(files))
-                        break
+            updates_json = download_predbat_file_from_github(tag, "updates.json", os.path.join(this_path, f"updates.json.{tag}"))
+            if updates_json:
+                updates = json.loads(updates_json)
 
-                # Download the remaining files
-                if files:
-                    for file in files:
-                        # Download the remaining files
-                        if file != "predbat.py":
-                            self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
+                for file in updates:
+                    self.log("Predbat update files{}".format(f["file"]))
+                    self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
 
                 # Kill the current threads
                 if self.pool:
@@ -12786,7 +12770,7 @@ class PredBat(hass.Hass):
                 # Perform the update
                 self.log("Perform the update.....")
                 cmd = ""
-                for file in files:
+                for file in updates:
                     cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
                 cmd += "echo 'Update complete'"
                 self.log("Performing update with command: {}".format(cmd))
