@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.1"
+THIS_VERSION = "v7.17.2"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -10938,10 +10938,12 @@ class PredBat(hass.Hass):
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
-            cloud_factor=min(self.metric_load_divergence + 0.5, 1.0),
+            cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0))
+        pv_forecast_minute10_step = self.step_data_history(
+            self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None
+        )
 
         # Save step data for debug
         if self.debug_enable:
@@ -11378,12 +11380,15 @@ class PredBat(hass.Hass):
                 if (inverter.discharge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
                     minutes_start = inverter.discharge_start_time_minutes
                     # Don't allow overlap with charge window
-                    if minutes_start >= inverter.charge_start_time_minutes and minutes_start < inverter.charge_end_time_minutes:
+                    if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
                         minutes_start = window["start"]
                     else:
                         self.log(
-                            "Include original discharge start {} with our start which is {}".format(
-                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start)
+                            "Include original discharge start {} with our start which is {} (charge start {} end {})".format(
+                                self.time_abs_str(inverter.discharge_start_time_minutes),
+                                self.time_abs_str(minutes_start),
+                                self.time_abs_str(inverter.charge_start_time_minutes),
+                                self.time_abs_str(inverter.charge_end_time_minutes),
                             )
                         )
 
