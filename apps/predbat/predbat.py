@@ -28,7 +28,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.0"
+THIS_VERSION = "v7.17.1"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
@@ -6372,7 +6372,7 @@ class PredBat(hass.Hass):
                             "results": predict_carbon_g,
                             "friendly_name": "Predicted Carbon energy best",
                             "state_class": "measurement",
-                            "unit_of_measurement": "g/kWh",
+                            "unit_of_measurement": "g",
                             "icon": "mdi:molecule-co2",
                         },
                     )
@@ -11592,6 +11592,7 @@ class PredBat(hass.Hass):
         """
         data_all = []
         carbon_data = {}
+        carbon_history = {}
 
         if entity_id:
             self.log("Fetching carbon intensity data from {}".format(entity_id))
@@ -11599,7 +11600,16 @@ class PredBat(hass.Hass):
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
 
-        carbon_history = self.minute_data_import_export(self.now_utc, "predbat.carbon_now", required_unit="g/kWh", increment=False, smoothing=False)
+        entity_id = "predbat.carbon_now"
+        state = self.get_state(entity_id=entity_id)
+        if state is not None:
+            try:
+                carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
+            except ValueError:
+                self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
+        else:
+            self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
+
         return carbon_data, carbon_history
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
