@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.0"
+THIS_VERSION = "v7.17.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -4855,7 +4855,7 @@ class PredBat(hass.Hass):
         """
         Download one or more entities for import/export data
         """
-        if "." not in key:
+        if '.' not in key:
             entity_ids = self.get_arg(key, indirect=False)
         else:
             entity_ids = key
@@ -7782,9 +7782,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
-            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
-        )
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -10949,7 +10947,7 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
-
+    
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
@@ -11592,6 +11590,7 @@ class PredBat(hass.Hass):
         """
         data_all = []
         carbon_data = {}
+        carbon_history = {}
 
         if entity_id:
             self.log("Fetching carbon intensity data from {}".format(entity_id))
@@ -11599,7 +11598,16 @@ class PredBat(hass.Hass):
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
 
-        carbon_history = self.minute_data_import_export(self.now_utc, "predbat.carbon_now", required_unit="g/kWh", increment=False, smoothing=False)
+        entity_id = "predbat.carbon_now"
+        state = self.get_state(entity_id=entity_id)
+        if state is not None:
+            try:
+                carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
+            except ValueError:
+                self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
+        else:
+            self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
+
         return carbon_data, carbon_history
 
     def fetch_octopus_rates(self, entity_id, adjust_key=None):
