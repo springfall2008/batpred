@@ -4855,7 +4855,7 @@ class PredBat(hass.Hass):
         """
         Download one or more entities for import/export data
         """
-        if '.' not in key:
+        if "." not in key:
             entity_ids = self.get_arg(key, indirect=False)
         else:
             entity_ids = key
@@ -7782,7 +7782,9 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
+            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
+        )
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -10939,7 +10941,9 @@ class PredBat(hass.Hass):
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None)
+        pv_forecast_minute10_step = self.step_data_history(
+            self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None
+        )
 
         # Save step data for debug
         if self.debug_enable:
@@ -10947,7 +10951,7 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
-    
+
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
@@ -11381,7 +11385,10 @@ class PredBat(hass.Hass):
                     else:
                         self.log(
                             "Include original discharge start {} with our start which is {} (charge start {} end {})".format(
-                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start), self.time_abs_str(inverter.charge_start_time_minutes),  self.time_abs_str(inverter.charge_end_time_minutes)
+                                self.time_abs_str(inverter.discharge_start_time_minutes),
+                                self.time_abs_str(minutes_start),
+                                self.time_abs_str(inverter.charge_start_time_minutes),
+                                self.time_abs_str(inverter.charge_end_time_minutes),
                             )
                         )
 
