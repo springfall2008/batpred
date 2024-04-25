@@ -12726,15 +12726,15 @@ class PredBat(hass.Hass):
             str: The contents of the file
         """
 
-        base_url = self.get_arg(update_override_url, f"https://raw.githubusercontent.com/springfall2008/{tag}")
-        url = f"{base_url}/{filename}"
+        base_url = self.args.get("update_override_url", f"https://raw.githubusercontent.com/springfall2008/{tag}/")
+        url = f"{base_url}{filename}"
 
-        self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
+        self.log(f"Downloading Predbat file from {url} to {new_filename}")
         r = requests.get(url, headers={})
         if r.ok:
             data = r.text
             if new_filename:
-                self.log("Write new version {} bytes to {}".format(len(data), new_filename))
+                self.log(f"Write new version {len(data)} bytes to {new_filename}")
                 with open(new_filename, "w") as han:
                     han.write(data)
             return data
@@ -12764,7 +12764,7 @@ class PredBat(hass.Hass):
         if tag_split:
             tag = tag_split[0]
 
-            updates_json = download_predbat_file_from_github(tag, "updates.json", os.path.join(base_path, f"updates.json.{tag}"))
+            updates_json = self.download_predbat_file_from_github(tag, "updates.json", os.path.join(base_path, f"updates.json.{tag}"))
             if updates_json:
                 updates = json.loads(updates_json)
                 file_list = ", ".join(updates)
