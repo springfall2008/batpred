@@ -247,6 +247,14 @@ trigger:
       minutes: 15
     variables:
       alert_text: Mosquitto Broker add-on is not running
+  - platform: state
+    entity_id:
+      - binary_sensor.appdaemon<-predbat>_broker_running
+    to: "off"
+    for:
+      minutes: 15
+    variables:
+      alert_text: AppDaemon<-predbat> add-on is not running
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
@@ -267,22 +275,24 @@ action:
 mode: single
 ```
 
-The last two triggers (GivTCP and Mosquitto running) check that the add-on that Predbat is dependent upon is running.<BR>
-You will need to enable a binary sensor for each add-on to be able to use these triggers:
-Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'.
-Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'.
-Click the 'Running' sensor, then the cogwheel, and Enable the sensor.
-Repeat these steps for the Mosquitto add-on.
+The last three triggers (GivTCP, Mosquitto and AppDaemon running) trigger if any of these add-ons that Predbat is dependent upon are not running.
+You will need to enable a binary sensor for each add-on to be able to use these triggers in the automation:
+
+- Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'
+- Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'
+- Click the 'Running' sensor, then the cogwheel, and Enable the sensor
+
+Repeat these steps for the 'Mosquitto' add-on and either 'Appdaemon' or 'AppDaemon-predbat' depending on which AppDaemon install option you followed.
 
 As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
 
-To restart the GivTCP add-on, add the following at the end of each 'sequence' sub-section within the action section:
+To restart the GivTCP add-on, add the following at the end of the action section:
 
 ```yaml
-          - service: hassio.addon_restart
-            data:
-              addon: a6a2857d_givtcp
+  - service: hassio.addon_restart
+    data:
+      addon: a6a2857d_givtcp
 ```
 
 ### Predbat error monitor
