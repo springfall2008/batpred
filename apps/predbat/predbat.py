@@ -12725,7 +12725,10 @@ class PredBat(hass.Hass):
         Returns:
             str: The contents of the file
         """
-        url = f"https://raw.githubusercontent.com/springfall2008/batpred/{tag}/{filename}"
+
+        base_url = self.get_arg(update_override_url, f"https://raw.githubusercontent.com/springfall2008/{tag}")
+        url = f"{base_url}/{filename}"
+
         self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
         r = requests.get(url, headers={})
         if r.ok:
@@ -12756,18 +12759,19 @@ class PredBat(hass.Hass):
         self.expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
+        base_path = os.path.abspath(os.path.join(this_path, "..", ".."))
         self.log("Split returns {}".format(tag_split))
         if tag_split:
             tag = tag_split[0]
 
-            updates_json = download_predbat_file_from_github(tag, "updates.json", os.path.join(this_path, f"updates.json.{tag}"))
+            updates_json = download_predbat_file_from_github(tag, "updates.json", os.path.join(base_path, f"updates.json.{tag}"))
             if updates_json:
                 updates = json.loads(updates_json)
                 file_list = ", ".join(updates)
                 self.log(f"Predbat update files: {file_list}")
 
                 for file in updates:
-                    self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
+                    self.download_predbat_file_from_github(tag, file, os.path.join(base_path, f"{file}.{tag}"))
 
                 # Kill the current threads
                 if self.pool:
@@ -12783,7 +12787,7 @@ class PredBat(hass.Hass):
                 self.log("Perform the update.....")
                 cmd = ""
                 for file in updates:
-                    cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
+                    cmd += "mv -f {} {} && ".format(os.path.join(base_path, f"{file}.{tag}"), os.path.join(base_path, file))
                 cmd += "echo 'Update complete'"
                 self.log("Performing update with command: {}".format(cmd))
                 os.system(cmd)

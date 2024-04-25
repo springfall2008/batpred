@@ -421,3 +421,7 @@ pred_bat:
   #  - '+[car_charging_planned]'
   #  - '+[car_charging_soc]'
   #  - '{car_charging_now}'
+  #
+ 
+  # Overrides the URL used for the update feature. Mostly used for development and testing.
+  #  update_override_url: "https://raw.githubusercontent.com/springfall2008/batpred/main/"
