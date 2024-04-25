@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.2"
+THIS_VERSION = "v7.17.3"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1318,6 +1318,7 @@ class Prediction:
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
+            self.log = base.log
             self.forecast_minutes = base.forecast_minutes
             self.midnight_utc = base.midnight_utc
             self.soc_kw = base.soc_kw
@@ -1850,16 +1851,17 @@ class Prediction:
                     battery_draw_ac += (soc - self.soc_max) / (self.battery_loss * self.inverter_loss)
                     soc = self.soc_max
 
-                # if (minute % 30) == 0:
-                #    self.log("Minute {} pv_ac {} pv_dc {} battery_ac {} battery_dc {} battery b4 {} after {} soc {}".format(minute, pv_ac, pv_dc, battery_draw_ac, battery_draw_dc, battery_draw, battery_draw_ac + battery_draw_dc, soc))
-
                 battery_draw = battery_draw_ac + battery_draw_dc
 
+            # Rounding on SOC
+            soc = round(soc, 6)
+
             # Count battery cycles
-            battery_cycle += abs(battery_draw)
+            battery_cycle = round(battery_cycle + abs(battery_draw), 4)
 
             # Work out left over energy after battery adjustment
-            diff = load_yesterday - (battery_draw + pv_dc + pv_ac)
+            diff = round(load_yesterday - (battery_draw + pv_dc + pv_ac), 6)
+
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
                 # All exports must come from PV or from the battery, so inverter loss is already accounted for in both cases
@@ -1915,6 +1917,12 @@ class Prediction:
                     grid_state = ">"
                 else:
                     grid_state = "~"
+
+            # Rounding for next stage
+            metric = round(metric, 4)
+            import_kwh_battery = round(import_kwh_battery, 6)
+            import_kwh_house = round(import_kwh_house, 6)
+            export_kwh = round(export_kwh, 6)
 
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
@@ -1976,6 +1984,8 @@ class Prediction:
                 if self.carbon_enable:
                     predict_carbon_g[stamp] = round(carbon_g, 3)
 
+            #if save == "best" and self.debug_enable:
+            #    self.log("Best plan, minute {} soc {} charge_limit_n {} battery_cycle {} metric {} metric_keep {} soc_min {} diff {} import_battery {} import_house {} export {}".format(minute, soc, charge_limit_n, battery_cycle, metric, metric_keep, soc_min, diff, import_kwh_battery, import_kwh_house, export_kwh))
             minute += step
 
         hours_left = minute_left / 60.0
@@ -4855,7 +4865,7 @@ class PredBat(hass.Hass):
         """
         Download one or more entities for import/export data
         """
-        if "." not in key:
+        if '.' not in key:
             entity_ids = self.get_arg(key, indirect=False)
         else:
             entity_ids = key
@@ -7782,9 +7792,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
-            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
-        )
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -9101,6 +9109,7 @@ class PredBat(hass.Hass):
         discharge_limits,
         all_n=None,
         end_record=None,
+        freeze_only=False
     ):
         """
         Optimise a single charging window for best SOC
@@ -9234,22 +9243,27 @@ class PredBat(hass.Hass):
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
             best_soc_min_setting = max(self.reserve, best_soc_min_setting)
-        while loop_soc > self.reserve:
-            skip = False
-            try_soc = max(best_soc_min, loop_soc)
-            try_soc = self.dp2(min(try_soc, self.soc_max))
-            if try_soc > (all_max_soc + loop_step):
-                skip = True
-            if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (all_min_soc - loop_step)):
-                skip = True
-            # Keep those we already simulated
-            if try_soc in resultmid:
+        
+        if freeze_only:
+            try_socs.append(charge_limit[window_n])
+        else:
+            while loop_soc > self.reserve:
                 skip = False
-            if not skip and (try_soc not in try_socs) and (try_soc != self.reserve):
-                try_socs.append(self.dp2(try_soc))
-            loop_soc -= loop_step
+                try_soc = max(best_soc_min, loop_soc)
+                try_soc = self.dp2(min(try_soc, self.soc_max))
+                if try_soc > (all_max_soc + loop_step):
+                    skip = True
+                if (try_soc > self.reserve) and (try_soc > self.best_soc_min) and (try_soc < (all_min_soc - loop_step)):
+                    skip = True
+                # Keep those we already simulated
+                if try_soc in resultmid:
+                    skip = False
+                if not skip and (try_soc not in try_socs) and (try_soc != self.reserve):
+                    try_socs.append(self.dp2(try_soc))
+                loop_soc -= loop_step
+
         # Give priority to off to avoid spurious charge freezes
-        if best_soc_min_setting not in try_socs:
+        if not freeze_only and best_soc_min_setting not in try_socs:
             try_socs.append(best_soc_min_setting)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
@@ -9348,12 +9362,13 @@ class PredBat(hass.Hass):
             if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
                 metric -= 0.02
-            elif try_soc == self.soc_max:
-                # Minor weighting to 100%
+            elif try_soc == self.soc_max or try_soc == self.reserve:
+                # Minor weighting to 100% or freeze
                 metric -= 0.01
 
             # Round metric to 4 DP
             metric = self.dp4(metric)
+            metric10 = self.dp4(metric10)
 
             if self.debug_enable:
                 self.log(
@@ -10167,6 +10182,7 @@ class PredBat(hass.Hass):
             )
         )
         for pass_type in ["freeze", "normal", "low"]:
+            self.log("Optimisation pass type {}".format(pass_type))
             start_at_low = False
             if pass_type in ["low"]:
                 price_set.reverse()
@@ -10219,6 +10235,7 @@ class PredBat(hass.Hass):
                                 self.discharge_window_best,
                                 self.discharge_limits_best,
                                 end_record=self.end_record,
+                                freeze_only=pass_type in ["freeze"],
                             )
                             self.charge_limit_best[window_n] = best_soc
 
@@ -10941,9 +10958,7 @@ class PredBat(hass.Hass):
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(
-            self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None
-        )
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None)
 
         # Save step data for debug
         if self.debug_enable:
@@ -10951,7 +10966,7 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
-
+    
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
@@ -11385,10 +11400,7 @@ class PredBat(hass.Hass):
                     else:
                         self.log(
                             "Include original discharge start {} with our start which is {} (charge start {} end {})".format(
-                                self.time_abs_str(inverter.discharge_start_time_minutes),
-                                self.time_abs_str(minutes_start),
-                                self.time_abs_str(inverter.charge_start_time_minutes),
-                                self.time_abs_str(inverter.charge_end_time_minutes),
+                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start), self.time_abs_str(inverter.charge_start_time_minutes),  self.time_abs_str(inverter.charge_end_time_minutes)
                             )
                         )
 
