@@ -1984,7 +1984,7 @@ class Prediction:
                 if self.carbon_enable:
                     predict_carbon_g[stamp] = round(carbon_g, 3)
 
-            # if save == "best" and self.debug_enable:
+            #if save == "best" and self.debug_enable:
             #    self.log("Best plan, minute {} soc {} charge_limit_n {} battery_cycle {} metric {} metric_keep {} soc_min {} diff {} import_battery {} import_house {} export {}".format(minute, soc, charge_limit_n, battery_cycle, metric, metric_keep, soc_min, diff, import_kwh_battery, import_kwh_house, export_kwh))
             minute += step
 
@@ -4865,7 +4865,7 @@ class PredBat(hass.Hass):
         """
         Download one or more entities for import/export data
         """
-        if "." not in key:
+        if '.' not in key:
             entity_ids = self.get_arg(key, indirect=False)
         else:
             entity_ids = key
@@ -7792,9 +7792,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
-            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
-        )
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION)
         html += "</tr>"
         html += self.get_html_plan_header(plan_debug)
         minute_now_align = int(self.minutes_now / 30) * 30
@@ -9102,7 +9100,16 @@ class PredBat(hass.Hass):
         return han
 
     def optimise_charge_limit(
-        self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None, freeze_only=False
+        self,
+        window_n,
+        record_charge_windows,
+        charge_limit,
+        charge_window,
+        discharge_window,
+        discharge_limits,
+        all_n=None,
+        end_record=None,
+        freeze_only=False
     ):
         """
         Optimise a single charging window for best SOC
@@ -9236,7 +9243,7 @@ class PredBat(hass.Hass):
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
             best_soc_min_setting = max(self.reserve, best_soc_min_setting)
-
+        
         if freeze_only:
             try_socs.append(charge_limit[window_n])
         else:
@@ -9350,14 +9357,14 @@ class PredBat(hass.Hass):
                 compare_with = max(self.current_charge_limit, self.reserve_percent)
 
                 if compare_with == try_percent:
-                    metric -= max(0.5, self.metric_min_improvement)
+                    metric -= max(0.1, self.metric_min_improvement)
 
             if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
-                metric -= 0.02
+                metric -= 0.002
             elif try_soc == self.soc_max or try_soc == self.reserve:
                 # Minor weighting to 100% or freeze
-                metric -= 0.01
+                metric -= 0.001
 
             # Round metric to 4 DP
             metric = self.dp4(metric)
@@ -10951,9 +10958,7 @@ class PredBat(hass.Hass):
             cloud_factor=min(self.metric_load_divergence + 0.5, 1.0) if self.metric_load_divergence else None,
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
-        pv_forecast_minute10_step = self.step_data_history(
-            self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None
-        )
+        pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None)
 
         # Save step data for debug
         if self.debug_enable:
@@ -10961,7 +10966,7 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
-
+    
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
 
@@ -11395,10 +11400,7 @@ class PredBat(hass.Hass):
                     else:
                         self.log(
                             "Include original discharge start {} with our start which is {} (charge start {} end {})".format(
-                                self.time_abs_str(inverter.discharge_start_time_minutes),
-                                self.time_abs_str(minutes_start),
-                                self.time_abs_str(inverter.charge_start_time_minutes),
-                                self.time_abs_str(inverter.charge_end_time_minutes),
+                                self.time_abs_str(inverter.discharge_start_time_minutes), self.time_abs_str(minutes_start), self.time_abs_str(inverter.charge_start_time_minutes),  self.time_abs_str(inverter.charge_end_time_minutes)
                             )
                         )
 
