@@ -9026,9 +9026,7 @@ class PredBat(hass.Hass):
                             # ie. how much extra battery is worth to us in future, assume it's the same as low rate
                             rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
                             metric -= (
-                                (soc + final_iboost)
-                                * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge)
-                                * self.metric_battery_value_scaling
+                                (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
                             )
 
                             # Adjustment for battery cycles metric
@@ -9114,7 +9112,9 @@ class PredBat(hass.Hass):
             )
         return han
 
-    def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None):
+    def optimise_charge_limit(
+        self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None
+    ):
         """
         Optimise a single charging window for best SOC
         """
@@ -10136,16 +10136,7 @@ class PredBat(hass.Hass):
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record, region_size):
                         region_end = min(region + region_size, self.end_record)
-                        (
-                            self.charge_limit_best,
-                            ignore_discharge_limits,
-                            best_price_region,
-                            best_price_discharge_region,
-                            best_metric,
-                            best_cost,
-                            best_keep,
-                            best_soc_min,
-                        ) = self.optimise_charge_limit_price(
+                        self.charge_limit_best, ignore_discharge_limits2, best_price_region, best_price_discharge_region, best_metric, best_cost, best_keep, best_soc_min = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
                             window_index,
@@ -10153,16 +10144,16 @@ class PredBat(hass.Hass):
                             self.charge_limit_best,
                             self.charge_window_best,
                             self.discharge_window_best,
-                            self.discharge_limits_best,
+                            ignore_discharge_limits,
                             end_record=self.end_record,
                             region_start=region + self.minutes_now,
                             region_end=region_end + self.minutes_now,
                             fast=fast_mode,
                             quiet=True,
-                            best_metric=best_metric,
-                            best_cost=best_cost,
-                            best_keep=best_keep,
-                            best_soc_min=best_soc_min,
+                            best_metric = best_metric,
+                            best_cost = best_cost,
+                            best_keep = best_keep,
+                            best_soc_min = best_soc_min,
                             best_price_charge=best_price,
                             best_price_discharge=best_price_discharge,
                         )
@@ -10364,6 +10355,9 @@ class PredBat(hass.Hass):
                         self.window_as_text(self.discharge_window_best, self.discharge_limits_best, ignore_max=True),
                     )
                 )
+
+        # Re-compute end record
+        self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
