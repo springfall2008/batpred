@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.3"
+THIS_VERSION = "v7.17.4"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -9808,6 +9808,7 @@ class PredBat(hass.Hass):
                 new_window_best
                 and (start == new_window_best[-1]["end"])
                 and (limit == new_limit_best[-1])
+                and limit != self.reserve
                 and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
             ):
