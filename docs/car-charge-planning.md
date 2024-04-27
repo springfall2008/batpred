@@ -34,6 +34,41 @@ You should not need to change this, but its worth checking the [Predbat logfile]
     you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
     A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
     this should be adapted for your own charger type and how it controls starting/stopping car charging:
+
+      ```yaml
+      alias: Car charging
+      description: "Start/stop car charging based on Predbat determined slots"
+      trigger:
+        - platform: state
+          entity_id:
+            - binary_sensor.predbat_car_charging_slot
+      action:
+        - choose:
+            - conditions:
+                - condition: state
+                  entity_id: binary_sensor.predbat_car_charging_slot
+                  state: "on"
+              sequence:
+                <commands to turn on your car charger, e.g.>
+                - service: select.select_option
+                  data:
+                    option: Eco+
+                  target:
+                    entity_id: select.myenergi_zappi_charge_mode
+            - conditions:
+                - condition: state
+                  entity_id: binary_sensor.predbat_car_charging_slot
+                  state: "off"
+              sequence:
+                <commands to turn off your car charger, e.g.>
+                - service: select.select_option
+                  data:
+                    option: Stopped
+                  target:
+                    entity_id: select.myenergi_zappi_charge_mode
+      mode: single
+      ```
+
     - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 ```yaml

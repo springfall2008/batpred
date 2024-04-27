@@ -44,7 +44,7 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 - Forecast house load (from your historical load data)
 - Planned car charging (if car charging is configured in Predbat)
 - Planned iBoost immersion heating (if iBoost is configured)
-- What the battery SOC will be at the start of the 30 minute slot
+- What the battery SoC will be at the start of the 30 minute slot
 - The forecast cost for the half hour slot
 - A running total cost
 
@@ -57,11 +57,11 @@ Rate symbols (import and export):
 - &dollar; - Rate that has been adjusted for an Octopus Saving session
 - ? - Rate that has not yet been defined and the previous days data was used instead
 
-Battery SOC symbols:
+Battery SoC symbols:
 
-- &rarr; - Current SOC expected to remain level
-- &searr; - Current SOC expected to fall
-- &nearr; - Current SOC expected to rise
+- &rarr; - Current SoC expected to remain level
+- &searr; - Current SoC expected to fall
+- &nearr; - Current SoC expected to rise
 
 Cost symbols:
 
@@ -117,14 +117,14 @@ above 0 to 0.25 it will be Light Green, and if zero, it will be coloured White.
 - **Car kWh** - The total predicted car charging for the half hour slot. This column will only be shown if *num_cars* in `apps.yaml` is 1 or more.<BR>
 If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
-- **iBoost kWh** - The energy planned for iBoost immersion heating. This column will only be shown if *switch.iboost_enable* is set to True.<BR>
-If the iBoost  is planned to be on in that slot then the kWh will be coloured Yellow, otherwise it will be White.
+- **iBoost kWh** - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi. This column will only be shown if *switch.iboost_enable* is set to True.<BR>
+If the solar diverter is planned to be on in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
-- **SOC %** - The estimate of battery State of Charge percentage *at the start* of the time slot
+- **SoC %** - The estimate of battery State of Charge percentage *at the start* of the time slot
 together with an arrow pointing up, to the right or downwards to indicate whether the battery SoC is increasing, remaining constant or decreasing during the time slot.<BR>
-The 'SOC %' can be read in conjunction with the 'Limit %'; the SOC column gives the estimated SOC at the beginning of the slot,
-the Limit column the estimated SOC at the end of the slot.<BR>
-If the SOC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.
+The 'SoC %' can be read in conjunction with the 'Limit %'; the SoC column gives the estimated SoC at the beginning of the slot,
+the Limit column the estimated SoC at the end of the slot.<BR>
+If the SoC is 50% or greater it will be coloured Green, 20% or greater, Yellow, and if less than 20%, Orangey-Red.
 
 - **Cost** - The estimated cost in pence for the time slot together with an arrow indicating whether the total cost today is increasing, staying flat or decreasing.<BR>
 If the cost for the slot is 10p or more it will be coloured Orangey-Red, &frac12;p or more it will be coloured Yellow, -&frac12;p or less it will be coloured Green,
@@ -173,6 +173,13 @@ Predbat plans to charge and then discharge the battery in the same slot to gener
 
 The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or discharge the battery.
 
-## Custom plan table
+## Customising and Reformatting the Predbat Plan
 
-You might also like this great add on: [PredBat-Table-Card](https://github.com/pacemaker82/PredBat-Table-Card)
+An additional independent front-end Home Assistant component the 'Predbat Table Card' is available on HACS that gives a number of additional customisation and configuration options
+to tailor how the Predbat plan looks:
+
+- Change the sequence of columns and which columns are shown in the plan
+- Restyle the columns, or retain the Predbat original colour scheme
+- Apply custom light/dark themes
+
+See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
