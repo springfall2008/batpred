@@ -68,6 +68,7 @@ You should not need to change this, but its worth checking the [Predbat logfile]
                     entity_id: select.myenergi_zappi_charge_mode
       mode: single
       ```
+
     - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
 
 ```yaml

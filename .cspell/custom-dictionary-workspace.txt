@@ -48,8 +48,8 @@ elif
 emszzzz
 endt
 feedin
-firstparty
 Fingerbot
+firstparty
 futurerate
 gekey
 geserial

@@ -298,7 +298,7 @@ This may improve reliability of the REST connection as it doesn't need to lookup
 
 Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
 interact with many different inverters.
-           
+
 The template `apps.yaml` for Giv Energy is pre-configured with regular expressions for the following configuration items
 that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
 
@@ -331,7 +331,7 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
-  
+
 See section below on [creating the battery charge power curve](#workarounds).
 
 ## Solcast Solar Forecast
