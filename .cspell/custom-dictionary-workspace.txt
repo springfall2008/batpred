@@ -140,6 +140,7 @@ springfall
 startt
 stdlib
 stepline
+sunsynk
 tasmota
 tdata
 tdiff
