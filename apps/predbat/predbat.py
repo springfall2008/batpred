@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.4"
+THIS_VERSION = "v7.17.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -6181,7 +6181,7 @@ class PredBat(hass.Hass):
                     )
                     self.dashboard_item(
                         self.prefix + ".carbon_now",
-                        state=self.dp2(self.carbon_intensity.get(0)),
+                        state=self.dp2(self.carbon_intensity.get(0, 0)),
                         attributes={
                             "friendly_name": "Grid carbon intensity now",
                             "state_class": "measurement",
