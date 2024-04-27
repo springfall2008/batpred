@@ -26,7 +26,12 @@ It also explains how you can contribute to the project.
 
 ## Support
 
-For support please raise a Github ticket or use the [GivTCP](https://www.facebook.com/groups/615579009972782) or [Solis](https://www.facebook.com/groups/288045168816481) Facebook Groups.
+For support please raise a Github ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106)
+
+Some inverters have their own groups also e.g:
+
+- [GivTCP](https://www.facebook.com/groups/615579009972782)
+- [Solis](https://www.facebook.com/groups/288045168816481)
 
 ```text
 Copyright (c) Trefor Southwell 2024 - All rights reserved
