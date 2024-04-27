@@ -143,7 +143,16 @@ pred_bat:
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
-
+  pause_mode:
+   - select.givtcp_{geserial}_battery_pause_mode)
+   - re:(select.givtcp_{geserial2}_battery_pause_mode)
+  pause_start_time:
+   - re:(select.givtcp_{geserial}_battery_pause_start_time_slot)
+   - re:(select.givtcp2_{geserial2}_battery_pause_start_time_slot)
+  pause_end_time:
+   - re:(select.givtcp_{geserial}_battery_pause_end_time_slot)
+   - re:(select.givtcp2_{geserial2}_battery_pause_end_time_slot)
+  
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
