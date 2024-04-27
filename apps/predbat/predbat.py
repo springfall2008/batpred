@@ -3366,7 +3366,7 @@ class Inverter:
         """
         Inverter control for Pause mode
         """
-    
+
         entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
@@ -3393,7 +3393,7 @@ class Inverter:
         if entity_end:
             old_end_time = self.base.get_state(entity_end)
             if old_end_time is not None:
-                entity_end = self.base.get_entity(entity_end)        
+                entity_end = self.base.get_entity(entity_end)
             else:
                 self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
                 entity_end = None
@@ -3401,7 +3401,7 @@ class Inverter:
         if not entity_mode or not self.inv_has_timed_pause:
             self.log("Note: Inverter {} does not have pause_mode entity configured".format(self.id))
             return
-        
+
         # Some inverters have start/end time registers
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
@@ -12762,7 +12762,9 @@ class PredBat(hass.Hass):
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
         self.manual_freeze_discharge_times = self.manual_times("manual_freeze_discharge")
         self.manual_idle_times = self.manual_times("manual_idle")
-        self.manual_all_times = self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times + self.manual_freeze_charge_times + self.manual_freeze_discharge_times
+        self.manual_all_times = (
+            self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times + self.manual_freeze_charge_times + self.manual_freeze_discharge_times
+        )
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
