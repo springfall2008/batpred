@@ -912,6 +912,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": True,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -936,6 +937,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": True,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": True,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -960,6 +962,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -984,6 +987,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "H M",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1008,6 +1012,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1032,6 +1037,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1056,6 +1062,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1080,6 +1087,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1104,6 +1112,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -2211,6 +2220,7 @@ class Inverter:
         self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
+        self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -3331,6 +3341,61 @@ class Inverter:
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
+
+    def adjust_pause_mode(self, pause_charge=False, pause_discharge=False):
+        """
+        Inverter control for Pause mode
+        """
+    
+        entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
+        entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
+        entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
+
+        if entity_mode:
+            entity_mode = self.base.get_entity(entity_mode)
+        if entity_start:
+            entity_start = self.base.get_entity(entity_start)
+        if entity_end:
+            entity_end = self.base.get_entity(entity_end)        
+
+        if not entity_mode or not self.inv_has_timed_pause:
+            self.log("Note: Inverter {} does not have pause_mode entity".format(self.id))
+            return
+
+        old_pause_mode = entity_mode.get_state()
+        if not old_pause_mode:
+            self.log("Warn: Inverter {} pause mode state is invalid".format(self.id))
+            return
+        
+        # Some inverters have start/end time registers
+        old_start_time = entity_start.get_state()
+        old_end_time = entity_end.get_state()
+        new_start_time = "00:00:00"
+        new_end_time = "23:59:00"
+
+        if pause_charge and pause_discharge:
+            new_pause_mode = "PauseBoth"
+        elif pause_charge:
+            new_pause_mode = "PauseCharge"
+        elif pause_discharge:
+            new_pause_mode = "PauseDischarge"
+        else:
+            new_pause_mode = "Disabled"
+
+        if old_start_time and old_start_time != new_start_time:
+            self.write_and_poll_value("pause_start_time", entity_start, new_start_time)
+            self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
+        if old_end_time and old_end_time != new_end_time:
+            self.write_and_poll_value("pause_end_time", entity_end, new_end_time)
+            self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
+
+        if new_pause_mode != old_pause_mode:
+            self.write_and_poll_option("inverter_mode", entity_mode, new_pause_mode)
+
+            if self.base.set_inverter_notify:
+                self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
+
+            self.base.log("Inverter {} set pause mode to {}".format(self.id, new_pause_mode))
 
     def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
         """
@@ -11251,6 +11316,7 @@ class PredBat(hass.Hass):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                     inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0, False)
+                    inverter.adjust_pause_mode()
                     self.isCharging = False
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
@@ -11364,6 +11430,7 @@ class PredBat(hass.Hass):
                             if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
+                            inverter.adjust_pause_mode(pause_discharge=True)
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
@@ -11377,8 +11444,10 @@ class PredBat(hass.Hass):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
+                                inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
+                                inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
@@ -11477,6 +11546,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            inverter.adjust_pause_mode(pause_charge=True)
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
@@ -11485,9 +11555,11 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            inverter.adjust_pause_mode(pause_charge=True)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
+                            isDischarging = True
                         else:
                             status = "Hold discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
@@ -11496,6 +11568,7 @@ class PredBat(hass.Hass):
                                     self.soc_kw, discharge_soc
                                 )
                             )
+                            inverter.adjust_pause_mode()
                         resetReserve = True
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_limits_best[0]:
@@ -11543,8 +11616,12 @@ class PredBat(hass.Hass):
                             break
 
             # Charging/Discharging off via service
-            if not isCharging and not isDischarging and self.set_charge_window:
+            if not isCharging and (not isDischarging or disabled_discharge) and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
+
+            # Pause charge off
+            if not isCharging and not isDischarging:
+                inverter.adjust_pause_mode()
 
             # Reset discharge rate?
             if resetDischarge:
@@ -11552,7 +11629,7 @@ class PredBat(hass.Hass):
 
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
-                if isDischarging and not self.set_reserve_enable:
+                if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
                     # If we are discharging and not setting reserve then we should reset the target SOC to 0%
                     # as some inverters can use this as a target for discharge
                     inverter.adjust_battery_target(self.discharge_limits_best[0], False)
