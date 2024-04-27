@@ -741,6 +741,26 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
+        "name": "manual_freeze_charge",
+        "friendly_name": "Manual force charge freeze",
+        "type": "select",
+        "options": [],
+        "icon": "mdi:state-machine",
+        "default": "",
+        "restore": False,
+        "manual": True,
+    },
+    {
+        "name": "manual_freeze_discharge",
+        "friendly_name": "Manual force discharge freeze",
+        "type": "select",
+        "options": [],
+        "icon": "mdi:state-machine",
+        "default": "",
+        "restore": False,
+        "manual": True,
+    },
+    {
         "name": "saverestore",
         "friendly_name": "Save/restore settings",
         "type": "select",
@@ -3346,7 +3366,7 @@ class Inverter:
         """
         Inverter control for Pause mode
         """
-
+    
         entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
@@ -3373,7 +3393,7 @@ class Inverter:
         if entity_end:
             old_end_time = self.base.get_state(entity_end)
             if old_end_time is not None:
-                entity_end = self.base.get_entity(entity_end)
+                entity_end = self.base.get_entity(entity_end)        
             else:
                 self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
                 entity_end = None
@@ -3381,7 +3401,7 @@ class Inverter:
         if not entity_mode or not self.inv_has_timed_pause:
             self.log("Note: Inverter {} does not have pause_mode entity configured".format(self.id))
             return
-
+        
         # Some inverters have start/end time registers
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
@@ -8069,7 +8089,10 @@ class PredBat(hass.Hass):
                     else:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
+
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
+                        state += " &#8526;"
+                    elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
 
@@ -8094,7 +8117,10 @@ class PredBat(hass.Hass):
                         state_color = "#FFFF00"
                     state += "Dis&searr;"
                     show_limit = str(int(limit))
+
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
+                    state += " &#8526;"
+                elif self.discharge_window_best[discharge_window_n]["start"] in self.manual_freeze_discharge_times:
                     state += " &#8526;"
 
             # Import and export rates -> to string
@@ -8783,6 +8809,8 @@ class PredBat(hass.Hass):
         self.inverter_needs_reset_force = ""
         self.manual_charge_times = []
         self.manual_discharge_times = []
+        self.manual_freeze_charge_times = []
+        self.manual_freeze_discharge_times = []
         self.manual_idle_times = []
         self.manual_all_times = []
         self.config_index = {}
@@ -10520,8 +10548,12 @@ class PredBat(hass.Hass):
                     self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_discharge_times:
                     self.charge_limit_best[window_n] = 0
+                elif self.charge_window_best[window_n]["start"] in self.manual_freeze_discharge_times:
+                    self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_charge_times:
                     self.charge_limit_best[window_n] = self.soc_max
+                elif self.charge_window_best[window_n]["start"] in self.manual_freeze_charge_times:
+                    self.charge_limit_best[window_n] = self.reserve
 
         if self.discharge_window_best and self.calculate_best_discharge:
             for window_n in range(len(self.discharge_window_best)):
@@ -10529,6 +10561,8 @@ class PredBat(hass.Hass):
                     self.discharge_limits_best[window_n] = 100
                 elif self.discharge_window_best[window_n]["start"] in self.manual_discharge_times:
                     self.discharge_limits_best[window_n] = 0
+                elif self.discharge_window_best[window_n]["start"] in self.manual_freeze_discharge_times:
+                    self.discharge_limits_best[window_n] = 99
 
     def optimise_charge_windows_reset(self, reset_all):
         """
@@ -12725,8 +12759,10 @@ class PredBat(hass.Hass):
         # Update list of slot times
         self.manual_charge_times = self.manual_times("manual_charge")
         self.manual_discharge_times = self.manual_times("manual_discharge")
+        self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
+        self.manual_freeze_discharge_times = self.manual_times("manual_freeze_discharge")
         self.manual_idle_times = self.manual_times("manual_idle")
-        self.manual_all_times = self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times
+        self.manual_all_times = self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times + self.manual_freeze_charge_times + self.manual_freeze_discharge_times
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
