@@ -9132,14 +9132,12 @@ class PredBat(hass.Hass):
             )
         return han
 
-    def optimise_charge_limit_swap(
-        self, charge_limit, charge_window, discharge_window, discharge_limits, record_charge_windows, end_record=None
-    ):
+    def optimise_charge_limit_swap(self, charge_limit, charge_window, discharge_window, discharge_limits, record_charge_windows, end_record=None):
         """
         Re-optimise charge limits by swapping to cheaper slots
         """
         charge_limit = copy.deepcopy(charge_limit)
-        
+
         (
             cost10,
             import_kwh_battery10,
@@ -9182,7 +9180,6 @@ class PredBat(hass.Hass):
         )
         metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
 
-
         best_soc = soc
         best_soc_min = soc_min
         best_soc_min_minute = soc_min_minute
@@ -9204,7 +9201,11 @@ class PredBat(hass.Hass):
                     price_swap = charge_window[window_swap]["average"]
                     limit_swap = charge_limit[window_swap]
                     if window_swap < record_charge_windows and price_swap <= price_n and limit_swap < limit_n:
-                        self.log("Attempt charge window swap window {} price {} limit {} -> window {} price {} limit {}".format(window_n, price_n, limit_n, window_swap, price_swap, limit_swap))
+                        self.log(
+                            "Attempt charge window swap window {} price {} limit {} -> window {} price {} limit {}".format(
+                                window_n, price_n, limit_n, window_swap, price_swap, limit_swap
+                            )
+                        )
                         try_limit = charge_limit.copy()
                         try_value = try_limit[window_swap]
                         try_limit[window_swap] = try_limit[window_n]
@@ -9250,7 +9251,9 @@ class PredBat(hass.Hass):
                             False,
                             end_record=self.end_record,
                         )
-                        metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
+                        metric, metric10 = self.compute_metric(
+                            end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10
+                        )
 
                         self.log("Swap optimisation with metric {}".format(metric))
                         if metric < best_metric:
@@ -9291,10 +9294,7 @@ class PredBat(hass.Hass):
 
         return self.dp4(metric), self.dp4(metric10)
 
-
-    def optimise_charge_limit(
-        self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None
-    ):
+    def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None):
         """
         Optimise a single charging window for best SOC
         """
@@ -10513,20 +10513,20 @@ class PredBat(hass.Hass):
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
-        #self.log("Swap optimisation started")
-        #self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep = self.optimise_charge_limit_swap(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record)
-        #self.log(
+        # self.log("Swap optimisation started")
+        # self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep = self.optimise_charge_limit_swap(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record)
+        # self.log(
         #    "Best after swap best_metric {} best_cost {} metric_keep {} end_record {}".format(
         #        self.dp2(best_metric),
         #        self.dp2(best_cost),
         #        self.dp2(best_keep),
         #        self.time_abs_str(self.end_record + self.minutes_now)
         #    )
-        #)
+        # )
         # Re-compute end record
-        #self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
-        #record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-        #record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
+        # self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+        # record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+        # record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
