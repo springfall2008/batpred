@@ -12,7 +12,7 @@ This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
 
-For support please raise a Github ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106) and 
+For support please raise a Github ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106) and
 watch my [YouTube Channel](https://www.youtube.com/channel/UCr3eWnHExUYFi4-8ZUGfNJQ)
 
 Some inverters have their own groups also e.g:
