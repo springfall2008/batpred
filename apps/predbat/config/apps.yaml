@@ -144,7 +144,7 @@ pred_bat:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
   pause_mode:
-   - select.givtcp_{geserial}_battery_pause_mode)
+   - re:(select.givtcp_{geserial}_battery_pause_mode)
    - re:(select.givtcp_{geserial2}_battery_pause_mode)
   pause_start_time:
    - re:(select.givtcp_{geserial}_battery_pause_start_time_slot)
