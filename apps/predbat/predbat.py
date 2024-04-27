@@ -3346,7 +3346,7 @@ class Inverter:
         """
         Inverter control for Pause mode
         """
-    
+
         entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
@@ -3373,7 +3373,7 @@ class Inverter:
         if entity_end:
             old_end_time = self.base.get_state(entity_end)
             if old_end_time is not None:
-                entity_end = self.base.get_entity(entity_end)        
+                entity_end = self.base.get_entity(entity_end)
             else:
                 self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
                 entity_end = None
@@ -3381,7 +3381,7 @@ class Inverter:
         if not entity_mode or not self.inv_has_timed_pause:
             self.log("Note: Inverter {} does not have pause_mode entity configured".format(self.id))
             return
-        
+
         # Some inverters have start/end time registers
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
