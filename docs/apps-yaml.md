@@ -271,7 +271,7 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
 interact with many different inverters.
 
-The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or 
+The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or
 if you have multiple inverters.
 
 The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode
