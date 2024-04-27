@@ -10513,20 +10513,20 @@ class PredBat(hass.Hass):
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
-        self.log("Swap optimisation started")
-        self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep = self.optimise_charge_limit_swap(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record)
-        self.log(
-            "Best after swap best_metric {} best_cost {} metric_keep {} end_record {}".format(
-                self.dp2(best_metric),
-                self.dp2(best_cost),
-                self.dp2(best_keep),
-                self.time_abs_str(self.end_record + self.minutes_now)
-            )
-        )
+        #self.log("Swap optimisation started")
+        #self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep = self.optimise_charge_limit_swap(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record)
+        #self.log(
+        #    "Best after swap best_metric {} best_cost {} metric_keep {} end_record {}".format(
+        #        self.dp2(best_metric),
+        #        self.dp2(best_cost),
+        #        self.dp2(best_keep),
+        #        self.time_abs_str(self.end_record + self.minutes_now)
+        #    )
+        #)
         # Re-compute end record
-        self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
-        record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-        record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
+        #self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+        #record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+        #record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
