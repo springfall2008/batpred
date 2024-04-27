@@ -9132,7 +9132,99 @@ class PredBat(hass.Hass):
             )
         return han
 
-    def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None):
+    def charge_limit_swaps(
+        self, charge_limit, charge_window, discharge_window, discharge_limits, end_record=None
+    ):
+        """
+        Re-optimise charge limits by swapping to cheaper slots
+        """
+        loop_soc = self.soc_max
+        best_soc = self.soc_max
+        best_soc_min = 0
+        best_soc_min_minute = 0
+        best_metric = 9999999
+        best_cost = 0
+        best_soc_step = self.best_soc_step
+        best_keep = 0
+        all_max_soc = self.soc_max
+        all_min_soc = 0
+        try_charge_limit = copy.deepcopy(charge_limit)
+        resultmid = {}
+        result10 = {}
+        
+        (
+            cost10,
+            import_kwh_battery10,
+            import_kwh_house10,
+            export_kwh10,
+            soc_min10,
+            soc10,
+            soc_min_minute10,
+            battery_cycle10,
+            metric_keep10,
+            final_iboost10,
+            final_carbon_g10,
+        ) = self.run_prediction(
+            try_charge_limit,
+            charge_window,
+            discharge_window,
+            discharge_limits,
+            True,
+            end_record=self.end_record,
+        )
+        (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        ) = self.run_prediction(
+            try_charge_limit,
+            charge_window,
+            discharge_window,
+            discharge_limits,
+            False,
+            end_record=self.end_record,
+        )
+        metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
+
+
+    def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10):
+        """
+        Compute the metric combing pv and pv10 data
+        """
+        # Store simulated mid value
+        metric = cost
+        metric10 = cost10
+
+        # Balancing payment to account for battery left over
+        # ie. how much extra battery is worth to us in future, assume it's the same as low rate
+        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
+        metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+
+        # Metric adjustment based on 10% outcome weighting
+        if metric10 > metric:
+            metric_diff = metric10 - metric
+            metric_diff *= self.pv_metric10_weight
+            metric += metric_diff
+
+        # Adjustment for battery cycles metric
+        metric += battery_cycle * self.metric_battery_cycle + metric_keep
+        metric10 += battery_cycle10 * self.metric_battery_cycle + metric_keep10
+
+        return self.dp4(metric), self.dp4(metric10)
+
+
+    def optimise_charge_limit(
+        self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None
+    ):
         """
         Optimise a single charging window for best SOC
         """
@@ -9323,7 +9415,7 @@ class PredBat(hass.Hass):
 
             # Simulate with medium PV
             (
-                metricmid,
+                cost,
                 import_kwh_battery,
                 import_kwh_house,
                 export_kwh,
@@ -9338,7 +9430,7 @@ class PredBat(hass.Hass):
                 max_soc,
             ) = resultmid[try_soc]
             (
-                metric10,
+                cost10,
                 import_kwh_battery,
                 import_kwh_house,
                 export_kwh,
@@ -9352,25 +9444,9 @@ class PredBat(hass.Hass):
                 min_soc,
                 max_soc,
             ) = result10[try_soc]
-            # Store simulated mid value
-            metric = metricmid
-            cost = metricmid
 
-            # Balancing payment to account for battery left over
-            # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-            metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-
-            # Metric adjustment based on 10% outcome weighting
-            if metric10 > metric:
-                metric_diff = metric10 - metric
-                metric_diff *= self.pv_metric10_weight
-                metric += metric_diff
-
-            # Adjustment for battery cycles metric
-            metric += battery_cycle * self.metric_battery_cycle + metric_keep
-            metric10 += battery_cycle10 * self.metric_battery_cycle + metric_keep10
+            # Compute the metric from simulation results
+            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target by forcing to keep the current % during a charge period
@@ -9391,7 +9467,6 @@ class PredBat(hass.Hass):
 
             # Round metric to 4 DP
             metric = self.dp4(metric)
-            metric10 = self.dp4(metric10)
 
             if self.debug_enable:
                 self.log(
@@ -9552,9 +9627,9 @@ class PredBat(hass.Hass):
             start, this_discharge_limit, hanres, hanres10 = try_option
 
             # Simulate with medium PV
-            metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
+            cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
             (
-                metric10,
+                cost10,
                 import_kwh_battery10,
                 import_kwh_house10,
                 export_kwh10,
@@ -9567,26 +9642,8 @@ class PredBat(hass.Hass):
                 final_carbon_g10,
             ) = hanres10
 
-            # Store simulated mid value
-            metric = metricmid
-            cost = metricmid
-
-            # Balancing payment to account for battery left over
-            # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-            rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-            metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-            metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-
-            # Metric adjustment based on 10% outcome weighting
-            if metric10 > metric:
-                metric_diff = metric10 - metric
-                metric_diff *= self.pv_metric10_weight
-                metric += metric_diff
-                metric = self.dp2(metric)
-
-            # Adjustment for battery cycles metric
-            metric += battery_cycle * self.metric_battery_cycle + metric_keep
-            metric10 += battery_cycle * self.metric_battery_cycle + metric_keep10
+            # Compute the metric from simulation results
+            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
 
             # Adjust to try to keep existing windows
             if window_n < 2 and this_discharge_limit <= 99.0 and self.discharge_window and self.isDischarging:
