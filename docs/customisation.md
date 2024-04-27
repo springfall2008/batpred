@@ -480,6 +480,12 @@ The **select.predbat_manual_idle** selector is used to force Predbat to idle mod
 House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
+The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a 30 minute slot, this implies the battery will not discharge and
+hold at the current level. The grid maybe used if solar is not enough to cover the load.
+
+The **select.predbat_manual_freeze_discharge** selector is used to force Predbat to freeze discharge during a 30 minute slot, this implies the battery will not charge but will
+still discharge for the house load. Any solar will be exported to the grid.
+
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).
 
