@@ -16,6 +16,8 @@ Batpred
 batteri
 batteryb
 bierner
+cexxxx
+ceyyyy
 chargedischarge
 Chrg
 citem
@@ -26,6 +28,8 @@ customisation
 Customise
 cvalue
 Daeamon
+darkgreen
+darkred
 darray
 datap
 datapoints
@@ -41,12 +45,15 @@ dstart
 dwindow
 Eddi
 elif
+emszzzz
 endt
+feedin
 firstparty
 Fingerbot
 futurerate
 gekey
 geserial
+geseriale
 Ginlong
 GivEnergy
 givtcp
@@ -103,6 +110,7 @@ pdetails
 perc
 ppdetails
 Pred
+Predai
 Predbat
 Predheat
 pwindow
@@ -111,6 +119,7 @@ pyproject
 pytz
 rarr
 Redownload
+remotecontrol
 resultmid
 rname
 rowspan
@@ -124,6 +133,7 @@ socs
 sofar
 SolarEdge
 Solax
+solaxmodbus
 Solcast
 solisx
 sourcery
@@ -132,6 +142,7 @@ springfall
 startt
 stdlib
 stepline
+sunsynk
 tasmota
 tdata
 tdiff

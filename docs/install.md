@@ -17,18 +17,23 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
-## Inverter Control Integration install (GivTCP/SolaX-ModBus)
+## Inverter Control Integration install
 
 You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
 
-| Brand     | Integration  | Github Link                                                                      |
-| :-------- | :----------- | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP       | [https://github.com/britkat1980/giv_tcp](https://github.com/britkat1980/giv_tcp) |
-| Solis     | SolaX ModBus | <https://github.com/wills106/homeassistant-solax-modbus>                         |
-| Sofar     | Sofar MQTT   | <https://github.com/cmcgerty/Sofar2mqtt> |
+| Brand     | Integration     | Github Link                                                                      |
+| :-------- | :-----------     | :------------------------------------------------------------------------------- |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp>    |
+| GivEnergy | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
+| GivEnergy EMS | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
+| Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
+| Solax Gen4| Solax Modbus     | <https://github.com/wills106/homeassistant-solax-modbus> |
+| Sofar     | Sofar MQTT       | <https://github.com/cmcgerty/Sofar2mqtt> |
+| Huawei    | Huawei Modbus    | <https://github.com/wlcrs/huawei_solar> |
+| SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
-At present Predbat supports Solis, Solax and Sofar inverters; please see [Other Inverters](other-inverters.md) for details on the install details.
+Please see [Other Inverters](other-inverters.md) for details on the install details.
 
 - Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
@@ -209,8 +214,12 @@ Predbat is configured in `apps.yaml` to automatically discover the Solcast forec
 Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-Note that Predbat does not automatically update Solcast for you so you will need to create your own Home Assistant automation that retrieves the solar forecast a few times a day
-(e.g. dawn, mid-day, dusk, and just before your nightly charge slot).
+**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging (bypassing the hybrid inverter).
+
+Note that Predbat does not update Solcast for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
+(e.g. dawn, dusk, and just before your nightly charge slot).
 
 Example Solcast update automation script:
 

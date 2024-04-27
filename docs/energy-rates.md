@@ -142,7 +142,7 @@ Configuring the Octopus rates URL is an expert feature and for most users the Oc
 
 ## Rate Bands to manually configure Energy Rates
 
-If you are not an Octopus Energy customer, or you are but your energy rates repeat in a simple manner, you can configure your rate bands in apps.yaml using rates_import/rates_export.
+If you are not an Octopus Energy customer, or you are but your energy rates repeat in a simple manner, you can configure your rate bands in apps.yaml using rates_import/rates_export/rates_gas.
 
 Add the following entries to apps.yaml to define the pattern of rates over a 24-hour period:
 
@@ -155,6 +155,10 @@ rates_export:
   - start: "HH:MM:SS"
     end: "HH:MM:SS"
     rate: pence
+rates_gas:
+  - start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 ```
 
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
@@ -163,6 +167,8 @@ rates_export:
 start and end can be omitted and Predbat will assume that you are on a single flat rate tariff.
 
 If there are any gaps in the 24-hour period then a zero rate will be assumed.
+
+If you don't use gas then you can not put this one in the configuration.
 
 ## Manually over-riding energy rates
 
@@ -265,3 +271,24 @@ futurerate_peak_end: "19:00:00"
 futurerate_peak_premium_import: 14
 futurerate_peak_premium_export: 6.5
 ```
+
+## Grid Carbon intensity
+
+Predbat can also track Carbon intensity by linking it to an integration which provides this data.
+
+### UK Grid Carbon intensity
+
+The National Grid provides this data, please install this integration: <https://github.com/jfparis/sensor.carbon_intensity_uk>
+
+Once it is active update apps.yaml to link Predbat to the Sensor (if its not already in your template):
+
+```yaml
+# Carbon Intensity data from National grid
+carbon_intensity: 're:(sensor.carbon_intensity_uk)'
+```
+
+Now you can enable **switch.predbat_carbon_enable** to view Carbon Intensity in your plan.
+
+In future releases Predbat will also be able to optimise for Carbon footprint.
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/292c6625-412a-420a-9bd4-df68a937e93c)

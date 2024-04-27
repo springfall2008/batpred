@@ -13,12 +13,10 @@ pred_bat:
 
   #
   # Sensors, currently more than one can be specified and they will be summed up automatically
-  # however if you have two inverters only set one of them as they will both read the same.
+  # however if you have two inverters only set one of them as they will both read the same.
   #
 
-  inverter_type: "GS"
-  solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
-
+  inverter_type: "SX4"
   num_inverters: 1
   #
   # Controls/status - must by 1 per inverter
@@ -26,85 +24,85 @@ pred_bat:
 
   # Max inverter power from battery
   battery_rate_max:
-    - 3600
+    - 5000
   # Battery capacity in kWh
   soc_max:
-    - 10
+    - 11.6
 
   # Solis specific parameters (these are based on https://github.com/wills106/homeassistant-solax-modbus)
 
   load_today:
-    - sensor.solis_house_load_today
+    - sensor.energy_house_load_today
   import_today:
-    - sensor.solis_grid_import_today
+    - sensor.solaxmodbus_today_s_import_energy
   export_today:
-    - sensor.solis_grid_export_today
+    - sensor.solaxmodbus_today_s_export_energy
   pv_today:
-    - sensor.solis_power_generation_today
+    - sensor.solaxmodbus_today_s_solar_energy
 
   battery_voltage:
-    - sensor.solis_battery_voltage
+    - sensor.solaxmodbus_battery_voltage_charge
 
   # This is disabled by default in the Solax integration so it must be manually enabled.
   inverter_time:
-    - sensor.solis_rtc
+    - sensor.date_time
 
   # This is disabled by default in the Solax integration so it must be manually enabled.
   battery_power:
-    - sensor.solis_battery_power
+    - sensor.solaxmodbus_battery_power_charge
   pv_power:
-    - sensor.solis_pv_total_power
+    - sensor.solaxmodbus_pv_power_total
 
   # For Solis inverters we need to add the bypass (backup) load to the main house load. If not used the load_power_1 can be commented out
   load_power:
-    - sensor.solis_house_load
-  load_power_1:
-    - sensor.solis_bypass_load
+    - sensor.solaxmodbus_house_load
+  #load_power_1:
+  #  - sensor.solis_bypass_load
 
   soc_percent:
-    - sensor.solis_battery_soc
+    - sensor.solaxmodbus_battery_capacity
 
   reserve:
-    - number.solis_backup_mode_soc
+    - number.solaxmodbus_backup_discharge_min_soc
 
   battery_min_soc:
-    - sensor.solis_battery_minimum_soc
+    - sensor.solaxmodbus_feedin_discharge_min_soc
 
   # With the Solax integration we need to press a button to send the time to
   charge_discharge_update_button:
     - button.solis_update_charge_discharge_times
 
-  timed_charge_current:
-    - number.solis_timed_charge_current
-  charge_start_hour:
-    - number.solis_timed_charge_start_hours
-  charge_start_minute:
-    - number.solis_timed_charge_start_minutes
-  charge_end_hour:
-    - number.solis_timed_charge_end_hours
-  charge_end_minute:
-    - number.solis_timed_charge_end_minutes
+  #timed_charge_current:
+  #  - number.solis_timed_charge_current
+  #charge_start_hour:
+  #  - number.solis_timed_charge_start_hours
+  #charge_start_minute:
+  #  - number.solis_timed_charge_start_minutes
+  #charge_end_hour:
+  #  - number.solis_timed_charge_end_hours
+  #charge_end_minute:
+  #  - number.solis_timed_charge_end_minutes
 
 
-  timed_discharge_current:
-    - number.solis_timed_discharge_current
+  #timed_discharge_current:
+  #  - number.solis_timed_discharge_current
 
-  discharge_start_hour:
-    - number.solis_timed_discharge_start_hours
-  discharge_start_minute:
-    - number.solis_timed_discharge_start_minutes
-  discharge_end_hour:
-    - number.solis_timed_discharge_end_hours
-  discharge_end_minute:
-    - number.solis_timed_discharge_end_minutes
+  #discharge_start_hour:
+   # - number.solis_timed_discharge_start_hours
+  #discharge_start_minute:
+  #  - number.solis_timed_discharge_start_minutes
+  #discharge_end_hour:
+  #  - number.solis_timed_discharge_end_hours
+  #discharge_end_minute:
+  #  - number.solis_timed_discharge_end_minutes
 
 
   energy_control_switch:
-    - select.solis_energy_storage_control_switch
+    - select.solaxmodbus_remotecontrol_power_control
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
-  inverter_limit: 3600
+  inverter_limit: 5000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -123,8 +121,8 @@ pred_bat:
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
-  inverter_battery_rate_min:
-   - 100
+  #inverter_battery_rate_min:
+  #  - 100
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -298,7 +296,7 @@ pred_bat:
   # recommend something that divides by 60 (5, 10 or 15) or you won't trigger at the start of energy price slots
   run_every: 5
 
-  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling: 1.0
 
@@ -306,7 +304,7 @@ pred_bat:
   import_export_scaling: 1.0
 
   # Export triggers:
-  # For each trigger give a name, the minutes of export needed and the energy required in that time
+  # For each trigger give a name, the minutes of export needed and the energy required in that time
   # Multiple triggers can be set at once so in total you could use too much energy if all run
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger

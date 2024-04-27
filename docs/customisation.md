@@ -208,6 +208,9 @@ to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** 
 - **switch.predbat_car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
 when disabled (False) all low rate slots will be used in time order.
 
+- **input_number.predbat_car_charging_plan_max_price** - When non-zero sets a maximum price per kWh to pay when charging your car,
+when disabled (0) all slots will be considered.
+
 **switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
 which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
 you must have set the **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
@@ -280,7 +283,10 @@ If you set this to a non-zero value you will need to use the low rate threshold 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
 
-**switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
+**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or discharge slots together into a single larger average rate slot.
+The default is 0p which disables this feature and all rate changes result in a new slot.
+
+**switch.predbat_combine_charge_slots** Controls if charge slots of > 60 minutes can be combined. When disabled they will be split up,
 increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
 a saving session). The default is enable (True)
@@ -296,7 +302,7 @@ You could even go to something like -0.1 to say you would charge less even if it
 
 **input_number.predbat_metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
 A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
-then discharges will become less common and shorter.
+then discharges will become less common and shorter. The value is in pence per 30 minutes of export time.
 
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
@@ -387,7 +393,19 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 - **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
 - **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
 
-## iBoost model (solar diverter) options
+## Cloud coverage and load variance
+
+Predbat tries to model passing clouds by modulating the PV forecast data on a 5 minute interval up and down while retaining the same predicted total.
+The amount of modulation depends on the difference between the PV50% (default) and PV10% scenario produced by Solcast.
+
+You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**
+
+Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same
+predicted total. The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
+
+You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**
+
+## iBoost model options
 
 Predbat has an 'iBoost model' that can be used to model using excess solar energy to heat hot water (or similar) instead of it being exported to the grid.
 
@@ -499,6 +517,12 @@ The force discharge takes priority over force charging.
 The **select.predbat_manual_idle** selector is used to force Predbat to idle mode during a 30 minute slot, this implies no forced grid charging or discharging of the battery.
 House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
+
+The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a 30 minute slot, this implies the battery will not discharge and
+hold at the current level. The grid maybe used if solar is not enough to cover the load.
+
+The **select.predbat_manual_freeze_discharge** selector is used to force Predbat to freeze discharge during a 30 minute slot, this implies the battery will not charge but will
+still discharge for the house load. Any solar will be exported to the grid.
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).

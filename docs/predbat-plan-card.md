@@ -183,3 +183,4 @@ to tailor how the Predbat plan looks:
 - Apply custom light/dark themes
 
 See the [Predbat Table Card repository](https://github.com/pacemaker82/PredBat-Table-Card) for more details.
+

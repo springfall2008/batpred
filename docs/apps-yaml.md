@@ -43,16 +43,9 @@ The two spaces before the dash are especially critical. Its easy to mis-edit and
 
 ## Templates
 
-You can find template configurations in the following locations:
+You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
 
-| Template | Link |
-| ---------- | ----------------------------------------- |
-| GivEnergy | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/apps/predbat/config/apps.yaml) |
-| SolisX | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
-| SolarEdge | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
-| Huawei | [apps.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
-
-The GivEnergy template will be installed by default but if you are using another inverter please copy the correct template into the directory
+The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
 where your `apps.yaml` is stored, and modify it from there.
 
 Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
@@ -61,24 +54,67 @@ Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
 
 Basic configuration items
 
-- **prefix** - Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
+### prefix
 
-- **timezone** - Set to your local timezone, default is Europe/London. It must be set to a
+Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
+
+```yaml
+  prefix: predbat
+```
+
+### timezone
+
+Set to your local timezone, default is Europe/London. It must be set to a
 [valid Python time zone for your location](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
 
-- **template** - Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
+```yaml
+  timezone: Europe/London
+```
+
+### currency_symbols
+
+Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
+
+```yaml
+ currency_symbols:
+   - '£'
+   - 'p'
+```
+
+### template
+
+Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
 Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
 
-- **threads** - If defined sets the number of CPU threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
+```yaml
+#  template: True
+```
+
+### threads
+
+If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
 you have CPUs in your system.
 Valid values are:
     - 'auto' - Use the same number of threads as your CPU count
     - '0' - Don't use threads - disabled
     - 'N' - Use N threads, recommended values are between 2 and 8
 
-- **notify_devices** - A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
+```yaml
+  threads: auto
+```
 
-- **days_previous** - Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
+### notify_devices
+
+A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
+
+```yaml
+  notify_devices:
+    - mobile_app_treforsiphone12_2
+```
+
+### days_previous
+
+Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
 days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
 It's recommended that you set days_previous so Predbat calculates an average house load using sufficient days' history so that 'unusual' load activity
 (e.g. saving sessions, "big washing day", etc) get averaged out.
@@ -108,7 +144,7 @@ kept in HA before it is purged by editing and adding the following to the `/home
     purge_keep_days: 14
 ```
 
-- **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
+**days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
 
 For example, to apply a 100% weighting for the first day entry in days_previous, but only a 50% weighting to the second day in days_previous:
 
@@ -125,8 +161,14 @@ The default value is 1, that all history days are equally weighted, so if you do
     - 1
 ```
 
-- **forecast_hours** - the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
+### forecast_hours
+
+the number of hours that Predbat will forecast ahead, 48 is the suggested amount, although other values can be used
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
+
+```yaml
+  forecast_hours: 48
+```
 
 ## Inverter information
 
@@ -134,9 +176,23 @@ The template `apps.yaml` comes pre-configured with regular expressions that shou
 If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
 For other inverter brands, see [Other Inverters](other-inverters.md)
 
-- **num_inverters** - The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
+### num_inverters
 
-- **geserial** - This is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
+
+```yaml
+  num_inverters: 1
+```
+
+### geserial
+
+Only for GE inverters, this is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
+
+```yaml
+  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+```
 
 ## Historical data
 
@@ -240,35 +296,43 @@ This may improve reliability of the REST connection as it doesn't need to lookup
 
 ### Home Assistant GivTCP inverter control
 
-As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
-
-The template `apps.yaml` is pre-configured with regular expressions for the following configuration items
+Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
+interact with many different inverters.
+           
+The template `apps.yaml` for Giv Energy is pre-configured with regular expressions for the following configuration items
 that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
-If you only have a single inverter then the givtcp2 lines can be commented out.
 
-If Predbat is to use the direct GivTCP Home Assistant controls as the preferred control method, the **givtcp_rest** line should be commented out/deleted.
+If you only have a single inverter then the givtcp2 lines can be commented out if so desired.
 
-- **charge_rate** - GivTCP battery charge rate entity in watts
-- **discharge_rate** - GivTCP battery discharge max rate entity in watts
-- **battery_power** - GivTCP current battery power in watts
-- **pv_power** - GivTCP current PV power in watts
-- **load_power** - GivTCP current load power in watts
-- **soc_kw** - GivTCP Entity name of the battery SoC in kWh, should be the inverter one not an individual battery
-- **soc_max** - GivTCP Entity name for the maximum charge level for the battery
-- **reserve** - GivTCP sensor name for the reserve setting in %
-- **inverter_mode** - GivTCP inverter mode control
-- **inverter_time** - GivTCP inverter timestamp
-- **charge_start_time** - GivTCP battery charge start time entity
-- **charge_end_time** - GivTCP battery charge end time entity
-- **charge_limit** - GivTCP Entity name for used to set the SoC target for the battery in percentage
-- **scheduled_charge_enable** - GivTCP Scheduled charge enable config
-- **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
-- **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
-- **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
+The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or
+if you have multiple inverters.
 
-If you are using REST control the above GivTCP configuration items can be deleted or commented out of `apps.yaml`
-(but see section below on [creating the battery charge & discharge power curves](#workarounds)).
-You can however choose to leave these lines in `apps.yaml` when using REST as this gives Predbat the option to fall-back to the GivTCP Home Assistant controls if there is a REST failure.
+The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode.
+
+- **charge_rate** - Battery charge rate entity in watts
+- **discharge_rate** - Battery discharge max rate entity in watts
+- **battery_power** - Current battery power in watts
+- **pv_power** - Current PV power in watts
+- **load_power** - Current load power in watts
+- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+- **soc_max** - Entity name for the maximum charge level for the battery
+- **reserve** - sensor name for the reserve setting in %
+- **inverter_mode** - Givenergy inverter mode control
+- **pause_mode** - Givenergy pause mode register (if present)
+- **inverter_time** - Inverter timestamp
+- **charge_start_time** - Battery charge start time entity
+- **charge_end_time** - Battery charge end time entity
+- **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
+- **scheduled_charge_enable** - Scheduled charge enable config
+- **scheduled_discharge_enable** - Scheduled discharge enable config
+- **discharge_start_time** - scheduled discharge slot_1 start time
+- **discharge_end_time** - scheduled discharge slot_1 end time
+- **pause_start_time** - scheduled pause start time (only if supported by your inverter)
+- **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+
+If you are using REST control the configuration items should still be kept as not all controls work with REST.
+  
+See section below on [creating the battery charge power curve](#workarounds).
 
 ## Solcast Solar Forecast
 
@@ -321,12 +385,14 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **metric_standing_charge** - Standing charge in pounds
 - **rates_import** - Import rates over a 24-hour period with start and end times
 - **rates_export** - Export rates over a 24-hour period with start and end times
+- **rates_gas** - Gas rates over a 24-hour period with start and end times
 - **rates_import_override** - Over-ride import rate for specific date and time range, e.g. Octopus Power-up events
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - price premium to be added during the peak period
+- **carbon_intensity** - Carbon intensity of the grid in half hour slots from an integration.
 
 ## Car Charging Integration
 
@@ -432,14 +498,20 @@ SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for
 ## Load Forecast
 
 In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load
-such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat):
+such as is produced by [Predheat for Hot water and Heat Pump heating systems](https://github.com/springfall2008/predheat) or via [Predai](https://github.com/springfall2008/predai)
 
-- **load_forecast** - this should be configured to point to a sensor and attribute that is in the format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+- **load_forecast** - this should be configured to point to a sensor and attribute. The attribute must in either
+    - The format of 'last_updated' timestamp and 'energy' in incrementing kWh.
+    - The format of a dictionary of timestamps and energy data in incremental KWh.
 
 For example:<BR>
 ![IMAGE](images/load_forecast.png)
 
-`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above format) like this:
+Or
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/5ac60be6-7a96-4caf-b53c-f097674e347f)
+
+`apps.yaml` should be configured to point to the forecast sensor and attribute (in the above formats) like this:
 
 ```yaml
 load_forecast:
@@ -451,6 +523,14 @@ So if using Predheat it would be configured as:
 ```yaml
 load_forecast:
   - predheat.heat_energy$external
+```
+
+Set **load_forecast_only** to True if you do not wish to use the Predbat forecast but instead want to use this as your only forecast data e.g using PredAi:
+
+```yaml
+  load_forecast_only: True
+  load_forecast:
+     - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
 ## Balance Inverters
@@ -548,7 +628,7 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
   inverter_reserve_max: percent
 ```
 
-Global, sets the maximum battery reserve % that the inverter can be set to, the default is 98 as some Gen 2 inverters and
+Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set to 100 if your inverter allows setting to 100%.
 
 ## Automatic restarts
