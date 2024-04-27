@@ -144,6 +144,20 @@ pred_bat:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
 
+  # Pause mode is not supported by all firmware's and will be ignored if not present
+  pause_mode:
+   - select.givtcp_{geserial}_battery_pause_mode
+   - select.givtcp_{geserial2}_battery_pause_mode
+
+  # Not all firmwares support pause start/end time, delete these if not supported
+  # to avoid spurious writes/warnings
+  pause_start_time:
+   - select.givtcp_{geserial}_battery_pause_start_time_slot
+   - select.givtcp2_{geserial2}_battery_pause_start_time_slot
+  pause_end_time:
+   - select.givtcp_{geserial}_battery_pause_end_time_slot
+   - select.givtcp2_{geserial2}_battery_pause_end_time_slot
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:

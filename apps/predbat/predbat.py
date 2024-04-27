@@ -741,6 +741,26 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
+        "name": "manual_freeze_charge",
+        "friendly_name": "Manual force charge freeze",
+        "type": "select",
+        "options": [],
+        "icon": "mdi:state-machine",
+        "default": "",
+        "restore": False,
+        "manual": True,
+    },
+    {
+        "name": "manual_freeze_discharge",
+        "friendly_name": "Manual force discharge freeze",
+        "type": "select",
+        "options": [],
+        "icon": "mdi:state-machine",
+        "default": "",
+        "restore": False,
+        "manual": True,
+    },
+    {
         "name": "saverestore",
         "friendly_name": "Save/restore settings",
         "type": "select",
@@ -912,6 +932,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": True,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -936,6 +957,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": True,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": True,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -960,6 +982,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": True,
+        "has_timed_pause": False,
         "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "kWh",
@@ -984,6 +1007,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "H M",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1008,6 +1032,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1032,6 +1057,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1056,6 +1082,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1080,6 +1107,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": False,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -1104,6 +1132,7 @@ INVERTER_DEF = {
         "has_discharge_enable_time": False,
         "has_target_soc": True,
         "has_reserve_soc": False,
+        "has_timed_pause": False,
         "charge_time_format": "S",
         "charge_time_entity_is_option": False,
         "soc_units": "%",
@@ -2211,6 +2240,7 @@ class Inverter:
         self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
+        self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -3331,6 +3361,77 @@ class Inverter:
         self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
         self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
+
+    def adjust_pause_mode(self, pause_charge=False, pause_discharge=False):
+        """
+        Inverter control for Pause mode
+        """
+
+        entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
+        entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
+        entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
+        old_pause_mode = None
+        old_start_time = None
+        old_end_time = None
+
+        # As not all inverters have these options we need to gracefully give up if its missing
+        if entity_mode:
+            old_pause_mode = self.base.get_state(entity_mode)
+            if old_pause_mode is not None:
+                entity_mode = self.base.get_entity(entity_mode)
+            else:
+                entity_mode = None
+
+        if entity_start:
+            old_start_time = self.base.get_state(entity_start)
+            if old_start_time is not None:
+                entity_start = self.base.get_entity(entity_start)
+            else:
+                entity_start = None
+                self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
+
+        if entity_end:
+            old_end_time = self.base.get_state(entity_end)
+            if old_end_time is not None:
+                entity_end = self.base.get_entity(entity_end)
+            else:
+                self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
+                entity_end = None
+
+        if not entity_mode or not self.inv_has_timed_pause:
+            self.log("Note: Inverter {} does not have pause_mode entity configured".format(self.id))
+            return
+
+        # Some inverters have start/end time registers
+        new_start_time = "00:00:00"
+        new_end_time = "23:59:00"
+
+        if pause_charge and pause_discharge:
+            new_pause_mode = "PauseBoth"
+        elif pause_charge:
+            new_pause_mode = "PauseCharge"
+        elif pause_discharge:
+            new_pause_mode = "PauseDischarge"
+        else:
+            new_pause_mode = "Disabled"
+
+        if old_start_time and old_start_time != new_start_time:
+            # Don't poll as inverters with no registers will fail
+            entity_start.set_state(state=new_start_time)
+            self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
+        if old_end_time and old_end_time != new_end_time:
+            # Don't poll as inverters with no registers will fail
+            entity_end.set_state(state=new_end_time)
+            self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
+
+        # Set the mode
+        if new_pause_mode != old_pause_mode:
+            self.write_and_poll_option("inverter_mode", entity_mode, new_pause_mode)
+
+            if self.base.set_inverter_notify:
+                self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
+
+            self.base.log("Inverter {} set pause mode to {}".format(self.id, new_pause_mode))
 
     def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
         """
@@ -7988,7 +8089,10 @@ class PredBat(hass.Hass):
                     else:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
+
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
+                        state += " &#8526;"
+                    elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
 
@@ -8013,7 +8117,10 @@ class PredBat(hass.Hass):
                         state_color = "#FFFF00"
                     state += "Dis&searr;"
                     show_limit = str(int(limit))
+
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
+                    state += " &#8526;"
+                elif self.discharge_window_best[discharge_window_n]["start"] in self.manual_freeze_discharge_times:
                     state += " &#8526;"
 
             # Import and export rates -> to string
@@ -8702,6 +8809,8 @@ class PredBat(hass.Hass):
         self.inverter_needs_reset_force = ""
         self.manual_charge_times = []
         self.manual_discharge_times = []
+        self.manual_freeze_charge_times = []
+        self.manual_freeze_discharge_times = []
         self.manual_idle_times = []
         self.manual_all_times = []
         self.config_index = {}
@@ -10439,8 +10548,12 @@ class PredBat(hass.Hass):
                     self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_discharge_times:
                     self.charge_limit_best[window_n] = 0
+                elif self.charge_window_best[window_n]["start"] in self.manual_freeze_discharge_times:
+                    self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_charge_times:
                     self.charge_limit_best[window_n] = self.soc_max
+                elif self.charge_window_best[window_n]["start"] in self.manual_freeze_charge_times:
+                    self.charge_limit_best[window_n] = self.reserve
 
         if self.discharge_window_best and self.calculate_best_discharge:
             for window_n in range(len(self.discharge_window_best)):
@@ -10448,6 +10561,8 @@ class PredBat(hass.Hass):
                     self.discharge_limits_best[window_n] = 100
                 elif self.discharge_window_best[window_n]["start"] in self.manual_discharge_times:
                     self.discharge_limits_best[window_n] = 0
+                elif self.discharge_window_best[window_n]["start"] in self.manual_freeze_discharge_times:
+                    self.discharge_limits_best[window_n] = 99
 
     def optimise_charge_windows_reset(self, reset_all):
         """
@@ -11251,6 +11366,7 @@ class PredBat(hass.Hass):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                     inverter.disable_charge_window()
                     inverter.adjust_battery_target(100.0, False)
+                    inverter.adjust_pause_mode()
                     self.isCharging = False
                 if self.set_charge_window or self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_reserve(0)
@@ -11364,6 +11480,7 @@ class PredBat(hass.Hass):
                             if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
+                            inverter.adjust_pause_mode(pause_discharge=True)
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
@@ -11377,8 +11494,10 @@ class PredBat(hass.Hass):
                                 status = "Hold charging"
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
+                                inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
+                                inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
@@ -11477,6 +11596,7 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            inverter.adjust_pause_mode(pause_charge=True)
                         # Immediate discharge mode
                         inverter.adjust_discharge_immediate(self.discharge_limits_best[0])
                     else:
@@ -11485,9 +11605,11 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            inverter.adjust_pause_mode(pause_charge=True)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
+                            isDischarging = True
                         else:
                             status = "Hold discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
@@ -11496,6 +11618,7 @@ class PredBat(hass.Hass):
                                     self.soc_kw, discharge_soc
                                 )
                             )
+                            inverter.adjust_pause_mode()
                         resetReserve = True
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_limits_best[0]:
@@ -11543,8 +11666,12 @@ class PredBat(hass.Hass):
                             break
 
             # Charging/Discharging off via service
-            if not isCharging and not isDischarging and self.set_charge_window:
+            if not isCharging and (not isDischarging or disabled_discharge) and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
+
+            # Pause charge off
+            if not isCharging and not isDischarging:
+                inverter.adjust_pause_mode()
 
             # Reset discharge rate?
             if resetDischarge:
@@ -11552,7 +11679,7 @@ class PredBat(hass.Hass):
 
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
-                if isDischarging and not self.set_reserve_enable:
+                if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
                     # If we are discharging and not setting reserve then we should reset the target SOC to 0%
                     # as some inverters can use this as a target for discharge
                     inverter.adjust_battery_target(self.discharge_limits_best[0], False)
@@ -12632,8 +12759,12 @@ class PredBat(hass.Hass):
         # Update list of slot times
         self.manual_charge_times = self.manual_times("manual_charge")
         self.manual_discharge_times = self.manual_times("manual_discharge")
+        self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
+        self.manual_freeze_discharge_times = self.manual_times("manual_freeze_discharge")
         self.manual_idle_times = self.manual_times("manual_idle")
-        self.manual_all_times = self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times
+        self.manual_all_times = (
+            self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times + self.manual_freeze_charge_times + self.manual_freeze_discharge_times
+        )
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 

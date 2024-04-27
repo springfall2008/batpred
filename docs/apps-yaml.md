@@ -268,31 +268,36 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 
 ### Home Assistant inverter control
 
-As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
-The template `apps.yaml` is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
-but may need changing if you have multiple inverters or non-standard GivTCP entity names.
+Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
+interact with many different inverters.
 
-The **givtcp_rest** line should be commented out/deleted in order for Predbat to use the direct GivTCP Home Assistant controls.
+The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or
+if you have multiple inverters.
 
-- **charge_rate** - GivTCP battery charge rate entity in watts
-- **discharge_rate** - GivTCP battery discharge max rate entity in watts
-- **battery_power** - GivTCP current battery power in watts
-- **pv_power** - GivTCP current PV power in watts
-- **load_power** - GivTCP current load power in watts
-- **soc_kw** - GivTCP Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
-- **soc_max** - GivTCP Entity name for the maximum charge level for the battery
-- **reserve** - GivTCP sensor name for the reserve setting in %
-- **inverter_mode** - GivTCP inverter mode control
-- **inverter_time** - GivTCP inverter timestamp
-- **charge_start_time** - GivTCP battery charge start time entity
-- **charge_end_time** - GivTCP battery charge end time entity
-- **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
-- **scheduled_charge_enable** - GivTCP Scheduled charge enable config
-- **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
-- **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
-- **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
+The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode
 
-If you are using REST control the above GivTCP configuration items can be deleted or commented out of `apps.yaml`
+- **charge_rate** - Battery charge rate entity in watts
+- **discharge_rate** - Battery discharge max rate entity in watts
+- **battery_power** - Current battery power in watts
+- **pv_power** - Current PV power in watts
+- **load_power** - Current load power in watts
+- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+- **soc_max** - Entity name for the maximum charge level for the battery
+- **reserve** - sensor name for the reserve setting in %
+- **inverter_mode** - Givenergy inverter mode control
+- **pause_mode** - Givenergy pause mode register (if present)
+- **inverter_time** - Inverter timestamp
+- **charge_start_time** - Battery charge start time entity
+- **charge_end_time** - Battery charge end time entity
+- **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
+- **scheduled_charge_enable** - Scheduled charge enable config
+- **scheduled_discharge_enable** - Scheduled discharge enable config
+- **discharge_start_time** - scheduled discharge slot_1 start time
+- **discharge_end_time** - scheduled discharge slot_1 end time
+- **pause_start_time** - scheduled pause start time (only if supported by your inverter)
+- **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+
+If you are using REST control the configuration items should be kept as not all controls work with REST
 (but see section below on [creating the battery charge power curve](#workarounds)).
 
 ## Solcast Solar Forecast
