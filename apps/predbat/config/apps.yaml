@@ -143,7 +143,7 @@ pred_bat:
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
     - select.givtcp2_{geserial2}_discharge_end_time_slot_1
-  
+
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
    - select.givtcp_{geserial}_battery_pause_mode
