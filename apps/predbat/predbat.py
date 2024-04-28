@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.5"
+THIS_VERSION = "v7.17.6"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -2269,7 +2269,7 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-
+        
         # Timed pause support?
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
@@ -2283,7 +2283,7 @@ class Inverter:
             else:
                 self.inv_has_timed_pause = False
                 self.log("Inverter {} does not have timed pause support enabled".format(self.id))
-
+        
         # Battery size, charge and discharge rates
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
@@ -12631,6 +12631,9 @@ class PredBat(hass.Hass):
         """
         item = self.config_index.get(config_item)
         if not item:
+            return
+        if not value:
+            # Ignore null selections
             return
         values = item.get("value", "")
         if not values:
