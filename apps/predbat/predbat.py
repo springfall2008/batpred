@@ -2269,7 +2269,7 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-        
+
         # Timed pause support?
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
@@ -2283,7 +2283,7 @@ class Inverter:
             else:
                 self.inv_has_timed_pause = False
                 self.log("Inverter {} does not have timed pause support enabled".format(self.id))
-        
+
         # Battery size, charge and discharge rates
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
@@ -2591,9 +2591,13 @@ class Inverter:
                             # Find a period where charging was at full rate and the SOC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
+                                if not discharge and (
+                                    predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0
+                                ):
                                     break
-                                if discharge and (predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
+                                if discharge and (
+                                    predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0
+                                ):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
