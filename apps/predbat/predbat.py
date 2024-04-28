@@ -2269,7 +2269,7 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-        
+
         # Timed pause support?
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
@@ -2283,7 +2283,7 @@ class Inverter:
             else:
                 self.inv_has_timed_pause = False
                 self.log("Inverter {} does not have timed pause support enabled".format(self.id))
-        
+
         # Battery size, charge and discharge rates
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
