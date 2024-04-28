@@ -49,8 +49,9 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Have a read of the [energy rates configuration guide](energy-rates.md) as depending on your tariff different settings maybe required
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
 - Make sure your inverter max AC rate has been set correctly
-- If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable
-- Do you have a solar diverter? If so maybe you want to try using the iBoost model settings.
+- If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable - see
+[Car charging planning](car-charge-planning.md)
+- Do you have a solar diverter? If so maybe you want to try using the [iBoost model settings](customisation.md#iboost-model-solar-diverter-options).
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
@@ -84,7 +85,7 @@ and [Battery Margins](customisation.md#battery-margins-and-metrics-options) as t
 Predbat's default configuration values are the recommended starting values for most users but there is no single right set of configuration values for every user of Predbat,
 it depends on many factors and your personal preferences. Many users will need to customise and tweak their [Predbat configuration](customisation.md) to suit their needs.
 
-The SOC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
+The SoC level that Predbat aims to keep in the battery **input_number.predbat_best_soc_keep**
 and the absolute minimum SoC level **input_number.predbat_best_soc_min** are the first thing to check.
 If these are set too high then Predbat will charge at unfavourable rates to maintain the battery SoC.
 Conversely if you find Predbat is letting the battery exhaust too early, set predbat_best_soc_keep to 1.0 so Predbat will aim to keep 1kWh available for unexpected load.
@@ -151,17 +152,20 @@ delete all the old Octopus sensors, and [re-install the Octopus Integration](ins
 
 ## WARN: No solar data has been configured
 
-If you get this warning message in the Predbat log file:
+If you get this warning message in the Predbat log file or you see that the 'PV kWh' column in the [Predbat plan card](predbat-plan-card.md) is completely blank:
 
 - Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )
+- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log)
 - Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
 and checking that you can see the half-hourly solar forecasts in the Solcast entities
 - If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities
+- If the solcast entities are still not populated, try reloading the Solcast integration (go to System / Devices & Services / Integrations tab, click on 'Solcast PV Forecast',
+click the three vertical dots beside 'Configure' and choose 'Reload' from the dropdown menu)
 - Check **sensor.solcast_pv_api_limit** (it's normally 10 for new Solcast accounts) meaning you can call the Solcast API 10 times a day
-(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.
+(but if you have two solar arrays, e.g. East/West) then retrieving the forecast will count as two API calls.<BR>
 Compare this to **sensor.solcast_pv_api_used** to see how many Solcast API calls you have made today
-(alternatively, you can confirm how many API calls you have made today by logging into your solcast account).
+(alternatively, you can confirm how many API calls you have made today by logging into your Solcast account).<BR>
 If you've run out of API calls you will have to wait until midnight GMT for the API count to reset.
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
@@ -189,7 +193,7 @@ but have not uncommented the following entities in apps.yaml that Predbat needs 
 ## WARN: Inverter is in calibration mode
 
 If you see the message "WARN: Inverter is in calibration mode, Predbat will not function correctly and will be disabled" in the logfile,
-then Predbat has identified that your inverter is currently calibrating your battery.
+then Predbat has identified that your inverter is currently calibrating your battery. Predbat's status will also be set to 'Calibration'.
 
 Predbat will set the inverter charge and discharge rates to maximum (if they are not already), SoC target to 100% and battery reserve to minimum (usually 4%),
 and will not execute the plan nor enable battery charge or discharge.

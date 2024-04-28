@@ -43,10 +43,12 @@ dlimit
 dstamp
 dstart
 dwindow
+Eddi
 elif
 emszzzz
 endt
 feedin
+Fingerbot
 firstparty
 futurerate
 gekey
@@ -140,6 +142,7 @@ springfall
 startt
 stdlib
 stepline
+sunsynk
 tasmota
 tdata
 tdiff

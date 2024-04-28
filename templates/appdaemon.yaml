@@ -14,7 +14,9 @@ http:
 admin:
 api:
 hadashboard:
+# write log records to a file, retaining 9 versions, rather than the standard appdaemon log
 logs:
   main_log:
     filename: /homeassistant/appdaemon/appdaemon.log
+    log_generations: 9
     log_size: 10000000

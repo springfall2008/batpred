@@ -9,6 +9,12 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
+  soc_max:
+   - 28.8
+
+  battery_rate_max:
+   - 8000
+
   # Timezone to work in
   timezone: Europe/London
 
@@ -24,12 +30,6 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
-  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work or if you have more than one inverter you will need to list both
-  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
-
-  # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
   load_filter_threshold: 30
 
@@ -42,13 +42,13 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.givtcp_{geserial}_load_energy_today_kwh
+    - sensor.total_house_load_today
   import_today:
-    - sensor.givtcp_{geserial}_import_energy_today_kwh
+    - sensor.grid_import_daily
   export_today:
-    - sensor.givtcp_{geserial}_export_energy_today_kwh
+    - sensor.grid_export_daily
   pv_today:
-    - sensor.givtcp_{geserial}_pv_energy_today_kwh
+    - sensor.total_solar_output_today
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -61,24 +61,31 @@ pred_bat:
   # Set the serial to the inverter serial to pull the data from and the key to your API key
   # When this is set load_today, import_today and export_today are not used
   #
-  ge_cloud_data: False
-  ge_cloud_serial: '{geserial}'
-  ge_cloud_key: 'xxxx'
+
   #
   # Controls/status - must by 1 per inverter
   #
-  inverter: "GE"
   num_inverters: 1
+  inverter_type: SK
+
+  # Services to control charging/discharging
+  charge_start_service:
+    service: switch.turn_off
+    entity_id: "switch.sunsynk_inverter_use_timer"
+  charge_stop_service:
+    service: switch.turn_on
+    entity_id: "switch.sunsynk_inverter_use_timer"
+
+  discharge_start_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_inverter_work_mode."
+    option: "Selling first"
+
+
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
-  balance_inverters_seconds: 60
+  balance_inverters_seconds: 0
   #
-  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
-  # Set one per inverter
-  # If using Docker then change homeassistant.local to the Docker IP address
-  givtcp_rest:
-    - 'http://homeassistant.local:6345'
-    - 'http://homeassistant.local:6346'
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
@@ -94,76 +101,55 @@ pred_bat:
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
   charge_rate:
-    - number.givtcp_{geserial}_battery_charge_rate
-    - number.givtcp2_{geserial2}_battery_charge_rate
+     - sensor.max_battery_charge_rate
   discharge_rate:
-    - number.givtcp_{geserial}_battery_discharge_rate
-    - number.givtcp2_{geserial2}_battery_discharge_rate
+     - sensor.max_battery_discharge_rate
   battery_power:
-    - sensor.givtcp_{geserial}_battery_power
-    - sensor.givtcp2_{geserial2}_battery_power
+     - number.sunsynk_inverter_battery_power
   pv_power:
-    - number.givtcp_{geserial}_pv_power
-    - number.givtcp2_{geserial2}_pv_power
+    - sensor.sunsynk_pv
+    - sensor.solis_ac_output_total_power
   load_power:
-    - number.givtcp_{geserial}_load_power
-    - number.givtcp2_{geserial2}_load_power
+    - sensor.calculated_house_load_w
   soc_kw:
-    - sensor.givtcp_{geserial}_soc_kwh
-    - sensor.givtcp2_{geserial2}_soc_kwh
-  soc_max:
-    - sensor.givtcp_{geserial}_battery_capacity_kwh
-    - sensor.givtcp2_{geserial2}_battery_capacity_kwh
-  reserve:
-    - number.givtcp_{geserial}_battery_power_reserve
-    - number.givtcp2_{geserial2}_battery_power_reserve
-  inverter_mode:
-    - select.givtcp_{geserial}_mode
-    - select.givtcp2_{geserial2}_mode
-  inverter_time:
-    - sensor.givtcp_{geserial}_invertor_time
-    - sensor.givtcp2_{geserial2}_invertor_time
-  charge_start_time:
-    - select.givtcp_{geserial}_charge_start_time_slot_1
-    - select.givtcp2_{geserial2}_charge_start_time_slot_1
-  charge_end_time:
-    - select.givtcp_{geserial}_charge_end_time_slot_1
-    - select.givtcp2_{geserial2}_charge_end_time_slot_1
+     - sensor.sunsynk_battery_soc_kw
+#  soc_max:
+ #   - sensor.givtcp_{geserial}_battery_capacity_kwh
+ #   - sensor.givtcp2_{geserial2}_battery_capacity_kwh
+#reserve:
+#    - number.givtcp_{geserial}_battery_power_reserve
+#    - number.givtcp2_{geserial2}_battery_power_reserve
+ # inverter_mode:
+#    - select.givtcp_{geserial}_mode
+#    - select.givtcp2_{geserial2}_mode
+ # inverter_time:
+ #   - sensor.givtcp_{geserial}_invertor_time
+ #   - sensor.givtcp2_{geserial2}_invertor_time
+#  charge_start_time:
+ #   - select.givtcp_{geserial}_charge_start_time_slot_1
+ #   - select.givtcp2_{geserial2}_charge_start_time_slot_1
+ # charge_end_time:
+ #   - select.givtcp_{geserial}_charge_end_time_slot_1
+ #   - select.givtcp2_{geserial2}_charge_end_time_slot_1
   charge_limit:
-    - number.givtcp_{geserial}_target_soc
-    - number.givtcp2_{geserial2}_target_soc
-  scheduled_charge_enable:
-    - switch.givtcp_{geserial}_enable_charge_schedule
-    - switch.givtcp2_{geserial2}_enable_charge_schedule
-  scheduled_discharge_enable:
-    - switch.givtcp_{geserial}_enable_discharge_schedule
-    - switch.givtcp2_{geserial2}_enable_discharge_schedule
-  discharge_start_time:
-    - select.givtcp_{geserial}_discharge_start_time_slot_1
-    - select.givtcp2_{geserial2}_discharge_start_time_slot_1
-  discharge_end_time:
-    - select.givtcp_{geserial}_discharge_end_time_slot_1
-    - select.givtcp2_{geserial2}_discharge_end_time_slot_1
-
-  # Pause mode is not supported by all firmware's and will be ignored if not present
-  pause_mode:
-   - select.givtcp_{geserial}_battery_pause_mode
-   - select.givtcp_{geserial2}_battery_pause_mode
-
-  # Not all firmwares support pause start/end time, delete these if not supported
-  # to avoid spurious writes/warnings
-  pause_start_time:
-   - select.givtcp_{geserial}_battery_pause_start_time_slot
-   - select.givtcp2_{geserial2}_battery_pause_start_time_slot
-  pause_end_time:
-   - select.givtcp_{geserial}_battery_pause_end_time_slot
-   - select.givtcp2_{geserial2}_battery_pause_end_time_slot
+    - number.sunsynk_inverter_capacity_point_6
+ # scheduled_charge_enable:
+#    - switch.givtcp_{geserial}_enable_charge_schedule
+#    - switch.givtcp2_{geserial2}_enable_charge_schedule
+#  scheduled_discharge_enable:
+#    - switch.givtcp_{geserial}_enable_discharge_schedule
+ #   - switch.givtcp2_geserial2}_enable_discharge_schedule
+#  discharge_start_time:
+#    - select.givtcp_{geserial}_discharge_start_time_slot_1
+#select.givtcp2_{geserial2}_discharge_start_time_slot_1
+#  discharge_end_time:
+#    - select.givtcp_{geserial}_discharge_end_time_slot_1
+  #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - 7500
-    - 7500
+    - 18000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -178,7 +164,7 @@ pred_bat:
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
-  inverter_reserve_max : 98
+ # inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -228,7 +214,7 @@ pred_bat:
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  car_charging_energy: 'sensor.myenergi_zappi_19556152_charge_added_session_2'
 
   # Defines the number of cars modelled by the system, set to 0 for no car
   num_cars: 1
@@ -292,9 +278,6 @@ pred_bat:
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
-
-  # Carbon Intensity data from National grid
-  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
@@ -412,8 +395,9 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
+
   # Gas rates for comparison
-  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
 
   # Nordpool market energy rates
   #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'

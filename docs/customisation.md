@@ -92,8 +92,8 @@ quite CPU intensive and provides very little improvement for most systems.
 If you have performance problems turn **switch.predbat_calculate_fast_plan** (_expert mode_) On to help
 reduce your CPU load.
 
-The number of threads you use can change your performance, you can set **threads** in apps.yaml to 0 to disable threading
-if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU.
+The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
+if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU. Its recommended you don't set this to an odd number of threads.
 
 ## Battery loss options
 
@@ -390,8 +390,8 @@ Enable the **switch.predbat_balance_inverters_enable** switch in Home Assistant 
 - **switch.predbat_balance_inverters_charge** - Is used to toggle on/off balancing while the batteries are charging
 - **switch.predbat_balance_inverters_discharge** - Is used to toggle on/off balancing while the batteries are discharging
 - **switch.predbat_balance_inverters_crosscharge** - Is used to toggle on/off balancing when the batteries are cross charging
-- **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SOC during charge before balancing, default is 1%
-- **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SOC during discharge before balancing, default is 1%
+- **input_number.predbat_balance_inverters_threshold_charge** - Sets the minimum percentage divergence of SoC during charge before balancing, default is 1%
+- **input_number.predbat_balance_inverters_threshold_discharge** - Sets the minimum percentage divergence of SoC during discharge before balancing, default is 1%
 
 ## Cloud coverage and load variance
 
@@ -407,34 +407,72 @@ You can disable this feature (_expert mode only_) using **switch.metric_load_div
 
 ## iBoost model options
 
-iBoost model, when enabled with **switch.predbat_iboost_enable** tries to model excess solar energy being used to heat
-hot water (or similar). The predicted output from the iBoost model is returned in **predbat.iboost_best**.
+Predbat has an 'iBoost model' that can be used to model using excess solar energy to heat hot water (or similar) instead of it being exported to the grid.
 
-The following entities are only available when you turn on iBoost enable:
+This model can be used to control any solar diverter device, for example an iBoost (e.g. using a Fingerbot or similar device to physically press the 'boost' button on the iBoost),
+a MyEnergy Eddi (using the MyEnergy integration), or it can be used with a high power smart switch to turn on the hot water cylinder immersion heater when there is excess solar.
 
-**switch.predbat_iboost_solar** When enabled assumes iBoost will use solar power to boost.
+So although Predbat refers to controlling an iBoost, you are not limited to just an iBoost device when using this model within Predbat.
 
-**input_number.predbat_iboost_min_soc** sets the minimum home battery soc % to enable iBoost solar on, default 0
+To turn the model on, **switch.predbat_iboost_enable** needs to be enabled.
 
-**switch.predbat_iboost_gas** When enabled assumes IBoost will operate when electric rates are lower than gas rates.
-Note: Gas rates have to be configured in `apps.yaml` with **metric_octopus_gas**
+The predicted output from the iBoost solar diverter model is returned in **predbat.iboost_best** and is populated in the 'iBoost' column of the [Predbat plan](predbat-plan-card.md).
 
-**input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates used before comparing with electric rates, to account for losses
+When you turn on predbat_iBoost_enable the following additional Home Assistant entities are created by Predbat:
 
-**switch.predbat_iboost_charging** Assume iBoost operates when the battery is charging (can be combined with iboost_gas or not)
+- **switch.predbat_iboost_solar** When enabled assumes the solar diverter will use solar power to boost the hot water heating.
 
-**input_number.predbat_iboost_max_energy** Sets the max energy sets the number of kWh that iBoost can consume during a day before turning off - default 3kWh
+- **input_number.predbat_iboost_min_soc** sets the minimum home battery SoC percentage that must be in the battery before the solar diverter is turned on.
+The default is 0 meaning hot water heating can occur regardless of what SoC level the battery is at.
 
-**input_number.predbat_iboost_max_power** Sets the maximum power in watts to consume - default 2400
+- **switch.predbat_iboost_gas** When enabled will control the solar diverter to only operate when electric rates are lower than gas rates.
+This is useful if you have the choice to heat your hot water by immersion heater or by gas boiler.
+Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas**.
 
-**input_number.predbat_iboost_min_power** Sets the minimum power in watts to consume - default 500
+- **input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates (set in `apps.yaml`)used before comparing with electric rates, to account for gas boiler losses and efficiency.
+It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% efficient gas boiler, set to 1.25.
 
-You will see **predbat.iboost_today** entity which tracks the estimated amount consumed during the day, and resets at night
+- **switch.predbat_iboost_charging** If set to on, the solar diverter will only operate when the battery is charging (can be combined with iboost_gas or not).
 
-The **binary_sensor.predbat_iboost_active** entity will be enabled when iBoost should be active, can be used for automations to trigger boost
+- **input_number.predbat_iboost_max_energy** Sets the maximum energy in kWh that the solar diverter can consume during a day before turning off - default 3kWh.
 
-If you have an incrementing Sensor that tracks iBoost energy usage then you should set **iboost_energy_today** sensor in
-apps.yaml to point to it and optionally set **iboost_energy_scaling** if the sensor isn't in kWh.
+- **input_number.predbat_iboost_max_power** Sets the maximum power in watts that the solar diverter will consume - default 2400.
+
+- **input_number.predbat_iboost_min_power** Sets the minimum power in watts that the solar diverter will consume - default 500.
+
+You will see **input_number.predbat_iboost_today** entity which tracks the estimated kWh consumed by the solar diverter during the day, and resets at 11:30pm every night.
+
+The **binary_sensor.predbat_iboost_active** entity will be enabled when the solar diverter should be active, can be used for automations to trigger the immersion heater boost.
+
+Example template automation for controlling the solar diverter:
+
+```yaml
+alias: Solar Diverter
+description: "Start/stop solar diverter based on Predbat determined slots"
+trigger:
+  - platform: state
+    entity_id:
+     - binary_sensor.predbat_iboost_active
+action:
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_iboost_active
+            state: "True"
+        sequence:
+          <commands to turn on your solar diverter>
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_iboost_active
+            state: "False"
+        sequence:
+          <commands to turn off your solar diverter>
+mode: single
+```
+
+If you have an incrementing sensor that tracks the solar diverter energy usage then to make your predictions more accurate you should set the **iboost_energy_today** sensor in
+`apps.yaml` to point to it, and optionally set **iboost_energy_scaling** if the sensor isn't in kWh (e.g. set to 0.001 if the sensor is in Watts).
+The sensor should be an incrementing sensor which can reset at midnight or not.
 
 ## Holiday mode
 
@@ -479,6 +517,12 @@ The force discharge takes priority over force charging.
 The **select.predbat_manual_idle** selector is used to force Predbat to idle mode during a 30 minute slot, this implies no forced grid charging or discharging of the battery.
 House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
+
+The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a 30 minute slot, this implies the battery will not discharge and
+hold at the current level. The grid maybe used if solar is not enough to cover the load.
+
+The **select.predbat_manual_freeze_discharge** selector is used to force Predbat to freeze discharge during a 30 minute slot, this implies the battery will not charge but will
+still discharge for the house load. Any solar will be exported to the grid.
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
 slot expires (they do not repeat).

@@ -56,13 +56,17 @@ If you do not have one of these file editors already installed in Home Assistant
 - Scroll down the add-on store list, to find either 'File editor' or 'Studio Code Server' as appropriate, click on the add-on, click 'INSTALL'
 - Once the editor has been installed, ensure that the 'Start on boot' option is turned on, and click 'START' to start the add-on
 
-Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / *editor_you_chose_to_use* / 'OPEN WEB UI'
+Thereafter whenever you need to edit a configuration file in Home Assistant you can navigate to Settings / Add-on's / *editor_you_chose_to_use* / 'OPEN WEB UI'.
+You can also turn the 'Show in sidebar' option on to give a quicker way to directly access the editor.
 
 If you are using the File Editor to edit Predbat's configuration files, you will need to turn **OFF** the **Enforce Basepath** option
 in order to access files in different directories (i.e. within the appdaemon directory):
 
 - From the File editor add-on page, click on the 'Configuration' tab to change this setting). It is set to 'On' by default:<BR>
 ![image](https://github.com/springfall2008/batpred/assets/48591903/298c7a19-3be9-43d6-9f1b-b46467701ca7)
+
+If you are using Studio Code Server it will default to showing just files and folders in the /config directory.
+To access the entire HA directory structure, click the three horizontal bars to the left of 'Explorer', File, Open Folder, type '/' (root) and click OK.
 
 ## AppDaemon-Predbat combined install
 
@@ -204,10 +208,10 @@ If you don't have solar then use a file editor to comment out the following line
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 ```
 
-If you do have solar panels its recommended to use the Solcast integration to automatically retrieve your forecast solar generation.
-Predbat is configured to automatically discover the Solcast forecast entities in Home Assistant.
+If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
 
-Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a [Solcast account](https://solcast.com/),
+Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
@@ -224,11 +228,13 @@ alias: Solcast update
 description: "Update Solcast solar forecast"
 trigger:
   - platform: time
-    at: "23:00:00"
+    at: "06:00:00"
   - platform: time
     at: "12:00:00"
   - platform: time
-    at: "04:00:00"
+    at: "18:00:00"
+  - platform: time
+    at: "23:00:00"
 condition: []
 action:
   - service: solcast_solar.update_forecasts

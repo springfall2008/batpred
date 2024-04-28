@@ -7,16 +7,18 @@ Also known by some as Batpred or Batman!
 ![icon](https://github.com/springfall2008/batpred/assets/48591903/7c207423-1423-4f88-beb2-d1da5cfbfeeb) ![image](https://github.com/springfall2008/batpred/assets/48591903/e98a0720-d2cf-4b71-94ab-97fe09b3cee1)
 
 ```text
-Copyright (c) Trefor Southwell October 2024 - All rights reserved
+Copyright (c) Trefor Southwell April 2024 - All rights reserved
 This software maybe used at not cost for personal use only
 No warranty is given, either expressed or implied
 ```
 
-For support please raise a Github ticket or use the GivTCP Facebook page:
+For support please raise a Github ticket or use the Facebook Group: [Predbat](https://www.facebook.com/groups/1477599886299106) and
+watch my [YouTube Channel](https://www.youtube.com/@springfall2008)
 
-[https://www.facebook.com/groups/615579009972782](https://www.facebook.com/groups/615579009972782)
+Some inverters have their own groups also e.g:
 
-For support specific to the Solis inverter you can use the [Solis Facebook Group:](https://www.facebook.com/groups/288045168816481).
+- [GivTCP](https://www.facebook.com/groups/615579009972782)
+- [Solis](https://www.facebook.com/groups/288045168816481)
 
 If you want to buy me a beer then please use Paypal - [tdlj@tdlj.net](mailto:tdlj@tdlj.net)
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)

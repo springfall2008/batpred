@@ -19,6 +19,28 @@ This section of the documentation describes what the different configuration ite
 When you edit `apps.yaml`, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
 You don't need to restart the AppDaemon add-on for your edits to take effect.
 
+## Warning! apps.yaml file format
+
+When editing the `apps.yaml` file you must ensure that the file remains correctly formatted.  YAML files are especially finicky about how the file contents are indented
+and its very easy to end up with an incorrectly formatted file that will cause problems for Predbat.
+
+The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured, but as a brief introduction,
+YAML files consist of an entity name, colon then the entity value, for example:
+
+```yaml
+timezone: Europe/London
+```
+
+Or the entity can be set to a list of values with each value being on a new line, two spaces, a dash, then the value.  For example:
+
+```yaml
+car_charging_now_response:
+  - 'yes'
+  - 'on'
+```
+
+The two spaces before the dash are especially critical. Its easy to mis-edit and have one or three spaces which isn't valid YAML.
+
 ## Templates
 
 You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
@@ -233,7 +255,9 @@ To disable, set it to 1440.
 
 - **inverter_limit** - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
 This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
-If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.
+If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR><BR>
+For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
+If though you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
 
 - **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
 This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
@@ -251,9 +275,10 @@ There are two ways that Predbat can control GivTCP to control the inverter, eith
 
 ### REST Interface inverter control
 
-- **givtcp_rest** - One per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal one for the first inverter and :6346 for the second inverter).
-When enabled the Control per inverter below isn't used and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
+- **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you haven't a second inverter, delete the second line).<BR>
+When enabled the Home Assistant GivTCP Inverter Controls below are not used
+and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
 If using Docker then change homeassistant.local to the Docker IP address.
 
 To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
@@ -266,34 +291,48 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 
 ![image](images/GivTCP-recommended-settings.png)
 
-### Home Assistant inverter control
+*TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
+This may improve reliability of the REST connection as it doesn't need to lookup the HA server IP address each time.
 
-As an alternative to REST control, Predbat can control the GivEnergy inverters via GivTCP controls in Home Assistant.
-The template `apps.yaml` is pre-configured with regular expressions for the following configuration items that should auto-discover the GivTCP controls,
-but may need changing if you have multiple inverters or non-standard GivTCP entity names.
+### Home Assistant GivTCP inverter control
 
-The **givtcp_rest** line should be commented out/deleted in order for Predbat to use the direct GivTCP Home Assistant controls.
+Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
+interact with many different inverters.
 
-- **charge_rate** - GivTCP battery charge rate entity in watts
-- **discharge_rate** - GivTCP battery discharge max rate entity in watts
-- **battery_power** - GivTCP current battery power in watts
-- **pv_power** - GivTCP current PV power in watts
-- **load_power** - GivTCP current load power in watts
-- **soc_kw** - GivTCP Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
-- **soc_max** - GivTCP Entity name for the maximum charge level for the battery
-- **reserve** - GivTCP sensor name for the reserve setting in %
-- **inverter_mode** - GivTCP inverter mode control
-- **inverter_time** - GivTCP inverter timestamp
-- **charge_start_time** - GivTCP battery charge start time entity
-- **charge_end_time** - GivTCP battery charge end time entity
-- **charge_limit** - GivTCP Entity name for used to set the SOC target for the battery in percentage
-- **scheduled_charge_enable** - GivTCP Scheduled charge enable config
-- **scheduled_discharge_enable** - GivTCP Scheduled discharge enable config
-- **discharge_start_time** - GivTCP scheduled discharge slot_1 start time
-- **discharge_end_time** - GivTCP scheduled discharge slot_1 end time
+The template `apps.yaml` for Giv Energy is pre-configured with regular expressions for the following configuration items
+that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
 
-If you are using REST control the above GivTCP configuration items can be deleted or commented out of `apps.yaml`
-(but see section below on [creating the battery charge power curve](#workarounds)).
+If you only have a single inverter then the givtcp2 lines can be commented out if so desired.
+
+The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or
+if you have multiple inverters.
+
+The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode.
+
+- **charge_rate** - Battery charge rate entity in watts
+- **discharge_rate** - Battery discharge max rate entity in watts
+- **battery_power** - Current battery power in watts
+- **pv_power** - Current PV power in watts
+- **load_power** - Current load power in watts
+- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+- **soc_max** - Entity name for the maximum charge level for the battery
+- **reserve** - sensor name for the reserve setting in %
+- **inverter_mode** - Givenergy inverter mode control
+- **pause_mode** - Givenergy pause mode register (if present)
+- **inverter_time** - Inverter timestamp
+- **charge_start_time** - Battery charge start time entity
+- **charge_end_time** - Battery charge end time entity
+- **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
+- **scheduled_charge_enable** - Scheduled charge enable config
+- **scheduled_discharge_enable** - Scheduled discharge enable config
+- **discharge_start_time** - scheduled discharge slot_1 start time
+- **discharge_end_time** - scheduled discharge slot_1 end time
+- **pause_start_time** - scheduled pause start time (only if supported by your inverter)
+- **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+
+If you are using REST control the configuration items should still be kept as not all controls work with REST.
+
+See section below on [creating the battery charge power curve](#workarounds).
 
 ## Solcast Solar Forecast
 
@@ -454,7 +493,7 @@ Multiple cars can be planned with Predbat, in which case you should set **num_ca
 - If you have Intelligent Octopus then Car 0 will be managed by the Octopus Energy integration, if its enabled
 
 - Each car will have it's own Home Assistant slot sensor created e.g. **binary_sensor.predbat_car_charging_slot_1**,
-SOC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
+SoC planning sensor e.g **predbat.car_soc_1** and **predbat.car_soc_best_1** for car 1
 
 ## Load Forecast
 
@@ -521,7 +560,7 @@ weirdness you may have from your inverter and battery setup.
 
 Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
 Set to 1 means add a minute to the AppDaemon time, set to -1 means take a minute off the AppDaemon time.
-This will change when real-time actions happen e.g. triggering a charge or discharge.
+This clock adjustment will be used by Predbat when real-time actions happen e.g. triggering a charge or discharge.
 
 If your inverter's time is different to the time on the computer running Home Assistant, you may need to skew the time settings made on the inverter when you trigger charging or discharging.
 Again 1 means the inverter is 1 minute fast and -1 means the inverter is 1 minute slow.
@@ -547,17 +586,23 @@ Skews the setting of the discharge slot registers vs the predicted start time
 ### Battery size scaling
 
 ```yaml
-  battery_scaling: scale
+  battery_scaling:
+    - scale
 ```
 
-Default value 1.0. One per inverter.
+Default value 1.0. Multiple battery size scales can be entered, one per inverter on separate lines.
 
-This setting is used to scale the battery reported SOC kWh to make it appear bigger or larger than it is.<BR>
+This setting is used to scale the battery reported SoC kWh to make it appear bigger or larger than it is.
+As the GivEnergy inverters treat all batteries attached to an inverter as in effect one giant battery,
+if you have multiple batteries on an inverter that need scaling you should enter a composite scaling value for all batteries attached to the inverter.
+
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
-so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.<BR>
-*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.<BR>
+so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.
+
+*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.
+
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
-rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up
+rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up.
 
 ### Import export scaling
 
@@ -610,8 +655,8 @@ auto_restart:
 
 ## Battery charge/discharge curves
 
-- **battery_charge_power_curve** - Some batteries tail off their charge rate at high soc% and this optional configuration item enables you to model this in Predbat.
-Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+- **battery_charge_power_curve** - Some batteries tail off their charge rate at high SoC% and this optional configuration item enables you to model this in Predbat.
+Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
 
 The default is 1.0 (full power) charge all the way to 100%.
 
@@ -619,9 +664,10 @@ Modelling the charge curve becomes important if you have limited charging slots 
 low power charging mode (**switch.predbat_set_charge_low_power**).
 
 Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
-when battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+when the battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+
 You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
-This will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
+The logfile will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the curve works and shows how Predbat automatically creates it.
@@ -642,7 +688,7 @@ If you are using the recommended default [REST mode to control your inverter](#i
     - sensor.givtcp_{geserial}_soc_kwh
 ```
 
-Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
+ Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
 
 Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
@@ -660,16 +706,18 @@ Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and 
     100 : 0.24
 ```
 
-- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low soc% and this optional configuration item enables you to model this in Predbat.
+- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low SoC% and this optional configuration item enables you to model this in Predbat.
 
-Enter the charging curve as a series of steps of % of max charge rate for each soc percentage.
+Enter the discharging curve as a series of steps of % of max discharge rate for each SoC percentage.
 
 The default is 1.0 (full power) discharge all the way to 0%.
 
-You can also look at the automation power curve calculation in the AppDaemon/Predbat log when Predbat starts (when this option is not set).
+When the battery_discharge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml),
+Predbat will generate the curve for you from historical battery discharging information.
 
-Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty
-the battery.
+You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
+
+Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
 In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
 
@@ -686,16 +734,18 @@ If you are using REST mode to control your inverter then the following entries i
 
 ## Triggers
 
-The trigger feature is useful to help trigger your own automations based on Predbat determining that you have spare solar energy or battery that you would otherwise export.
-For example you may turn an immersion heater or the washing machine on to consume the excess solar power.
+- **export_triggers** - The export trigger feature is useful to help trigger your own automations based on Predbat predicting in the plan
+that you will have spare solar energy that would be exported - this could happen if the battery is full or there is more predicted solar generation than can be charged into the battery.
+You can use the trigger in an automation, for example you could turn on an immersion heater or the washing machine to consume the excess solar power.
 
 The triggers count export energy until the next active charge slot only.
 
-For each trigger give a name, the minutes of export needed and the energy required in that time.
+For each trigger give a name, the minutes of export needed, and the energy required in that time.
 
-Multiple triggers can be set at once so in total you could use too much energy if all run.
+Multiple triggers can be enabled by Predbat at once so in total you could use too much energy if multiple triggered automations all run.
 
-Each trigger specified in `apps.yaml` will create a Home Assistant entity called 'binary_sensor.predbat_export_trigger_*name*' which will be turned on when the condition is valid.
+Each trigger specified in `apps.yaml` will create a Home Assistant entity called 'binary_sensor.predbat_export_trigger_*name*'
+which will be turned on when the predicted trigger conditions are valid.
 Connect this binary sensor to your automation to start whatever you want to trigger.
 
 Set the name for each trigger, the number of minutes of solar export you need, and the amount of energy in kWh you will need available during that time period in apps.yaml:
@@ -712,7 +762,14 @@ export_triggers:
     energy: 0.25
 ```
 
-If you wish to trigger based on charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors in Home Assistant:
+**Note:** Predbat will set an export trigger to True if in the plan it predicts
+that there will be more than the specified amount of excess solar energy over the specified time period.<BR>
+In the example above, the 'large' trigger will be set to True for the 1 hour period where Predbat predicts
+that there will be a *total* of 1kWh of excess solar generation *over that time period*.
+For clarity the trigger is not set based on actual excess solar generation or export.<BR>
+It should also be recognised that this prediction could be wrong; there could be less solar generation or more house load than was predicted in the plan.
+
+If you wish to trigger activities based on Predbat charging or discharging the battery rather than spare solar energy you can instead use the following binary sensors in Home Assistant:
 
 - **binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
 Note that this does include charge freeze slots where the discharge rate is set to zero without charging the battery.
