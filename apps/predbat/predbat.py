@@ -2269,7 +2269,21 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-
+        
+        # Timed pause support?
+        if self.inv_has_timed_pause:
+            entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
+            if entity_mode:
+                old_pause_mode = self.base.get_state(entity_mode)
+                if old_pause_mode is None:
+                    self.inv_has_timed_pause = False
+                    self.log("Inverter {} does not have timed pause support enabled".format(self.id))
+                else:
+                    self.log("Inverter {} has timed pause support enabled".format(self.id))
+            else:
+                self.inv_has_timed_pause = False
+                self.log("Inverter {} does not have timed pause support enabled".format(self.id))
+        
         # Battery size, charge and discharge rates
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
@@ -3369,6 +3383,10 @@ class Inverter:
         Inverter control for Pause mode
         """
 
+        # Ignore if inverter doesn't have pause mode
+        if not self.inv_has_timed_pause:
+            return
+
         entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
@@ -3400,8 +3418,8 @@ class Inverter:
                 self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
                 entity_end = None
 
-        if not entity_mode or not self.inv_has_timed_pause:
-            self.log("Note: Inverter {} does not have pause_mode entity configured".format(self.id))
+        if not entity_mode:
+            self.log("Warn: Inverter {} does not have pause_mode entity configured correctly".format(self.id))
             return
 
         # Some inverters have start/end time registers
@@ -11633,18 +11651,17 @@ class PredBat(hass.Hass):
                             resetDischarge = False
 
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
-                            if self.set_soc_enable and self.set_reserve_enable and self.set_reserve_hold:
+                            if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                            inverter.adjust_pause_mode(pause_discharge=True)
+                                inverter.adjust_pause_mode(pause_discharge=True)
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
                             if (
                                 self.set_soc_enable
-                                and self.set_reserve_enable
-                                and self.set_reserve_hold
-                                and ((inverter.soc_percent + 1) >= self.charge_limit_percent_best[0])
+                                and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause)
+                                and (inverter.soc_percent >= self.charge_limit_percent_best[0])
                                 and (inverter.reserve_max >= inverter.soc_percent)
                             ):
                                 status = "Hold charging"
