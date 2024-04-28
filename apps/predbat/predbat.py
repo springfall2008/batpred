@@ -2269,7 +2269,7 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-
+        
         # Timed pause support?
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
@@ -2283,7 +2283,7 @@ class Inverter:
             else:
                 self.inv_has_timed_pause = False
                 self.log("Inverter {} does not have timed pause support enabled".format(self.id))
-
+        
         # Battery size, charge and discharge rates
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
@@ -2554,7 +2554,7 @@ class Inverter:
 
                 soc_percent = {}
                 for minute in range(0, min_len):
-                    soc_percent[minute] = calc_percent_limit(soc_kwh[minute], self.soc_max)
+                    soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
 
                 if discharge:
                     search_range = range(5, 20, 1)
@@ -2569,31 +2569,31 @@ class Inverter:
                             not discharge
                             and soc_percent.get(minute - 1, 0) == (data_point + 1)
                             and soc_percent.get(minute, 0) == data_point
-                            and predbat_status[minute - 1] == "Charging"
-                            and predbat_status[minute] == "Charging"
-                            and predbat_status[minute + 1] == "Charging"
-                            and charge_rate[minute - 1] == max_power
-                            and charge_rate[minute] == max_power
-                            and battery_power[minute] < 0
+                            and predbat_status.get(minute - 1, "") == "Charging"
+                            and predbat_status.get(minute, "") == "Charging"
+                            and predbat_status.get(minute + 1, "") == "Charging"
+                            and charge_rate.get(minute - 1, 0) == max_power
+                            and charge_rate.get(minute, 0) == max_power
+                            and battery_power.get(minute, 0) < 0
                         ) or (
                             discharge
                             and soc_percent.get(minute - 1, 0) == (data_point - 1)
                             and soc_percent.get(minute, 0) == data_point
-                            and predbat_status[minute - 1] == "Discharging"
-                            and predbat_status[minute] == "Discharging"
-                            and predbat_status[minute + 1] == "Discharging"
-                            and charge_rate[minute - 1] == max_power
-                            and charge_rate[minute] == max_power
-                            and battery_power[minute] > 0
+                            and predbat_status.get(minute - 1, "") == "Discharging"
+                            and predbat_status.get(minute, "") == "Discharging"
+                            and predbat_status.get(minute + 1, "") == "Discharging"
+                            and charge_rate.get(minute - 1, 0) == max_power
+                            and charge_rate.get(minute, 0) == max_power
+                            and battery_power.get(minute, 0) > 0
                         ):
                             total_power = 0
                             total_count = 0
                             # Find a period where charging was at full rate and the SOC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status[target_minute] != "Charging" or charge_rate[minute] != max_power or battery_power[minute] >= 0):
+                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
                                     break
-                                if discharge and (predbat_status[target_minute] != "Discharging" or charge_rate[minute] != max_power or battery_power[minute] <= 0):
+                                if discharge and (predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -2606,8 +2606,8 @@ class Inverter:
                                         this_soc += 1
                                     # So the power for this data point average has been stored, it's possible we spanned more than one data point
                                     # if not all SOC %'s are represented for this battery size
-                                    from_soc = soc_kwh[minute]
-                                    to_soc = soc_kwh[target_minute]
+                                    from_soc = soc_kwh.get(minute, 0)
+                                    to_soc = soc_kwh.get(target_minute, 0)
                                     soc_charged = from_soc - to_soc
                                     average_power = total_power / total_count
                                     charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
@@ -2640,7 +2640,7 @@ class Inverter:
                                     break
                                 else:
                                     # Store data
-                                    total_power += abs(battery_power[minute])
+                                    total_power += abs(battery_power.get(minute, 0))
                                     total_count += 1
                 if final_curve:
                     # Average the data points
