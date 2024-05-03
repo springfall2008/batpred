@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.6"
+THIS_VERSION = "v7.17.7"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -3165,7 +3165,7 @@ class Inverter:
             current_rate = self.base.sim_charge_rate_now
         else:
             if self.rest_data:
-                current_rate = self.rest_data["Control"]["Battery_Charge_Rate"]
+                current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             else:
                 current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
 
@@ -4219,7 +4219,7 @@ class Inverter:
             r = requests.post(url, json=data)
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
-            new = self.rest_data["Control"]["Battery_Charge_Rate"]
+            new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
@@ -4239,7 +4239,7 @@ class Inverter:
             r = requests.post(url, json=data)
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
-            new = self.rest_data["Control"]["Battery_Discharge_Rate"]
+            new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
@@ -11834,6 +11834,7 @@ class PredBat(hass.Hass):
                             # from draining the battery
                             if status not in ["Discharging", "Charging"]:
                                 inverter.adjust_discharge_rate(0)
+                                inverter.adjust_pause_mode(pause_discharge=True)
                                 resetDischarge = False
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if status != "Idle":
