@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.7"
+THIS_VERSION = "v7.17.8"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -7649,13 +7649,25 @@ class PredBat(hass.Hass):
                     start = datetime.strptime(slot["startDtUtc"], TIME_FORMAT_OCTOPUS)
                     end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
                 source = slot.get("source", "")
+                location = slot.get("location", "")
+
+                # Change to minutes
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
+                end_minutes = self.minutes_to_time(end, self.midnight_utc)
+
                 # Ignore bump-charge slots as their cost won't change
-                if source != "bump-charge":
-                    start_minutes = max(self.minutes_to_time(start, self.midnight_utc), 0)
-                    end_minutes = max(min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes), 0)
-                    if end_minutes > start_minutes:
-                        self.log("Octopus Intelligent slot at {}-{} assumed price {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min))
-                        for minute in range(start_minutes, end_minutes):
+                if source != "bump-charge" and (not location or location == "AT_HOME"):
+                    # Round slots to 30 minute boundary, make numbers positive so they round to the start of a slot
+                    start_minutes += 24*60*14
+                    end_minutes += 24*60*14
+                    start_minutes = int(start_minutes / 30) * 30
+                    end_minutes = int((end_minutes + 29) / 30) * 30
+                    start_minutes -= 24*60*14
+                    end_minutes -= 24*60*14
+
+                    self.log("Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source))
+                    for minute in range(start_minutes, end_minutes):
+                        if minute >= 0 and minute < self.forecast_minutes:
                             rates[minute] = self.rate_min
 
         return rates
