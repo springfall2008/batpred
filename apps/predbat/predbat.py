@@ -7658,14 +7658,18 @@ class PredBat(hass.Hass):
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary, make numbers positive so they round to the start of a slot
-                    start_minutes += 24*60*14
-                    end_minutes += 24*60*14
+                    start_minutes += 24 * 60 * 14
+                    end_minutes += 24 * 60 * 14
                     start_minutes = int(start_minutes / 30) * 30
                     end_minutes = int((end_minutes + 29) / 30) * 30
-                    start_minutes -= 24*60*14
-                    end_minutes -= 24*60*14
+                    start_minutes -= 24 * 60 * 14
+                    end_minutes -= 24 * 60 * 14
 
-                    self.log("Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source))
+                    self.log(
+                        "Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(
+                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source
+                        )
+                    )
                     for minute in range(start_minutes, end_minutes):
                         if minute >= 0 and minute < self.forecast_minutes:
                             rates[minute] = self.rate_min
