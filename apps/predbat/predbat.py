@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.9"
+THIS_VERSION = "v7.17.10"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1661,8 +1661,11 @@ class Prediction:
                     if self.set_charge_freeze and (charge_limit_n == self.reserve):
                         # Charge freeze via reserve
                         charge_limit_n = soc
+
+                    # When set reserve enable is on pretend the reserve is the charge limit minus the
+                    # minimum battery rate modelled as it can leak a little
                     if self.set_reserve_enable:
-                        reserve_expected = max(charge_limit_n, self.reserve)
+                        reserve_expected = max(charge_limit_n - self.battery_rate_min * step, self.reserve)
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -5704,7 +5707,7 @@ class PredBat(hass.Hass):
                 txt += ", "
             txt += "%8s" % str(value)
         return txt
-
+    
     def scenario_summary_state(self, record_time):
         txt = ""
         minute_start = self.minutes_now - self.minutes_now % 30
@@ -6067,6 +6070,7 @@ class PredBat(hass.Hass):
                 new_data[stamp] = value
             prev = value
         return new_data
+
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
@@ -6573,9 +6577,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:currency-usd",
                     },
                 )
-                self.dashboard_item(
-                    self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"}
-                )
+                self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",
                     state=self.dp2(final_iboost_kwh),
@@ -7728,18 +7730,14 @@ class PredBat(hass.Hass):
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary, make numbers positive so they round to the start of a slot
-                    start_minutes += 24 * 60 * 14
-                    end_minutes += 24 * 60 * 14
+                    start_minutes += 24*60*14
+                    end_minutes += 24*60*14
                     start_minutes = int(start_minutes / 30) * 30
                     end_minutes = int((end_minutes + 29) / 30) * 30
-                    start_minutes -= 24 * 60 * 14
-                    end_minutes -= 24 * 60 * 14
+                    start_minutes -= 24*60*14
+                    end_minutes -= 24*60*14
 
-                    self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source
-                        )
-                    )
+                    self.log("Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source))
                     for minute in range(start_minutes, end_minutes):
                         if minute >= 0 and minute < self.forecast_minutes:
                             rates[minute] = self.rate_min
@@ -11737,6 +11735,7 @@ class PredBat(hass.Hass):
                         # Do we disable discharge during charge?
                         if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
                             inverter.adjust_discharge_rate(0)
+                            inverter.adjust_pause_mode(pause_discharge=True)
                             resetDischarge = False
 
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
@@ -11759,7 +11758,8 @@ class PredBat(hass.Hass):
                                 inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
-                                inverter.adjust_pause_mode()
+                                if not resetDischarge:
+                                    inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
@@ -12768,8 +12768,9 @@ class PredBat(hass.Hass):
         for item in CONFIG_ITEMS:
             if item["name"] != config_item and item.get("manual"):
                 value = item.get("value", "")
-                if value and value != "reset" and exclude_list:
+                if value and value != 'reset' and exclude_list:
                     await self.async_manual_times(item["name"], exclude=exclude_list)
+
 
     def manual_times(self, config_item, exclude=[], new_value=None):
         """
@@ -13504,7 +13505,7 @@ class PredBat(hass.Hass):
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
-                        """INPUT_NUMBER"""
+                        """ INPUT_NUMBER """
                         icon = item.get("icon", "mdi:numeric")
                         unit = item["unit"]
                         unit = unit.replace("£", self.currency_symbols[0])
@@ -13522,11 +13523,11 @@ class PredBat(hass.Hass):
                             },
                         )
                     elif item["type"] == "switch":
-                        """SWITCH"""
+                        """ SWITCH """
                         icon = item.get("icon", "mdi:light-switch")
                         self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
-                        """SELECT"""
+                        """ SELECT """
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
                             value = item.get("default", "")
@@ -13538,7 +13539,7 @@ class PredBat(hass.Hass):
                             self.set_state(entity_id=entity, state=old_state, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                     elif item["type"] == "update":
-                        """UPDATE"""
+                        """ UPDATE """
                         summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
                         state = "off"
@@ -13829,7 +13830,7 @@ class PredBat(hass.Hass):
 
             if type == "update":
                 ha_value = None
-
+            
             # Push back into current state
             if ha_value is not None:
                 if item.get("manual"):
