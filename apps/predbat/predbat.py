@@ -8141,7 +8141,8 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0 and not in_span:
                 rowspan = int((self.discharge_window_best[discharge_window_n]["end"] - minute) / 30)
-                if rowspan > 1 and (charge_window_n < 0):
+                start = self.discharge_window_best[discharge_window_n]["start"]
+                if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True
                     start_span = True
                     minute_relative_end = self.discharge_window_best[discharge_window_n]["end"] - minute_now_align
@@ -8260,6 +8261,19 @@ class PredBat(hass.Hass):
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
+            else:
+                if discharge_window_n >= 0:
+                    start = self.discharge_window_best[discharge_window_n]["start"]
+                    if start > minute:
+                        soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+                        if soc_change_this >= 0:
+                            state = " &nearr;"
+                        elif soc_change_this < 0:
+                            state = " &searr;"
+                        else:
+                            state = " &rarr;"
+                        state_color = "#FFFFFF"
+                        show_limit = ""
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
