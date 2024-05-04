@@ -5707,7 +5707,7 @@ class PredBat(hass.Hass):
                 txt += ", "
             txt += "%8s" % str(value)
         return txt
-
+    
     def scenario_summary_state(self, record_time):
         txt = ""
         minute_start = self.minutes_now - self.minutes_now % 30
@@ -6082,6 +6082,7 @@ class PredBat(hass.Hass):
                 new_data[stamp] = value
             prev = value
         return new_data
+
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
@@ -6612,9 +6613,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:currency-usd",
                     },
                 )
-                self.dashboard_item(
-                    self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"}
-                )
+                self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
                 self.dashboard_item(
                     self.prefix + ".iboost_best",
                     state=self.dp2(final_iboost_kwh),
@@ -7783,18 +7782,14 @@ class PredBat(hass.Hass):
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
                     # Round slots to 30 minute boundary, make numbers positive so they round to the start of a slot
-                    start_minutes += 24 * 60 * 14
-                    end_minutes += 24 * 60 * 14
+                    start_minutes += 24*60*14
+                    end_minutes += 24*60*14
                     start_minutes = int(start_minutes / 30) * 30
                     end_minutes = int((end_minutes + 29) / 30) * 30
-                    start_minutes -= 24 * 60 * 14
-                    end_minutes -= 24 * 60 * 14
+                    start_minutes -= 24*60*14
+                    end_minutes -= 24*60*14
 
-                    self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source
-                        )
-                    )
+                    self.log("Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source))
                     for minute in range(start_minutes, end_minutes):
                         if minute >= 0 and minute < self.forecast_minutes:
                             rates[minute] = self.rate_min
@@ -8141,7 +8136,8 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0 and not in_span:
                 rowspan = int((self.discharge_window_best[discharge_window_n]["end"] - minute) / 30)
-                if rowspan > 1 and (charge_window_n < 0):
+                start = self.discharge_window_best[discharge_window_n]["start"]
+                if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True
                     start_span = True
                     minute_relative_end = self.discharge_window_best[discharge_window_n]["end"] - minute_now_align
@@ -8260,6 +8256,19 @@ class PredBat(hass.Hass):
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
+            else:
+                if discharge_window_n >= 0:
+                    start = self.discharge_window_best[discharge_window_n]["start"]
+                    if start > minute:
+                        soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+                        if soc_change_this >= 0:
+                            state = " &nearr;"
+                        elif soc_change_this < 0:
+                            state = " &searr;"
+                        else:
+                            state = " &rarr;"
+                        state_color = "#FFFFFF"
+                        show_limit = ""
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
@@ -12825,8 +12834,9 @@ class PredBat(hass.Hass):
         for item in CONFIG_ITEMS:
             if item["name"] != config_item and item.get("manual"):
                 value = item.get("value", "")
-                if value and value != "reset" and exclude_list:
+                if value and value != 'reset' and exclude_list:
                     await self.async_manual_times(item["name"], exclude=exclude_list)
+
 
     def manual_times(self, config_item, exclude=[], new_value=None):
         """
@@ -13561,7 +13571,7 @@ class PredBat(hass.Hass):
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
-                        """INPUT_NUMBER"""
+                        """ INPUT_NUMBER """
                         icon = item.get("icon", "mdi:numeric")
                         unit = item["unit"]
                         unit = unit.replace("£", self.currency_symbols[0])
@@ -13579,11 +13589,11 @@ class PredBat(hass.Hass):
                             },
                         )
                     elif item["type"] == "switch":
-                        """SWITCH"""
+                        """ SWITCH """
                         icon = item.get("icon", "mdi:light-switch")
                         self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
-                        """SELECT"""
+                        """ SELECT """
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
                             value = item.get("default", "")
@@ -13595,7 +13605,7 @@ class PredBat(hass.Hass):
                             self.set_state(entity_id=entity, state=old_state, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                         self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                     elif item["type"] == "update":
-                        """UPDATE"""
+                        """ UPDATE """
                         summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
                         state = "off"
@@ -13886,7 +13896,7 @@ class PredBat(hass.Hass):
 
             if type == "update":
                 ha_value = None
-
+            
             # Push back into current state
             if ha_value is not None:
                 if item.get("manual"):
