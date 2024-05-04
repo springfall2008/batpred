@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.9"
+THIS_VERSION = "v7.17.10"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1661,8 +1661,11 @@ class Prediction:
                     if self.set_charge_freeze and (charge_limit_n == self.reserve):
                         # Charge freeze via reserve
                         charge_limit_n = soc
+
+                    # When set reserve enable is on pretend the reserve is the charge limit minus the
+                    # minimum battery rate modelled as it can leak a little
                     if self.set_reserve_enable:
-                        reserve_expected = max(charge_limit_n, self.reserve)
+                        reserve_expected = max(charge_limit_n - self.battery_rate_min * step, self.reserve)
 
             # Add in standing charge, only for the final plan when we save the results
             if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
@@ -11737,6 +11740,7 @@ class PredBat(hass.Hass):
                         # Do we disable discharge during charge?
                         if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
                             inverter.adjust_discharge_rate(0)
+                            inverter.adjust_pause_mode(pause_discharge=True)
                             resetDischarge = False
 
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
@@ -11759,7 +11763,8 @@ class PredBat(hass.Hass):
                                 inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
-                                inverter.adjust_pause_mode()
+                                if not resetDischarge:
+                                    inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
