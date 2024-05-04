@@ -27,7 +27,7 @@ from multiprocessing import Pool, cpu_count
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.8"
+THIS_VERSION = "v7.17.9"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -714,9 +714,9 @@ CONFIG_ITEMS = [
         "name": "manual_charge",
         "friendly_name": "Manual force charge",
         "type": "select",
-        "options": [],
+        "options": ["off"],
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": "off",
         "restore": False,
         "manual": True,
     },
@@ -724,9 +724,9 @@ CONFIG_ITEMS = [
         "name": "manual_discharge",
         "friendly_name": "Manual force discharge",
         "type": "select",
-        "options": [],
+        "options": ["off"],
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": "off",
         "restore": False,
         "manual": True,
     },
@@ -734,9 +734,9 @@ CONFIG_ITEMS = [
         "name": "manual_idle",
         "friendly_name": "Manual force idle",
         "type": "select",
-        "options": [],
+        "options": ["off"],
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": "off",
         "restore": False,
         "manual": True,
     },
@@ -744,9 +744,9 @@ CONFIG_ITEMS = [
         "name": "manual_freeze_charge",
         "friendly_name": "Manual force charge freeze",
         "type": "select",
-        "options": [],
+        "options": ["off"],
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": "off",
         "restore": False,
         "manual": True,
     },
@@ -754,9 +754,9 @@ CONFIG_ITEMS = [
         "name": "manual_freeze_discharge",
         "friendly_name": "Manual force discharge freeze",
         "type": "select",
-        "options": [],
+        "options": ["off"],
         "icon": "mdi:state-machine",
-        "default": "",
+        "default": "off",
         "restore": False,
         "manual": True,
     },
@@ -8870,10 +8870,8 @@ class PredBat(hass.Hass):
         self.calculate_plan_every = 5
         self.prediction_started = False
         self.update_pending = True
-        self.midnight = None
         self.midnight_utc = None
         self.difference_minutes = 0
-        self.minutes_now = 0
         self.minutes_to_midnight = 0
         self.days_previous = [7]
         self.days_previous_weight = [1]
@@ -9870,7 +9868,7 @@ class PredBat(hass.Hass):
             metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10)
 
             # Adjust to try to keep existing windows
-            if window_n < 2 and this_discharge_limit <= 99.0 and self.discharge_window and self.isDischarging:
+            if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window and self.isDischarging:
                 pwindow = discharge_window[window_n]
                 dwindow = self.discharge_window[0]
                 if (
@@ -11996,7 +11994,7 @@ class PredBat(hass.Hass):
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
 
-        entity_id = "predbat.carbon_now"
+        entity_id = self.prefix + ".carbon_now"
         state = self.get_state(entity_id=entity_id)
         if state is not None:
             try:
@@ -12648,6 +12646,15 @@ class PredBat(hass.Hass):
 
     def manual_select(self, config_item, value):
         """
+        Wrapper for async manual times
+        """
+        task = self.create_task(self.async_manual_select(config_item, value))
+        while not task.done():
+            time.sleep(0.01)
+        return task.result()
+
+    async def async_manual_select(self, config_item, value):
+        """
         Selection on manual times dropdown
         """
         item = self.config_index.get(config_item)
@@ -12656,14 +12663,18 @@ class PredBat(hass.Hass):
         if not value:
             # Ignore null selections
             return
+        if value.startswith("+"):
+            # Ignore selections which are just the current value
+            return
         values = item.get("value", "")
         if not values:
             values = ""
         values = values.replace("+", "")
         values_list = []
+        exclude_list = []
         if values:
             values_list = values.split(",")
-        if value == "reset":
+        if value == "off":
             values_list = []
         elif "[" in value:
             value = value.replace("[", "")
@@ -12671,14 +12682,34 @@ class PredBat(hass.Hass):
             if value in values_list:
                 values_list.remove(value)
         else:
-            values_list.append(value)
+            if value not in values_list:
+                values_list.append(value)
+                exclude_list.append(value)
         item_value = ",".join(values_list)
         if item_value:
             item_value = "+" + item_value
-        self.expose_config(config_item, item_value)
-        self.manual_times(config_item)
 
-    def manual_times(self, config_item):
+        if not item_value:
+            item_value = "off"
+        await self.async_manual_times(config_item, new_value=item_value)
+
+        # Update other drop downs that may need this time excluding
+        for item in CONFIG_ITEMS:
+            if item["name"] != config_item and item.get("manual"):
+                value = item.get("value", "")
+                if value and value != "reset" and exclude_list:
+                    await self.async_manual_times(item["name"], exclude=exclude_list)
+
+    def manual_times(self, config_item, exclude=[], new_value=None):
+        """
+        Wrapper for async manual times
+        """
+        task = self.create_task(self.async_manual_times(config_item=config_item, exclude=exclude, new_value=new_value))
+        while not task.done():
+            time.sleep(0.01)
+        return task.result()
+
+    async def async_manual_times(self, config_item, exclude=[], new_value=None):
         """
         Update manual times sensor
         """
@@ -12688,12 +12719,17 @@ class PredBat(hass.Hass):
 
         # Deconstruct the value into a list of minutes
         item = self.config_index.get(config_item)
-        values = item.get("value", "")
+        if new_value:
+            values = new_value
+        else:
+            values = item.get("value", "")
         values = values.replace("+", "")
         values_list = []
         if values:
             values_list = values.split(",")
         for value in values_list:
+            if value == "off":
+                continue
             try:
                 start_time = datetime.strptime(value, "%H:%M:%S")
             except ValueError:
@@ -12709,7 +12745,8 @@ class PredBat(hass.Hass):
         values_list = []
         for minute in time_overrides:
             minute_str = (self.midnight + timedelta(minutes=minute)).strftime("%H:%M:%S")
-            values_list.append(minute_str)
+            if minute_str not in exclude:
+                values_list.append(minute_str)
         values = ",".join(values_list)
         if values:
             values = "+" + values
@@ -12724,11 +12761,11 @@ class PredBat(hass.Hass):
 
         if values not in time_values:
             time_values.append(values)
-        time_values.append("reset")
+        time_values.append("off")
         item["options"] = time_values
         if not values:
-            values = ""
-        self.expose_config(config_item, values, force=True)
+            values = "off"
+        await self.async_expose_config(config_item, values, force=True)
 
         if time_overrides:
             time_txt = []
@@ -13251,9 +13288,9 @@ class PredBat(hass.Hass):
                     else:
                         self.restore_settings_yaml(value)
                 elif item.get("manual"):
-                    self.manual_select(item["name"], value)
+                    await self.async_manual_select(item["name"], value)
                 else:
-                    self.expose_config(item["name"], value, event=True)
+                    await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -13286,7 +13323,7 @@ class PredBat(hass.Hass):
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("number_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value, event=True)
+                await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -13335,7 +13372,7 @@ class PredBat(hass.Hass):
                     value = not value
 
                 self.log("switch_event: {} = {}".format(entity, value))
-                self.expose_config(item["name"], value, event=True)
+                await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
                 self.plan_valid = False
 
@@ -13363,6 +13400,15 @@ class PredBat(hass.Hass):
 
     def expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         """
+        Wrapper for async expose config
+        """
+        task = self.create_task(self.async_expose_config(name, value, quiet, event, force, in_progress))
+        while not task.done():
+            time.sleep(0.01)
+        return task.result()
+
+    async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
+        """
         Share the config with HA
         """
         item = self.config_index.get(name, None)
@@ -13387,6 +13433,7 @@ class PredBat(hass.Hass):
                     if not quiet:
                         self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
+                        """INPUT_NUMBER"""
                         icon = item.get("icon", "mdi:numeric")
                         unit = item["unit"]
                         unit = unit.replace("£", self.currency_symbols[0])
@@ -13404,14 +13451,23 @@ class PredBat(hass.Hass):
                             },
                         )
                     elif item["type"] == "switch":
+                        """SWITCH"""
                         icon = item.get("icon", "mdi:light-switch")
                         self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
+                        """SELECT"""
                         icon = item.get("icon", "mdi:format-list-bulleted")
                         if value is None:
                             value = item.get("default", "")
-                        self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": item["options"], "icon": icon})
+                        options = item["options"]
+                        if value not in options:
+                            options.append(value)
+                        old_state = await self.get_state(entity_id=entity)
+                        if old_state and old_state != value:
+                            self.set_state(entity_id=entity, state=old_state, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
+                        self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                     elif item["type"] == "update":
+                        """UPDATE"""
                         summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
                         state = "off"
@@ -13638,7 +13694,7 @@ class PredBat(hass.Hass):
 
         # New install, used to set default of expert mode
         new_install = True
-        current_status = self.load_previous_value_from_ha("predbat.status")
+        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
         if current_status:
             new_install = False
 
@@ -13705,7 +13761,10 @@ class PredBat(hass.Hass):
 
             # Push back into current state
             if ha_value is not None:
-                self.expose_config(item["name"], ha_value, quiet=quiet)
+                if item.get("manual"):
+                    self.manual_times(name, new_value=ha_value)
+                else:
+                    self.expose_config(item["name"], ha_value, quiet=quiet)
 
         # Register HA services
         if register:
@@ -13938,6 +13997,12 @@ class PredBat(hass.Hass):
         """
         global SIMULATE
         self.log("Predbat: Startup {}".format(__name__))
+        skew = self.args.get("clock_skew", 0)
+        run_every = RUN_EVERY * 60
+        skew = skew % (run_every / 60)
+        now = datetime.now() + timedelta(minutes=skew)
+        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.minutes_now = int((now - self.midnight).seconds / 60)
 
         try:
             self.reset()
@@ -13963,31 +14028,19 @@ class PredBat(hass.Hass):
             self.log("Best SOC array {}".format(soc_best))
             SIMULATE = True
 
-            skew = self.get_arg("clock_skew", 0)
-            now = datetime.now() + timedelta(minutes=skew)
-            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            minutes_now = int((now - midnight).seconds / 60)
-
             for offset in range(0, SIMULATE_LENGTH, 30):
-                self.simulate_offset = offset + 30 - (minutes_now % 30)
+                self.simulate_offset = offset + 30 - (self.minutes_now % 30)
                 self.sim_soc_kw = soc_best[int(self.simulate_offset / 5) * 5]
                 self.log(">>>>>>>>>> Simulated offset {} soc {} <<<<<<<<<<<<".format(self.simulate_offset, self.sim_soc_kw))
                 self.update_pred(scheduled=True)
         else:
             # Run every N minutes aligned to the minute
-            skew = self.get_arg("clock_skew", 0)
-            if skew:
-                self.log("WARN: Clock skew is set to {} minutes".format(skew))
-            run_every = RUN_EVERY * 60
-            skew = skew % (run_every / 60)
-            now = datetime.now() + timedelta(minutes=skew)
-            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-            seconds_now = (now - midnight).seconds
+            seconds_now = (now - self.midnight).seconds
 
             # Calculate next run time to exactly align with the run_every time
             seconds_offset = seconds_now % run_every
             seconds_next = seconds_now + (run_every - seconds_offset)
-            next_time = midnight + timedelta(seconds=seconds_next)
+            next_time = self.midnight + timedelta(seconds=seconds_next)
             self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
 
             # First run is now
@@ -14006,7 +14059,7 @@ class PredBat(hass.Hass):
                 self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
                 seconds_offset_balance = seconds_now % run_every_balance
                 seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
-                next_time_balance = midnight + timedelta(seconds=seconds_next_balance)
+                next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
                 self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
     @ad.app_lock
