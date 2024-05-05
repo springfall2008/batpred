@@ -13296,7 +13296,7 @@ class PredBat(hass.Hass):
                 latest = self.releases.get("latest", None)
                 if latest:
                     self.log("Requested install of latest version {}".format(latest))
-                    self.download_predbat_version(latest)
+                    await self.async_download_predbat_version(latest)
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")
 
@@ -13327,6 +13327,15 @@ class PredBat(hass.Hass):
 
     def download_predbat_version(self, version):
         """
+        Sync wrapper for async download_predbat_version
+        """
+        task = self.create_task(self.async_download_predbat_version(self, version))
+        while not task.done():
+            time.sleep(0.01)
+        return task.result()
+
+    async def async_download_predbat_version(self, version):
+        """
         Download a version of Predbat from GitHub
 
         Args:
@@ -13339,7 +13348,7 @@ class PredBat(hass.Hass):
             self.log("WARN: Predbat update requested for the same version as we are running ({}), no update required".format(version))
             return
 
-        self.expose_config("version", True, force=True, in_progress=True)
+        await self.async_expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
         self.log("Split returns {}".format(tag_split))
@@ -13424,7 +13433,7 @@ class PredBat(hass.Hass):
                 self.log("select_event: {}, {} = {}".format(item["name"], entity, value))
                 if item["name"] == "update":
                     self.log("Calling update service for {}".format(value))
-                    self.download_predbat_version(value)
+                    await self.async_download_predbat_version(value)
                 elif item["name"] == "saverestore":
                     if value == "save current":
                         self.update_save_restore_list()
