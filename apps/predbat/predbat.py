@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.11"
+THIS_VERSION = "v7.17.12"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -13340,7 +13340,7 @@ class PredBat(hass.Hass):
         """
         Sync wrapper for async download_predbat_version
         """
-        return self.run_async(self.async_download_predbat_version(self, version))
+        return self.run_async(self.async_download_predbat_version(version))
 
     async def async_download_predbat_version(self, version):
         """
@@ -13394,7 +13394,7 @@ class PredBat(hass.Hass):
                     self.pool = None
 
                 # Notify that we are about to update
-                await self.async_call_notify("Predbat: update to: {}".format(version))
+                self.call_notify("Predbat: update to: {}".format(version))
 
                 # Perform the update
                 self.log("Perform the update.....")
