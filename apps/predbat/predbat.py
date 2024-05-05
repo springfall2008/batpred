@@ -6076,11 +6076,15 @@ class PredBat(hass.Hass):
 
         prev = None
         new_data = {}
-        for stamp in time_data.keys():
+        keys = list(time_data.keys())
+        for id in range(len(keys)):
+            stamp = keys[id]
             value = time_data[stamp]
-            if prev is None or value != prev:
+            next_value = time_data[keys[id + 1]] if id + 1 < len(keys) else None
+            if prev is None or value != prev or next_value != value:
                 new_data[stamp] = value
             prev = value
+            id += 1
         return new_data
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
