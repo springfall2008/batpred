@@ -22,6 +22,7 @@ import pytz
 import requests
 import yaml
 from multiprocessing import Pool, cpu_count
+import asyncio
 
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
@@ -1181,7 +1182,6 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
 }
-
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
@@ -4362,12 +4362,32 @@ class PredBat(hass.Hass):
     The battery prediction class itself
     """
 
+    def run_async(self, func):
+        """
+        Run async func as sync
+        """
+        task = self.create_task(func)
+        count = 0
+        while not task.done() and count < 60*100:
+            time.sleep(0.01)
+            count += 1
+        if not task.done():
+            raise Exception("Timeout waiting for async function to complete")
+        return task.result()
+        
     def call_notify(self, message):
+        """
+        Sync wrapper for call_notify
+        """
+        return self.run_async(self.async_call_notify(message))
+
+    async def async_call_notify(self, message):
         """
         Send HA notifications
         """
         for device in self.notify_devices:
-            self.call_service("notify/" + device, message=message)
+            await self.call_service("notify/" + device, message=message)
+        return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
         """
@@ -4987,31 +5007,27 @@ class PredBat(hass.Hass):
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
 
-    async def get_history_async_hook(self, result, entity_id, days):
+    async def get_history_async_hook(self, entity_id, days):
         """
         Async function to get history from HA
         """
         if days:
-            result["data"] = await self.get_history(entity_id=entity_id, days=days)
+            history = await self.get_history(entity_id=entity_id, days=days)
         else:
-            result["data"] = await self.get_history(entity_id=entity_id)
+            history = await self.get_history(entity_id=entity_id)
+        return history
 
     def get_history_async(self, entity_id, days=None):
         """
         Async function to get history from HA using Async task
         """
-        result = {}
-        task = self.create_task(self.get_history_async_hook(result, entity_id=entity_id, days=days))
-        cnt = 0
-        while not task.done() and (cnt < 120):
-            time.sleep(0.05)
-            cnt += 0.05
+        result = self.run_async(self.get_history_async_hook(entity_id, days))
 
-        if "data" in result:
-            return result["data"]
-        else:
+        if result is None:
             self.log("Failure to fetch history for {}".format(entity_id))
             raise ValueError
+        else:
+            return result
 
     def minute_data_import_export(self, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True):
         """
@@ -8991,6 +9007,7 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
+        self.loop = asyncio.new_event_loop()
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.restart_active = False
@@ -12794,10 +12811,7 @@ class PredBat(hass.Hass):
         """
         Wrapper for async manual times
         """
-        task = self.create_task(self.async_manual_select(config_item, value))
-        while not task.done():
-            time.sleep(0.01)
-        return task.result()
+        return self.run_async(self.async_manual_select(config_item, value))
 
     async def async_manual_select(self, config_item, value):
         """
@@ -12850,10 +12864,7 @@ class PredBat(hass.Hass):
         """
         Wrapper for async manual times
         """
-        task = self.create_task(self.async_manual_times(config_item=config_item, exclude=exclude, new_value=new_value))
-        while not task.done():
-            time.sleep(0.01)
-        return task.result()
+        return self.run_async(self.async_manual_times(config_item=config_item, exclude=exclude, new_value=new_value))
 
     async def async_manual_times(self, config_item, exclude=[], new_value=None):
         """
@@ -13329,10 +13340,7 @@ class PredBat(hass.Hass):
         """
         Sync wrapper for async download_predbat_version
         """
-        task = self.create_task(self.async_download_predbat_version(self, version))
-        while not task.done():
-            time.sleep(0.01)
-        return task.result()
+        return self.run_async(self.async_download_predbat_version(self, version))
 
     async def async_download_predbat_version(self, version):
         """
@@ -13436,8 +13444,8 @@ class PredBat(hass.Hass):
                     await self.async_download_predbat_version(value)
                 elif item["name"] == "saverestore":
                     if value == "save current":
-                        self.update_save_restore_list()
-                        self.save_settings_yaml()
+                        await self.async_update_save_restore_list()
+                        await self.async_save_settings_yaml()
                     elif value == "restore default":
                         self.restore_settings_yaml(None)
                     else:
@@ -13557,10 +13565,7 @@ class PredBat(hass.Hass):
         """
         Wrapper for async expose config
         """
-        task = self.create_task(self.async_expose_config(name, value, quiet, event, force, in_progress))
-        while not task.done():
-            time.sleep(0.01)
-        return task.result()
+        return self.run_async(self.async_expose_config(name, value, quiet, event, force, in_progress))
 
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         """
@@ -13673,6 +13678,12 @@ class PredBat(hass.Hass):
 
     def update_save_restore_list(self):
         """
+        Sync wrapper for sync update_save_restore_list
+        """
+        return self.run_async(self.async_update_save_restore_list())
+
+    async def async_update_save_restore_list(self):
+        """
         Update list of current Predbat settings
         """
         global PREDBAT_SAVE_RESTORE
@@ -13694,9 +13705,9 @@ class PredBat(hass.Hass):
                     PREDBAT_SAVE_RESTORE.append(name)
         item = self.config_index.get("saverestore", None)
         item["options"] = PREDBAT_SAVE_RESTORE
-        self.expose_config("saverestore", None)
+        await self.async_expose_config("saverestore", None)
 
-    def restore_settings_yaml(self, filename):
+    async def restore_settings_yaml(self, filename):
         """
         Restore settings from YAML file
         """
@@ -13708,15 +13719,15 @@ class PredBat(hass.Hass):
             return
 
         if filename != "previous.yaml":
-            self.save_settings_yaml("previous.yaml")
+            await self.async_save_settings_yaml("previous.yaml")
 
         if not filename:
             self.log("Restore settings to default")
             for item in CONFIG_ITEMS:
                 if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
-                    self.expose_config(item["name"], item["default"], event=True)
-            self.call_notify("Predbat settings restored from default")
+                    await self.async_expose_config(item["name"], item["default"], event=True)
+            await self.async_call_notify("Predbat settings restored from default")
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
@@ -13727,11 +13738,11 @@ class PredBat(hass.Hass):
                         current = self.config_index.get(item["name"], None)
                         if current and (current["value"] != item["value"]) and current.get("restore", True):
                             self.log("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
-                            self.expose_config(item["name"], item["value"], event=True)
-                self.call_notify("Predbat settings restored from {}".format(filename))
-        self.expose_config("saverestore", None)
+                            await self.async_expose_config(item["name"], item["value"], event=True)
+                await self.async_call_notify("Predbat settings restored from {}".format(filename))
+        await self.async_expose_config("saverestore", None)
 
-    def save_settings_yaml(self, filename=None):
+    async def async_save_settings_yaml(self, filename=None):
         """
         Save current Predbat settings
         """
@@ -13745,7 +13756,7 @@ class PredBat(hass.Hass):
         with open(filepath, "w") as file:
             yaml.dump(CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath))
-        self.call_notify("Predbat settings saved to {}".format(filename))
+        await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
     def create_debug_yaml(self):
         """
