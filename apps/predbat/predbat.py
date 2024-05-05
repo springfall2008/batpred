@@ -13447,9 +13447,9 @@ class PredBat(hass.Hass):
                         await self.async_update_save_restore_list()
                         await self.async_save_settings_yaml()
                     elif value == "restore default":
-                        self.restore_settings_yaml(None)
+                        await self.async_restore_settings_yaml(None)
                     else:
-                        self.restore_settings_yaml(value)
+                        await self.async_restore_settings_yaml(value)
                 elif item.get("manual"):
                     await self.async_manual_select(item["name"], value)
                 else:
@@ -13707,7 +13707,7 @@ class PredBat(hass.Hass):
         item["options"] = PREDBAT_SAVE_RESTORE
         await self.async_expose_config("saverestore", None)
 
-    async def restore_settings_yaml(self, filename):
+    async def async_restore_settings_yaml(self, filename):
         """
         Restore settings from YAML file
         """
