@@ -6076,11 +6076,15 @@ class PredBat(hass.Hass):
 
         prev = None
         new_data = {}
-        for stamp in time_data.keys():
+        keys = list(time_data.keys())
+        for id in range(len(keys)):
+            stamp = keys[id]
             value = time_data[stamp]
-            if prev is None or value != prev:
+            next_value = time_data[keys[id + 1]] if id + 1 < len(keys) else None
+            if prev is None or value != prev or next_value != value:
                 new_data[stamp] = value
             prev = value
+            id += 1
         return new_data
 
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
@@ -13292,7 +13296,7 @@ class PredBat(hass.Hass):
                 latest = self.releases.get("latest", None)
                 if latest:
                     self.log("Requested install of latest version {}".format(latest))
-                    await self.async_download_predbat_version(latest)
+                    self.download_predbat_version(latest)
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")
 
@@ -13323,15 +13327,6 @@ class PredBat(hass.Hass):
 
     def download_predbat_version(self, version):
         """
-        Sync wrapper for async download_predbat_version
-        """
-        task = self.create_task(self.async_download_predbat_version(self, version))
-        while not task.done():
-            time.sleep(0.01)
-        return task.result()
-
-    async def async_download_predbat_version(self, version):
-        """
         Download a version of Predbat from GitHub
 
         Args:
@@ -13344,7 +13339,7 @@ class PredBat(hass.Hass):
             self.log("WARN: Predbat update requested for the same version as we are running ({}), no update required".format(version))
             return
 
-        await self.async_expose_config("version", True, force=True, in_progress=True)
+        self.expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
         this_path = os.path.dirname(__file__)
         self.log("Split returns {}".format(tag_split))
@@ -13429,7 +13424,7 @@ class PredBat(hass.Hass):
                 self.log("select_event: {}, {} = {}".format(item["name"], entity, value))
                 if item["name"] == "update":
                     self.log("Calling update service for {}".format(value))
-                    await self.async_download_predbat_version(value)
+                    self.download_predbat_version(value)
                 elif item["name"] == "saverestore":
                     if value == "save current":
                         self.update_save_restore_list()
