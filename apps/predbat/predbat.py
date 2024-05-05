@@ -1668,10 +1668,6 @@ class Prediction:
                     if self.set_reserve_enable:
                         reserve_expected = max(charge_limit_n - self.battery_rate_min * step, self.reserve)
 
-            # Add in standing charge, only for the final plan when we save the results
-            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
-                metric += self.metric_standing_charge
-
             # Outside the recording window?
             if minute >= end_record and record:
                 record = False
@@ -1698,6 +1694,10 @@ class Prediction:
                 self.predict_iboost_best[minute] = iboost_today_kwh
                 self.predict_carbon_best[minute] = carbon_g
 
+            # Add in standing charge, only for the final plan when we save the results
+            if (minute_absolute % (24 * 60)) < step and (save in ["best", "base", "base10", "best10"]):
+                metric += self.metric_standing_charge
+
             # Get load and pv forecast, total up for all values in the step
             pv_now = 0
             load_yesterday = 0
@@ -1720,7 +1720,7 @@ class Prediction:
                     car_load_scale = car_load[car_n] * step / 60.0
                     car_load_scale = car_load_scale * self.car_charging_loss
                     car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
-                    car_soc[car_n] += car_load_scale
+                    car_soc[car_n] = round(car_soc[car_n] + car_load_scale, 3)
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
                     if not self.car_charging_from_battery:
@@ -1989,10 +1989,10 @@ class Prediction:
             if record:
                 final_soc = soc
                 for car_n in range(self.num_cars):
-                    final_car_soc[car_n] = car_soc[car_n]
+                    final_car_soc[car_n] = round(car_soc[car_n], 3)
                     if minute == 0:
                         # Next car SOC
-                        self.car_charging_soc_next[car_n] = car_soc[car_n]
+                        self.car_charging_soc_next[car_n] = round(car_soc[car_n], 3)
 
                 final_metric = metric
                 final_import_kwh = import_kwh
@@ -7223,7 +7223,7 @@ class PredBat(hass.Hass):
 
             # Work out charging amounts
             if kwh > 0:
-                car_soc += kwh_add
+                car_soc = self.dp3(car_soc + kwh_add)
                 new_slot = {}
                 new_slot["start"] = start
                 new_slot["end"] = end
@@ -11007,7 +11007,7 @@ class PredBat(hass.Hass):
             self.car_charging_plan_time[car_n] = self.get_arg("car_charging_plan_time", "07:00:00")
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
-            self.car_charging_limit[car_n] = (float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0
+            self.car_charging_limit[car_n] = self.dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
 
         if self.num_cars > 0:
             self.log(
@@ -12424,7 +12424,7 @@ class PredBat(hass.Hass):
                         self.car_charging_rate[0] = rate
 
                 # Get car charging limit again from car based on new battery size
-                self.car_charging_limit[0] = (float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0
+                self.car_charging_limit[0] = self.dp3((float(self.get_arg("car_charging_limit", 100.0, index=0)) * self.car_charging_battery_size[0]) / 100.0)
 
                 # Extract vehicle preference if we can get it
                 if vehicle_pref and self.octopus_intelligent_charging:
@@ -12435,7 +12435,7 @@ class PredBat(hass.Hass):
                     else:
                         octopus_ready_time += ":00"
                     self.car_charging_plan_time[0] = octopus_ready_time
-                    octopus_limit = self.dp2(octopus_limit * self.car_charging_battery_size[0] / 100.0)
+                    octopus_limit = self.dp3(octopus_limit * self.car_charging_battery_size[0] / 100.0)
                     self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                 elif self.octopus_intelligent_charging:
                     octopus_ready_time = self.get_arg("octopus_ready_time", None)
@@ -12447,7 +12447,7 @@ class PredBat(hass.Hass):
                             self.log("Warn: octopus_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
                             octopus_limit = None
                     if octopus_limit:
-                        octopus_limit = self.dp2(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
+                        octopus_limit = self.dp3(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)
                         self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                     if octopus_ready_time:
                         self.car_charging_plan_time[0] = octopus_ready_time
@@ -12477,7 +12477,11 @@ class PredBat(hass.Hass):
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
-            self.log("Current Car SOC kWh: {}".format(self.car_charging_soc))
+            self.log(
+                "Current Car SOC kWh: {} Charge limit {} plan time {} battery size {}".format(
+                    self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size
+                )
+            )
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
@@ -14227,6 +14231,16 @@ class PredBat(hass.Hass):
                 seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
                 next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
                 self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
+
+    async def terminate(self):
+        """
+        Called once each time the app terminates
+        """
+        self.log("Predbat terminated")
+        if self.pool:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
 
     @ad.app_lock
     def update_time_loop(self, cb_args):
