@@ -13394,7 +13394,7 @@ class PredBat(hass.Hass):
                     self.pool = None
 
                 # Notify that we are about to update
-                self.call_notify("Predbat: update to: {}".format(version))
+                await self.async_call_notify("Predbat: update to: {}".format(version))
 
                 # Perform the update
                 self.log("Perform the update.....")
