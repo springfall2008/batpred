@@ -9007,7 +9007,6 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
-        self.loop = asyncio.new_event_loop()
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.restart_active = False
