@@ -1183,6 +1183,7 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority": 98,
 }
 
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
     Filters and removes intersecting charge windows
@@ -4368,13 +4369,13 @@ class PredBat(hass.Hass):
         """
         task = self.create_task(func)
         count = 0
-        while not task.done() and count < 60*100:
+        while not task.done() and count < 60 * 100:
             time.sleep(0.01)
             count += 1
         if not task.done():
             raise Exception("Timeout waiting for async function to complete")
         return task.result()
-        
+
     def call_notify(self, message):
         """
         Sync wrapper for call_notify
