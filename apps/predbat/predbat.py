@@ -9,6 +9,7 @@ import os
 import re
 import time
 import math
+from aiohttp import web
 
 # fmt off
 # pylint: disable=consider-using-f-string
@@ -8124,6 +8125,7 @@ class PredBat(hass.Hass):
             rate_value_export = self.dp2(self.rate_export.get(minute, 0))
             charge_window_n = -1
             discharge_window_n = -1
+            time_string_only = rate_start.strftime("%H:%M:00")
 
             import_cost_threshold = self.rate_import_cost_threshold
             export_cost_threshold = self.rate_export_cost_threshold
@@ -8208,7 +8210,7 @@ class PredBat(hass.Hass):
             state = soc_sym
             state_color = "#FFFFFF"
             if minute in self.manual_idle_times:
-                state += " &#8526;"
+                state += ' <A HREF="/app/{}?select.{}_manual_idle=[{}]">&#8526;</A>'.format(self.prefix, self.prefix, time_string_only)
 
             pv_color = "#BCBCBC"
             load_color = "#FFFFFF"
@@ -8278,9 +8280,10 @@ class PredBat(hass.Hass):
                         state_color = "#3AEE85"
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
-                        state += " &#8526;"
+                        state += ' <A HREF="/app/{}?select.{}_manual_charge=[{}]">&#8526;</A>'.format(self.prefix, self.prefix, time_string_only)
+
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
-                        state += " &#8526;"
+                        state += ' <A HREF="/app/{}?select.{}_manual_freeze_charge=[{}]">&#8526;</A>'.format(self.prefix, self.prefix, time_string_only)
                     show_limit = str(limit_percent)
             else:
                 if discharge_window_n >= 0:
@@ -8320,9 +8323,9 @@ class PredBat(hass.Hass):
                     show_limit = str(int(limit))
 
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
-                    state += " &#8526;"
+                    state += ' <A HREF="/app/{}?select.{}_manual_discharge=[{}]">&#8526;</A>'.format(self.prefix, self.prefix, time_string_only)
                 elif self.discharge_window_best[discharge_window_n]["start"] in self.manual_freeze_discharge_times:
-                    state += " &#8526;"
+                    state += ' <A HREF="/app/{}?select.{}_manual_freeze_discharge=[{}]">&#8526;</A>'.format(self.prefix, self.prefix, time_string_only)
 
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
@@ -8338,6 +8341,10 @@ class PredBat(hass.Hass):
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
 
+            rate_str_import += ' <A HREF="/app/{}?select.{}_manual_charge={}">C</A>'.format(self.prefix, self.prefix, time_string_only)
+            rate_str_import += ' <A HREF="/app/{}?select.{}_manual_freeze_charge={}">F</A>'.format(self.prefix, self.prefix, time_string_only)
+            rate_str_import += ' <A HREF="/app/{}?select.{}_manual_idle={}">I</A>'.format(self.prefix, self.prefix, time_string_only)
+
             adjust_type = self.rate_export_replicated.get(minute, None)
             adjust_symbol = self.adjust_symbol(adjust_type)
             if adjust_symbol:
@@ -8350,6 +8357,9 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0:
                 rate_str_export = "<b>" + rate_str_export + "</b>"
+
+            rate_str_export += ' <A HREF="/app/{}?select.{}_manual_discharge={}">D</A>'.format(self.prefix, self.prefix, time_string_only)
+            rate_str_export += ' <A HREF="/app/{}?select.{}_manual_freeze_discharge={}">F</A>'.format(self.prefix, self.prefix, time_string_only)
 
             # Total cost at start of slot, add leading minus if negative
             if metric_start >= 0:
@@ -8481,6 +8491,8 @@ class PredBat(hass.Hass):
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+        self.plan_html = html
+        self.plan_html_outdated = False
 
     def publish_rates(self, rates, export, gas=False):
         """
@@ -9009,7 +9021,11 @@ class PredBat(hass.Hass):
         PRED_GLOBAL["dict"] = None
 
         self.currency_symbols = self.args.get("currency_symbols", "£p")
+        self.webserver_route = None
         self.pool = None
+        self.plan_html = ""
+        self.plan_html_outdated = True
+        self.local_url = None
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -14081,7 +14097,7 @@ class PredBat(hass.Hass):
                     self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
                     self.log("WARN: appdaemon section is missing from appdaemon.yaml")
-                    passed = False
+                    passed = False                
         else:
             self.log("WARN: unable to find {}".format(appdaemon_config))
             passed = False
@@ -14228,6 +14244,20 @@ class PredBat(hass.Hass):
                 next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
                 self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
+            self.webserver_route = self.register_route(self.handle_web, self.prefix)
+
+    async def terminate(self):
+        """
+        Terminate the app, called once each time the app terminates
+        """
+        self.log("Predbat terminated")
+        if self.webserver_route:
+            self.deregister_route(self.webserver_route)
+        if self.pool:
+            self.pool.close()
+            self.pool.join()
+            self.pool = None
+
     @ad.app_lock
     def update_time_loop(self, cb_args):
         """
@@ -14283,3 +14313,47 @@ class PredBat(hass.Hass):
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
+    
+    async def handle_web(self, request, rargs):
+        """
+        Handle web interface
+        """
+        css = '<style>body{font-family:Roboto,Noto,Noto Sans,sans-serif;-moz-osx-font-smoothing:grayscale;-webkit-font-smoothing:antialiased;font-weight:400;margin:2;padding:2;height:100%}</style><style>html{background-color: #1c1c1c;color:var(--primary-text-color,#ffffff);height:100vh}@media (prefers-color-scheme:dark){html{background-color:var(--primary-background-color,#111);color:var(--primary-text-color,#e1e1e1)}}#ha-launch-screen{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center}#ha-launch-screen svg{width:112px;flex-shrink:0}#ha-launch-screen .ha-launch-screen-spacer{flex:1}</style>'
+        html = '<!DOCTYPE html><html><head><title>Predbat</title>'
+        html += '<meta http-equiv="refresh" content="10" />'
+        html += '<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />'
+        html += '<meta http-equiv="Pragma" content="no-cache" />'
+        html += '<meta http-equiv="Expires" content="0" />'
+        html += css
+        html += '</head><body>'
+
+        self.local_url = request.host
+
+        query_data = request.query
+        for item in query_data.keys():
+            if item.startswith("select."):
+                value = query_data[item]
+                data = {}
+                data['service_data'] = {}
+                data['service_data']['option'] = value
+                data['service_data']['entity_id'] = item
+                await self.select_event("call_service", data, {})
+
+        # Redirect
+        if query_data:
+            host = request.host
+            path = "/app/" + self.prefix
+            redirect = host + path
+            self.plan_html_outdated = True
+            return web.Response(status=302, headers={"Location": redirect})
+
+        html += "<h1>Predbat</h1>"
+        if self.plan_html:
+            if self.plan_html_outdated:
+                html += '<p><i>Please wait for plan to calculate...</i></p>'
+                self.log("Plan outdated, updating...")
+            html += self.plan_html
+        else:
+            html += '<p><i>Please wait for plan to calculate...</i></p>'
+        html += "</body></html>"
+        return web.Response(text=html, content_type="text/html")
