@@ -14097,7 +14097,7 @@ class PredBat(hass.Hass):
                     self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
                     self.log("WARN: appdaemon section is missing from appdaemon.yaml")
-                    passed = False                
+                    passed = False
         else:
             self.log("WARN: unable to find {}".format(appdaemon_config))
             passed = False
@@ -14313,19 +14313,19 @@ class PredBat(hass.Hass):
                 self.log("ERROR: Exception raised {}".format(e))
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
-    
+
     async def handle_web(self, request, rargs):
         """
         Handle web interface
         """
-        css = '<style>body{font-family:Roboto,Noto,Noto Sans,sans-serif;-moz-osx-font-smoothing:grayscale;-webkit-font-smoothing:antialiased;font-weight:400;margin:2;padding:2;height:100%}</style><style>html{background-color: #1c1c1c;color:var(--primary-text-color,#ffffff);height:100vh}@media (prefers-color-scheme:dark){html{background-color:var(--primary-background-color,#111);color:var(--primary-text-color,#e1e1e1)}}#ha-launch-screen{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center}#ha-launch-screen svg{width:112px;flex-shrink:0}#ha-launch-screen .ha-launch-screen-spacer{flex:1}</style>'
-        html = '<!DOCTYPE html><html><head><title>Predbat</title>'
+        css = "<style>body{font-family:Roboto,Noto,Noto Sans,sans-serif;-moz-osx-font-smoothing:grayscale;-webkit-font-smoothing:antialiased;font-weight:400;margin:2;padding:2;height:100%}</style><style>html{background-color: #1c1c1c;color:var(--primary-text-color,#ffffff);height:100vh}@media (prefers-color-scheme:dark){html{background-color:var(--primary-background-color,#111);color:var(--primary-text-color,#e1e1e1)}}#ha-launch-screen{height:100%;display:flex;flex-direction:column;justify-content:center;align-items:center}#ha-launch-screen svg{width:112px;flex-shrink:0}#ha-launch-screen .ha-launch-screen-spacer{flex:1}</style>"
+        html = "<!DOCTYPE html><html><head><title>Predbat</title>"
         html += '<meta http-equiv="refresh" content="10" />'
         html += '<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />'
         html += '<meta http-equiv="Pragma" content="no-cache" />'
         html += '<meta http-equiv="Expires" content="0" />'
         html += css
-        html += '</head><body>'
+        html += "</head><body>"
 
         self.local_url = request.host
 
@@ -14334,9 +14334,9 @@ class PredBat(hass.Hass):
             if item.startswith("select."):
                 value = query_data[item]
                 data = {}
-                data['service_data'] = {}
-                data['service_data']['option'] = value
-                data['service_data']['entity_id'] = item
+                data["service_data"] = {}
+                data["service_data"]["option"] = value
+                data["service_data"]["entity_id"] = item
                 await self.select_event("call_service", data, {})
 
         # Redirect
@@ -14350,10 +14350,10 @@ class PredBat(hass.Hass):
         html += "<h1>Predbat</h1>"
         if self.plan_html:
             if self.plan_html_outdated:
-                html += '<p><i>Please wait for plan to calculate...</i></p>'
+                html += "<p><i>Please wait for plan to calculate...</i></p>"
                 self.log("Plan outdated, updating...")
             html += self.plan_html
         else:
-            html += '<p><i>Please wait for plan to calculate...</i></p>'
+            html += "<p><i>Please wait for plan to calculate...</i></p>"
         html += "</body></html>"
         return web.Response(text=html, content_type="text/html")
