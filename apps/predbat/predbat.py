@@ -12477,7 +12477,11 @@ class PredBat(hass.Hass):
             else:
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
-            self.log("Current Car SOC kWh: {} Charge limit {} plan time {} battery size {}".format(self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size))
+            self.log(
+                "Current Car SOC kWh: {} Charge limit {} plan time {} battery size {}".format(
+                    self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size
+                )
+            )
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
