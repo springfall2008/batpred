@@ -1183,7 +1183,6 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority": 98,
 }
 
-
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
     Filters and removes intersecting charge windows
@@ -4369,13 +4368,13 @@ class PredBat(hass.Hass):
         """
         task = self.create_task(func)
         count = 0
-        while not task.done() and count < 60 * 100:
+        while not task.done() and count < 60*100:
             time.sleep(0.01)
             count += 1
         if not task.done():
             raise Exception("Timeout waiting for async function to complete")
         return task.result()
-
+        
     def call_notify(self, message):
         """
         Sync wrapper for call_notify
@@ -13447,9 +13446,9 @@ class PredBat(hass.Hass):
                         await self.async_update_save_restore_list()
                         await self.async_save_settings_yaml()
                     elif value == "restore default":
-                        self.restore_settings_yaml(None)
+                        await self.async_restore_settings_yaml(None)
                     else:
-                        self.restore_settings_yaml(value)
+                        await self.async_restore_settings_yaml(value)
                 elif item.get("manual"):
                     await self.async_manual_select(item["name"], value)
                 else:
@@ -13707,7 +13706,7 @@ class PredBat(hass.Hass):
         item["options"] = PREDBAT_SAVE_RESTORE
         await self.async_expose_config("saverestore", None)
 
-    async def restore_settings_yaml(self, filename):
+    async def async_restore_settings_yaml(self, filename):
         """
         Restore settings from YAML file
         """
