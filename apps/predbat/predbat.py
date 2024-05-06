@@ -1468,7 +1468,7 @@ class Prediction:
         else:
             try_charge_limit[window_n] = try_soc
 
-        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
         )
         min_soc = 0
@@ -1483,7 +1483,7 @@ class Prediction:
                 max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
 
         return (
-            metricmid,
+            cost,
             import_kwh_battery,
             import_kwh_house,
             export_kwh,
@@ -9235,6 +9235,8 @@ class PredBat(hass.Hass):
         best_soc_min=None,
         best_price_charge=None,
         best_price_discharge=None,
+        best_cycle=0,
+        best_carbon=0,
     ):
         """
         Pick an import price threshold which gives the best results
@@ -9244,7 +9246,6 @@ class PredBat(hass.Hass):
         try_discharge = discharge_limits.copy()
         best_limits = try_charge_limit.copy()
         best_discharge = try_discharge.copy()
-        best_cost = 0
         if best_soc_min is None:
             best_soc_min = self.reserve
         if best_price_charge is None:
@@ -9271,8 +9272,8 @@ class PredBat(hass.Hass):
         window_prices = {}
         window_prices_discharge = {}
         for loop_price in all_prices:
-            for modulo in [2, 3, 4, 8, 16, 32]:
-                for divide in [1, 2, 3, 4, 8, 16, 96]:
+            for modulo in [2, 3, 4, 6, 8, 16, 32]:
+                for divide in [1, 2, 3, 4, 8, 16, 32, 96]:
                     all_n = []
                     all_d = []
                     highest_price_charge = price_set[-1]
@@ -9314,6 +9315,10 @@ class PredBat(hass.Hass):
                             if all_d:
                                 first_discharge = False
 
+                    # Sort for print out
+                    all_n.sort()
+                    all_d.sort()
+
                     for discharge_enable in discharge_enable_options:
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
@@ -9329,7 +9334,7 @@ class PredBat(hass.Hass):
                                 try_charge_limit[window_n] = 0
 
                         # Try discharge on/off
-                        try_discharge = discharge_limits.copy()
+                        try_discharge = best_discharge.copy()
                         if discharge_enable:
                             if not all_d:
                                 continue
@@ -9355,8 +9360,8 @@ class PredBat(hass.Hass):
                         if try_hash in tried_list:
                             if self.debug_enable and 0:
                                 self.log(
-                                    "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones".format(
-                                        divide, all_n, all_d, discharge_enable
+                                    "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
+                                        divide, all_n, all_d, discharge_enable, try_hash
                                     )
                                 )
                             continue
@@ -9397,7 +9402,7 @@ class PredBat(hass.Hass):
                         )
 
                         # Optimise
-                        if self.debug_enable and 0:
+                        if self.debug_enable:
                             if discharge_enable:
                                 self.log(
                                     "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {}".format(
@@ -9406,8 +9411,8 @@ class PredBat(hass.Hass):
                                 )
                             else:
                                 self.log(
-                                    "Optimise all for buy/sell price band <= {} metric {} keep {} soc_min {} windows {} discharge off".format(
-                                        loop_price, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n
+                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge off".format(
+                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n
                                     )
                                 )
 
@@ -9420,27 +9425,41 @@ class PredBat(hass.Hass):
                             best_price_discharge = lowest_price_discharge
                             best_limits = try_charge_limit.copy()
                             best_discharge = try_discharge.copy()
+                            best_cycle = battery_cycle
+                            best_carbon = final_carbon_g
                             best_soc_min = soc_min
                             best_cost = cost
                             if 1 or not quiet:
                                 self.log(
-                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at metric {} keep {} cost {} limits {} discharge {}".format(
-                                        loop_price, best_price_charge, self.dp4(best_metric), self.dp4(best_keep), self.dp4(best_cost), best_limits, best_discharge
+                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {}".format(
+                                        loop_price,
+                                        best_price_charge,
+                                        self.dp4(best_cost),
+                                        self.dp4(best_metric),
+                                        self.dp4(best_keep),
+                                        self.dp4(best_cycle),
+                                        self.dp0(best_carbon),
+                                        self.dp4(best_cost),
+                                        best_limits,
+                                        best_discharge,
                                     )
                                 )
         self.log(
-            "Optimise all charge for all bands best price threshold {} charges at {} at metric {} keep {} cost {} soc_min {} limits {} discharge {}".format(
+            "Optimise all charge for all bands best price threshold {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
                 self.dp4(best_price),
                 self.dp4(best_price_charge),
+                self.dp4(best_cost),
                 self.dp4(best_metric),
                 self.dp4(best_keep),
+                self.dp4(best_cycle),
+                self.dp0(best_carbon),
                 self.dp4(best_cost),
                 self.dp4(best_soc_min),
                 best_limits,
                 best_discharge,
             )
         )
-        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -9529,6 +9548,8 @@ class PredBat(hass.Hass):
         best_metric = metric
         best_cost = cost
         best_keep = metric_keep
+        best_cycle = 0
+        best_carbon = 0
 
         price_sorted = self.sort_window_by_price(charge_window)
         price_sorted.reverse()
@@ -9618,10 +9639,12 @@ class PredBat(hass.Hass):
                             best_soc = soc
                             best_soc_min = soc_min
                             best_soc_min_minute = soc_min_minute
+                            best_cycle = battery_cycle
+                            best_carbon = final_carbon_g
                             charge_limit = try_limit.copy()
                             self.log("Swap optimisation window {} -> {} selected with metric {}".format(window_n, window_swap, metric))
         self.log("Swap optimisation finished with metric {}".format(best_metric))
-        return charge_limit, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
+        return charge_limit, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon
 
     def compute_metric(
         self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
@@ -9647,16 +9670,16 @@ class PredBat(hass.Hass):
             * self.metric_battery_value_scaling
         )
 
-        # Carbon metric
-        if self.carbon_enable:
-            metric += (final_carbon_g / 1000) * self.carbon_metric
-            metric10 += (final_carbon_g10 / 1000) * self.carbon_metric
-
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
             metric_diff *= self.pv_metric10_weight
             metric += metric_diff
+
+        # Carbon metric
+        if self.carbon_enable:
+            metric += (final_carbon_g / 1000) * self.carbon_metric
+            metric10 += (final_carbon_g10 / 1000) * self.carbon_metric
 
         # Adjustment for battery cycles metric
         metric += battery_cycle * self.metric_battery_cycle + metric_keep
@@ -9676,6 +9699,8 @@ class PredBat(hass.Hass):
         best_cost = 0
         best_soc_step = self.best_soc_step
         best_keep = 0
+        best_cycle = 0
+        best_carbon = 0
         all_max_soc = self.soc_max
         all_min_soc = 0
         try_charge_limit = copy.deepcopy(charge_limit)
@@ -9709,7 +9734,7 @@ class PredBat(hass.Hass):
             id = 0
             for han in hans:
                 (
-                    metricmid,
+                    cost,
                     import_kwh_battery,
                     import_kwh_house,
                     export_kwh,
@@ -9727,7 +9752,7 @@ class PredBat(hass.Hass):
                 all_max_soc = max(all_max_soc, max_soc)
                 if id == 0:
                     resultmid[loop_soc] = [
-                        metricmid,
+                        cost,
                         import_kwh_battery,
                         import_kwh_house,
                         export_kwh,
@@ -9743,7 +9768,7 @@ class PredBat(hass.Hass):
                     ]
                 elif id == 1:
                     result10[loop_soc] = [
-                        metricmid,
+                        cost,
                         import_kwh_battery,
                         import_kwh_house,
                         export_kwh,
@@ -9759,7 +9784,7 @@ class PredBat(hass.Hass):
                     ]
                 elif id == 2:
                     resultmid[best_soc_min] = [
-                        metricmid,
+                        cost,
                         import_kwh_battery,
                         import_kwh_house,
                         export_kwh,
@@ -9775,7 +9800,7 @@ class PredBat(hass.Hass):
                     ]
                 elif id == 3:
                     result10[best_soc_min] = [
-                        metricmid,
+                        cost,
                         import_kwh_battery,
                         import_kwh_house,
                         export_kwh,
@@ -9912,11 +9937,12 @@ class PredBat(hass.Hass):
 
             if self.debug_enable:
                 self.log(
-                    "Sim: SOC {} window {} metric {} metricmid {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} metric_keep10 {} cycle {} cycle10 {}".format(
+                    "Sim: SOC {} window {} metric {} cost {} cost10 {} metric10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} metric_keep10 {} cycle {} cycle10 {} carbon {} carbon10 {}".format(
                         try_soc,
                         window_n,
                         metric,
-                        metricmid,
+                        cost,
+                        cost10,
                         metric10,
                         soc,
                         soc10,
@@ -9927,12 +9953,14 @@ class PredBat(hass.Hass):
                         metric_keep10,
                         battery_cycle,
                         battery_cycle10,
+                        final_carbon_g,
+                        final_carbon_g10,
                     )
                 )
 
             if self.debug_enable:
                 self.log(
-                    "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} metricmid {} metric10 {}".format(
+                    "Sim: SOC {} window {} imp bat {} house {} exp {} min_soc {} @ {} soc {} cost {} metric {} keep {} cost {} cost10 {} metric10 {}".format(
                         try_soc,
                         window_n,
                         self.dp4(import_kwh_battery),
@@ -9944,7 +9972,8 @@ class PredBat(hass.Hass):
                         self.dp4(cost),
                         self.dp4(metric),
                         self.dp4(metric_keep),
-                        self.dp4(metricmid),
+                        self.dp4(cost),
+                        self.dp4(cost10),
                         self.dp4(metric10),
                     )
                 )
@@ -9960,6 +9989,8 @@ class PredBat(hass.Hass):
                 best_soc_min = soc_min
                 best_soc_min_minute = soc_min_minute
                 best_keep = metric_keep
+                best_cycle = battery_cycle
+                best_carbon = final_carbon_g
 
         # Add margin last
         best_soc = min(best_soc + self.best_soc_margin, self.soc_max)
@@ -9967,7 +9998,7 @@ class PredBat(hass.Hass):
         if self.debug_enable:
             if not all_n:
                 self.log(
-                    "Try optimising charge window(s)    {}: {} - {} price {} cost {} metric {} keep {} selected {} was {} results {}".format(
+                    "Try optimising charge window(s)    {}: {} - {} price {} cost {} metric {} keep {} cycle {} carbon {} selected {} was {} results {}".format(
                         window_n,
                         self.time_abs_str(window["start"]),
                         self.time_abs_str(window["end"]),
@@ -9975,6 +10006,8 @@ class PredBat(hass.Hass):
                         self.dp4(best_cost),
                         self.dp4(best_metric),
                         self.dp4(best_keep),
+                        self.dp4(best_cycle),
+                        self.dp0(best_carbon),
                         best_soc,
                         charge_limit[window_n],
                         window_results,
@@ -9982,11 +10015,20 @@ class PredBat(hass.Hass):
                 )
             else:
                 self.log(
-                    "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} selected {} was {} results {}".format(
-                        all_n, charge_window[window_n]["average"], self.dp2(best_cost), self.dp2(best_metric), self.dp2(best_keep), best_soc, charge_limit[window_n], window_results
+                    "Try optimising charge window(s)    {}: price {} cost {} metric {} keep {} cycle {} carbon {} selected {} was {} results {}".format(
+                        all_n,
+                        charge_window[window_n]["average"],
+                        self.dp2(best_cost),
+                        self.dp2(best_metric),
+                        self.dp2(best_keep),
+                        self.dp2(best_cycle),
+                        self.dp0(best_carbon),
+                        best_soc,
+                        charge_limit[window_n],
+                        window_results,
                     )
                 )
-        return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
+        return best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon
 
     def optimise_discharge(
         self, window_n, record_charge_windows, try_charge_limit, charge_window, discharge_window, discharge_limit, all_n=None, end_record=None, freeze_only=False
@@ -10001,6 +10043,8 @@ class PredBat(hass.Hass):
         best_soc_min = 0
         best_soc_min_minute = 0
         best_keep = 0
+        best_cycle = 0
+        best_carbon = 0
         this_discharge_limit = 100.0
         window = discharge_window[window_n]
         try_discharge_window = copy.deepcopy(discharge_window)
@@ -10143,6 +10187,8 @@ class PredBat(hass.Hass):
                 best_start = start
                 best_size = window_size
                 best_keep = metric_keep
+                best_cycle = battery_cycle
+                best_carbon = final_carbon_g
 
             # Store the metric for discharge off
             if off_metric == 9999999:
@@ -10179,7 +10225,7 @@ class PredBat(hass.Hass):
                     )
                 )
 
-        return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
+        return best_discharge, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon
 
     def window_sort_func(self, window):
         """
@@ -10577,6 +10623,8 @@ class PredBat(hass.Hass):
         best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
+        best_cycle = 0
+        best_carbon = 0
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows])
         for key in window_sorted:
@@ -10585,7 +10633,7 @@ class PredBat(hass.Hass):
             if typ == "c":
                 window_start = self.charge_window_best[window_n]["start"]
                 if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_charge_limit(
+                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_charge_limit(
                         window_n,
                         record_charge_windows,
                         self.charge_limit_best,
@@ -10604,7 +10652,7 @@ class PredBat(hass.Hass):
                             continue
                         if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
                             continue
-                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
+                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_discharge(
                         window_n,
                         record_discharge_windows,
                         self.charge_limit_best,
@@ -10619,7 +10667,11 @@ class PredBat(hass.Hass):
             if count >= 8:
                 break
 
-        self.log("Tweak optimisation finished metric {} cost {} metric_keep {}".format(self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep)))
+        self.log(
+            "Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {}".format(
+                self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.dp2(best_cycle), self.dp0(best_carbon)
+            )
+        )
 
     def optimise_all_windows(self, best_metric, metric_keep):
         """
@@ -10642,7 +10694,18 @@ class PredBat(hass.Hass):
             self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
             self.optimise_charge_windows_reset(reset_all=True)
             self.optimise_charge_windows_manual()
-            self.charge_limit_best, ignore_discharge_limits, best_price, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min = self.optimise_charge_limit_price(
+            (
+                self.charge_limit_best,
+                ignore_discharge_limits,
+                best_price,
+                best_price_discharge,
+                best_metric,
+                best_cost,
+                best_keep,
+                best_soc_min,
+                best_cycle,
+                best_carbon,
+            ) = self.optimise_charge_limit_price(
                 price_set,
                 price_links,
                 window_index,
@@ -10658,7 +10721,7 @@ class PredBat(hass.Hass):
             if self.calculate_regions:
                 self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
                 region_size = int(16 * 60)
-                while region_size >= 4 * 60:
+                while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record, region_size):
                         region_end = min(region + region_size, self.end_record)
@@ -10671,6 +10734,8 @@ class PredBat(hass.Hass):
                             best_cost,
                             best_keep,
                             best_soc_min,
+                            best_cycle,
+                            best_carbon,
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
@@ -10691,6 +10756,8 @@ class PredBat(hass.Hass):
                             best_soc_min=best_soc_min,
                             best_price_charge=best_price,
                             best_price_discharge=best_price_discharge,
+                            best_cycle=best_cycle,
+                            best_carbon=best_carbon,
                         )
                     region_size = int(region_size / 2)
 
@@ -10761,14 +10828,22 @@ class PredBat(hass.Hass):
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {}".format(
-                                        price_key, pass_type, price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)
+                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {} best_cycle {} best_carbon {}".format(
+                                        price_key,
+                                        pass_type,
+                                        price,
+                                        start_at_low,
+                                        best_price,
+                                        self.dp2(best_metric),
+                                        self.dp2(best_cost),
+                                        self.dp2(best_cycle),
+                                        self.dp0(best_carbon),
                                     )
                                 )
                                 printed_set = True
                             average = self.charge_window_best[window_n]["average"]
 
-                            best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_charge_limit(
+                            best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_charge_limit(
                                 window_n,
                                 record_charge_windows,
                                 self.charge_limit_best,
@@ -10781,7 +10856,7 @@ class PredBat(hass.Hass):
 
                             if self.debug_enable:
                                 self.log(
-                                    "Best charge limit window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} windows {}".format(
+                                    "Best charge limit window {} time {} - {} cost {} charge_limit {} (adjusted) min {} @ {} (margin added {} and min {} max {}) with metric {} cost {} cycle {} carbon {} windows {}".format(
                                         window_n,
                                         self.time_abs_str(self.charge_window_best[window_n]["start"]),
                                         self.time_abs_str(self.charge_window_best[window_n]["end"]),
@@ -10794,6 +10869,8 @@ class PredBat(hass.Hass):
                                         self.best_soc_max,
                                         self.dp2(best_metric),
                                         self.dp2(best_cost),
+                                        self.dp2(best_cycle),
+                                        self.dp0(best_carbon),
                                         calc_percent_limit(self.charge_limit_best, self.soc_max),
                                     )
                                 )
@@ -10835,13 +10912,21 @@ class PredBat(hass.Hass):
 
                             if not printed_set:
                                 self.log(
-                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {}".format(
-                                        price_key, pass_type, price, start_at_low, best_price, self.dp2(best_metric), self.dp2(best_cost)
+                                    "Optimise price set {} pass {} price {} start_at_low {} best_price {} best_metric {} best_cost {} best_cycle {} best_carbon {}".format(
+                                        price_key,
+                                        pass_type,
+                                        price,
+                                        start_at_low,
+                                        best_price,
+                                        self.dp2(best_metric),
+                                        self.dp2(best_cost),
+                                        self.dp2(best_cycle),
+                                        self.dp0(best_carbon),
                                     )
                                 )
                                 printed_set = True
 
-                            best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
+                            best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_discharge(
                                 window_n,
                                 record_discharge_windows,
                                 self.charge_limit_best,
@@ -10856,7 +10941,7 @@ class PredBat(hass.Hass):
 
                             if self.debug_enable:
                                 self.log(
-                                    "Best discharge limit window {} time {} - {} cost {} discharge_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {}".format(
+                                    "Best discharge limit window {} time {} - {} cost {} discharge_limit {} (adjusted) min {} @ {} (margin added {} and min {}) with metric {} cost {} cycle {} carbon {}".format(
                                         window_n,
                                         self.time_abs_str(self.discharge_window_best[window_n]["start"]),
                                         self.time_abs_str(self.discharge_window_best[window_n]["end"]),
@@ -10868,6 +10953,8 @@ class PredBat(hass.Hass):
                                         self.best_soc_min,
                                         self.dp2(best_metric),
                                         self.dp2(best_cost),
+                                        self.dp2(best_cycle),
+                                        self.dp0(best_carbon),
                                     )
                                 )
 
@@ -10899,20 +10986,20 @@ class PredBat(hass.Hass):
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
-        # self.log("Swap optimisation started")
-        # self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep = self.optimise_charge_limit_swap(self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record)
-        # self.log(
-        #    "Best after swap best_metric {} best_cost {} metric_keep {} end_record {}".format(
-        #        self.dp2(best_metric),
-        #        self.dp2(best_cost),
-        #        self.dp2(best_keep),
-        #        self.time_abs_str(self.end_record + self.minutes_now)
-        #    )
-        # )
-        # Re-compute end record
-        # self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
-        # record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
-        # record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
+        if 0:
+            self.log("Swap optimisation started")
+            self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_charge_limit_swap(
+                self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record
+            )
+            self.log(
+                "Best after swap best_metric {} best_cost {} metric_keep {} end_record {}".format(
+                    self.dp2(best_metric), self.dp2(best_cost), self.dp2(best_keep), self.time_abs_str(self.end_record + self.minutes_now)
+                )
+            )
+            # Re-compute end record
+            self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+            record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+            record_discharge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.discharge_window_best), 1)
 
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
@@ -10924,7 +11011,7 @@ class PredBat(hass.Hass):
                 if typ == "c":
                     window_start = self.charge_window_best[window_n]["start"]
                     if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                        best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_charge_limit(
+                        best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_charge_limit(
                             window_n,
                             record_charge_windows,
                             self.charge_limit_best,
@@ -10945,7 +11032,7 @@ class PredBat(hass.Hass):
                             continue
 
                         average = self.discharge_window_best[window_n]["average"]
-                        best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
+                        best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = self.optimise_discharge(
                             window_n,
                             record_discharge_windows,
                             self.charge_limit_best,
@@ -10959,7 +11046,11 @@ class PredBat(hass.Hass):
                 if (count % 16) == 0:
                     self.log("Final optimisation type {} window {} metric {} metric_keep {} cost {}".format(typ, window_n, best_metric, self.dp2(best_keep), self.dp2(best_cost)))
                 count += 1
-            self.log("Second pass optimisation finished metric {} cost {} metric_keep {}".format(best_metric, self.dp2(best_cost), self.dp2(best_keep)))
+            self.log(
+                "Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {}".format(
+                    best_metric, self.dp2(best_cost), self.dp2(best_keep), self.dp2(best_cycle), self.dp0(best_carbon)
+                )
+            )
 
     def optimise_charge_windows_manual(self):
         """
