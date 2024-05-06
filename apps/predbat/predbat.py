@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.12"
+THIS_VERSION = "v7.17.13"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -9327,7 +9327,7 @@ class PredBat(hass.Hass):
 
                         # Simulate with medium PV
                         (
-                            metricmid,
+                            cost,
                             import_kwh_battery,
                             import_kwh_house,
                             export_kwh,
@@ -9351,22 +9351,7 @@ class PredBat(hass.Hass):
                         # Debug re-enable if it was on
                         self.debug_enable = was_debug
 
-                        # Store simulated mid value
-                        metric = metricmid
-                        cost = metricmid
-
-                        # Balancing payment to account for battery left over
-                        # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-                        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-                        metric -= (
-                            (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-                        )
-
-                        # Adjustment for battery cycles metric
-                        metric += battery_cycle * self.metric_battery_cycle + metric_keep
-
-                        # Round to 4dp
-                        metric = self.dp4(metric)
+                        metric, metric10 = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep)
 
                         # Optimise
                         if self.debug_enable and 0:
@@ -9591,9 +9576,9 @@ class PredBat(hass.Hass):
 
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss
-        metric -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge) * self.metric_battery_value_scaling
+        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        metric   -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
 
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
@@ -9814,18 +9799,18 @@ class PredBat(hass.Hass):
             ) = resultmid[try_soc]
             (
                 cost10,
-                import_kwh_battery,
-                import_kwh_house,
-                export_kwh,
-                soc_min,
+                import_kwh_battery10,
+                import_kwh_house10,
+                export_kwh10,
+                soc_min10,
                 soc10,
-                soc_min_minute,
+                soc_min_minute10,
                 battery_cycle10,
                 metric_keep10,
                 final_iboost10,
                 final_carbon_g10,
-                min_soc,
-                max_soc,
+                min_soc10,
+                max_soc10,
             ) = result10[try_soc]
 
             # Compute the metric from simulation results
