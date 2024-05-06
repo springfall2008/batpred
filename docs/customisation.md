@@ -336,6 +336,12 @@ to either scale up or down the impact of the in-day adjustment (lower numbers sc
 factor can be seen in **predbat.load_inday_adjustment** and charted with the In Day Adjustment chart (template can be found
 in the charts template in Github).
 
+**input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is enabled (**switch.predbat_carbon_enable**)
+you can specify a cost per Kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off
+cost vs carbon footprint of your system.
+
+_Note: Carbon footprint tracking can only be enabled if apps.yaml is configured to point to the correct CO2 cost sensor_
+
 ## Inverter control options
 
 **switch.predbat_set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
