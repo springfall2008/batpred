@@ -800,7 +800,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Carbon Metric",
         "type": "input_number",
         "min": 0,
-        "max": 100,
+        "max": 500,
         "step": 1,
         "unit": "p/Kg",
         "icon": "mdi:molecule-co2",
@@ -9363,9 +9363,7 @@ class PredBat(hass.Hass):
                         # Debug re-enable if it was on
                         self.debug_enable = was_debug
 
-                        metric, metric10 = self.compute_metric(
-                            end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g
-                        )
+                        metric, metric10 = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g)
 
                         # Optimise
                         if self.debug_enable and 0:
@@ -9490,9 +9488,7 @@ class PredBat(hass.Hass):
             False,
             end_record=self.end_record,
         )
-        metric, metric10 = self.compute_metric(
-            end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
-        )
+        metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
 
         best_soc = soc
         best_soc_min = soc_min
@@ -9566,19 +9562,7 @@ class PredBat(hass.Hass):
                             end_record=self.end_record,
                         )
                         metric, metric10 = self.compute_metric(
-                            end_record,
-                            soc,
-                            soc10,
-                            cost,
-                            cost10,
-                            final_iboost,
-                            final_iboost10,
-                            battery_cycle,
-                            battery_cycle10,
-                            metric_keep,
-                            metric_keep10,
-                            final_carbon_g,
-                            final_carbon_g10,
+                            end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
                         )
 
                         self.log("Swap optimisation with metric {}".format(metric))
@@ -9594,9 +9578,7 @@ class PredBat(hass.Hass):
         self.log("Swap optimisation finished with metric {}".format(best_metric))
         return charge_limit, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
-    def compute_metric(
-        self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
-    ):
+    def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10):
         """
         Compute the metric combing pv and pv10 data
         """
@@ -9607,16 +9589,8 @@ class PredBat(hass.Hass):
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        metric -= (
-            (soc + final_iboost)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
-            * self.metric_battery_value_scaling
-        )
-        metric10 -= (
-            (soc10 + final_iboost10)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
-            * self.metric_battery_value_scaling
-        )
+        metric   -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
 
         # Carbon metric
         if self.carbon_enable:
@@ -9857,9 +9831,7 @@ class PredBat(hass.Hass):
             ) = result10[try_soc]
 
             # Compute the metric from simulation results
-            metric, metric10 = self.compute_metric(
-                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
-            )
+            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target by forcing to keep the current % during a charge period
@@ -10056,9 +10028,7 @@ class PredBat(hass.Hass):
             ) = hanres10
 
             # Compute the metric from simulation results
-            metric, metric10 = self.compute_metric(
-                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
-            )
+            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
 
             # Adjust to try to keep existing windows
             if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window and self.isDischarging:
@@ -11395,8 +11365,10 @@ class PredBat(hass.Hass):
         opts += "inverter_hybrid({}) ".format(self.inverter_hybrid)
         opts += "metric_min_improvement({} p) ".format(self.metric_min_improvement)
         opts += "metric_min_improvement_discharge({} p) ".format(self.metric_min_improvement_discharge)
-        opts += "metric_battery_cycle({} p/kWh)".format(self.metric_battery_cycle)
-        opts += "metric_battery_value_scaling({} x)".format(self.metric_battery_value_scaling)
+        opts += "metric_battery_cycle({} p/kWh) ".format(self.metric_battery_cycle)
+        opts += "metric_battery_value_scaling({} x) ".format(self.metric_battery_value_scaling)
+        if self.carbon_enable:
+            opts += "metric_carbon({} p/Kg) ".format(self.carbon_metric)
         self.log("Calculate Best options: " + opts)
 
     def calculate_plan(self, recompute=True):
