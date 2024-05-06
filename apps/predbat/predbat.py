@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.0"
+THIS_VERSION = "v7.18.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -10685,6 +10685,8 @@ class PredBat(hass.Hass):
         best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
+        best_cycle = 0
+        best_carbon = 0
         best_price = 0
         best_price_discharge = 0
         fast_mode = True
