@@ -8093,7 +8093,7 @@ class PredBat(hass.Hass):
                         minute_offset = minute + offset
                         if minute_offset >= start and minute_offset < end:
                             car_charging_kwh += kwh * PREDICT_STEP
-            car_charging_kwh = self.dp2(car_charging_kwh)        
+            car_charging_kwh = self.dp2(car_charging_kwh)
         return car_charging_kwh
 
     def hit_car_window(self, window_start, window_end):
@@ -8142,7 +8142,7 @@ class PredBat(hass.Hass):
             html += "<td><b>CO2 kg</b></td>"
         html += "</tr>"
         return html
-    
+
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
         """
         Publish the current plan in HTML format
@@ -9342,7 +9342,9 @@ class PredBat(hass.Hass):
                                 )
                                 if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                     continue
-                                if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                                if not self.car_charging_from_battery and self.hit_car_window(
+                                    self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                ):
                                     continue
                                 if window_prices_discharge[window_n] < lowest_price_discharge:
                                     lowest_price_discharge = window_prices_discharge[window_n]
@@ -9390,7 +9392,9 @@ class PredBat(hass.Hass):
                         # Debug re-enable if it was on
                         self.debug_enable = was_debug
 
-                        metric, metric10 = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g)
+                        metric, metric10 = self.compute_metric(
+                            end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g
+                        )
 
                         # Optimise
                         if self.debug_enable and 0:
@@ -9515,7 +9519,9 @@ class PredBat(hass.Hass):
             False,
             end_record=self.end_record,
         )
-        metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
+        metric, metric10 = self.compute_metric(
+            end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
+        )
 
         best_soc = soc
         best_soc_min = soc_min
@@ -9589,7 +9595,19 @@ class PredBat(hass.Hass):
                             end_record=self.end_record,
                         )
                         metric, metric10 = self.compute_metric(
-                            end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
+                            end_record,
+                            soc,
+                            soc10,
+                            cost,
+                            cost10,
+                            final_iboost,
+                            final_iboost10,
+                            battery_cycle,
+                            battery_cycle10,
+                            metric_keep,
+                            metric_keep10,
+                            final_carbon_g,
+                            final_carbon_g10,
                         )
 
                         self.log("Swap optimisation with metric {}".format(metric))
@@ -9605,7 +9623,9 @@ class PredBat(hass.Hass):
         self.log("Swap optimisation finished with metric {}".format(best_metric))
         return charge_limit, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep
 
-    def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10):
+    def compute_metric(
+        self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
+    ):
         """
         Compute the metric combing pv and pv10 data
         """
@@ -9616,8 +9636,16 @@ class PredBat(hass.Hass):
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        metric   -= (soc + final_iboost) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle) * self.metric_battery_value_scaling
+        metric -= (
+            (soc + final_iboost)
+            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
+            * self.metric_battery_value_scaling
+        )
+        metric10 -= (
+            (soc10 + final_iboost10)
+            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
+            * self.metric_battery_value_scaling
+        )
 
         # Carbon metric
         if self.carbon_enable:
@@ -9858,7 +9886,9 @@ class PredBat(hass.Hass):
             ) = result10[try_soc]
 
             # Compute the metric from simulation results
-            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
+            metric, metric10 = self.compute_metric(
+                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
+            )
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SOC target by forcing to keep the current % during a charge period
@@ -10055,7 +10085,9 @@ class PredBat(hass.Hass):
             ) = hanres10
 
             # Compute the metric from simulation results
-            metric, metric10 = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10)
+            metric, metric10 = self.compute_metric(
+                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, battery_cycle10, metric_keep, metric_keep10, final_carbon_g, final_carbon_g10
+            )
 
             # Adjust to try to keep existing windows
             if window_n < 2 and this_discharge_limit < 99.0 and self.discharge_window and self.isDischarging:
@@ -10210,7 +10242,7 @@ class PredBat(hass.Hass):
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
                 if self.carbon_enable:
-                    carbon_intensity = self.carbon_intensity.get(window["start"]  - self.minutes_now, 0)
+                    carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
                     average += carbon_intensity * self.carbon_metric / 1000.0
                 if secondary_order:
                     average_import = self.dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
@@ -10786,7 +10818,9 @@ class PredBat(hass.Hass):
                                 )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
-                            if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                            if not self.car_charging_from_battery and self.hit_car_window(
+                                self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                            ):
                                 continue
 
                             average = self.discharge_window_best[window_n]["average"]
