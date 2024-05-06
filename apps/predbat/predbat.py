@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.17.13"
+THIS_VERSION = "v7.18.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1962,7 +1962,7 @@ class Prediction:
                 import_kwh += diff
 
                 if self.carbon_enable:
-                    carbon_g += diff * self.carbon_intensity.get(minute_absolute, 0)
+                    carbon_g += diff * self.carbon_intensity.get(minute, 0)
 
                 if charge_window_n >= 0:
                     # If the battery is on charge anyhow then imports are at battery charging rate
@@ -1978,7 +1978,7 @@ class Prediction:
                 energy = -diff
                 export_kwh += energy
                 if self.carbon_enable:
-                    carbon_g -= energy * self.carbon_intensity.get(minute_absolute, 0)
+                    carbon_g -= energy * self.carbon_intensity.get(minute, 0)
 
                 if minute_absolute in rate_export:
                     metric -= rate_export[minute_absolute] * energy
@@ -7808,6 +7808,10 @@ class PredBat(hass.Hass):
                     end = datetime.strptime(slot["endDtUtc"], TIME_FORMAT_OCTOPUS)
                 source = slot.get("source", "")
                 location = slot.get("location", "")
+                if "charge_in_kwh" in slot:
+                    kwh = abs(float(slot.get("charge_in_kwh", 0)))
+                else:
+                    kwh = abs(float(slot.get("chargeKwh", 0)))
 
                 # Change to minutes
                 start_minutes = self.minutes_to_time(start, self.midnight_utc)
@@ -7824,8 +7828,8 @@ class PredBat(hass.Hass):
                     end_minutes -= 24 * 60 * 14
 
                     self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} location {} source {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, location, source
+                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {}".format(
+                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, kwh, location, source
                         )
                     )
                     for minute in range(start_minutes, end_minutes):
@@ -8073,6 +8077,37 @@ class PredBat(hass.Hass):
             else:
                 symbol = "?"
         return symbol
+
+    def car_charge_slot_kwh(self, minute):
+        """
+        Work out car charging amount in KWh for given 30-minute slot
+        """
+        car_charging_kwh = 0.0
+        if self.num_cars > 0:
+            for car_n in range(self.num_cars):
+                for window in self.car_charging_slots[car_n]:
+                    start = window["start"]
+                    end = window["end"]
+                    kwh = self.dp2(window["kwh"]) / (end - start)
+                    for offset in range(0, 30, PREDICT_STEP):
+                        minute_offset = minute + offset
+                        if minute_offset >= start and minute_offset < end:
+                            car_charging_kwh += kwh * PREDICT_STEP
+            car_charging_kwh = self.dp2(car_charging_kwh)
+        return car_charging_kwh
+
+    def hit_car_window(self, window_start, window_end):
+        """
+        Does this window intersect a car charging window?
+        """
+        if self.num_cars > 0:
+            for car_n in range(self.num_cars):
+                for window in self.car_charging_slots[car_n]:
+                    start = window["start"]
+                    end = window["end"]
+                    if end > window_start and start < window_end:
+                        return True
+        return False
 
     def get_html_plan_header(self, plan_debug):
         """
@@ -8388,17 +8423,7 @@ class PredBat(hass.Hass):
 
             # Car charging?
             if self.num_cars > 0:
-                car_charging_kwh = 0.0
-                for car_n in range(self.num_cars):
-                    for window in self.car_charging_slots[car_n]:
-                        start = window["start"]
-                        end = window["end"]
-                        kwh = self.dp2(window["kwh"]) / (end - start)
-                        for offset in range(0, 30, PREDICT_STEP):
-                            minute_offset = minute + offset
-                            if minute_offset >= start and minute_offset < end:
-                                car_charging_kwh += kwh * PREDICT_STEP
-                car_charging_kwh = self.dp2(car_charging_kwh)
+                car_charging_kwh = self.car_charge_slot_kwh(minute)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
@@ -9317,6 +9342,10 @@ class PredBat(hass.Hass):
                                 )
                                 if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                     continue
+                                if not self.car_charging_from_battery and self.hit_car_window(
+                                    self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                ):
+                                    continue
                                 if window_prices_discharge[window_n] < lowest_price_discharge:
                                     lowest_price_discharge = window_prices_discharge[window_n]
                                 try_discharge[window_n] = 0
@@ -10190,6 +10219,9 @@ class PredBat(hass.Hass):
                     average = self.dp2(window["average"])
                 else:
                     average = self.dp2(window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle)
+                    if self.carbon_enable:
+                        carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
+                        average += carbon_intensity * self.carbon_metric / 1000.0
                 if secondary_order:
                     average_export = self.dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
@@ -10209,6 +10241,9 @@ class PredBat(hass.Hass):
             for window in discharge_windows:
                 # Account for losses in average rate as it makes export value lower
                 average = self.dp2(window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
+                if self.carbon_enable:
+                    carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
+                    average += carbon_intensity * self.carbon_metric / 1000.0
                 if secondary_order:
                     average_import = self.dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
@@ -10567,6 +10602,8 @@ class PredBat(hass.Hass):
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                         if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                             continue
+                        if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                            continue
                     best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                         window_n,
                         record_discharge_windows,
@@ -10781,6 +10818,10 @@ class PredBat(hass.Hass):
                                 )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
+                            if not self.car_charging_from_battery and self.hit_car_window(
+                                self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                            ):
+                                continue
 
                             average = self.discharge_window_best[window_n]["average"]
                             if price < lowest_price_charge:
@@ -10900,6 +10941,9 @@ class PredBat(hass.Hass):
                             hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                             if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                 continue
+                        if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                            continue
+
                         average = self.discharge_window_best[window_n]["average"]
                         best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep = self.optimise_discharge(
                             window_n,
