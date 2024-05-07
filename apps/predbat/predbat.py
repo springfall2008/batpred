@@ -1,4 +1,3 @@
-
 """
 Battery Prediction app
 see Readme for information
@@ -1802,7 +1801,7 @@ class Prediction:
 
             # discharge freeze, reset charge rate by default
             if self.set_discharge_freeze:
-                charge_rate_now = self.battery_rate_max_charge        
+                charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
                 if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
                     if self.set_discharge_freeze_only or ((soc - step * self.battery_rate_max_discharge_scaled) < (self.soc_max * discharge_limits[discharge_window_n] / 100.0)):
@@ -7324,7 +7323,7 @@ class PredBat(hass.Hass):
         end_minutes = self.minutes_to_time(end, self.midnight_utc)
         org_minutes = end_minutes - start_minutes
 
-        # Cap slot times into the forecast itself
+        # Cap slot times into the forecast itself
         start_minutes = max(start_minutes, 0)
         end_minutes = min(end_minutes, self.forecast_minutes + self.minutes_now)
         cap_minutes = end_minutes - start_minutes
@@ -7335,14 +7334,13 @@ class PredBat(hass.Hass):
             kwh = abs(float(slot.get("charge_in_kwh", 0.0)))
         else:
             kwh = abs(float(slot.get("chargeKwh", 0.0)))
-        
+
         if not kwh:
             kwh = self.car_charging_rate[0] * cap_hours
         else:
             kwh = kwh * cap_minutes / org_minutes
 
         return start_minutes, end_minutes, kwh, source, location
-
 
     def load_octopus_slots(self, octopus_slots):
         """
