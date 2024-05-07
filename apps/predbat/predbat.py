@@ -1141,7 +1141,7 @@ INVERTER_DEF = {
         "has_mqtt_api": False,
         "has_service_api": True,
         "output_charge_control": "power",
-        "current_dp" : 0,
+        "current_dp": 0,
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": True,
