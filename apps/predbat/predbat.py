@@ -1141,6 +1141,7 @@ INVERTER_DEF = {
         "has_mqtt_api": False,
         "has_service_api": True,
         "output_charge_control": "power",
+        "current_dp" : 0,
         "has_charge_enable_time": False,
         "has_discharge_enable_time": False,
         "has_target_soc": True,
@@ -2254,6 +2255,7 @@ class Inverter:
         self.inv_has_service_api = INVERTER_DEF[self.inverter_type]["has_service_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
+        self.inv_current_dp = INVERTER_DEF[self.inverter_type].get("current_dp", 1)
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
         self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
@@ -3916,18 +3918,21 @@ class Inverter:
             power = self.base.get_arg(f"{direction}_rate", index=self.id, default=2600.0)
             self.set_current_from_power(direction, power)
         else:
-            # To disable we set both times to 00:00
-            for x in ["start", "end"]:
-                for y in ["hour", "minute"]:
-                    name = f"{direction}_{x}_{y}"
-                    entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
-                    self.write_and_poll_value(name, entity, 0)
+            if self.inv_charge_time_format == "H M":
+                # To disable we set both times to 00:00
+                for x in ["start", "end"]:
+                    for y in ["hour", "minute"]:
+                        name = f"{direction}_{x}_{y}"
+                        entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
+                        self.write_and_poll_value(name, entity, 0)
+            else:
+                self.set_current_from_power(direction, 0)
 
     def set_current_from_power(self, direction, power):
         """
         Set the timed charge/discharge current setting by converting power to current
         """
-        new_current = round(power / self.battery_voltage, 1)
+        new_current = round(power / self.battery_voltage, self.inv_current_dp)
         entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
         self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
 
