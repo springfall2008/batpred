@@ -3272,8 +3272,7 @@ class Inverter:
 
         """
         # SOC has no decimal places and clamp in min
-        soc = int(soc)
-        soc = max(soc, self.reserve_percent)
+        soc = int(max(soc, self.reserve_percent))
 
         # Check current setting and adjust
         if SIMULATE:
