@@ -2198,7 +2198,7 @@ class Inverter:
         self.log = base.log
         self.async_get_arg = base.async_get_arg
         self.quiet = quiet
-
+    
     async def async_init_inverter(self):
         self.charge_enable_time = False
         self.charge_start_time_minutes = self.base.forecast_minutes
@@ -2375,9 +2375,7 @@ class Inverter:
 
         # Battery rate max charge, discharge (all converted to kW/min)
         self.battery_rate_max_charge = min(await self.async_get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
-        self.battery_rate_max_discharge = (
-            min(await self.async_get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
-        )
+        self.battery_rate_max_discharge = min(await self.async_get_arg("inverter_limit_discharge", self.battery_rate_max_raw, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
         self.battery_rate_max_charge_scaled = self.battery_rate_max_charge * self.base.battery_rate_max_scaling
         self.battery_rate_max_discharge_scaled = self.battery_rate_max_discharge * self.base.battery_rate_max_scaling_discharge
         self.battery_rate_min = min(await self.async_get_arg("inverter_battery_rate_min", 0, index=self.id), self.battery_rate_max_raw) / MINUTE_WATT
@@ -2429,9 +2427,7 @@ class Inverter:
         if self.rest_data:
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
-            self.reserve_percent_current = max(
-                await self.async_get_arg("reserve", default=0.0, index=self.id), await self.async_get_arg("battery_min_soc", default=4.0, index=self.id)
-            )
+            self.reserve_percent_current = max(await self.async_get_arg("reserve", default=0.0, index=self.id), await self.async_get_arg("battery_min_soc", default=4.0, index=self.id))
         self.reserve_current = self.base.dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         # Get the expected minimum reserve value
@@ -2439,7 +2435,7 @@ class Inverter:
         self.reserve_min = await self.async_get_arg("set_reserve_min")
         if self.reserve_min < battery_min_soc:
             self.log(f"Increasing set_reserve_min from {self.reserve_min}%  to battery_min_soc of {battery_min_soc}%")
-            self.base.expose_config("set_reserve_min", battery_min_soc)
+            await self.base.async_expose_config("set_reserve_min", battery_min_soc)
             self.reserve_min = battery_min_soc
 
         self.log(f"Reserve min: {self.reserve_min}% Battery_min:{battery_min_soc}%")
@@ -2533,13 +2529,13 @@ class Inverter:
         if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Find {} curve with sensors {} and {} and {} and {}".format(curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
-            soc_kwh_data = self.base.get_history_async(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
-            charge_rate_data = self.base.get_history_async(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
-            predbat_status_data = self.base.get_history_async(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
-            battery_power_data = self.base.get_history_async(entity_id=battery_power_sensor, days=self.base.max_days_previous)
+            soc_kwh_data = await self.base.async_get_history_async(entity_id=soc_kwh_sensor, days=self.base.max_days_previous)
+            charge_rate_data = await self.base.async_get_history_async(entity_id=charge_rate_sensor, days=self.base.max_days_previous)
+            predbat_status_data = await self.base.async_get_history_async(entity_id=predbat_status_sensor, days=self.base.max_days_previous)
+            battery_power_data = await self.base.async_get_history_async(entity_id=battery_power_sensor, days=self.base.max_days_previous)
 
             if soc_kwh_data and charge_rate_data and charge_rate_data and battery_power_data:
-                soc_kwh = self.base.minute_data(
+                soc_kwh = await self.base.async_minute_data(
                     soc_kwh_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,
@@ -2552,7 +2548,7 @@ class Inverter:
                     scale=self.battery_scaling,
                     required_unit="kWh",
                 )
-                charge_rate = self.base.minute_data(
+                charge_rate = await self.base.async_minute_data(
                     charge_rate_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,
@@ -2565,8 +2561,8 @@ class Inverter:
                     scale=1.0,
                     required_unit="W",
                 )
-                predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
-                battery_power = self.base.minute_data(
+                predbat_status = await self.base.async_minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
+                battery_power = await self.base.async_minute_data(
                     battery_power_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,
@@ -3022,9 +3018,7 @@ class Inverter:
             discharge_end = datetime.strptime(await self.async_get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
         else:
             self.log("ERROR: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
-            await self.base.async_record_status(
-                "Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True
-            )
+            await self.base.async_record_status("Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
         # Update simulated discharge enable time to match the discharge window time.
@@ -4232,7 +4226,6 @@ class Inverter:
         data = {"chargeToPercent": target}
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
@@ -4251,7 +4244,6 @@ class Inverter:
         data = {"chargeRate": rate}
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
@@ -4271,7 +4263,6 @@ class Inverter:
         data = {"dischargeRate": rate}
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
@@ -4293,7 +4284,6 @@ class Inverter:
 
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
@@ -4313,7 +4303,6 @@ class Inverter:
         data = {"reservePercent": target}
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
@@ -4333,7 +4322,6 @@ class Inverter:
 
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
@@ -4358,7 +4346,6 @@ class Inverter:
 
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -4377,7 +4364,6 @@ class Inverter:
 
         for retry in range(5):
             r = requests.post(url, json=data)
-            # time.sleep(10)
             self.rest_data = await self.async_rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
@@ -6634,9 +6620,7 @@ class PredBat(hass.Hass):
                     },
                 )
                 await self.async_dashboard_item(
-                    self.prefix + ".record",
-                    state=0.0,
-                    attributes={"results": await self.async_filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"},
+                    self.prefix + ".record", state=0.0, attributes={"results": await self.async_filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"}
                 )
                 await self.async_dashboard_item(
                     self.prefix + ".iboost_best",
@@ -9473,9 +9457,7 @@ class PredBat(hass.Hass):
             )
         return han
 
-    async def async_launch_run_prediction_discharge(
-        self, this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record
-    ):
+    async def async_launch_run_prediction_discharge(self, this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record):
         """
         Launch a thread to run a prediction
         """
@@ -9727,16 +9709,10 @@ class PredBat(hass.Hass):
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
-            hans.append(
-                await self.async_launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-            )
+            hans.append(await self.async_launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
             hans.append(await self.async_launch_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
-            hans.append(
-                await self.async_launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
-            )
-            hans.append(
-                await self.async_launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
-            )
+            hans.append(await self.async_launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record))
+            hans.append(await self.async_launch_run_prediction_charge(best_soc_min, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record))
             id = 0
             for han in hans:
                 (
@@ -9861,9 +9837,7 @@ class PredBat(hass.Hass):
             if try_soc not in resultmid:
                 hanres = await self.async_launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, False, all_n, end_record)
                 results.append(hanres)
-                hanres10 = await self.async_launch_run_prediction_charge(
-                    try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record
-                )
+                hanres10 = await self.async_launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, True, all_n, end_record)
                 results10.append(hanres10)
 
         # Get results from sims if we simulated them
@@ -10634,9 +10608,7 @@ class PredBat(hass.Hass):
         best_cycle = 0
         best_carbon = 0
         count = 0
-        window_sorted, window_index = await self.async_sort_window_by_time_combined(
-            self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows]
-        )
+        window_sorted, window_index = await self.async_sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows])
         for key in window_sorted:
             typ = window_index[key]["type"]
             window_n = window_index[key]["id"]
@@ -10660,9 +10632,7 @@ class PredBat(hass.Hass):
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                         if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                             continue
-                        if not self.car_charging_from_battery and await self.async_hit_car_window(
-                            self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
-                        ):
+                        if not self.car_charging_from_battery and await self.async_hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
                             continue
                     best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon = await self.async_optimise_discharge(
                         window_n,
@@ -11002,17 +10972,7 @@ class PredBat(hass.Hass):
 
         if 0:
             self.log("Swap optimisation started")
-            (
-                self.charge_limit_best,
-                best_soc,
-                best_metric,
-                best_cost,
-                best_soc_min,
-                best_soc_min_minute,
-                best_keep,
-                best_cycle,
-                best_carbon,
-            ) = await self.async_optimise_charge_limit_swap(
+            self.charge_limit_best, best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon = await self.async_optimise_charge_limit_swap(
                 self.charge_limit_best, self.charge_window_best, self.discharge_window_best, self.discharge_limits_best, record_charge_windows, end_record=self.end_record
             )
             self.log(
@@ -11028,9 +10988,7 @@ class PredBat(hass.Hass):
         if self.calculate_second_pass:
             self.log("Second pass optimisation started")
             count = 0
-            window_sorted, window_index = await self.async_sort_window_by_time_combined(
-                self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows]
-            )
+            window_sorted, window_index = await self.async_sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.discharge_window_best[:record_discharge_windows])
             for key in window_sorted:
                 typ = window_index[key]["type"]
                 window_n = window_index[key]["id"]
@@ -11054,9 +11012,7 @@ class PredBat(hass.Hass):
                             hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                             if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                 continue
-                        if not self.car_charging_from_battery and await self.async_hit_car_window(
-                            self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
-                        ):
+                        if not self.car_charging_from_battery and await self.async_hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
                             continue
 
                         average = self.discharge_window_best[window_n]["average"]
@@ -11686,19 +11642,9 @@ class PredBat(hass.Hass):
                 self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
-        (
-            metric,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-        ) = await self.async_run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record)
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = await self.async_run_prediction(
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record
+        )
 
         # Try different battery SOCs to get the best result
         if recompute:
@@ -11810,19 +11756,9 @@ class PredBat(hass.Hass):
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        (
-            metric,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-        ) = await self.async_run_prediction(self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, save="base", end_record=self.end_record)
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = await self.async_run_prediction(
+            self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, save="base", end_record=self.end_record
+        )
         (
             metricb10,
             import_kwh_batteryb10,
@@ -12606,9 +12542,7 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = await self.async_get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = await self.get_state(entity_id=entity_id, attribute="completedDispatches") or await self.get_state(
-                    entity_id=entity_id, attribute="completed_dispatches"
-                )
+                completed = await self.get_state(entity_id=entity_id, attribute="completedDispatches") or await self.get_state(entity_id=entity_id, attribute="completed_dispatches")
                 planned = await self.get_state(entity_id=entity_id, attribute="plannedDispatches") or await self.get_state(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = await self.get_state(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = await self.get_state(entity_id=entity_id, attribute="vehicleChargingPreferences")
@@ -12803,9 +12737,7 @@ class PredBat(hass.Hass):
             self.rate_import = await self.async_rate_add_io_slots(self.rate_import, self.octopus_slots)
             await self.async_load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             if "rates_import_override" in self.args:
-                self.rate_import = await self.async_basic_rates(
-                    await self.async_get_arg("rates_import_override", [], indirect=False), "import", self.rate_import, self.rate_import_replicated
-                )
+                self.rate_import = await self.async_basic_rates(await self.async_get_arg("rates_import_override", [], indirect=False), "import", self.rate_import, self.rate_import_replicated)
             self.rate_import = await self.async_rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
@@ -12819,9 +12751,7 @@ class PredBat(hass.Hass):
             if self.rate_export_max > 0:
                 await self.async_load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             if "rates_export_override" in self.args:
-                self.rate_export = await self.async_basic_rates(
-                    await self.async_get_arg("rates_export_override", [], indirect=False), "export", self.rate_export, self.rate_export_replicated
-                )
+                self.rate_export = await self.async_basic_rates(await self.async_get_arg("rates_export_override", [], indirect=False), "export", self.rate_export, self.rate_export_replicated)
             self.rate_export = await self.async_rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -12889,9 +12819,7 @@ class PredBat(hass.Hass):
 
         # Load today vs actual
         if self.load_minutes:
-            self.load_inday_adjustment = await self.async_load_today_comparison(
-                self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now
-            )
+            self.load_inday_adjustment = await self.async_load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
         else:
             self.load_inday_adjustment = 1.0
 
@@ -14428,24 +14356,24 @@ class PredBat(hass.Hass):
 
     def is_attr_available(self, attr):
         return hasattr(self, attr)
-
+    
     async def terminate(self):
         """
         Called once each time the app terminates
         """
         self.log("Predbat terminating")
-        if self.is_attr_available("pool"):
+        if self.is_attr_available('pool'):
             if self.pool:
                 self.pool.close()
                 self.pool.join()
                 self.pool = None
-        if self.is_attr_available("run_time_task"):
+        if self.is_attr_available('run_time_task'):
             if self.run_time_task:
                 self.run_time_task.cancel()
-        if self.is_attr_available("update_time_task"):
+        if self.is_attr_available('update_time_task'):
             if self.update_time_task:
                 self.update_time_task.cancel()
-        if self.is_attr_available("balance_time_task"):
+        if self.is_attr_available('balance_time_task'):
             if self.balance_time_task:
                 self.balance_time_task.cancel()
         self.log("Predbat terminated")
@@ -14463,7 +14391,7 @@ class PredBat(hass.Hass):
                 self.log("Update time loop already running, skipping")
                 return
         self.update_time_task = self.create_task(self.async_update_time_loop())
-
+    
     def run_time_loop_balance(self, cb_args):
         if self.balance_time_task:
             if not self.balance_time_task.done():
