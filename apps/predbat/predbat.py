@@ -1841,13 +1841,17 @@ class Prediction:
                 diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
                     above_limit = abs(diff_tmp + self.export_limit * step)
-                    battery_draw = max(0, battery_draw - above_limit)
+                    battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
-                # Account for inverter limit, clip battery draw if possible to avoid going over
-                total_inverted = pv_ac + pv_dc + battery_draw
-                if total_inverted > self.inverter_limit * step:
-                    reduce_by = total_inverted - (self.inverter_limit * step)
-                    battery_draw = max(0, battery_draw - reduce_by)
+                # If the battery is charging then solar will be used to charge as a priority
+                # So move more of the PV into PV DC
+                if battery_draw < 0 and pv_dc < abs(battery_draw):
+                    extra_pv = min(abs(battery_draw) - pv_dc, pv_ac)
+                    # Clamp to remaining energy to charge limit
+                    if (extra_pv + pv_dc) > (charge_limit_n - soc):
+                        extra_pv = max((charge_limit_n - soc) - pv_dc, 0)
+                    pv_ac -= extra_pv
+                    pv_dc += extra_pv
 
                 battery_state = "f-"
 
@@ -1892,6 +1896,22 @@ class Prediction:
                         battery_state = "e+"
                     else:
                         battery_state = "e~"
+
+            # Account for inverter limit, clip battery draw if possible to avoid going over
+            if self.inverter_hybrid:
+                total_inverted = pv_ac + pv_dc + battery_draw
+            else:
+                total_inverted = pv_ac + pv_dc + abs(battery_draw)
+
+            if total_inverted > self.inverter_limit * step:
+                reduce_by = total_inverted - (self.inverter_limit * step)
+                if battery_draw < 0:
+                    pv_ac -= reduce_by
+                    if pv_ac < 0:
+                        pv_dc = max(pv_dc + pv_ac, 0)
+                        pv_ac = 0
+                else:
+                    battery_draw = max(0, battery_draw - reduce_by)
 
             # Clamp battery at reserve for discharge
             if battery_draw > 0:
@@ -5081,7 +5101,11 @@ class PredBat(hass.Hass):
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
-            history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
+            try:
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
+            except ValueError:
+                history = []
+
             if history:
                 item = history[0][0]
                 try:
@@ -14015,6 +14039,8 @@ class PredBat(hass.Hass):
         current_status = self.load_previous_value_from_ha(self.prefix + ".status")
         if current_status:
             new_install = False
+        else:
+            self.log("New install detected")
 
         # Build config index
         for item in CONFIG_ITEMS:
