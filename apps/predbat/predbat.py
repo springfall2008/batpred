@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.3"
+THIS_VERSION = "v7.18.4"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5039,13 +5039,20 @@ class PredBat(hass.Hass):
         """
         Async function to get history from HA using Async task
         """
-        if days:
-            history = self.get_history(entity_id=entity_id, days=days)
-        else:
-            history = self.get_history(entity_id=entity_id)
+        for retry in range(5):
+            if retry:
+                time.sleep(retry * 5)
 
+            if days:
+                history = self.get_history(entity_id=entity_id, days=days)
+            else:
+                history = self.get_history(entity_id=entity_id)
+            if history is not None:
+                break
+            self.log("WARN: Unable to fetch history for {} retry {}".format(entity_id, retry))
+        
         if history is None:
-            self.log("Failure to fetch history for {}".format(entity_id))
+            self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
         else:
             return history
