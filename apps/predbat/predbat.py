@@ -13833,7 +13833,7 @@ class PredBat(hass.Hass):
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
-    
+
     def update_save_restore_list(self):
         """
         Update list of current Predbat settings
