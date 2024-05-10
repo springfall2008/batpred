@@ -13833,7 +13833,7 @@ class PredBat(hass.Hass):
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
-    
+
     def update_save_restore_list(self):
         """
         Update list of current Predbat settings
@@ -13853,7 +13853,7 @@ class PredBat(hass.Hass):
         for root, dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
-                if filepath.endswith(".yaml") and not name.startswith('.'):
+                if filepath.endswith(".yaml") and not name.startswith("."):
                     PREDBAT_SAVE_RESTORE.append(name)
         item = self.config_index.get("saverestore", None)
         item["options"] = PREDBAT_SAVE_RESTORE
