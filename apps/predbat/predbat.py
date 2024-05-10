@@ -5101,7 +5101,6 @@ class PredBat(hass.Hass):
         load_minutes = {}
         age_days = None
         for entity_id in entity_ids:
-
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
             except ValueError:
