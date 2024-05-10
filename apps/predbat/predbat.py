@@ -5050,7 +5050,7 @@ class PredBat(hass.Hass):
             if history is not None:
                 break
             self.log("WARN: Unable to fetch history for {} retry {}".format(entity_id, retry))
-        
+
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
