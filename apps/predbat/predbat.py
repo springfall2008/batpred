@@ -85,6 +85,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Predbat Active",
         "type": "switch",
         "default": False,
+        "restore": False,
     },
     {
         "name": "pv_metric10_weight",
@@ -13305,7 +13306,6 @@ class PredBat(hass.Hass):
         self.car_charging_energy_scale = self.get_arg("car_charging_energy_scale")
 
         # Update list of slot times
-        self.log("Starting plan calls manual_times")
         self.manual_charge_times = self.manual_times("manual_charge")
         self.manual_discharge_times = self.manual_times("manual_discharge")
         self.manual_freeze_charge_times = self.manual_times("manual_freeze_charge")
@@ -13833,7 +13833,7 @@ class PredBat(hass.Hass):
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
-
+    
     def update_save_restore_list(self):
         """
         Update list of current Predbat settings
@@ -13853,7 +13853,7 @@ class PredBat(hass.Hass):
         for root, dirs, files in os.walk(self.save_restore_dir):
             for name in files:
                 filepath = os.path.join(root, name)
-                if filepath.endswith(".yaml"):
+                if filepath.endswith(".yaml") and not name.startswith('.'):
                     PREDBAT_SAVE_RESTORE.append(name)
         item = self.config_index.get("saverestore", None)
         item["options"] = PREDBAT_SAVE_RESTORE
