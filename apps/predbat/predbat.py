@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.4"
+THIS_VERSION = "v7.18.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -38,7 +38,7 @@ PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIMEOUT = 60 * 2
+TIMEOUT = 60*2
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -1846,7 +1846,7 @@ class Prediction:
                     above_limit = abs(diff_tmp + self.export_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
-                # Account for inverter limit, clip battery draw if possible to avoid going over
+                # Account for inverter limit, clip battery draw if possible to avoid going over
                 if self.inverter_hybrid and diff_tmp < 0 and abs(diff_tmp) > (self.inverter_limit * step):
                     above_limit = abs(diff_tmp + self.inverter_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
@@ -5048,7 +5048,7 @@ class PredBat(hass.Hass):
         Async function to get history from HA using Async task
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
-
+        
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -13350,8 +13350,8 @@ class PredBat(hass.Hass):
         """
         Update the current time/date
         """
-        local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        skew = self.get_arg("clock_skew", 0)
+        local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
+        skew = self.args.get("clock_skew", 0)
         if skew:
             self.log("WARN: Clock skew is set to {} minutes".format(skew))
         self.now_utc_real = datetime.now(local_tz)
@@ -14346,13 +14346,11 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         global SIMULATE
+        self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
-        skew = self.args.get("clock_skew", 0)
+        self.update_time(print=False)
         run_every = RUN_EVERY * 60
-        skew = skew % (run_every / 60)
-        now = datetime.now() + timedelta(minutes=skew)
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((now - self.midnight).seconds / 60)
+        now = self.now
 
         self.ha_interface = HAInterface(self)
 
@@ -14418,11 +14416,13 @@ class PredBat(hass.Hass):
         """
         Called once each time the app terminates
         """
+        self.log("Predbat terminating")
+        if hasattr(self, "pool"):
+            if self.pool:
+                self.pool.close()
+                self.pool.join()
+                self.pool = None
         self.log("Predbat terminated")
-        if self.pool:
-            self.pool.close()
-            self.pool.join()
-            self.pool = None
 
     @ad.app_lock
     def update_time_loop(self, cb_args):
@@ -14480,12 +14480,10 @@ class PredBat(hass.Hass):
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
 
-
-class HAInterface:
+class HAInterface():
     """
     Direct interface to Home Assistant
     """
-
     def __init__(self, base):
         self.ha_key = os.environ.get("SUPERVISOR_TOKEN", None)
         self.ha_url = "http://supervisor/core"
@@ -14518,7 +14516,7 @@ class HAInterface:
                 return self.base.set_state(entity_id, state=state)
             else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
-
+        
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
