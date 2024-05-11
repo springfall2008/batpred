@@ -38,7 +38,7 @@ PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIMEOUT = 60*2
+TIMEOUT = 60 * 2
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -1846,7 +1846,7 @@ class Prediction:
                     above_limit = abs(diff_tmp + self.export_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
-                # Account for inverter limit, clip battery draw if possible to avoid going over
+                # Account for inverter limit, clip battery draw if possible to avoid going over
                 if self.inverter_hybrid and diff_tmp < 0 and abs(diff_tmp) > (self.inverter_limit * step):
                     above_limit = abs(diff_tmp + self.inverter_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
@@ -5048,7 +5048,7 @@ class PredBat(hass.Hass):
         Async function to get history from HA using Async task
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
-        
+
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -14480,10 +14480,12 @@ class PredBat(hass.Hass):
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
 
-class HAInterface():
+
+class HAInterface:
     """
     Direct interface to Home Assistant
     """
+
     def __init__(self, base):
         self.ha_key = os.environ.get("SUPERVISOR_TOKEN", None)
         self.ha_url = "http://supervisor/core"
@@ -14516,7 +14518,7 @@ class HAInterface():
                 return self.base.set_state(entity_id, state=state)
             else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
-        
+
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
