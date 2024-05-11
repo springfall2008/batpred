@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.4"
+THIS_VERSION = "v7.18.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -13350,8 +13350,8 @@ class PredBat(hass.Hass):
         """
         Update the current time/date
         """
-        local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        skew = self.get_arg("clock_skew", 0)
+        local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
+        skew = self.args.get("clock_skew", 0)
         if skew:
             self.log("WARN: Clock skew is set to {} minutes".format(skew))
         self.now_utc_real = datetime.now(local_tz)
@@ -14346,13 +14346,11 @@ class PredBat(hass.Hass):
         Setup the app, called once each time the app starts
         """
         global SIMULATE
+        self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
-        skew = self.args.get("clock_skew", 0)
+        self.update_time(print=False)
         run_every = RUN_EVERY * 60
-        skew = skew % (run_every / 60)
-        now = datetime.now() + timedelta(minutes=skew)
-        self.midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = int((now - self.midnight).seconds / 60)
+        now = self.now
 
         self.ha_interface = HAInterface(self)
 
@@ -14418,11 +14416,13 @@ class PredBat(hass.Hass):
         """
         Called once each time the app terminates
         """
+        self.log("Predbat terminating")
+        if hasattr(self, "pool"):
+            if self.pool:
+                self.pool.close()
+                self.pool.join()
+                self.pool = None
         self.log("Predbat terminated")
-        if self.pool:
-            self.pool.close()
-            self.pool.join()
-            self.pool = None
 
     @ad.app_lock
     def update_time_loop(self, cb_args):
