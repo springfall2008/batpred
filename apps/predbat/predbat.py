@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.5"
+THIS_VERSION = "v7.18.6"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5043,7 +5043,7 @@ class PredBat(hass.Hass):
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
 
-    def get_history_wrapper(self, entity_id, days=None):
+    def get_history_wrapper(self, entity_id, days=30):
         """
         Async function to get history from HA using Async task
         """
