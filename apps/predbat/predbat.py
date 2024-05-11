@@ -38,7 +38,7 @@ PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIMEOUT = 60 * 2
+TIMEOUT = 60*2
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -1823,6 +1823,9 @@ class Prediction:
             battery_draw = 0
             charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
             discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
+            battery_to_min = max(soc - self.reserve, 0) * self.battery_loss_discharge * self.inverter_loss
+            battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss * self.inverter_loss
+
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
@@ -1835,14 +1838,17 @@ class Prediction:
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
-                battery_draw = discharge_rate_now_curve * step
-                if (soc - reserve_expected) < battery_draw:
-                    battery_draw = max(soc - reserve_expected, 0)
+                battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
 
                 # Account for export limit, clip battery draw if possible to avoid going over
                 diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if diff_tmp < 0 and abs(diff_tmp) > (self.export_limit * step):
                     above_limit = abs(diff_tmp + self.export_limit * step)
+                    battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
+
+                # Account for inverter limit, clip battery draw if possible to avoid going over
+                if self.inverter_hybrid and diff_tmp < 0 and abs(diff_tmp) > (self.inverter_limit * step):
+                    above_limit = abs(diff_tmp + self.inverter_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
                 # If the battery is charging then solar will be used to charge as a priority
@@ -1884,16 +1890,16 @@ class Prediction:
 
                 # Remove inverter loss as it will be added back in again when calculating the SOC change
                 charge_rate_now_curve /= self.inverter_loss
-                battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0)
+                battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0, -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
             else:
                 # ECO Mode
                 if load_yesterday - pv_ac - pv_dc > 0:
-                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac)
+                    battery_draw = min(load_yesterday - pv_ac - pv_dc, discharge_rate_now_curve * step, self.inverter_limit * step - pv_ac, battery_to_min)
                     battery_state = "e-"
                 else:
-                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step)
+                    battery_draw = max(load_yesterday - pv_ac - pv_dc, -charge_rate_now_curve * step, -battery_to_max)
                     if battery_draw < 0:
                         battery_state = "e+"
                     else:
@@ -1901,7 +1907,7 @@ class Prediction:
 
             # Account for inverter limit, clip battery draw if possible to avoid going over
             if self.inverter_hybrid:
-                total_inverted = pv_ac + pv_dc + battery_draw
+                total_inverted = pv_ac + max(pv_dc + battery_draw, 0)
             else:
                 total_inverted = pv_ac + pv_dc + abs(battery_draw)
 
@@ -1909,7 +1915,7 @@ class Prediction:
                 reduce_by = total_inverted - (self.inverter_limit * step)
                 if battery_draw < 0:
                     pv_ac -= reduce_by
-                    if pv_ac < 0:
+                    if not self.inverter_hybrid and pv_ac < 0:
                         pv_dc = max(pv_dc + pv_ac, 0)
                         pv_ac = 0
                 else:
@@ -5042,7 +5048,7 @@ class PredBat(hass.Hass):
         Async function to get history from HA using Async task
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
-
+        
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -14474,12 +14480,10 @@ class PredBat(hass.Hass):
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
 
-
-class HAInterface:
+class HAInterface():
     """
     Direct interface to Home Assistant
     """
-
     def __init__(self, base):
         self.ha_key = os.environ.get("SUPERVISOR_TOKEN", None)
         self.ha_url = "http://supervisor/core"
@@ -14512,7 +14516,7 @@ class HAInterface:
                 return self.base.set_state(entity_id, state=state)
             else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
-
+        
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
