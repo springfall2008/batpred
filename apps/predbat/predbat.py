@@ -38,7 +38,7 @@ PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIMEOUT = 60 * 2
+TIMEOUT = 60*2
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -5042,7 +5042,7 @@ class PredBat(hass.Hass):
         Async function to get history from HA using Async task
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
-
+        
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
@@ -14474,17 +14474,17 @@ class PredBat(hass.Hass):
                 self.record_status("ERROR: Exception raised {}".format(e))
                 raise
 
-
-class HAInterface:
+class HAInterface():
     """
     Direct interface to Home Assistant
     """
-
     def __init__(self, base):
         self.ha_key = os.environ.get("SUPERVISOR_TOKEN", None)
         self.ha_url = "http://supervisor/core"
         self.base = base
         self.log = base.log
+        if not self.ha_key:
+            self.log("WARN: Supervisor token not found, will use direct HA API")
 
     def get_history(self, sensor, now, days=30):
         """
@@ -14510,44 +14510,43 @@ class HAInterface:
                 return self.base.set_state(entity_id, state=state)
             else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
-
+        
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
 
-    def api_call(self, endpoint, datain=None, post=False):
+    def api_call(self, endpoint, data_in=None, post=False):
         """
         Make an API call to Home Assistant.
 
         :param endpoint: The API endpoint to call.
-        :param datain: The data to send in the body of the request.
+        :param data_in: The data to send in the body of the request.
         :param post: True if this is a POST request, False for GET.
         :return: The response from the API.
         """
         url = self.ha_url + endpoint
-        print("Making API call to {}".format(url))
         headers = {
             "Authorization": "Bearer " + self.ha_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
         if post:
-            if datain:
-                response = requests.post(url, headers=headers, json=datain, timeout=TIMEOUT)
+            if data_in:
+                response = requests.post(url, headers=headers, json=data_in, timeout=TIMEOUT)
             else:
                 response = requests.post(url, headers=headers, timeout=TIMEOUT)
         else:
-            if datain:
-                response = requests.get(url, headers=headers, params=datain, timeout=TIMEOUT)
+            if data_in:
+                response = requests.get(url, headers=headers, params=data_in, timeout=TIMEOUT)
             else:
                 response = requests.get(url, headers=headers, timeout=TIMEOUT)
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Failed to decode response from {}".format(url))
+            self.log("Warn: Failed to decode response from {}".format(url))
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
-            self.log("Timeout from {}".format(url))
+            self.log("Warn: Timeout from {}".format(url))
             data = None
         return data
