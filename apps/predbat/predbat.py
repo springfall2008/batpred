@@ -12018,16 +12018,22 @@ class PredBat(hass.Hass):
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
 
                         # Do we disable discharge during charge?
+                        pausedDischarge = False
                         if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
                             inverter.adjust_discharge_rate(0)
                             inverter.adjust_pause_mode(pause_discharge=True)
                             resetDischarge = False
+                            pausedDischarge = True
 
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                pausedDischarge = True
+
+                            if not pausedDischarge:
+                                inverter.adjust_pause_mode()
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
@@ -12043,7 +12049,7 @@ class PredBat(hass.Hass):
                                 inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
-                                if not resetDischarge:
+                                if not pausedDischarge:
                                     inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
