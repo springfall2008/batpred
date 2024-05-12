@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.18.6"
+THIS_VERSION = "v7.18.7"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -785,6 +785,12 @@ CONFIG_ITEMS = [
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
+    },
+    {
+        "name": "calculate_savings",
+        "friendly_name": "Calculate savings",
+        "type": "switch",
+        "default": False,
     },
     {
         "name": "iboost_enable",
@@ -5618,6 +5624,17 @@ class PredBat(hass.Hass):
                             else:
                                 data[offset] = per_minute_increment * PREDICT_STEP
 
+    def get_historical_base(self, data, minute, base_minutes):
+        """
+        Get historical data from base minute ago
+        """
+        # No data?
+        if not data:
+            return 0
+
+        minute_previous = base_minutes - minute
+        return self.get_from_incrementing(data, minute_previous)
+
     def get_historical(self, data, minute):
         """
         Get historical data across N previous days in days_previous array based on current minute
@@ -5888,7 +5905,7 @@ class PredBat(hass.Hass):
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
         # Work out divergence
-        if not self.calculate_inday_adjustment or self.load_forecast_only:
+        if not self.calculate_inday_adjustment:
             difference_cap = 1.0
         else:
             # Apply damping factor to adjustment
@@ -6039,7 +6056,18 @@ class PredBat(hass.Hass):
             return None
 
     def step_data_history(
-        self, item, minutes_now, forward, step=PREDICT_STEP, scale_today=1.0, scale_fixed=1.0, type_load=False, load_forecast={}, cloud_factor=None, load_scaling_dynamic=None
+        self,
+        item,
+        minutes_now,
+        forward,
+        step=PREDICT_STEP,
+        scale_today=1.0,
+        scale_fixed=1.0,
+        type_load=False,
+        load_forecast={},
+        cloud_factor=None,
+        load_scaling_dynamic=None,
+        base_offset=None,
     ):
         """
         Create cached step data for historical array
@@ -6070,7 +6098,10 @@ class PredBat(hass.Hass):
                     if forward:
                         value += item.get(minute + minutes_now + offset, 0.0)
                     else:
-                        value += self.get_historical(item, minute + offset)
+                        if base_offset:
+                            value += self.get_historical_base(item, minute + offset, base_offset)
+                        else:
+                            value += self.get_historical(item, minute + offset)
 
             # Extra load adding in (e.g. heat pump)
             load_extra = 0
@@ -9235,6 +9266,10 @@ class PredBat(hass.Hass):
         self.computed_discharge_curve = False
         self.isCharging = False
         self.isDischarging = False
+        self.savings_today_predbat = 0.0
+        self.savings_today_pvbat = 0.0
+        self.yesterday_load_step = {}
+        self.yesterday_pv_step = {}
 
     def optimise_charge_limit_price(
         self,
@@ -11560,6 +11595,165 @@ class PredBat(hass.Hass):
             opts += "metric_carbon({} p/Kg) ".format(self.carbon_metric)
         self.log("Calculate Best options: " + opts)
 
+    def calculate_yesterday(self):
+        """
+        Calculate the base plan for yesterday
+        """
+        yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+        yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+        yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+
+        # Get SOC history to find yesterday SOC
+        soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
+        if not soc_kwh_data:
+            self.log("WARN: No SOC data found for yesterday")
+            return
+        soc_kwh = self.minute_data(
+            soc_kwh_data[0],
+            2,
+            self.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            required_unit="kWh",
+        )
+        soc_yesterday = soc_kwh.get(24 * 60 + self.minutes_now, 0.0)
+
+        # Get Cost yesterday
+        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2)
+        if not cost_today_data:
+            self.log("WARN: No cost_today data for yesterday")
+            return
+        cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
+
+        # Save step data for debug
+        if self.debug_enable:
+            self.yesterday_load_step = yesterday_load_step
+            self.yesterday_pv_step = yesterday_pv_step
+
+        # Save state
+        minutes_now = self.minutes_now
+        midnight_utc = self.midnight_utc
+        forecast_minutes = self.forecast_minutes
+        cost_today_sofar = self.cost_today_sofar
+        import_today_now = self.import_today_now
+        export_today_now = self.export_today_now
+        pv_today_now = self.pv_today_now
+        carbon_today_sofar = self.carbon_today_sofar
+        soc_kw = self.soc_kw
+        car_charging_hold = self.car_charging_hold
+        load_minutes_now = self.load_minutes_now
+        soc_max = self.soc_max
+
+        # Fake to yesterday state
+        self.minutes_now = 0
+        self.cost_today_sofar = 0
+        self.import_today_now = 0
+        self.export_today_now = 0
+        self.carbon_today_sofar = 0
+        self.midnight_utc = self.midnight_utc - timedelta(days=1)
+        self.forecast_minutes = 24 * 60
+        self.pv_today_now = 0
+        self.soc_kw = soc_yesterday
+        self.car_charging_hold = False
+        self.load_minutes_now = 0
+
+        # Simulate yesterday
+        self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+            [], [], [], [], False, end_record=24 * 60, save="yesterday"
+        )
+        saving = metric - cost_yesterday
+        self.log(
+            "Yesterday: Eco mode cost predicted was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} iboost {}".format(
+                self.dp2(metric),
+                self.dp2(cost_yesterday),
+                self.dp2(saving),
+                self.dp2(import_kwh_house + import_kwh_battery),
+                self.dp2(export_kwh),
+                self.dp2(battery_cycle),
+                self.dp2(final_iboost),
+            )
+        )
+        self.savings_today_predbat = saving
+
+        # Save state
+        self.dashboard_item(
+            self.prefix + ".savings_yesterday_predbat",
+            state=self.dp2(saving),
+            attributes={
+                "import": self.dp2(import_kwh_house + import_kwh_battery),
+                "export": self.dp2(export_kwh),
+                "battery_cycle": self.dp2(battery_cycle),
+                "iboost": self.dp2(final_iboost),
+                "actual_cost": self.dp2(metric),
+                "predicted_cost": self.dp2(cost_yesterday),
+                "friendly_name": "Predbat savings yesterday",
+                "state_class": "measurement",
+                "unit_of_measurement": "p",
+                "icon": "mdi:percent",
+            },
+        )
+
+        # Simulate no PV or battery
+        self.soc_kw = 0
+        self.soc_max = 0
+
+        self.prediction = Prediction(self, yesterday_pv_step_zero, yesterday_pv_step_zero, yesterday_load_step, yesterday_load_step)
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+            [], [], [], [], False, end_record=24 * 60
+        )
+        saving = metric - cost_yesterday
+        self.savings_today_pvbat = saving
+        self.log(
+            "Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} iboost {}".format(
+                self.dp2(metric),
+                self.dp2(cost_yesterday),
+                self.dp2(saving),
+                self.dp2(import_kwh_house + import_kwh_battery),
+                self.dp2(export_kwh),
+                self.dp2(battery_cycle),
+                self.dp2(final_iboost),
+            )
+        )
+
+        # Save state
+        self.dashboard_item(
+            self.prefix + ".savings_yesterday_pvbat",
+            state=self.dp2(saving),
+            attributes={
+                "import": self.dp2(import_kwh_house + import_kwh_battery),
+                "export": self.dp2(export_kwh),
+                "battery_cycle": self.dp2(battery_cycle),
+                "iboost": self.dp2(final_iboost),
+                "actual_cost": self.dp2(cost_yesterday),
+                "predicted_cost": self.dp2(metric),
+                "friendly_name": "PV/Battery system savings yesterday",
+                "state_class": "measurement",
+                "unit_of_measurement": "p",
+                "icon": "mdi:percent",
+            },
+        )
+
+        # Restore state
+        self.minutes_now = minutes_now
+        self.midnight_utc = midnight_utc
+        self.forecast_minutes = forecast_minutes
+        self.cost_today_sofar = cost_today_sofar
+        self.import_today_now = import_today_now
+        self.export_today_now = export_today_now
+        self.carbon_today_sofar = carbon_today_sofar
+        self.pv_today_now = pv_today_now
+        self.soc_kw = soc_kw
+        self.car_charging_hold = car_charging_hold
+        self.load_minutes_now = load_minutes_now
+        self.soc_max = soc_max
+
     def calculate_plan(self, recompute=True):
         """
         Calculate the new plan (best)
@@ -11664,6 +11858,10 @@ class PredBat(hass.Hass):
             self.load_minutes_step10 = load_minutes_step10
             self.pv_forecast_minute_step = pv_forecast_minute_step
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
+
+        # Yesterday data
+        if recompute and self.calculate_savings:
+            self.calculate_yesterday()
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
@@ -12498,7 +12696,7 @@ class PredBat(hass.Hass):
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:
                 if self.load_forecast:
-                    self.log("Info: Using load forecast from load_forecast sensor as load_today is not set")
+                    self.log("Info: Using load forecast from load_forecast sensor")
                     self.load_minutes_now = self.load_forecast.get(0, 0)
                     self.load_minutes_age = 0
                 else:
@@ -13318,6 +13516,7 @@ class PredBat(hass.Hass):
 
         # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")
+        self.calculate_savings = self.get_arg("calculate_savings")
         self.carbon_enable = self.get_arg("carbon_enable")
         self.carbon_metric = self.get_arg("carbon_metric")
         self.iboost_solar = self.get_arg("iboost_solar")
@@ -13448,6 +13647,41 @@ class PredBat(hass.Hass):
             # Save next iBoost model value
             self.expose_config("iboost_today", self.iboost_next)
             self.log("iBoost model today updated to {}".format(self.iboost_next))
+
+        if self.calculate_savings:
+            # Get current totals
+            savings_total_predbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat")
+            if not isinstance(savings_total_predbat, float):
+                savings_total_predbat = 0.0
+            savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
+            if not isinstance(savings_total_pvbat, float):
+                savings_total_pvbat = 0.0
+
+            # Increment total at midnight for next day
+            if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
+                savings_total_predbat += self.savings_today_predbat
+                savings_total_pvbat += self.savings_total_pvbat
+
+            self.dashboard_item(
+                self.prefix + ".savings_total_predbat",
+                state=savings_total_predbat,
+                attributes={
+                    "friendly_name": "Total Predbat savings",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "p",
+                    "icon": "mdi:cash-multiple",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".savings_total_pvbat",
+                state=savings_total_pvbat,
+                attributes={
+                    "friendly_name": "Total Savings vs no PV/Battery system",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "p",
+                    "icon": "mdi:cash-multiple",
+                },
+            )
 
         # Car SOC increment
         if scheduled:
@@ -13950,7 +14184,7 @@ class PredBat(hass.Hass):
         """
         Write out a debug info yaml
         """
-        time_now = self.now_utc_real.strftime("%H_%M_%S")
+        time_now = self.now_utc.strftime("%H_%M_%S")
         basename = "/debug/predbat_debug_{}.yaml".format(time_now)
         filename = None
         for root in CONFIG_ROOTS:
@@ -13975,6 +14209,8 @@ class PredBat(hass.Hass):
             debug["load_minutes_step10"] = self.load_minutes_step10
             debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
             debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
+            debug["yesterday_load_step"] = self.yesterday_load_step
+            debug["yesterday_pv_step"] = self.yesterday_pv_step
 
             with open(filename, "w") as file:
                 yaml.dump(debug, file)
