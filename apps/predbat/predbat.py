@@ -12032,7 +12032,7 @@ class PredBat(hass.Hass):
                                 inverter.adjust_pause_mode(pause_discharge=True)
                                 pausedDischarge = True
 
-                            if not pausedDischarge
+                            if not pausedDischarge:
                                 inverter.adjust_pause_mode()
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
