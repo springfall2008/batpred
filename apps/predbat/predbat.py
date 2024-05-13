@@ -11656,6 +11656,18 @@ class PredBat(hass.Hass):
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
+       # Save state
+        self.dashboard_item(
+            self.prefix + ".cost_yesterday",
+            state=self.dp2(cost_yesterday),
+            attributes={
+                "friendly_name": "Cost yesterday",
+                "state_class": "measurement",
+                "unit_of_measurement": "p",
+                "icon": "mdi:currency-usd",
+            },
+        )
+
         # Save step data for debug
         if self.debug_enable:
             self.yesterday_load_step = yesterday_load_step
@@ -11720,12 +11732,12 @@ class PredBat(hass.Hass):
                 "export": self.dp2(export_kwh),
                 "battery_cycle": self.dp2(battery_cycle),
                 "iboost": self.dp2(final_iboost),
-                "actual_cost": self.dp2(metric),
-                "predicted_cost": self.dp2(cost_yesterday),
+                "actual_cost": self.dp2(cost_yesterday),
+                "predicted_cost": self.dp2(metric),
                 "friendly_name": "Predbat savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": "p",
-                "icon": "mdi:percent",
+                "icon": "mdi:currency-usd",
             },
         )
 
@@ -11765,7 +11777,7 @@ class PredBat(hass.Hass):
                 "friendly_name": "PV/Battery system savings yesterday",
                 "state_class": "measurement",
                 "unit_of_measurement": "p",
-                "icon": "mdi:percent",
+                "icon": "mdi:currency-usd",
             },
         )
 
@@ -13684,13 +13696,13 @@ class PredBat(hass.Hass):
             savings_total_predbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_predbat")
             try:
                 savings_total_predbat = float(savings_total_predbat)
-            except ValueError:
+            except (ValueError, TypeError):
                 savings_total_predbat = 0.0
 
             savings_total_pvbat = self.load_previous_value_from_ha(self.prefix + ".savings_total_pvbat")
             try:
                 savings_total_pvbat = float(savings_total_pvbat)
-            except ValueError:
+            except (ValueError, TypeError):
                 savings_total_pvbat = 0.0
 
             # Increment total at midnight for next day
