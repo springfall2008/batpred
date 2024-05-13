@@ -5862,20 +5862,18 @@ class PredBat(hass.Hass):
             else:
                 load_value_pred, load_value_pred_raw = self.get_filtered_load_minute(load_minutes, minute - minutes_now, historical=True, step=step)
 
-            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
-            car_value_actual = load_value_today_raw - load_value_today
-            if import_value_today >= load_value_today_raw:
-                import_ignored_load_actual += load_value_today
-                load_value_today = 0
-
-            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
-            car_value_pred = load_value_pred_raw - load_value_pred
-            if import_value_pred >= load_value_pred_raw:
-                import_ignored_load_pred += load_value_pred
-                load_value_pred = 0
-
             # Add in forecast load
             load_value_pred += forecast_value_pred
+            load_value_pred_raw += forecast_value_pred
+
+            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
+            car_value_actual = load_value_today_raw - load_value_today
+            car_value_pred = load_value_pred_raw - load_value_pred
+            if minute < minutes_now and import_value_today >= load_value_today_raw:
+                import_ignored_load_actual += load_value_today
+                load_value_today = 0
+                import_ignored_load_pred += load_value_pred
+                load_value_pred = 0
 
             # Only count totals until now
             if minute < minutes_now:
