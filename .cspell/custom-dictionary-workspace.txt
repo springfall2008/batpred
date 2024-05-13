@@ -113,6 +113,7 @@ Pred
 Predai
 Predbat
 Predheat
+pvbat
 pwindow
 pylint
 pyproject
