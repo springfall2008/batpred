@@ -654,3 +654,39 @@ series:
         color: red
       - value: 330
         color: darkred
+
+###############################################
+# Cost saving chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Cost Savings
+  show_states: true
+  colorize_states: true
+span:
+  start: day
+now:
+  show: true
+series:
+  - entity: predbat.savings_yesterday_predbat
+    stroke_width: 1
+    name: saving_predbat
+    type: column
+    group_by:
+      func: min
+      duration: 1day
+  - entity: predbat.savings_yesterday_pvbat
+    stroke_width: 1
+    name: saving_pvbat
+    type: column
+    group_by:
+      func: min
+      duration: 1day
+  - entity: predbat.cost_yesterday
+    stroke_width: 1
+    type: column
+    name: actual
+    group_by:
+      func: min
+      duration: 1day

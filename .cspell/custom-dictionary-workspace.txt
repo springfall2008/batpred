@@ -73,6 +73,7 @@ iboost
 idag
 idetails
 inday
+invname
 isort
 ivtime
 kopt
