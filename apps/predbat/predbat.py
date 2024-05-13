@@ -14502,7 +14502,7 @@ class HAInterface:
         :return: The history for the sensor.
         """
         if not self.ha_key:
-            return self.base.get_history(sensor, days=days)
+            return self.base.get_history(entity_id=sensor, days=days)
 
         start = now - timedelta(days=days)
         end = now
