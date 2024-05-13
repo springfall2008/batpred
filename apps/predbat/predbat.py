@@ -11656,7 +11656,7 @@ class PredBat(hass.Hass):
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
-       # Save state
+        # Save state
         self.dashboard_item(
             self.prefix + ".cost_yesterday",
             state=self.dp2(cost_yesterday),
