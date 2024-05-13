@@ -37,3 +37,5 @@ Example charts:
 ![image](https://github.com/springfall2008/batpred/assets/48591903/c02d65cf-e502-4484-a58d-cff8fb93d0f3)
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a96934d3-753a-49da-800b-925896f87cb6)
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/f31bdd5e-0c54-419d-81b4-0987a98d0a53)
