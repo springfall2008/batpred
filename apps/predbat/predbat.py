@@ -787,12 +787,6 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
-        "name": "calculate_savings",
-        "friendly_name": "Calculate savings",
-        "type": "switch",
-        "default": False,
-    },
-    {
         "name": "iboost_enable",
         "friendly_name": "iBoost enable",
         "type": "switch",
@@ -2165,6 +2159,10 @@ class Inverter:
         self.adjust_reserve(100)
         self.adjust_reserve(6)
         self.adjust_reserve(4)
+        self.adjust_pause_mode(pause_charge=True)
+        self.adjust_pause_mode(pause_discharge=True)
+        self.adjust_pause_mode(pause_charge=True, pause_discharge=True)
+        self.adjust_pause_mode()
         self.disable_charge_window()
         timea = datetime.strptime("23:00:00", "%H:%M:%S")
         timeb = datetime.strptime("23:01:00", "%H:%M:%S")
@@ -2345,23 +2343,29 @@ class Inverter:
             self.soc_max = float(idetails["Battery_Capacity_kWh"])
             self.nominal_capacity = self.soc_max
             if "raw" in self.rest_data:
-                self.nominal_capacity = (
-                    float(self.rest_data["raw"]["invertor"]["battery_nominal_capacity"]) / 19.53125
-                )  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+                raw_data = self.rest_data["raw"]
+                invname = "invertor"
+                if invname not in raw_data:
+                    invname = "inverter"
+                if invname in raw_data and "battery_nominal_capacity" in raw_data[invname]:
+                    self.nominal_capacity = (
+                        float(raw_data[invname]["battery_nominal_capacity"]) / 19.53125
+                    )  # XXX: Where does 19.53125 come from? I back calculated but why that number...
                 if self.base.battery_capacity_nominal:
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
                         self.base.log("WARN: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
-                soc_force_adjust = self.rest_data["raw"]["invertor"]["soc_force_adjust"]
-                if soc_force_adjust:
-                    try:
-                        soc_force_adjust = int(soc_force_adjust)
-                    except ValueError:
-                        soc_force_adjust = 0
-                    if (soc_force_adjust > 0) and (soc_force_adjust < 7):
-                        self.in_calibration = True
-                        self.log("WARN: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+                if invname in raw_data and "soc_force_adjust" in raw_data[invname]:
+                    soc_force_adjust = raw_data[invname]["soc_force_adjust"]
+                    if soc_force_adjust:
+                        try:
+                            soc_force_adjust = int(soc_force_adjust)
+                        except ValueError:
+                            soc_force_adjust = 0
+                        if (soc_force_adjust > 0) and (soc_force_adjust < 7):
+                            self.in_calibration = True
+                            self.log("WARN: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
             self.soc_max *= self.battery_scaling
 
             # Max battery rate
@@ -2434,7 +2438,7 @@ class Inverter:
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
-            if abs(tdiff) >= 5:
+            if abs(tdiff) >= 10:
                 self.base.log(
                     "WARN: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
                         self.inverter_time, now_utc, tdiff
@@ -2447,7 +2451,7 @@ class Inverter:
                     had_errors=True,
                 )
                 # Trigger restart
-                self.auto_restart("Clock skew >=5 minutes")
+                self.auto_restart("Clock skew >=10 minutes")
             else:
                 self.base.restart_active = False
 
@@ -11656,7 +11660,7 @@ class PredBat(hass.Hass):
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
-        # Save state
+       # Save state
         self.dashboard_item(
             self.prefix + ".cost_yesterday",
             state=self.dp2(cost_yesterday),
@@ -13559,7 +13563,7 @@ class PredBat(hass.Hass):
 
         # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")
-        self.calculate_savings = self.get_arg("calculate_savings")
+        self.calculate_savings = True
         self.carbon_enable = self.get_arg("carbon_enable")
         self.carbon_metric = self.get_arg("carbon_metric")
         self.iboost_solar = self.get_arg("iboost_solar")
