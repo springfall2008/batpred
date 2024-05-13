@@ -5868,6 +5868,7 @@ class PredBat(hass.Hass):
 
             # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
             car_value_actual = load_value_today_raw - load_value_today
+            car_value_pred = load_value_pred_raw - load_value_pred
             if minute < minutes_now and import_value_today >= load_value_today_raw:
                 import_ignored_load_actual += load_value_today
                 load_value_today = 0
