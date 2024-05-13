@@ -154,6 +154,15 @@ as described in [Predbat led car charging](car-charge-planning.md)
 - binary_sensor.predbat_iboost_active - A binary sensor indicating when there is excess solar and the solar diverter (e.g. iBoost, Eddi or just plain immersion heater) should be active,
 can be used for automations to trigger the immersion heater boost.
 
+## Energy saving data
+
+- predbat.cost_yesterday - A sensor that gives you your energy costs for yesterday (00:00-23:59 on the previous day).
+- predbat.savings_yesterday_predbat - A sensor which tells you have much money Predbat saved you yesterday compared to not using Predbat and only charging at the lowest
+import rate in the 24 hour Period
+- predbat.savings_total_predbat - A running total of the above
+- predbat.savings_yesterday_pvbat - A sensor which tells you have much money you saved vs not having a PV and battery system at all (this includes in the Predbat savings).
+- predbat.savings_total_pvbat - A running total of the above
+
 ## Sample Predbat data out dashboard
 
 ![image](images/predbat-data_out_dashboard_sample.png)
