@@ -5053,6 +5053,12 @@ class PredBat(hass.Hass):
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
 
+    def get_history_ad(self, entity_id, days=30):
+        """
+        Wrapper for AppDaemon get history
+        """
+        return self.get_history(entity_id = entity_id, days=days)
+
     def get_history_wrapper(self, entity_id, days=30):
         """
         Async function to get history from HA using Async task
@@ -10885,10 +10891,6 @@ class PredBat(hass.Hass):
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
 
-                        # Freeze pass is just discharge freeze
-                        if pass_type in ["freeze"]:
-                            continue
-
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
@@ -14801,7 +14803,7 @@ class HAInterface:
         :return: The history for the sensor.
         """
         if not self.ha_key:
-            return self.base.get_history(sensor, days=days)
+            return self.base.get_history_ad(sensor, days=days)
 
         start = now - timedelta(days=days)
         end = now
