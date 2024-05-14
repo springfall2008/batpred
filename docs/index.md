@@ -65,7 +65,7 @@ The calibration chart is useful for tuning the model for things like inverter lo
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/625d0ec3-181d-440c-be06-2cd912e28b6e)
 
-Predbat can track your actual vs predicted energy useage and make real time adjustments to the predictions if you use more or less:
+Predbat can track your actual vs predicted energy usage and make real time adjustments to the predictions if you use more or less:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/1b3d7efd-b537-4c40-810d-c8770577ad98)
 
