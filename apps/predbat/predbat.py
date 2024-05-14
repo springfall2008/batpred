@@ -5057,7 +5057,7 @@ class PredBat(hass.Hass):
         """
         Wrapper for AppDaemon get history
         """
-        return self.get_history(entity_id = entity_id, days=days)
+        return self.get_history(entity_id=entity_id, days=days)
 
     def get_history_wrapper(self, entity_id, days=30):
         """
