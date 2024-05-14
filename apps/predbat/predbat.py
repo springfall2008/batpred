@@ -7259,8 +7259,8 @@ class PredBat(hass.Hass):
             length = 0
             kwh = 0
 
-            # Stop once we have enough charge
-            if car_soc >= self.car_charging_limit[car_n]:
+            # Stop once we have enough charge, allow small margin for rounding
+            if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
                 break
 
             # Skip past windows
@@ -13752,7 +13752,7 @@ class PredBat(hass.Hass):
                 if (car_n == 0) and self.car_charging_manual_soc:
                     self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
-                        self.expose_config("car_charging_manual_soc_kwh", round(self.car_charging_soc_next[car_n], 2))
+                        self.expose_config("car_charging_manual_soc_kwh", round(self.car_charging_soc_next[car_n], 3))
 
         # Holiday days left countdown, subtract a day at midnight every day
         if scheduled and self.holiday_days_left > 0 and self.minutes_now < RUN_EVERY:
