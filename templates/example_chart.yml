@@ -692,4 +692,3 @@ series:
     group_by:
       func: last
       duration: 1day
-
