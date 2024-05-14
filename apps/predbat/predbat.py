@@ -7170,10 +7170,10 @@ class PredBat(hass.Hass):
                     end_minutes += delta_minutes
 
                 # Store rates against range
-                if end_minutes >= (-24 * 60) and start_minutes < max_minute:
+                if end_minutes >= (-24*60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
-                        if (not date) or (minute >= (-24 * 60) and minute < max_minute):
+                        if (not date) or (minute >= (-24*60) and minute < max_minute):
                             minute_index = minute_mod
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
@@ -7376,7 +7376,7 @@ class PredBat(hass.Hass):
         if not raw:
             start_minutes = max(start_minutes, 0)
             end_minutes = max(min(end_minutes, self.forecast_minutes + self.minutes_now), start_minutes)
-
+        
         if start_minutes == end_minutes:
             return 0, 0, 0, source, location
 
@@ -10885,6 +10885,10 @@ class PredBat(hass.Hass):
                         self.charge_window_best[window_n]["set"] = price
                         window_start = self.charge_window_best[window_n]["start"]
 
+                        # Freeze pass is just discharge freeze
+                        if pass_type in ["freeze"]:
+                            continue
+    
                         # For start at high only tune down excess high slots
                         if (not start_at_low) and (price > best_price) and (self.charge_limit_best[window_n] != self.soc_max):
                             if self.debug_enable:
