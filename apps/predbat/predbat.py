@@ -11660,7 +11660,7 @@ class PredBat(hass.Hass):
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
-        # Save state
+       # Save state
         self.dashboard_item(
             self.prefix + ".cost_yesterday",
             state=self.dp2(cost_yesterday),
@@ -13712,7 +13712,7 @@ class PredBat(hass.Hass):
             # Increment total at midnight for next day
             if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
                 savings_total_predbat += self.savings_today_predbat
-                savings_total_pvbat += self.savings_total_pvbat
+                savings_total_pvbat += self.savings_today_pvbat
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
@@ -14796,7 +14796,7 @@ class HAInterface:
         :return: The history for the sensor.
         """
         if not self.ha_key:
-            return self.base.get_history(entity_id=sensor, days=days)
+            return self.base.get_history(entity_id, days=days)
 
         start = now - timedelta(days=days)
         end = now
