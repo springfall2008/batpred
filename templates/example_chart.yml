@@ -664,8 +664,10 @@ header:
   title: Cost Savings
   show_states: true
   colorize_states: true
+graph_span: 7days
 span:
   start: day
+  offset: '-7day'
 now:
   show: true
 series:
@@ -674,19 +676,19 @@ series:
     name: saving_predbat
     type: column
     group_by:
-      func: min
-      duration: 1day
+      func: last
+      duration: 24hours
   - entity: predbat.savings_yesterday_pvbat
     stroke_width: 1
     name: saving_pvbat
     type: column
     group_by:
-      func: min
+      func: last
       duration: 1day
   - entity: predbat.cost_yesterday
     stroke_width: 1
     type: column
     name: actual
     group_by:
-      func: min
+      func: last
       duration: 1day
