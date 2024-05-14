@@ -6947,7 +6947,7 @@ class PredBat(hass.Hass):
         """
         We don't get enough hours of data for Octopus, so lets assume it repeats until told others
         """
-        minute = 0
+        minute = -24 * 60
         rate_last = 0
         adjusted_rates = {}
         replicated_rates = {}
@@ -7170,10 +7170,10 @@ class PredBat(hass.Hass):
                     end_minutes += delta_minutes
 
                 # Store rates against range
-                if end_minutes >= 0 and start_minutes < max_minute:
+                if end_minutes >= (-24 * 60) and start_minutes < max_minute:
                     for minute in range(start_minutes, end_minutes):
                         minute_mod = minute % max_minute
-                        if (not date) or (minute >= 0 and minute < max_minute):
+                        if (not date) or (minute >= (-24 * 60) and minute < max_minute):
                             minute_index = minute_mod
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
@@ -7354,7 +7354,7 @@ class PredBat(hass.Hass):
                         self.load_scaling_dynamic[minute] = self.load_scaling_saving
                     rate_replicate[minute] = "saving"
 
-    def decode_octopus_slot(self, slot):
+    def decode_octopus_slot(self, slot, raw=False):
         """
         Decode IOG slot
         """
@@ -7373,8 +7373,13 @@ class PredBat(hass.Hass):
         org_minutes = end_minutes - start_minutes
 
         # Cap slot times into the forecast itself
-        start_minutes = max(start_minutes, 0)
-        end_minutes = min(end_minutes, self.forecast_minutes + self.minutes_now)
+        if not raw:
+            start_minutes = max(start_minutes, 0)
+            end_minutes = max(min(end_minutes, self.forecast_minutes + self.minutes_now), start_minutes)
+
+        if start_minutes == end_minutes:
+            return 0, 0, 0, source, location
+
         cap_minutes = end_minutes - start_minutes
         cap_hours = cap_minutes / 60
 
@@ -7399,7 +7404,7 @@ class PredBat(hass.Hass):
 
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
-            if end_minutes > self.minutes_now and (not location or location == "AT_HOME"):
+            if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                 new_slot = {}
                 new_slot["start"] = start_minutes
                 new_slot["end"] = end_minutes
@@ -7874,17 +7879,13 @@ class PredBat(hass.Hass):
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
+                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and (not location or location == "AT_HOME"):
-                    # Round slots to 30 minute boundary, make numbers positive so they round to the start of a slot
-                    start_minutes += 24 * 60 * 14
-                    end_minutes += 24 * 60 * 14
-                    start_minutes = int(start_minutes / 30) * 30
-                    end_minutes = int((end_minutes + 29) / 30) * 30
-                    start_minutes -= 24 * 60 * 14
-                    end_minutes -= 24 * 60 * 14
+                    # Round slots to 30 minute boundary
+                    start_minutes = int(round(start_minutes / 30, 0) * 30)
+                    end_minutes = int(round(end_minutes / 30, 0) * 30)
 
                     self.log(
                         "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {}".format(
@@ -7892,7 +7893,7 @@ class PredBat(hass.Hass):
                         )
                     )
                     for minute in range(start_minutes, end_minutes):
-                        if minute >= 0 and minute < self.forecast_minutes:
+                        if minute >= (-24 * 60) and minute < self.forecast_minutes:
                             rates[minute] = self.rate_min
 
         return rates
@@ -8584,7 +8585,7 @@ class PredBat(hass.Hass):
         Create rates/time every 30 minutes
         """
         rates_time = {}
-        for minute in range(0, self.minutes_now + self.forecast_minutes + 24 * 60, 30):
+        for minute in range(-24 * 60, self.minutes_now + self.forecast_minutes + 24 * 60, 30):
             minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
             rates_time[stamp] = self.dp2(rates[minute])
