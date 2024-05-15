@@ -667,7 +667,7 @@ header:
 graph_span: 7days
 span:
   start: day
-  offset: '-7day'
+  offset: '-6day'
 now:
   show: true
 series:
