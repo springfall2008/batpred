@@ -427,7 +427,8 @@ e.g. if you want to remove Mixergy hot water tank heating data from the forecast
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
 to multiply the car_charging_energy data by if required (e.g. set to 0.001 to convert Watts to kW).
 
-If you do not have a suitable car charging kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml`
+and configure the following Home Assistant entity:
 
 - **input_number.predbat_car_charging_threshold** - Sets the threshold above which home consumption is assumed to be car charging and
 will be removed from the home load data (default 6 = 6kW).
@@ -475,14 +476,16 @@ Useful if you have a sensor for your car charger that isn't binary.
 
 To make planned car charging more accurate, configure the following items in `apps.yaml`:
 
-- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100. It will be used to predict car charging stops.
+- **car_charging_battery_size** - Set this value in `apps.yaml` to the car's battery size in kWh. If not set, Predbat defaults to 100kWh.
+It will be used to predict when to stop car charging.
 
 - **car_charging_limit** - You should configure this to point to a sensor that specifies the % limit the car is set to charge to.
 This could be a sensor on the EV charger integration or a Home Assistant helper entity you can set as you wish.
-If you don't specify a sensor Predbat will default to 100%.
+If you don't specify a sensor Predbat will default to 100% - i.e. fill the car to full.
 
-- **car_charging_soc** - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current % charge level.
-If not set, Predbat will default to 0%.
+- **car_charging_soc** - You should configure this to point to a sensor (on the HA integration for your EV charger) that specifies the car's current charge level
+expressed as a percentage - it must NOT be set to a sensor that gives the car's current kWh value as this will cause Predbat to charge the car to an incorrect level.
+If you don't specify a sensor, Predbat will default to 0%.
 
 ### Multiple Electric Cars
 
