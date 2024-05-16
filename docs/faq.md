@@ -258,6 +258,25 @@ In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / clic
 - Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
 is recommended to be set to a value of between 20 and 60 seconds.
 
+If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/predbat isn’t getting the same time from the inverter as it is expecting.
+Either GivTCP has lost communications with the inverter or the inverter is stopped talking to the world.
+
+If you look at the Logbook in Home Assistant you should see a steady stream of entities changing in HA.
+In particular you will see the GivTCP inverter time entity changing every polling period, e.g. every 20 seconds.
+
+Possible fixes:
+
+- restart the GivTCP add-on
+- restart Home Assistant (although usually restarting GivTCP is enough)
+- power the inverter off, turn off panels and battery first, then the inverter, then follow the reverse sequence to power the inverter back on again.
+This forces the inverter to reconnect to your wifi
+- do a ‘reset to defaults’ in the portal
+
+If you keep getting the warning message, even sporadically, then this points to an underlying issue in your home network between Home Assistant and the inverter.
+You may need to add a Wi-Fi repeater or ideally a fixed Ethernet connection to your inverter to improve signal strength if this keeps happening.
+
+There is a [Home Assistant automation that will alert you if GivTCP stops sending data to predbat](output-data.md#automated-monitoring-that-predbat-and-givtcp-are-running-ok).
+
 ## I have another problem not listed above
 
 If you are still having trouble feel free to raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support
