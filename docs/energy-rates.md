@@ -287,8 +287,8 @@ Once it is active update apps.yaml to link Predbat to the Sensor (if its not alr
 carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 ```
 
-Now you can enable **switch.predbat_carbon_enable** to view Carbon Intensity in your plan.
+By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the predbat plan](predbat-plan-card.md).
 
-In future releases Predbat will also be able to optimise for Carbon footprint.
+Predbat can also [optimise your grid charging based on the Carbon footprint](customisation.md#battery-margins-and-metrics-options) by setting **input_number.predbat_carbon_metric**.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/292c6625-412a-420a-9bd4-df68a937e93c)

@@ -47,6 +47,7 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 - What the battery SoC will be at the start of the 30 minute slot
 - The forecast cost for the half hour slot
 - A running total cost
+- Forecast CO2 Carbon intensity and Carbon footprint emitted by the grid's electricity generation, and the direction of travel over the slot (if carbon forecasting is enabled)
 
 Rate symbols (import and export):
 
@@ -117,7 +118,8 @@ above 0 to 0.25 it will be Light Green, and if zero, it will be coloured White.
 - **Car kWh** - The total predicted car charging for the half hour slot. This column will only be shown if *num_cars* in `apps.yaml` is 1 or more.<BR>
 If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
-- **iBoost kWh** - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi. This column will only be shown if *switch.iboost_enable* is set to True.<BR>
+- **iBoost kWh** - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi.
+This column will only be shown if *switch.predbat_iboost_enable* is set to True.<BR>
 If the solar diverter is planned to be on in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
 - **SoC %** - The estimate of battery State of Charge percentage *at the start* of the time slot
@@ -140,6 +142,16 @@ In the 22:30 and 23:00 slots there is a little grid import, and then at 23:30 th
 As you can see the Total continues to increase in the plan past midnight with each Total being
 the Total from the preceding slot plus the Cost estimate from the preceding slot - reminder that Total gives the running total *at the start* of the slot.<BR>
 Total cost is always coloured White.
+
+- **CO2 (g/kWh)** - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the 30 minute slot.
+This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
+The CO2 value will be coloured according to how high the carbon footprint intensity is: greater or equal to 450g/kWh it will be deep red; greater or equal to 290, dark red;
+then golden orange from 200 upwards; yellow from 120; green from 40 and light green if less than 40.
+
+- **CO2 (kg)** - The estimated CO2 Carbon footprint that the grid will emit generating electricity at the start of the slot and the direction of travel over the slot.
+This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
+The carbon amount in kg will be coloured according to the direction of travel over the slot; if the carbon value is rising by 10kg or more it will be orange with an upwards arrow;
+if falling by 10kg or more it will green with a downwards arrow, and in the middle, white with a horizontal arrow.
 
 ## Debug mode for Predbat Plan
 
