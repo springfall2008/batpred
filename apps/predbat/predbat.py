@@ -11726,9 +11726,19 @@ class PredBat(hass.Hass):
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, final_soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit_best, charge_window_best, [], [], False, end_record=24 * 60
-        )
+        (
+            metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=24 * 60)
         saving = metric - cost_yesterday
         self.log(
             "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} final_soc {}".format(
@@ -11775,11 +11785,7 @@ class PredBat(hass.Hass):
         self.savings_today_pvbat = saving
         self.log(
             "Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(
-                self.dp2(metric),
-                self.dp2(cost_yesterday),
-                self.dp2(saving),
-                self.dp2(import_kwh_house + import_kwh_battery),
-                self.dp2(export_kwh)
+                self.dp2(metric), self.dp2(cost_yesterday), self.dp2(saving), self.dp2(import_kwh_house + import_kwh_battery), self.dp2(export_kwh)
             )
         )
 
