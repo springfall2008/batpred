@@ -157,7 +157,7 @@ if falling by 10kg or more it will green with a downwards arrow, and in the midd
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.
 
-If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import and export rate columns.
+If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import rate, export rate, load and PV columns.
 
 The Predbat plan will now look like this with plan_debug turned on:
 
@@ -183,7 +183,15 @@ so each discharged and exported kWh actually earns slightly less.
 so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
 Predbat plans to charge and then discharge the battery in the same slot to generate that profit.
 
+With debug mode turned on, the Load column shows the predicted load in kWh for the half hour slot and in brackets the modelled load variance value using the [load variance model](customisation.md#cloud-coverage-and-load-variance).
+
+The PV column in debug mode changes shows the predicted PV generation in kWh for the half hour slot and the Solcast 10% forecast in brackets.
+Note that Predbat's forecasted PV generation already contains a **input_number.predbat_pv_metric10_weight** [weighted value of the Solcast 10% forecast](customisation.md#scaling-and-weight-options).
+
+Note that the values in brackets in the load and PV columns are each only shown if they are non-zero.
+
 The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or discharge the battery.
+There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan-doesnt-charge-or-discharge-when-i-expect-it-to) in the FAQ's.
 
 ## Customising and Reformatting the Predbat Plan
 
