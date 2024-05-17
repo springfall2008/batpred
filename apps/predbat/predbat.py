@@ -11648,7 +11648,10 @@ class PredBat(hass.Hass):
             scale=1.0,
             required_unit="kWh",
         )
-        soc_yesterday = self.get_state(self.prefix + ".savings_total_soc", default=0.0)
+        try:
+            soc_yesterday = float(self.get_state(self.prefix + ".savings_total_soc", default=0.0))
+        except (ValueError, TypeError):
+            soc_yesterday = 0.0
 
         # Shift rates back
         past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)
@@ -11738,7 +11741,7 @@ class PredBat(hass.Hass):
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save='yesterday')
         saving = metric - cost_yesterday
         self.log(
             "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
