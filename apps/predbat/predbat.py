@@ -11738,7 +11738,7 @@ class PredBat(hass.Hass):
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save='yesterday')
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
         saving = metric - cost_yesterday
         self.log(
             "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
