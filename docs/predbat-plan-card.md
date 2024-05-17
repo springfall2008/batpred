@@ -47,6 +47,7 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 - What the battery SoC will be at the start of the 30 minute slot
 - The forecast cost for the half hour slot
 - A running total cost
+- Forecast CO2 Carbon intensity and Carbon footprint emitted by the grid's electricity generation, and the direction of travel over the slot (if carbon forecasting is enabled)
 
 Rate symbols (import and export):
 
@@ -117,7 +118,8 @@ above 0 to 0.25 it will be Light Green, and if zero, it will be coloured White.
 - **Car kWh** - The total predicted car charging for the half hour slot. This column will only be shown if *num_cars* in `apps.yaml` is 1 or more.<BR>
 If the car is planned to be charged in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
-- **iBoost kWh** - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi. This column will only be shown if *switch.iboost_enable* is set to True.<BR>
+- **iBoost kWh** - The energy planned for solar diverter immersion heating such as iBoost or MyEnergi Eddi.
+This column will only be shown if *switch.predbat_iboost_enable* is set to True.<BR>
 If the solar diverter is planned to be on in that slot then the kWh will be coloured Yellow, otherwise it will be White.
 
 - **SoC %** - The estimate of battery State of Charge percentage *at the start* of the time slot
@@ -141,11 +143,21 @@ As you can see the Total continues to increase in the plan past midnight with ea
 the Total from the preceding slot plus the Cost estimate from the preceding slot - reminder that Total gives the running total *at the start* of the slot.<BR>
 Total cost is always coloured White.
 
+- **CO2 (g/kWh)** - The estimated CO2 Carbon intensity emitted by the grid when generating electricity at the start of the 30 minute slot.
+This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
+The CO2 value will be coloured according to how high the carbon footprint intensity is: greater or equal to 450g/kWh it will be deep red; greater or equal to 290, dark red;
+then golden orange from 200 upwards; yellow from 120; green from 40 and light green if less than 40.
+
+- **CO2 (kg)** - The estimated CO2 Carbon footprint that the grid will emit generating electricity at the start of the slot and the direction of travel over the slot.
+This column will only be shown if *switch.predbat_carbon_enable* is set to True.<BR>
+The carbon amount in kg will be coloured according to the direction of travel over the slot; if the carbon value is rising by 10kg or more it will be orange with an upwards arrow;
+if falling by 10kg or more it will green with a downwards arrow, and in the middle, white with a horizontal arrow.
+
 ## Debug mode for Predbat Plan
 
 If [Predbat expert mode](customisation.md#expert-mode) is turned on then a number of additional controls and switches are made available in Home Assistant.
 
-If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import and export rate columns.
+If **switch.predbat_plan_debug** is then turned on then the Predbat plan shows additional 'debugging' information for the import rate, export rate, load and PV columns.
 
 The Predbat plan will now look like this with plan_debug turned on:
 
@@ -171,7 +183,15 @@ so each discharged and exported kWh actually earns slightly less.
 so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
 Predbat plans to charge and then discharge the battery in the same slot to generate that profit.
 
+With debug mode turned on, the Load column shows the predicted load in kWh for the half hour slot and in brackets the modelled load variance value using the [load variance model](customisation.md#cloud-coverage-and-load-variance).
+
+The PV column in debug mode changes shows the predicted PV generation in kWh for the half hour slot and the Solcast 10% forecast in brackets.
+Note that Predbat's forecasted PV generation already contains a **input_number.predbat_pv_metric10_weight** [weighted value of the Solcast 10% forecast](customisation.md#scaling-and-weight-options).
+
+Note that the values in brackets in the load and PV columns are each only shown if they are non-zero.
+
 The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or discharge the battery.
+There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan-doesnt-charge-or-discharge-when-i-expect-it-to) in the FAQ's.
 
 ## Customising and Reformatting the Predbat Plan
 
