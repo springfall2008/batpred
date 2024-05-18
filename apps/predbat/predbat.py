@@ -2565,7 +2565,7 @@ class Inverter:
                     self.base.max_days_previous,
                     self.base.now_utc,
                     "state",
-                    "last_updated",
+                    "last_changed",
                     backwards=True,
                     clean_increment=False,
                     smoothing=False,
@@ -2578,7 +2578,7 @@ class Inverter:
                     self.base.max_days_previous,
                     self.base.now_utc,
                     "state",
-                    "last_updated",
+                    "last_changed",
                     backwards=True,
                     clean_increment=False,
                     smoothing=False,
@@ -2586,13 +2586,13 @@ class Inverter:
                     scale=1.0,
                     required_unit="W",
                 )
-                predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
+                predbat_status = self.base.minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_changed")
                 battery_power = self.base.minute_data(
                     battery_power_data[0],
                     self.base.max_days_previous,
                     self.base.now_utc,
                     "state",
-                    "last_updated",
+                    "last_changed",
                     backwards=True,
                     clean_increment=False,
                     smoothing=False,
@@ -4605,7 +4605,7 @@ class PredBat(hass.Hass):
                     dpv = item["total"]["solar"]
 
                     new_data = {}
-                    new_data["last_updated"] = timestamp
+                    new_data["last_changed"] = timestamp
                     new_data["consumption"] = consumption
                     new_data["import"] = dimport
                     new_data["export"] = dexport
@@ -4617,23 +4617,23 @@ class PredBat(hass.Hass):
         # Find how old the data is
         item = mdata[0]
         try:
-            last_updated_time = self.str2time(item["last_updated"])
+            last_updated_time = self.str2time(item["last_changed"])
         except (ValueError, TypeError):
             last_updated_time = now_utc
 
         age = now_utc - last_updated_time
         self.load_minutes_age = age.days
         self.load_minutes = self.minute_data(
-            mdata, self.max_days_previous, now_utc, "consumption", "last_updated", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True
+            mdata, self.max_days_previous, now_utc, "consumption", "last_changed", backwards=True, smoothing=True, scale=self.load_scaling, clean_increment=True
         )
         self.import_today = self.minute_data(
-            mdata, self.max_days_previous, now_utc, "import", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
+            mdata, self.max_days_previous, now_utc, "import", "last_changed", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
         )
         self.export_today = self.minute_data(
-            mdata, self.max_days_previous, now_utc, "export", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
+            mdata, self.max_days_previous, now_utc, "export", "last_changed", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
         )
         self.pv_today = self.minute_data(
-            mdata, self.max_days_previous, now_utc, "pv", "last_updated", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
+            mdata, self.max_days_previous, now_utc, "pv", "last_changed", backwards=True, smoothing=True, scale=self.import_export_scaling, clean_increment=True
         )
 
         self.load_minutes_now = self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0)
@@ -5089,7 +5089,7 @@ class PredBat(hass.Hass):
                     self.max_days_previous,
                     now_utc,
                     "state",
-                    "last_updated",
+                    "last_changed",
                     backwards=True,
                     smoothing=smoothing,
                     scale=scale,
@@ -5123,7 +5123,7 @@ class PredBat(hass.Hass):
             if history:
                 item = history[0][0]
                 try:
-                    last_updated_time = self.str2time(item["last_updated"])
+                    last_updated_time = self.str2time(item["last_changed"])
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
                 age = now_utc - last_updated_time
@@ -5136,7 +5136,7 @@ class PredBat(hass.Hass):
                     max_days_previous,
                     now_utc,
                     "state",
-                    "last_updated",
+                    "last_changed",
                     backwards=True,
                     smoothing=True,
                     scale=self.load_scaling,
@@ -11288,7 +11288,7 @@ class PredBat(hass.Hass):
                 if isinstance(data, dict):
                     data_array = []
                     for key, value in data.items():
-                        data_array.append({"energy": value, "last_updated": key})
+                        data_array.append({"energy": value, "last_changed": key})
                     data = data_array
 
                 # Load data
@@ -11297,7 +11297,7 @@ class PredBat(hass.Hass):
                     self.forecast_days,
                     self.midnight_utc,
                     "energy",
-                    "last_updated",
+                    "last_changed",
                     backwards=False,
                     clean_increment=False,
                     smoothing=True,
@@ -11602,7 +11602,7 @@ class PredBat(hass.Hass):
             2,
             self.now_utc,
             "state",
-            "last_updated",
+            "last_changed",
             backwards=True,
             clean_increment=False,
             smoothing=False,
@@ -11634,7 +11634,7 @@ class PredBat(hass.Hass):
         if not cost_today_data:
             self.log("WARN: No cost_today data for yesterday")
             return
-        cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_changed", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
         # Save state
@@ -14810,7 +14810,9 @@ class HAInterface:
 
         start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+        res = self.api_call(
+            "/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA), "minimal_response": True}
+        )
         return res
 
     def set_state(self, entity_id, state, attributes=None):
