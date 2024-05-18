@@ -9374,7 +9374,7 @@ class PredBat(hass.Hass):
                         # Skip this one as it's the same as selected already
                         try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
                         if try_hash in tried_list:
-                            if self.debug_enable or 0:
+                            if self.debug_enable and 0:
                                 self.log(
                                     "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
                                         divide, all_n, all_d, discharge_enable, try_hash
