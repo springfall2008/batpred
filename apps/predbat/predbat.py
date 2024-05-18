@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.19.2"
+THIS_VERSION = "v7.19.3"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -13714,11 +13714,12 @@ class PredBat(hass.Hass):
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
-                state=self.dp2(savings_total_predbat / 100.0),
+                state=self.dp2(savings_total_predbat),
                 attributes={
                     "friendly_name": "Total Predbat savings",
                     "state_class": "measurement",
-                    "unit_of_measurement": "£",
+                    "unit_of_measurement": "p",
+                    "pounds": self.dp2(savings_total_predbat / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
             )
@@ -13734,11 +13735,12 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".savings_total_pvbat",
-                state=self.dp2(savings_total_pvbat / 100.0),
+                state=self.dp2(savings_total_pvbat),
                 attributes={
                     "friendly_name": "Total Savings vs no PV/Battery system",
                     "state_class": "measurement",
-                    "unit_of_measurement": "£",
+                    "unit_of_measurement": "p",
+                    "pounds": self.dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
             )

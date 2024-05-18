@@ -656,12 +656,12 @@ series:
         color: darkred
 
 ###############################################
-# Cost saving chart
+# Daily cost saving chart
 ###############################################
 type: custom:apexcharts-card
 header:
   show: true
-  title: Cost Savings
+  title: Daily Cost Savings
   show_states: true
   colorize_states: true
 graph_span: 7days
@@ -692,3 +692,32 @@ series:
     group_by:
       func: last
       duration: 1day
+
+###############################################
+# Total cost saving chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Total Cost Saving
+  show_states: true
+  colorize_states: true
+graph_span: 30days
+span:
+  start: day
+  offset: '-29days'
+now:
+  show: true
+series:
+  - entity: predbat.savings_total_predbat
+    stroke_width: 1
+    curve: smooth
+    name: Predbat saving
+    attribute: pounds
+    unit: £
+  - entity: predbat.savings_total_pvbat
+    stroke_width: 1
+    curve: smooth
+    name: PV/Battery saving
+    attribute: pounds
+    unit: £
