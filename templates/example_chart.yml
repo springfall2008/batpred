@@ -718,6 +718,6 @@ series:
   - entity: predbat.savings_total_pvbat
     stroke_width: 1
     curve: smooth
-    name: PV/Batttery saving
+    name: PV/Battery saving
     attribute: pounds
     unit: £
