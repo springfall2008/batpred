@@ -14810,7 +14810,9 @@ class HAInterface:
 
         start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA), "minimal_response": True})
+        res = self.api_call(
+            "/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA), "minimal_response": True}
+        )
         return res
 
     def set_state(self, entity_id, state, attributes=None):
