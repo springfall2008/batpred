@@ -9251,6 +9251,7 @@ class PredBat(hass.Hass):
         best_price_discharge=None,
         best_cycle=0,
         best_carbon=0,
+        tried_list = None
     ):
         """
         Pick an import price threshold which gives the best results
@@ -9266,10 +9267,16 @@ class PredBat(hass.Hass):
             best_price_charge = price_set[-1]
         if best_price_discharge is None:
             best_price_discharge = price_set[0]
-        tried_list = {}
+        if tried_list is None:
+            tried_list = {}
         step = PREDICT_STEP
         if fast:
             step = 30
+
+        if region_start:
+            region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
+        else:
+            region_txt = "All regions"
 
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
@@ -9277,6 +9284,7 @@ class PredBat(hass.Hass):
         else:
             discharge_enable_options = [False]
 
+        #discharge_enable_options = [False]
         # Most expensive first
         all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
         if not quiet:
@@ -9286,8 +9294,8 @@ class PredBat(hass.Hass):
         window_prices = {}
         window_prices_discharge = {}
         for loop_price in all_prices:
-            for modulo in [2, 3, 4, 6, 8, 16, 32]:
-                for divide in [1, 2, 3, 4, 8, 16, 32, 96]:
+            for modulo in [2, 3, 4, 6, 8, 16]:
+                for divide in [1, 2, 3, 4, 8, 16, 32, 48, 96]:
                     all_n = []
                     all_d = []
                     highest_price_charge = price_set[-1]
@@ -9447,7 +9455,7 @@ class PredBat(hass.Hass):
                             best_cost = cost
                             if 1 or not quiet:
                                 self.log(
-                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} modulo {} divide {}".format(
+                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} modulo {} divide {} limits {} dischage {}".format(
                                         loop_price,
                                         best_price_charge,
                                         self.dp4(best_cost),
@@ -9458,14 +9466,16 @@ class PredBat(hass.Hass):
                                         self.dp4(best_cost),
                                         modulo,
                                         divide,
+                                        try_charge_limit,
+                                        try_discharge,
                                     )
                                 )
-                                self.log("Picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
-                                self.log("Picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
+                                #self.log("Picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
+                                #self.log("Picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
                         else:
                             if 0:
                                 self.log(
-                                    "Unselected Optimise all charge found bad buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {}".format(
+                                    "Unselected Optimise all charge found bad buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} dischage {}".format(
                                         loop_price,
                                         best_price_charge,
                                         self.dp4(cost),
@@ -9474,15 +9484,18 @@ class PredBat(hass.Hass):
                                         self.dp4(battery_cycle),
                                         self.dp0(final_carbon_g),
                                         self.dp4(cost),
+                                        try_charge_limit,
+                                        try_discharge,
                                     )
                                 )
-                                self.log(
-                                    "Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True))
-                                )
-                                self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
+                                #self.log("Not Picked charge {} discharge {}".format(try_charge_limit, try_discharge))
+                                #self.log("Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
+                                #self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
+
         self.log(
-            "Optimise all charge for all bands best price threshold {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+            "Finished Optimise all charge for all bands best price threshold {} {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
                 self.dp4(best_price),
+                region_txt,
                 self.dp4(best_price_charge),
                 self.dp4(best_cost),
                 self.dp4(best_metric),
@@ -9495,7 +9508,7 @@ class PredBat(hass.Hass):
                 best_discharge,
             )
         )
-        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -10743,6 +10756,7 @@ class PredBat(hass.Hass):
                 best_soc_min,
                 best_cycle,
                 best_carbon,
+                tried_list,
             ) = self.optimise_charge_limit_price(
                 price_set,
                 price_links,
@@ -10758,11 +10772,13 @@ class PredBat(hass.Hass):
             )
             if self.calculate_regions:
                 self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
-                region_size = int(16 * 60)
+                region_size = int(12 * 60)
                 while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    for region in range(0, self.end_record, region_size):
-                        region_end = min(region + region_size, self.end_record)
+                    for region in range(0, self.end_record + self.minutes_now, region_size):
+                        region_end = min(region + region_size, self.end_record + self.minutes_now)
+                        if region_end < self.minutes_now:
+                            continue
                         (
                             self.charge_limit_best,
                             ignore_discharge_limits2,
@@ -10774,6 +10790,7 @@ class PredBat(hass.Hass):
                             best_soc_min,
                             best_cycle,
                             best_carbon,
+                            tried_list
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
@@ -10784,8 +10801,8 @@ class PredBat(hass.Hass):
                             self.discharge_window_best,
                             ignore_discharge_limits,
                             end_record=self.end_record,
-                            region_start=region + self.minutes_now,
-                            region_end=region_end + self.minutes_now,
+                            region_start=region,
+                            region_end=region_end,
                             fast=fast_mode,
                             quiet=True,
                             best_metric=best_metric,
@@ -10796,6 +10813,7 @@ class PredBat(hass.Hass):
                             best_price_discharge=best_price_discharge,
                             best_cycle=best_cycle,
                             best_carbon=best_carbon,
+                            tried_list=tried_list,
                         )
                     region_size = int(region_size / 2)
 
