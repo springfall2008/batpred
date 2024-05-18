@@ -9476,7 +9476,9 @@ class PredBat(hass.Hass):
                                         self.dp4(cost),
                                     )
                                 )
-                                self.log("Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
+                                self.log(
+                                    "Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True))
+                                )
                                 self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
