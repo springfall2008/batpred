@@ -11704,6 +11704,10 @@ class PredBat(hass.Hass):
             final_iboost,
             final_carbon_g,
         ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.log(
             "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
@@ -11747,6 +11751,10 @@ class PredBat(hass.Hass):
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             [], [], [], [], False, end_record=24 * 60
         )
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.savings_today_pvbat = saving
         self.log(
@@ -13706,11 +13714,11 @@ class PredBat(hass.Hass):
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
-                state=self.dp2(savings_total_predbat),
+                state=self.dp2(savings_total_predbat / 100.0),
                 attributes={
                     "friendly_name": "Total Predbat savings",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": "£",
                     "icon": "mdi:cash-multiple",
                 },
             )
@@ -13726,11 +13734,11 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".savings_total_pvbat",
-                state=self.dp2(savings_total_pvbat),
+                state=self.dp2(savings_total_pvbat / 100.0),
                 attributes={
                     "friendly_name": "Total Savings vs no PV/Battery system",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": "£",
                     "icon": "mdi:cash-multiple",
                 },
             )
