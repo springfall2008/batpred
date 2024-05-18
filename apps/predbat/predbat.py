@@ -7775,12 +7775,13 @@ class PredBat(hass.Hass):
 
             if rate_low_start >= 0:
                 if (return_raw or (rate_low_end > self.minutes_now)) and (rate_low_end - rate_low_start) >= rate_low_min_window:
+
                     if rate_low_average < lowest:
                         lowest = rate_low_average
                     if rate_low_average > highest:
                         highest = rate_low_average
 
-                    found_rates.append(window)
+                    found_rates.append(window)                    
                 minute = rate_low_end
             else:
                 break
@@ -9461,22 +9462,21 @@ class PredBat(hass.Hass):
                                     )
                                 )
                         else:
-                            if 0:
-                                self.log(
-                                    "Unselected Optimise all charge found bad buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {} = {}".format(
-                                        loop_price,
-                                        best_price_charge,
-                                        self.dp4(cost),
-                                        self.dp4(metric),
-                                        self.dp4(metric_keep),
-                                        self.dp4(battery_cycle),
-                                        self.dp0(final_carbon_g),
-                                        self.dp4(cost),
-                                        all_n,
-                                        all_d,
-                                        try_discharge,
-                                    )
+                            if 0: 
+                                self.log("Unselected Optimise all charge found bad buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {} = {}".format(
+                                    loop_price,
+                                    best_price_charge,
+                                    self.dp4(cost),
+                                    self.dp4(metric),
+                                    self.dp4(metric_keep),
+                                    self.dp4(battery_cycle),
+                                    self.dp0(final_carbon_g),
+                                    self.dp4(cost),
+                                    all_n,
+                                    all_d,
+                                    try_discharge,
                                 )
+                            )
         self.log(
             "Optimise all charge for all bands best price threshold {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
                 self.dp4(best_price),
@@ -11703,7 +11703,11 @@ class PredBat(hass.Hass):
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save='yesterday')
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.log(
             "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
@@ -11747,6 +11751,10 @@ class PredBat(hass.Hass):
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             [], [], [], [], False, end_record=24 * 60
         )
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.savings_today_pvbat = saving
         self.log(
@@ -13706,11 +13714,11 @@ class PredBat(hass.Hass):
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
-                state=self.dp2(savings_total_predbat),
+                state=self.dp2(savings_total_predbat / 100.0),
                 attributes={
                     "friendly_name": "Total Predbat savings",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": "£",
                     "icon": "mdi:cash-multiple",
                 },
             )
@@ -13726,11 +13734,11 @@ class PredBat(hass.Hass):
             )
             self.dashboard_item(
                 self.prefix + ".savings_total_pvbat",
-                state=self.dp2(savings_total_pvbat),
+                state=self.dp2(savings_total_pvbat / 100.0),
                 attributes={
                     "friendly_name": "Total Savings vs no PV/Battery system",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": "£",
                     "icon": "mdi:cash-multiple",
                 },
             )
