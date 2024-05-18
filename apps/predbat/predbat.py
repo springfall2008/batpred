@@ -9251,7 +9251,7 @@ class PredBat(hass.Hass):
         best_price_discharge=None,
         best_cycle=0,
         best_carbon=0,
-        tried_list = None
+        tried_list=None,
     ):
         """
         Pick an import price threshold which gives the best results
@@ -9284,7 +9284,7 @@ class PredBat(hass.Hass):
         else:
             discharge_enable_options = [False]
 
-        #discharge_enable_options = [False]
+        # discharge_enable_options = [False]
         # Most expensive first
         all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
         if not quiet:
@@ -9294,7 +9294,7 @@ class PredBat(hass.Hass):
         window_prices = {}
         window_prices_discharge = {}
         for discharge_enable in discharge_enable_options:
-           for loop_price in all_prices:
+            for loop_price in all_prices:
                 for modulo in [2, 3, 4, 6, 8, 16]:
                     for divide in [1, 2, 3, 4, 8, 16, 32, 48, 96]:
                         all_n = []
@@ -9342,7 +9342,7 @@ class PredBat(hass.Hass):
                         all_n.sort()
                         all_d.sort()
 
-                    #for discharge_enable in discharge_enable_options:
+                        # for discharge_enable in discharge_enable_options:
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(record_charge_windows):
@@ -9474,8 +9474,8 @@ class PredBat(hass.Hass):
                                         try_discharge,
                                     )
                                 )
-                                #self.log("Picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
-                                #self.log("Picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
+                                # self.log("Picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
+                                # self.log("Picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
                         else:
                             if 0:
                                 self.log(
@@ -9492,9 +9492,9 @@ class PredBat(hass.Hass):
                                         try_discharge,
                                     )
                                 )
-                                #self.log("Not Picked charge {} discharge {}".format(try_charge_limit, try_discharge))
-                                #self.log("Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
-                                #self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
+                                # self.log("Not Picked charge {} discharge {}".format(try_charge_limit, try_discharge))
+                                # self.log("Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
+                                # self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
 
         self.log(
             "Finished Optimise all charge for all bands best price threshold {} {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
@@ -10794,7 +10794,7 @@ class PredBat(hass.Hass):
                             best_soc_min,
                             best_cycle,
                             best_carbon,
-                            tried_list
+                            tried_list,
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
