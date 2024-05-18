@@ -89,7 +89,7 @@ keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 min
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's
 quite CPU intensive and provides very little improvement for most systems.
 
-You can can enable **combine_charge_slots** and **combine_discharge_slots** in order to speed up planning. 
+You can can enable **combine_charge_slots** and **combine_discharge_slots** in order to speed up planning.
 Note: Combining discharge slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
 longer periods of fixed rates but can limit the planning ability in some cases.
 
