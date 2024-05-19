@@ -9349,7 +9349,7 @@ class PredBat(hass.Hass):
                     for window_n in range(record_charge_windows):
                         if window_n >= len(try_charge_limit):
                             continue
-                        
+
                         if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
                             continue
 
