@@ -1364,11 +1364,13 @@ def wrapped_run_prediction_single(charge_limit, charge_window, discharge_window,
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
 
+
 def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+
 
 def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
@@ -1461,23 +1463,11 @@ class Prediction:
     def thread_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
         """
         Run single prediction in a thread
-        """        
+        """
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record, step=step
         )
-        return (
-            cost,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g
-        )
+        return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -9256,31 +9246,31 @@ class PredBat(hass.Hass):
         self.yesterday_pv_step = {}
 
     def optimise_charge_limit_price(
-            self,
-            price_set,
-            price_links,
-            window_index,
-            record_charge_windows,
-            record_discharge_windows,
-            try_charge_limit,
-            charge_window,
-            discharge_window,
-            discharge_limits,
-            end_record=None,
-            region_start=None,
-            region_end=None,
-            fast=False,
-            quiet=False,
-            best_metric=9999999,
-            best_cost=0,
-            best_keep=0,
-            best_soc_min=None,
-            best_price_charge=None,
-            best_price_discharge=None,
-            best_cycle=0,
-            best_carbon=0,
-            tried_list=None,
-        ):
+        self,
+        price_set,
+        price_links,
+        window_index,
+        record_charge_windows,
+        record_discharge_windows,
+        try_charge_limit,
+        charge_window,
+        discharge_window,
+        discharge_limits,
+        end_record=None,
+        region_start=None,
+        region_end=None,
+        fast=False,
+        quiet=False,
+        best_metric=9999999,
+        best_cost=0,
+        best_keep=0,
+        best_soc_min=None,
+        best_price_charge=None,
+        best_price_discharge=None,
+        best_cycle=0,
+        best_carbon=0,
+        tried_list=None,
+    ):
         """
         Pick an import price threshold which gives the best results
         """
@@ -9305,7 +9295,7 @@ class PredBat(hass.Hass):
             region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
         else:
             region_txt = "All regions"
-    
+
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
             discharge_enable = True
@@ -9370,15 +9360,12 @@ class PredBat(hass.Hass):
                     # Try discharge on/off
                     try_discharge = best_discharge.copy()
                     for window_n in range(record_discharge_windows):
-
                         if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
                             continue
 
                         try_discharge[window_n] = 100
                         if window_n in all_d:
-                            hit_charge = self.hit_charge_window(
-                                self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
-                            )
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                             if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                 continue
                             if not self.car_charging_from_battery and self.hit_car_window(
@@ -9393,38 +9380,33 @@ class PredBat(hass.Hass):
                     try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
                     if try_hash in tried_list:
                         if self.debug_enable and 0:
-                            self.log("Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(divide, all_n, all_d, discharge_enable, try_hash))
+                            self.log(
+                                "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
+                                    divide, all_n, all_d, discharge_enable, try_hash
+                                )
+                            )
                         continue
 
                     tried_list[try_hash] = True
 
-                    pred_handle = self.launch_run_prediction_single(
-                        try_charge_limit,
-                        charge_window,
-                        discharge_window,
-                        try_discharge,
-                        False,
-                        end_record=end_record,
-                        step=step
-                    )                        
+                    pred_handle = self.launch_run_prediction_single(try_charge_limit, charge_window, discharge_window, try_discharge, False, end_record=end_record, step=step)
                     pred_item = {}
-                    pred_item['handle'] = pred_handle
-                    pred_item['charge_limit'] = try_charge_limit.copy()
-                    pred_item['discharge_limit'] = try_discharge.copy()
-                    pred_item['highest_price_charge'] = highest_price_charge
-                    pred_item['lowest_price_discharge'] = lowest_price_discharge
-                    pred_item['loop_price'] = loop_price
+                    pred_item["handle"] = pred_handle
+                    pred_item["charge_limit"] = try_charge_limit.copy()
+                    pred_item["discharge_limit"] = try_discharge.copy()
+                    pred_item["highest_price_charge"] = highest_price_charge
+                    pred_item["lowest_price_discharge"] = lowest_price_discharge
+                    pred_item["loop_price"] = loop_price
                     pred_table.append(pred_item)
 
         for pred in pred_table:
-            handle = pred['handle']
-            try_charge_limit = pred['charge_limit']
-            try_discharge = pred['discharge_limit']
-            highest_price_charge = pred['highest_price_charge']
-            lowest_price_discharge = pred['lowest_price_discharge']
-            loop_price = pred['loop_price']
+            handle = pred["handle"]
+            try_charge_limit = pred["charge_limit"]
+            try_discharge = pred["discharge_limit"]
+            highest_price_charge = pred["highest_price_charge"]
+            lowest_price_discharge = pred["lowest_price_discharge"]
+            loop_price = pred["loop_price"]
             cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
-
 
             metric, metric10 = self.compute_metric(
                 end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g
@@ -9506,18 +9488,8 @@ class PredBat(hass.Hass):
                 metric_keep,
                 final_iboost,
                 final_carbon_g,
-            ) = self.run_prediction(
-                best_limits,
-                charge_window,
-                discharge_window,
-                best_discharge,
-                False,
-                end_record=end_record,
-                step=PREDICT_STEP,
-                save='level'
-            )        
+            ) = self.run_prediction(best_limits, charge_window, discharge_window, best_discharge, False, end_record=end_record, step=PREDICT_STEP, save="level")
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
-
 
     def launch_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step=PREDICT_STEP):
         """
@@ -9526,13 +9498,9 @@ class PredBat(hass.Hass):
         charge_limit = copy.deepcopy(charge_limit)
         discharge_limits = copy.deepcopy(discharge_limits)
         if self.pool:
-            han = self.pool.apply_async(
-                wrapped_run_prediction_single, (charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
-            )
+            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
         else:
-            han = DummyThread(
-                self.prediction.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
-            )
+            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
         return han
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
@@ -10816,7 +10784,7 @@ class PredBat(hass.Hass):
                             best_soc_min,
                             best_cycle,
                             best_carbon,
-                            tried_list
+                            tried_list,
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
@@ -13585,7 +13553,7 @@ class PredBat(hass.Hass):
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
-        self.calculate_regions = True 
+        self.calculate_regions = True
         self.calculate_secondary_order = self.get_arg("calculate_secondary_order")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
