@@ -9229,30 +9229,30 @@ class PredBat(hass.Hass):
         self.yesterday_pv_step = {}
 
     def optimise_charge_limit_price(
-        self,
-        price_set,
-        price_links,
-        window_index,
-        record_charge_windows,
-        try_charge_limit,
-        charge_window,
-        discharge_window,
-        discharge_limits,
-        end_record=None,
-        region_start=None,
-        region_end=None,
-        fast=False,
-        quiet=False,
-        best_metric=9999999,
-        best_cost=0,
-        best_keep=0,
-        best_soc_min=None,
-        best_price_charge=None,
-        best_price_discharge=None,
-        best_cycle=0,
-        best_carbon=0,
-        tried_list=None,
-    ):
+            self,
+            price_set,
+            price_links,
+            window_index,
+            record_charge_windows,
+            try_charge_limit,
+            charge_window,
+            discharge_window,
+            discharge_limits,
+            end_record=None,
+            region_start=None,
+            region_end=None,
+            fast=False,
+            quiet=False,
+            best_metric=9999999,
+            best_cost=0,
+            best_keep=0,
+            best_soc_min=None,
+            best_price_charge=None,
+            best_price_discharge=None,
+            best_cycle=0,
+            best_carbon=0,
+            tried_list=None,
+        ):
         """
         Pick an import price threshold which gives the best results
         """
@@ -9267,13 +9267,17 @@ class PredBat(hass.Hass):
             best_price_charge = price_set[-1]
         if best_price_discharge is None:
             best_price_discharge = price_set[0]
-        tried_list = {}
         step = PREDICT_STEP
         if fast:
             step = 30
         if tried_list is None:
             tried_list = {}
 
+        if region_start:
+            region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
+        else:
+            region_txt = "All regions"
+    
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
             discharge_enable_options = [False, True]
@@ -9462,7 +9466,8 @@ class PredBat(hass.Hass):
                                     )
                                 )
         self.log(
-            "Optimise all charge for all bands best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+            "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+                region_txt,
                 self.dp4(best_price),
                 len(tried_list),
                 self.dp4(best_price_charge),
@@ -9478,6 +9483,7 @@ class PredBat(hass.Hass):
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
+
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -10759,7 +10765,7 @@ class PredBat(hass.Hass):
                             best_soc_min,
                             best_cycle,
                             best_carbon,
-                            tried_list,
+                            tried_list
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
@@ -13526,7 +13532,7 @@ class PredBat(hass.Hass):
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
-        self.calculate_regions = True
+        self.calculate_regions = True 
         self.calculate_secondary_order = self.get_arg("calculate_secondary_order")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
