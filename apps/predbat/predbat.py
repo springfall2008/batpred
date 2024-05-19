@@ -9347,6 +9347,9 @@ class PredBat(hass.Hass):
                     # This price band setting for charge
                     try_charge_limit = best_limits.copy()
                     for window_n in range(record_charge_windows):
+                        if window_n >= len(try_charge_limit):
+                            continue
+
                         if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
                             continue
 
@@ -9360,6 +9363,9 @@ class PredBat(hass.Hass):
                     # Try discharge on/off
                     try_discharge = best_discharge.copy()
                     for window_n in range(record_discharge_windows):
+                        if window_n >= len(discharge_limits):
+                            continue
+
                         if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
                             continue
 
