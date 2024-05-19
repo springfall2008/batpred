@@ -7219,7 +7219,7 @@ class PredBat(hass.Hass):
         max_price = self.car_charging_plan_max_price[car_n]
 
         if self.car_charging_plan_smart[car_n]:
-            price_sorted = self.sort_window_by_price(low_rates)
+            price_sorted = self.sort_window_by_price(low_rates, reverse_time=True)
             price_sorted.reverse()
         else:
             price_sorted = [n for n in range(len(low_rates))]
