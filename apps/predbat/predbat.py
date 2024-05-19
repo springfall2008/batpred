@@ -9229,30 +9229,30 @@ class PredBat(hass.Hass):
         self.yesterday_pv_step = {}
 
     def optimise_charge_limit_price(
-        self,
-        price_set,
-        price_links,
-        window_index,
-        record_charge_windows,
-        try_charge_limit,
-        charge_window,
-        discharge_window,
-        discharge_limits,
-        end_record=None,
-        region_start=None,
-        region_end=None,
-        fast=False,
-        quiet=False,
-        best_metric=9999999,
-        best_cost=0,
-        best_keep=0,
-        best_soc_min=None,
-        best_price_charge=None,
-        best_price_discharge=None,
-        best_cycle=0,
-        best_carbon=0,
-        tried_list=None,
-    ):
+            self,
+            price_set,
+            price_links,
+            window_index,
+            record_charge_windows,
+            try_charge_limit,
+            charge_window,
+            discharge_window,
+            discharge_limits,
+            end_record=None,
+            region_start=None,
+            region_end=None,
+            fast=False,
+            quiet=False,
+            best_metric=9999999,
+            best_cost=0,
+            best_keep=0,
+            best_soc_min=None,
+            best_price_charge=None,
+            best_price_discharge=None,
+            best_cycle=0,
+            best_carbon=0,
+            tried_list=None,
+        ):
         """
         Pick an import price threshold which gives the best results
         """
@@ -9267,16 +9267,12 @@ class PredBat(hass.Hass):
             best_price_charge = price_set[-1]
         if best_price_discharge is None:
             best_price_discharge = price_set[0]
-        if tried_list is None:
-            tried_list = {}
+        tried_list = {}
         step = PREDICT_STEP
         if fast:
             step = 30
-
-        if region_start:
-            region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
-        else:
-            region_txt = "All regions"
+        if tried_list is None:
+            tried_list = {}
 
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
@@ -9284,7 +9280,6 @@ class PredBat(hass.Hass):
         else:
             discharge_enable_options = [False]
 
-        # discharge_enable_options = [False]
         # Most expensive first
         all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
         if not quiet:
@@ -9294,61 +9289,58 @@ class PredBat(hass.Hass):
         window_prices = {}
         window_prices_discharge = {}
         for loop_price in all_prices:
-            for discharge_enable in discharge_enable_options:
-                for modulo in [2, 3, 4, 6, 8, 16]:
-                    for divide in [1, 2, 3, 4, 8, 16, 32, 48, 96]:
-                        all_n = []
-                        all_d = []
-                        highest_price_charge = price_set[-1]
-                        lowest_price_discharge = price_set[0]
-                        divide_count_c = 0
-                        divide_count_d = 0
-                        first_charge = True
-                        first_discharge = True
+            for modulo in [2, 3, 4, 6, 8, 16, 32]:
+                for divide in [1, 2, 3, 4, 8, 16, 32, 48, 96]:
+                    all_n = []
+                    all_d = []
+                    highest_price_charge = price_set[-1]
+                    lowest_price_discharge = price_set[0]
+                    divide_count_c = 0
+                    divide_count_d = 0
+                    first_charge = True
+                    first_discharge = True
 
-                        for price in price_set:
-                            links = price_links[price]
-                            if loop_price >= price:
-                                for key in links:
-                                    window_n = window_index[key]["id"]
-                                    typ = window_index[key]["type"]
-                                    if typ == "c":
-                                        window_prices[window_n] = price
-                                        if first_charge:
-                                            if (int(divide_count_c / divide) % modulo) == 0:
-                                                all_n.append(window_n)
-                                            divide_count_c += 1
-                                        else:
+                    for price in price_set:
+                        links = price_links[price]
+                        if loop_price >= price:
+                            for key in links:
+                                window_n = window_index[key]["id"]
+                                typ = window_index[key]["type"]
+                                if typ == "c":
+                                    window_prices[window_n] = price
+                                    if first_charge:
+                                        if (int(divide_count_c / divide) % modulo) == 0:
                                             all_n.append(window_n)
-                                if all_n:
-                                    first_charge = False
-                            else:
-                                # For prices above threshold try discharge
-                                for key in links:
-                                    typ = window_index[key]["type"]
-                                    window_n = window_index[key]["id"]
-                                    if typ == "d":
-                                        window_prices_discharge[window_n] = price
-                                        if first_discharge:
-                                            if (int(divide_count_d / divide) % modulo) == 0:
-                                                all_d.append(window_n)
-                                            divide_count_d += 1
-                                        else:
+                                        divide_count_c += 1
+                                    else:
+                                        all_n.append(window_n)
+                            if all_n:
+                                first_charge = False
+                        else:
+                            # For prices above threshold try discharge
+                            for key in links:
+                                typ = window_index[key]["type"]
+                                window_n = window_index[key]["id"]
+                                if typ == "d":
+                                    window_prices_discharge[window_n] = price
+                                    if first_discharge:
+                                        if (int(divide_count_d / divide) % modulo) == 0:
                                             all_d.append(window_n)
-                                if all_d:
-                                    first_discharge = False
+                                        divide_count_d += 1
+                                    else:
+                                        all_d.append(window_n)
+                            if all_d:
+                                first_discharge = False
 
-                        # Sort for print out
-                        all_n.sort()
-                        all_d.sort()
+                    # Sort for print out
+                    all_n.sort()
+                    all_d.sort()
 
+                    for discharge_enable in discharge_enable_options:
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(record_charge_windows):
                             if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                                continue
-
-                            if discharge_enable:
                                 continue
 
                             if window_n in all_n:
@@ -9360,13 +9352,13 @@ class PredBat(hass.Hass):
 
                         # Try discharge on/off
                         try_discharge = best_discharge.copy()
-                        for window_n in range(len(best_discharge)):
-                            if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                        if discharge_enable:
+                            if not all_d:
                                 continue
 
-                            if discharge_enable:
-                                try_discharge[window_n] = 100
-
+                            for window_n in all_d:
+                                if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                    continue
                                 hit_charge = self.hit_charge_window(
                                     self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
                                 )
@@ -9376,11 +9368,9 @@ class PredBat(hass.Hass):
                                     self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
                                 ):
                                     continue
-
-                                if window_n in all_d:
-                                    if window_prices_discharge[window_n] < lowest_price_discharge:
-                                        lowest_price_discharge = window_prices_discharge[window_n]
-                                    try_discharge[window_n] = 0
+                                if window_prices_discharge[window_n] < lowest_price_discharge:
+                                    lowest_price_discharge = window_prices_discharge[window_n]
+                                try_discharge[window_n] = 0
 
                         # Skip this one as it's the same as selected already
                         try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
@@ -9429,17 +9419,17 @@ class PredBat(hass.Hass):
                         )
 
                         # Optimise
-                        if self.debug_enable and 0:
+                        if self.debug_enable:
                             if discharge_enable:
                                 self.log(
-                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {} hash {}".format(
-                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n, all_d, try_hash
+                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {}".format(
+                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n, all_d
                                     )
                                 )
                             else:
                                 self.log(
-                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge off {} hash {}".format(
-                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n, all_d, try_hash
+                                    "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge off".format(
+                                        loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), all_n
                                     )
                                 )
 
@@ -9458,7 +9448,7 @@ class PredBat(hass.Hass):
                             best_cost = cost
                             if 1 or not quiet:
                                 self.log(
-                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} modulo {} divide {} limits {} discharge {}".format(
+                                    "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {}".format(
                                         loop_price,
                                         best_price_charge,
                                         self.dp4(best_cost),
@@ -9467,38 +9457,14 @@ class PredBat(hass.Hass):
                                         self.dp4(best_cycle),
                                         self.dp0(best_carbon),
                                         self.dp4(best_cost),
-                                        modulo,
-                                        divide,
-                                        try_charge_limit,
-                                        try_discharge,
+                                        best_limits,
+                                        best_discharge,
                                     )
                                 )
-                                # self.log("Picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
-                                # self.log("Picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
-                        else:
-                            if 0:
-                                self.log(
-                                    "Unselected Optimise all charge found bad buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {}".format(
-                                        loop_price,
-                                        best_price_charge,
-                                        self.dp4(cost),
-                                        self.dp4(metric),
-                                        self.dp4(metric_keep),
-                                        self.dp4(battery_cycle),
-                                        self.dp0(final_carbon_g),
-                                        self.dp4(cost),
-                                        try_charge_limit,
-                                        try_discharge,
-                                    )
-                                )
-                                # self.log("Not Picked charge {} discharge {}".format(try_charge_limit, try_discharge))
-                                # self.log("Not picked charge window {}".format(self.window_as_text(charge_window, calc_percent_limit(try_charge_limit, self.soc_max), ignore_min=True)))
-                                # self.log("Not picked discharge window {}".format(self.window_as_text(discharge_window, try_discharge, ignore_max=True)))
-
         self.log(
-            "Finished Optimise all charge for all bands best price threshold {} {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+            "Optimise all charge for all bands best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
                 self.dp4(best_price),
-                region_txt,
+                len(tried_list),
                 self.dp4(best_price_charge),
                 self.dp4(best_cost),
                 self.dp4(best_metric),
@@ -9512,6 +9478,7 @@ class PredBat(hass.Hass):
             )
         )
         return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
+
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -10785,15 +10752,15 @@ class PredBat(hass.Hass):
                         (
                             self.charge_limit_best,
                             ignore_discharge_limits,
-                            best_price,
-                            best_price_discharge,
+                            ignore_best_price,
+                            ignore_best_price_discharge,
                             best_metric,
                             best_cost,
                             best_keep,
                             best_soc_min,
                             best_cycle,
                             best_carbon,
-                            tried_list,
+                            tried_list
                         ) = self.optimise_charge_limit_price(
                             price_set,
                             price_links,
@@ -10816,7 +10783,6 @@ class PredBat(hass.Hass):
                             best_price_discharge=best_price_discharge,
                             best_cycle=best_cycle,
                             best_carbon=best_carbon,
-                            tried_list=tried_list,
                         )
                     region_size = int(region_size / 2)
 
@@ -13560,7 +13526,7 @@ class PredBat(hass.Hass):
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
-        self.calculate_regions = True
+        self.calculate_regions = True 
         self.calculate_secondary_order = self.get_arg("calculate_secondary_order")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
