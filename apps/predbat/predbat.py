@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.19.6"
+THIS_VERSION = "v7.19.7"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -9972,17 +9972,17 @@ class PredBat(hass.Hass):
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         metric -= (
             (soc + final_iboost)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
+            * max(rate_min, 1.0, rate_export_min)
             * self.metric_battery_value_scaling
         )
         metric10 -= (
             (soc10 + final_iboost10)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
+            * max(rate_min, 1.0, rate_export_min)
             * self.metric_battery_value_scaling
         )
-
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
