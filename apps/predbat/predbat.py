@@ -28,7 +28,7 @@ import asyncio
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.19.5"
+THIS_VERSION = "v7.19.6"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -11966,7 +11966,7 @@ class PredBat(hass.Hass):
         self.export_today_now = 0
         self.carbon_today_sofar = 0
         self.midnight_utc = self.midnight_utc - timedelta(days=1)
-        self.forecast_minutes = 25 * 60
+        self.forecast_minutes = 24 * 60
         self.pv_today_now = 0
         self.soc_kw = soc_yesterday
         self.car_charging_hold = False
@@ -13660,7 +13660,7 @@ class PredBat(hass.Hass):
 
         self.debug_enable = self.get_arg("debug_enable")
         self.previous_status = self.get_state(self.prefix + ".status")
-        forecast_hours = self.get_arg("forecast_hours", 48)
+        forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
