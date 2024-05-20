@@ -9362,7 +9362,6 @@ class PredBat(hass.Hass):
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(record_charge_windows):
-
                             if window_n >= len(charge_window):
                                 continue
 
@@ -9383,7 +9382,6 @@ class PredBat(hass.Hass):
                                 continue
 
                             for window_n in range(record_discharge_windows):
-
                                 if window_n >= len(discharge_window):
                                     continue
 
@@ -15118,9 +15116,7 @@ class HAInterface:
 
         start = now - timedelta(days=days)
         end = now
-        res = self.api_call(
-            "/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)}
-        )
+        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
 
     def set_state(self, entity_id, state, attributes=None):
