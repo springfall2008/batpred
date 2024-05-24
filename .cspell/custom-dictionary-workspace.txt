@@ -11,6 +11,7 @@ autoflake
 automations
 autopep
 autoupdate
+aoihttp
 Basepath
 Batpred
 batteri
