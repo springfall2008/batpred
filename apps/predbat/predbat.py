@@ -2230,13 +2230,13 @@ class Inverter:
                 if service:
                     if addon:
                         self.log("Calling restart service {} with addon {}".format(service, addon))
-                        self.base.call_service(service, addon=addon)
+                        self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
                         self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
-                        self.base.call_service(service, entity_id=entity_id)
+                        self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
                         self.log("Calling restart service {}".format(service))
-                        self.base.call_service(service)
+                        self.base.call_service_wrapper(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     time.sleep(15)
             raise Exception("Auto-restart triggered")
@@ -3252,9 +3252,7 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
-                        )
+                        self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3301,12 +3299,7 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "discharge_rate",
-                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
-                            new_rate,
-                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
-                        )
+                        self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -3389,9 +3382,9 @@ class Inverter:
                     self.base.set_state_wrapper(state="off", entity_id=entity_id)
             else:
                 if new_value:
-                    self.base.call_service("turn_on", entity_id=entity_id)
+                    self.base.call_service_wrapper("turn_on", entity_id=entity_id)
                 else:
-                    self.base.call_service("turn_off", entity_id=entity_id)
+                    self.base.call_service_wrapper("turn_off", entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
@@ -3425,7 +3418,7 @@ class Inverter:
                 self.base.set_state_wrapper(entity_id, state=new_value)
             else:
                 # if isinstance(new_value, str):
-                self.base.call_service("set_value", value=new_value, entity_id=entity_id)
+                self.base.call_service_wrapper("set_value", value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -3450,7 +3443,7 @@ class Inverter:
         GivTCP Workaround, keep writing until correct
         """
         for retry in range(6):
-            self.base.call_service("select_option", option=new_value, entity_id=entity_id)
+            self.base.call_service_wrapper("select_option", option=new_value, entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
@@ -3953,7 +3946,7 @@ class Inverter:
         Send an MQTT message via service
         """
         if self.inv_has_mqtt_api:
-            self.base.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
+            self.base.call_service_wrapper("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
         """
@@ -4005,7 +3998,7 @@ class Inverter:
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
-                self.base.call_service(service_name, **service_data)
+                self.base.call_service_wrapper(service_name, **service_data)
             else:
                 self.log("WARN: Inverter {} unable to find service name for {}".format(self.id, service))
         else:
@@ -4199,7 +4192,7 @@ class Inverter:
         Call a button press service (Solis) and wait for the data to update
         """
         for retry in range(6):
-            self.base.call_service("button/press", entity_id=entity_id)
+            self.base.call_service_wrapper("button/press", entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             time_pressed = datetime.strptime(self.base.get_state_wrapper(entity_id, refresh=True), TIME_FORMAT_SECONDS)
 
@@ -4426,7 +4419,7 @@ class PredBat(hass.Hass):
         Sync wrapper for call_notify
         """
         for device in self.notify_devices:
-            self.call_service("notify/" + device, message=message)
+            self.call_service_wrapper("notify/" + device, message=message)
         return True
 
     async def async_call_notify(self, message):
@@ -4434,7 +4427,7 @@ class PredBat(hass.Hass):
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.call_service("notify/" + device, message=message)
+            await self.call_service_wrapper("notify/" + device, message=message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
@@ -5072,6 +5065,12 @@ class PredBat(hass.Hass):
         Wrapper function to get state from HA
         """
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
+
+    def call_service_wrapper(self, service, **kwargs):
+        """
+        Wrapper function to call a HA service
+        """
+        return self.ha_interface.call_service(service, **kwargs)
 
     def get_history_wrapper(self, entity_id, days=30):
         """
@@ -9981,8 +9980,16 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric -= (
+            (soc + final_iboost)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
+        metric10 -= (
+            (soc10 + final_iboost10)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -12603,8 +12610,7 @@ class PredBat(hass.Hass):
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
                             if not self.inverter_set_charge_before:
-                                self.log(
-                                    "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
+                                self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
                                         self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
                                     )
                                 )
@@ -13129,9 +13135,7 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
-                    entity_id=entity_id, attribute="completed_dispatches"
-                )
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
                 planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
@@ -14708,6 +14712,7 @@ class PredBat(hass.Hass):
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -14794,8 +14799,8 @@ class PredBat(hass.Hass):
         if register:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
-
-            if not self.ha_interface.websocket_active:
+        
+            if not self.ha_interface.websocket_active:            
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
                     self.fire_event("service_registered", domain=item["domain"], service=item["service"])
@@ -15177,22 +15182,21 @@ class HAInterface:
             self.log("Info: Start socket for url {}".format(url))
             async with aiohttp.ClientSession() as session:
                 async with session.ws_connect(url) as websocket:
-                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+
+                    await websocket.send_json({'type': 'auth','access_token': self.ha_key})
                     sid = 1
 
                     # Subscribe to all state changes
-                    await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "state_changed"})
+                    await websocket.send_json({'id': sid, 'type': 'subscribe_events', 'event_type': 'state_changed'})
                     sid += 1
 
                     # Listen for services
-                    await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
+                    await websocket.send_json({'id': sid, 'type' : 'subscribe_events', 'event_type': 'call_service'})
                     sid += 1
-
+                
                     # Fire events to say we have registered services
                     for item in self.base.SERVICE_REGISTER_LIST:
-                        await websocket.send_json(
-                            {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
-                        )
+                        await websocket.send_json({'id': sid, 'type': 'fire_event', 'event_type': 'service_registered', 'event_data': {'service': item["service"], 'domain': item["domain"]}})
                         sid += 1
 
                     self.log("Info: Web Socket active")
@@ -15208,15 +15212,13 @@ class HAInterface:
                                     event_type = event_info.get("event_type", "")
                                     if event_type == "state_changed":
                                         event_data = event_info.get("data", {})
-                                        old_state = event_data.get("old_state")
-                                        new_state = event_data.get("new_state")
+                                        old_state = event_data.get('old_state')
+                                        new_state = event_data.get('new_state')
                                         if new_state:
                                             self.update_state_item(new_state)
                                             # Only trigger on value change or you get too many updates
-                                            if new_state.get("state", None) != old_state.get("state", None):
-                                                await self.base.trigger_watch_list(
-                                                    new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
-                                                )
+                                            if new_state.get('state', None) != old_state.get('state', None):
+                                                await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
                                     elif event_type == "call_service":
                                         service_data = event_info.get("data", {})
                                         await self.base.trigger_callback(service_data)
@@ -15334,6 +15336,18 @@ class HAInterface:
             data["attributes"] = attributes
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
         self.update_state(entity_id)
+
+    def call_service(self, service, **kwargs):
+        """
+        Call a service in Home Assistant.
+        """
+        if not self.ha_key:
+            return self.base.call_service(service, **kwargs)
+
+        data = {}
+        for key in kwargs:
+            data[key] = kwargs[key]
+        self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False):
         """
