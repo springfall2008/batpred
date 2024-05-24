@@ -12,6 +12,13 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
+  # XXX: Template configuration, delete this line once you have set up for your system
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
    - '£'
@@ -20,9 +27,6 @@ pred_bat:
   # Number of threads to use in plan calculation
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
-
-  # XXX: This is a configuration template, delete this line once you edit your configuration
-  template: True
 
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both

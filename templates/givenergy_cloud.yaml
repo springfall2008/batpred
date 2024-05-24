@@ -11,7 +11,17 @@ pred_bat:
 
   # Timezone to work in
   timezone: Europe/London
+
+  # XXX: Template configuration, delete this line once you have set up for your system
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
+  # Number of threads to use, auto will match the number of CPUs or 0 for disabled
   threads: auto
+
   currency_symbols:
    - '£'
    - 'p'

@@ -9,14 +9,15 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
-  soc_max:
-   - 28.8
-
-  battery_rate_max:
-   - 8000
-
   # Timezone to work in
   timezone: Europe/London
+
+  # XXX: Template configuration, delete this line once you have set up for your system
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
 
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
@@ -27,8 +28,13 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # XXX: This is a configuration template, delete this line once you edit your configuration
-  template: True
+  # The size of the battery in kWh
+  soc_max:
+   - 28.8
+
+  # The maximum rate of the battery charge/discharge in watts
+  battery_rate_max:
+   - 8000
 
   # To disable set it to 1440
   load_filter_threshold: 30

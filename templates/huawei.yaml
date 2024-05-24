@@ -12,8 +12,21 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
-  # Template, please delete the next line once configured
+  # XXX: Template configuration, delete this line once you have set up for your system
   template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
+  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  currency_symbols:
+   - '£'
+   - 'p'
+
+  # Number of threads to use in plan calculation
+  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
+  threads: auto
 
   # Sensors, more than one can be specified and they will be summed up automatically
   #
