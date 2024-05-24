@@ -3245,9 +3245,7 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
-                        )
+                        self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3294,12 +3292,7 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "discharge_rate",
-                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
-                            new_rate,
-                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
-                        )
+                        self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -9068,8 +9061,10 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
+        self.define_service_list()
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
+        self.watch_list = []
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -9971,8 +9966,16 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric -= (
+            (soc + final_iboost)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
+        metric10 -= (
+            (soc10 + final_iboost10)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -13107,9 +13110,7 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
-                    entity_id=entity_id, attribute="completed_dispatches"
-                )
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
                 planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
@@ -14636,6 +14637,54 @@ class PredBat(hass.Hass):
             ha_value = history[-1]["state"]
         return ha_value
 
+    async def trigger_watch_list(self, entity_id, attribute, old, new):
+        """
+        Trigger a watch event for an entity
+        """
+        for entity in self.watch_list:
+            if entity_id == entity:
+                self.log("Triggered watch event for {} attribute {} old {} new {}".format(entity, attribute, old, new))
+                await self.watch_event(entity, attribute, old, new, None)
+
+    async def trigger_callback(self, service_data):
+        """
+        Trigger a callback for a service via HA Interface
+        """
+        for item in self.EVENT_LISTEN_LIST:
+            if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
+                await item["callback"](item["service"], service_data, None)
+
+    def define_service_list(self):
+        self.SERVICE_REGISTER_LIST = [
+            {"domain": "input_number", "service": "set_value"},
+            {"domain": "input_number", "service": "increment"},
+            {"domain": "input_number", "service": "decrement"},
+            {"domain": "switch", "service": "turn_on"},
+            {"domain": "switch", "service": "turn_off"},
+            {"domain": "switch", "service": "toggle"},
+            {"domain": "select", "service": "select_option"},
+            {"domain": "select", "service": "select_first"},
+            {"domain": "select", "service": "select_last"},
+            {"domain": "select", "service": "select_next"},
+            {"domain": "select", "service": "select_previous"},
+        ]
+        self.EVENT_LISTEN_LIST = [
+            {"domain": "switch", "service": "turn_on", "callback": self.switch_event},
+            {"domain": "switch", "service": "turn_off", "callback": self.switch_event},
+            {"domain": "switch", "service": "toggle", "callback": self.switch_event},
+            {"domain": "input_number", "service": "set_value", "callback": self.number_event},
+            {"domain": "input_number", "service": "increment", "callback": self.number_event},
+            {"domain": "input_number", "service": "decrement", "callback": self.number_event},
+            {"domain": "select", "service": "select_option", "callback": self.select_event},
+            {"domain": "select", "service": "select_first", "callback": self.select_event},
+            {"domain": "select", "service": "select_last", "callback": self.select_event},
+            {"domain": "select", "service": "select_next", "callback": self.select_event},
+            {"domain": "select", "service": "select_previous", "callback": self.select_event},
+            {"domain": "update", "service": "install", "callback": self.update_event},
+            {"domain": "update", "service": "skip", "callback": self.update_event},
+        ]
+
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -14720,36 +14769,19 @@ class PredBat(hass.Hass):
 
         # Register HA services
         if register:
-            self.fire_event("service_registered", domain="input_number", service="set_value")
-            self.fire_event("service_registered", domain="input_number", service="increment")
-            self.fire_event("service_registered", domain="input_number", service="decrement")
-            self.fire_event("service_registered", domain="switch", service="turn_on")
-            self.fire_event("service_registered", domain="switch", service="turn_off")
-            self.fire_event("service_registered", domain="switch", service="toggle")
-            self.fire_event("service_registered", domain="select", service="select_option")
-            self.fire_event("service_registered", domain="select", service="select_first")
-            self.fire_event("service_registered", domain="select", service="select_last")
-            self.fire_event("service_registered", domain="select", service="select_next")
-            self.fire_event("service_registered", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            self.watch_list = self.get_arg("watch_list", [], indirect=False)
+            self.log("Watch list {}".format(self.watch_list))
+        
+            if not self.ha_interface.websocket_active:            
+                # Registering HA events as Websocket is not active
+                for item in self.SERVICE_REGISTER_LIST:
+                    self.fire_event("service_registered", domain=item["domain"], service=item["service"])
+                for item in self.EVENT_LISTEN_LIST:
+                    self.listen_select_handle = self.listen_event(item["callback"], event="call_service", domain=item["domain"], service=item["service"])
 
-            watch_list = self.get_arg("watch_list", [], indirect=False)
-            self.log("Watch list {}".format(watch_list))
-            for entity in watch_list:
-                if entity and isinstance(entity, str) and ("." in entity):
-                    self.listen_state(self.watch_event, entity_id=entity)
+                for entity in self.watch_list:
+                    if entity and isinstance(entity, str) and ("." in entity):
+                        self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
@@ -15097,6 +15129,7 @@ class HAInterface:
         """
         self.ha_url = base.args.get("ha_url", "http://supervisor/core")
         self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
+        self.websocket_active = False
 
         self.base = base
         self.log = base.log
@@ -15113,47 +15146,81 @@ class HAInterface:
                 self.base.create_task(self.socketLoop())
 
     async def socketLoop(self):
-        url = "{}/api/websocket".format(self.ha_url)
-        self.log("Info: Start socket for url {}".format(url))
+        """
+        Web socket loop for HA interface
+        """
+        while True:
+            url = "{}/api/websocket".format(self.ha_url)
+            self.log("Info: Start socket for url {}".format(url))
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(url) as websocket:
 
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(url) as websocket:
-                await websocket.send_json({"type": "auth", "access_token": self.ha_key})
-                await websocket.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
-                await websocket.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
-                await websocket.send_json({"id": 3, "type": "subscribe_events", "event_type": "service_registered"})
-                await websocket.send_json({"id": 4, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": "select_option", "domain": "select"}})
-                self.log("Info: Web Socket active")
+                    await websocket.send_json({'type': 'auth','access_token': self.ha_key})
+                    sid = 1
 
-                # {'type': 'event', 'event': {'event_type': 'call_service', 'data': {'domain': 'select', 'service': 'select_option', 'service_data': {'option': 'off', 'entity_id': ['select.predbat_manual_idle']}}, 'origin': 'LOCAL', 'time_fired': '2024-05-24T12:31:47.824114+00:00', 'context': {'id': '01HYN9BZKFRA7JXEH5Z9TQBAS7', 'parent_id': None, 'user_id': 'dd0067a4253b48798e718dd92307d593'}}, 'id': 2}
+                    # Subscribe to all state changes
+                    await websocket.send_json({'id': sid, 'type': 'subscribe_events', 'event_type': 'state_changed'})
+                    sid += 1
 
-                async for message in websocket:
-                    if message.type == aiohttp.WSMsgType.TEXT:
-                        try:
-                            data = json.loads(message.data)
-                            message_type = data.get("type", "")
-                            if message_type == "event":
-                                event_info = data.get("event", {})
-                                event_type = event_info.get("event_type", "")
-                                if event_type == "state_changed":
-                                    event_data = event_info.get("data", {})
-                                    new_state = event_data.get("new_state")
-                                    if new_state:
-                                        self.update_state_item(new_state)
-                                elif event_type == "call_service":
-                                    service_data = event_info.get("data", {})
+                    # Listen for services
+                    await websocket.send_json({'id': sid, 'type' : 'subscribe_events', 'event_type': 'call_service'})
+                    sid += 1
+                
+                    # Fire events to say we have registered services
+                    for item in self.base.SERVICE_REGISTER_LIST:
+                        await websocket.send_json({'id': sid, 'type': 'fire_event', 'event_type': 'service_registered', 'event_data': {'service': item["service"], 'domain': item["domain"]}})
+                        sid += 1
+
+                    self.log("Info: Web Socket active")
+                    self.websocket_active = True
+
+                    async for message in websocket:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            try:
+                                data = json.loads(message.data)
+                                message_type = data.get("type", "")
+                                if message_type == "event":
+                                    event_info = data.get("event", {})
+                                    event_type = event_info.get("event_type", "")
+                                    if event_type == "state_changed":
+                                        event_data = event_info.get("data", {})
+                                        old_state = event_data.get('old_state')
+                                        new_state = event_data.get('new_state')
+                                        if new_state:
+                                            self.update_state_item(new_state)
+                                            # Only trigger on value change or you get too many updates
+                                            if new_state.get('state', None) != old_state.get('state', None):
+                                                await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
+                                    elif event_type == "call_service":
+                                        service_data = event_info.get("data", {})
+                                        await self.base.trigger_callback(service_data)
+                                    else:
+                                        self.log("Info: Web Socket unknown message {}".format(data))
+                                elif message_type == "result":
+                                    success = data.get("success", False)
+                                    if not success:
+                                        self.log("Warn: Web Socket result failed {}".format(data))
+                                elif message_type == "auth_required":
                                     pass
+                                elif message_type == "auth_ok":
+                                    pass
+                                elif message_type == "auth_invalid":
+                                    self.log("Warn: Web Socket auth failed, check your ha_key setting")
+                                    raise Exception("Web Socket auth failed")
+                                    self.websocket_active = False
                                 else:
                                     self.log("Info: Web Socket unknown message {}".format(data))
-                            else:
-                                self.log("Info: Web Socket unknown message {}".format(data))
 
-                        except Exception:
-                            pass
-                    elif message.type == aiohttp.WSMsgType.CLOSED:
-                        break
-                    elif message.type == aiohttp.WSMsgType.ERROR:
-                        break
+                            except Exception as e:
+                                self.log("Warn Web Socket exception {}".format(e))
+                                pass
+                        elif message.type == aiohttp.WSMsgType.CLOSED:
+                            break
+                        elif message.type == aiohttp.WSMsgType.ERROR:
+                            break
+
+            self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
+            asyncio.sleep(5)
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
