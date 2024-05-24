@@ -8,6 +8,10 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
   # Timezone to work in
   timezone: Europe/London
 
