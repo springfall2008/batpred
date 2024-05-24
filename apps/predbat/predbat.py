@@ -2230,13 +2230,13 @@ class Inverter:
                 if service:
                     if addon:
                         self.log("Calling restart service {} with addon {}".format(service, addon))
-                        self.base.call_service(service, addon=addon)
+                        self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
                         self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
-                        self.base.call_service(service, entity_id=entity_id)
+                        self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
                         self.log("Calling restart service {}".format(service))
-                        self.base.call_service(service)
+                        self.base.call_service_wrapper(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     time.sleep(15)
             raise Exception("Auto-restart triggered")
@@ -3389,9 +3389,9 @@ class Inverter:
                     self.base.set_state_wrapper(state="off", entity_id=entity_id)
             else:
                 if new_value:
-                    self.base.call_service("turn_on", entity_id=entity_id)
+                    self.base.call_service_wrapper("turn_on", entity_id=entity_id)
                 else:
-                    self.base.call_service("turn_off", entity_id=entity_id)
+                    self.base.call_service_wrapper("turn_off", entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
@@ -3425,7 +3425,7 @@ class Inverter:
                 self.base.set_state_wrapper(entity_id, state=new_value)
             else:
                 # if isinstance(new_value, str):
-                self.base.call_service("set_value", value=new_value, entity_id=entity_id)
+                self.base.call_service_wrapper("set_value", value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -3450,7 +3450,7 @@ class Inverter:
         GivTCP Workaround, keep writing until correct
         """
         for retry in range(6):
-            self.base.call_service("select_option", option=new_value, entity_id=entity_id)
+            self.base.call_service_wrapper("select_option", option=new_value, entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
@@ -3953,7 +3953,7 @@ class Inverter:
         Send an MQTT message via service
         """
         if self.inv_has_mqtt_api:
-            self.base.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
+            self.base.call_service_wrapper("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
         """
@@ -4005,7 +4005,7 @@ class Inverter:
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
-                self.base.call_service(service_name, **service_data)
+                self.base.call_service_wrapper(service_name, **service_data)
             else:
                 self.log("WARN: Inverter {} unable to find service name for {}".format(self.id, service))
         else:
@@ -4199,7 +4199,7 @@ class Inverter:
         Call a button press service (Solis) and wait for the data to update
         """
         for retry in range(6):
-            self.base.call_service("button/press", entity_id=entity_id)
+            self.base.call_service_wrapper("button/press", entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             time_pressed = datetime.strptime(self.base.get_state_wrapper(entity_id, refresh=True), TIME_FORMAT_SECONDS)
 
@@ -4426,7 +4426,7 @@ class PredBat(hass.Hass):
         Sync wrapper for call_notify
         """
         for device in self.notify_devices:
-            self.call_service("notify/" + device, message=message)
+            self.call_service_wrapper("notify/" + device, message=message)
         return True
 
     async def async_call_notify(self, message):
@@ -4434,7 +4434,7 @@ class PredBat(hass.Hass):
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.call_service("notify/" + device, message=message)
+            await self.call_service_wrapper("notify/" + device, message=message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
@@ -5072,6 +5072,12 @@ class PredBat(hass.Hass):
         Wrapper function to get state from HA
         """
         return self.ha_interface.set_state(entity_id, state, attributes=attributes)
+
+    def call_service_wrapper(self, service, **kwargs):
+        """
+        Wrapper function to call a HA service
+        """
+        return self.ha_interface.call_service(service, **kwargs)
 
     def get_history_wrapper(self, entity_id, days=30):
         """
@@ -15334,6 +15340,18 @@ class HAInterface:
             data["attributes"] = attributes
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
         self.update_state(entity_id)
+
+    def call_service(self, service, **kwargs):
+        """
+        Call a service in Home Assistant.
+        """
+        if not self.ha_key:
+            return self.base.call_service(service, **kwargs)
+
+        data = {}
+        for key in kwargs:
+            data[key] = kwargs[key]
+        self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False):
         """
