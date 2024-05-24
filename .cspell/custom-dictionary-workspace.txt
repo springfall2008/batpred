@@ -1,6 +1,7 @@
 # Custom Dictionary Words
 adata
 adbase
+aiohttp
 Anson
 apexcharts
 appdaemon
