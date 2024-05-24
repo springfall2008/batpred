@@ -2,7 +2,7 @@
 adata
 adbase
 Anson
-aoihttp
+aiohttp
 apexcharts
 appdaemon
 appkey
