@@ -3245,7 +3245,9 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+                        self.write_and_poll_value(
+                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3292,7 +3294,12 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
+                        self.write_and_poll_value(
+                            "discharge_rate",
+                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                            new_rate,
+                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -9964,16 +9971,8 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (
-            (soc + final_iboost)
-            * max(rate_min, 1.0, rate_export_min)
-            * self.metric_battery_value_scaling
-        )
-        metric10 -= (
-            (soc10 + final_iboost10)
-            * max(rate_min, 1.0, rate_export_min)
-            * self.metric_battery_value_scaling
-        )
+        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -13108,7 +13107,9 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
+                    entity_id=entity_id, attribute="completed_dispatches"
+                )
                 planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
@@ -15117,16 +15118,14 @@ class HAInterface:
 
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(url) as websocket:
-
-                await websocket.send_json({'type': 'auth','access_token': self.ha_key})
-                await websocket.send_json({'id': 1, 'type': 'subscribe_events', 'event_type': 'state_changed'})
-                await websocket.send_json({'id': 2, 'type': 'subscribe_events', 'event_type': 'call_service'})
-                await websocket.send_json({'id': 3, 'type': 'subscribe_events', 'event_type': 'service_registered'})
-                await websocket.send_json({'id': 4, 'type': 'fire_event', 'event_type': 'service_registered', 'event_data': {'service': 'select_option', 'domain': 'select'}})
+                await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+                await websocket.send_json({"id": 1, "type": "subscribe_events", "event_type": "state_changed"})
+                await websocket.send_json({"id": 2, "type": "subscribe_events", "event_type": "call_service"})
+                await websocket.send_json({"id": 3, "type": "subscribe_events", "event_type": "service_registered"})
+                await websocket.send_json({"id": 4, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": "select_option", "domain": "select"}})
                 self.log("Info: Web Socket active")
 
-# {'type': 'event', 'event': {'event_type': 'call_service', 'data': {'domain': 'select', 'service': 'select_option', 'service_data': {'option': 'off', 'entity_id': ['select.predbat_manual_idle']}}, 'origin': 'LOCAL', 'time_fired': '2024-05-24T12:31:47.824114+00:00', 'context': {'id': '01HYN9BZKFRA7JXEH5Z9TQBAS7', 'parent_id': None, 'user_id': 'dd0067a4253b48798e718dd92307d593'}}, 'id': 2}
-
+                # {'type': 'event', 'event': {'event_type': 'call_service', 'data': {'domain': 'select', 'service': 'select_option', 'service_data': {'option': 'off', 'entity_id': ['select.predbat_manual_idle']}}, 'origin': 'LOCAL', 'time_fired': '2024-05-24T12:31:47.824114+00:00', 'context': {'id': '01HYN9BZKFRA7JXEH5Z9TQBAS7', 'parent_id': None, 'user_id': 'dd0067a4253b48798e718dd92307d593'}}, 'id': 2}
 
                 async for message in websocket:
                     if message.type == aiohttp.WSMsgType.TEXT:
@@ -15138,7 +15137,7 @@ class HAInterface:
                                 event_type = event_info.get("event_type", "")
                                 if event_type == "state_changed":
                                     event_data = event_info.get("data", {})
-                                    new_state = event_data.get('new_state')
+                                    new_state = event_data.get("new_state")
                                     if new_state:
                                         self.update_state_item(new_state)
                                 elif event_type == "call_service":
