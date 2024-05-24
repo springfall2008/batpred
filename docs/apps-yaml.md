@@ -92,7 +92,7 @@ Once you have made all other required changes to apps.yaml this line should be d
 
 ### Home assistant connection
 
-Predbat can speak directly to Home Assistant rather than going via AppDaemon. 
+Predbat can speak directly to Home Assistant rather than going via AppDaemon.
 
 If you are using a standard add-on then this will be automatic and you do not need to set this.
 
@@ -100,7 +100,7 @@ If you run AppDaemon/Predbat in a Docker then you will need to set the URL of Ho
 lived access token you can create inside Home Assistant.
 
 Currently if this communication is not established Predbat will fallback to AppDaemon, however some users have experienced failures due
-to a 10-second timeout set by AppDaemon. 
+to a 10-second timeout set by AppDaemon.
 
 In future versions of Predbat AppDaemon will be removed.
 
@@ -110,7 +110,6 @@ In future versions of Predbat AppDaemon will be removed.
 ```
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/da5916ce-4630-49b4-a265-81e8e010ff86)
-
 
 ### threads
 
