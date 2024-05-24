@@ -18,7 +18,7 @@ pred_bat:
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
-  
+
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
    - '£'

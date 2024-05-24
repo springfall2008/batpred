@@ -3242,7 +3242,9 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+                        self.write_and_poll_value(
+                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3289,7 +3291,12 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
+                        self.write_and_poll_value(
+                            "discharge_rate",
+                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                            new_rate,
+                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -9961,16 +9968,8 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (
-            (soc + final_iboost)
-            * max(rate_min, 1.0, rate_export_min)
-            * self.metric_battery_value_scaling
-        )
-        metric10 -= (
-            (soc10 + final_iboost10)
-            * max(rate_min, 1.0, rate_export_min)
-            * self.metric_battery_value_scaling
-        )
+        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -13105,7 +13104,9 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
+                    entity_id=entity_id, attribute="completed_dispatches"
+                )
                 planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")

@@ -11,7 +11,7 @@ pred_bat:
 
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
-  
+
   # Timezone to work in
   timezone: Europe/London
 
@@ -27,7 +27,7 @@ pred_bat:
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
-  
+
   # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
   # if it doesn't work or if you have more than one inverter you will need to list both
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
