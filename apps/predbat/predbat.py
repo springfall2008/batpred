@@ -216,6 +216,13 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "inverter_set_charge_before",
+        "friendly_name": "Inverter Set charge window before start",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": True,
+    },
+    {
         "name": "battery_capacity_nominal",
         "friendly_name": "Use the Battery Capacity Nominal size",
         "type": "switch",
@@ -3245,9 +3252,7 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
-                        )
+                        self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3294,12 +3299,7 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        self.write_and_poll_value(
-                            "discharge_rate",
-                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
-                            new_rate,
-                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
-                        )
+                        self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -9131,6 +9131,7 @@ class PredBat(hass.Hass):
         self.inverter_loss = 1.0
         self.inverter_hybrid = True
         self.inverter_soc_reset = False
+        self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
         self.best_soc_margin = 0
@@ -9973,8 +9974,16 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric -= (
+            (soc + final_iboost)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
+        metric10 -= (
+            (soc10 + final_iboost10)
+            * max(rate_min, 1.0, rate_export_min)
+            * self.metric_battery_value_scaling
+        )
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -12594,11 +12603,17 @@ class PredBat(hass.Hass):
                                 )
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            self.log(
-                                "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(
-                                    self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                            if not self.inverter_set_charge_before:
+                                self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})").format(
+                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                    )
+                                inverter.disable_charge_window()
+                            else:
+                                self.log(
+                                    "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {})".format(
+                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                    )
                                 )
-                            )
 
                     # Set configured window minutes for the SOC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
@@ -12608,7 +12623,11 @@ class PredBat(hass.Hass):
                     self.log("No charge window required for 24-hours, disabling before the start")
                     inverter.disable_charge_window()
                 else:
-                    self.log("No change to charge window yet, waiting for schedule.")
+                    if not self.inverter_set_charge_before:
+                        self.log("No change to charge window yet, disabled while waiting for schedule.")
+                        inverter.disable_charge_window()
+                    else:
+                        self.log("No change to charge window yet, waiting for schedule.")
             elif self.set_charge_window and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                 # No charge windows
                 self.log("No charge windows found, disabling before the start")
@@ -12758,7 +12777,7 @@ class PredBat(hass.Hass):
                 elif (
                     self.charge_limit_best
                     and (self.minutes_now < inverter.charge_end_time_minutes)
-                    and ((inverter.charge_start_time_minutes - self.minutes_now) < self.set_soc_minutes)
+                    and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes)
                     and not (disabled_charge_window)
                 ):
                     if inverter.inv_has_charge_enable_time or isCharging:
@@ -13109,9 +13128,7 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
-                    entity_id=entity_id, attribute="completed_dispatches"
-                )
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches")
                 planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
                 vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
                 vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
@@ -13756,6 +13773,10 @@ class PredBat(hass.Hass):
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
+        self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")
+        if not self.inverter_set_charge_before:
+            self.set_soc_minutes = 0
+            self.set_window_minutes = 0
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.get_car_charging_planned()
@@ -14684,6 +14705,7 @@ class PredBat(hass.Hass):
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
+
     def load_user_config(self, quiet=True, register=False):
         """
         Load config from HA
@@ -14770,8 +14792,8 @@ class PredBat(hass.Hass):
         if register:
             self.watch_list = self.get_arg("watch_list", [], indirect=False)
             self.log("Watch list {}".format(self.watch_list))
-
-            if not self.ha_interface.websocket_active:
+        
+            if not self.ha_interface.websocket_active:            
                 # Registering HA events as Websocket is not active
                 for item in self.SERVICE_REGISTER_LIST:
                     self.fire_event("service_registered", domain=item["domain"], service=item["service"])
@@ -15153,22 +15175,21 @@ class HAInterface:
             self.log("Info: Start socket for url {}".format(url))
             async with aiohttp.ClientSession() as session:
                 async with session.ws_connect(url) as websocket:
-                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+
+                    await websocket.send_json({'type': 'auth','access_token': self.ha_key})
                     sid = 1
 
                     # Subscribe to all state changes
-                    await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "state_changed"})
+                    await websocket.send_json({'id': sid, 'type': 'subscribe_events', 'event_type': 'state_changed'})
                     sid += 1
 
                     # Listen for services
-                    await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
+                    await websocket.send_json({'id': sid, 'type' : 'subscribe_events', 'event_type': 'call_service'})
                     sid += 1
-
+                
                     # Fire events to say we have registered services
                     for item in self.base.SERVICE_REGISTER_LIST:
-                        await websocket.send_json(
-                            {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
-                        )
+                        await websocket.send_json({'id': sid, 'type': 'fire_event', 'event_type': 'service_registered', 'event_data': {'service': item["service"], 'domain': item["domain"]}})
                         sid += 1
 
                     self.log("Info: Web Socket active")
@@ -15184,15 +15205,13 @@ class HAInterface:
                                     event_type = event_info.get("event_type", "")
                                     if event_type == "state_changed":
                                         event_data = event_info.get("data", {})
-                                        old_state = event_data.get("old_state")
-                                        new_state = event_data.get("new_state")
+                                        old_state = event_data.get('old_state')
+                                        new_state = event_data.get('new_state')
                                         if new_state:
                                             self.update_state_item(new_state)
                                             # Only trigger on value change or you get too many updates
-                                            if new_state.get("state", None) != old_state.get("state", None):
-                                                await self.base.trigger_watch_list(
-                                                    new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
-                                                )
+                                            if new_state.get('state', None) != old_state.get('state', None):
+                                                await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
                                     elif event_type == "call_service":
                                         service_data = event_info.get("data", {})
                                         await self.base.trigger_callback(service_data)
