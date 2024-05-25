@@ -3,25 +3,29 @@ Battery Prediction app
 see Readme for information
 """
 
-
 import copy
 import os
 import re
 import time
 import math
+from datetime import datetime, timedelta
 
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from datetime import datetime, timedelta
 
-import adbase as ad
-import appdaemon.plugins.hass.hassapi as hass
+# Import AppDaemon or our standalone wrapper
+try:
+    import adbase as ad
+    import appdaemon.plugins.hass.hassapi as hass
+except:
+    import hass as hass
+
 import pytz
 import requests
 import yaml
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import aiohttp
 from aiohttp import web
@@ -2827,7 +2831,7 @@ class Inverter:
 
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
-        if not self.base.entity_exists(entity_id):
+        if self.base.get_state_wrapper(entity_id) is None:
             attributes = {
                 "state_class": "measurement",
             }
@@ -13928,7 +13932,6 @@ class PredBat(hass.Hass):
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
-    @ad.app_lock
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -15015,10 +15018,9 @@ class PredBat(hass.Hass):
         run_every = RUN_EVERY * 60
         now = self.now
 
-        self.ha_interface = HAInterface(self)
-
         try:
             self.reset()
+            self.ha_interface = HAInterface(self)
             self.sanity()
             self.ha_interface.update_states()
             self.auto_config()
@@ -15088,7 +15090,6 @@ class PredBat(hass.Hass):
                 self.pool = None
         self.log("Predbat terminated")
 
-    @ad.app_lock
     def update_time_loop(self, cb_args):
         """
         Called every 15 seconds
@@ -15109,7 +15110,6 @@ class PredBat(hass.Hass):
                 self.prediction_started = False
             self.prediction_started = False
 
-    @ad.app_lock
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
@@ -15173,6 +15173,8 @@ class HAInterface:
             else:
                 self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
                 self.base.create_task(self.socketLoop())
+                self.websocket_active = True
+                self.log("Info: Web Socket task started")
 
     async def socketLoop(self):
         """
@@ -15202,7 +15204,6 @@ class HAInterface:
                         sid += 1
 
                     self.log("Info: Web Socket active")
-                    self.websocket_active = True
 
                     async for message in websocket:
                         if message.type == aiohttp.WSMsgType.TEXT:
