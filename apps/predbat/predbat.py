@@ -27,15 +27,14 @@ import requests
 import yaml
 from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
-import aiohttp
-from aiohttp import web
+from aiohttp import web, ClientSession, WSMsgType
 import json
 
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.20.0"
+THIS_VERSION = "v7.20.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -15183,7 +15182,8 @@ class HAInterface:
         while True:
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
-            async with aiohttp.ClientSession() as session:
+            session = ClientSession()
+            if session:
                 async with session.ws_connect(url) as websocket:
                     await websocket.send_json({"type": "auth", "access_token": self.ha_key})
                     sid = 1
@@ -15206,7 +15206,7 @@ class HAInterface:
                     self.log("Info: Web Socket active")
 
                     async for message in websocket:
-                        if message.type == aiohttp.WSMsgType.TEXT:
+                        if message.type == WSMsgType.TEXT:
                             try:
                                 data = json.loads(message.data)
                                 message_type = data.get("type", "")
@@ -15247,9 +15247,9 @@ class HAInterface:
                             except Exception as e:
                                 self.log("Warn Web Socket exception {}".format(e))
                                 pass
-                        elif message.type == aiohttp.WSMsgType.CLOSED:
+                        elif message.type == WSMsgType.CLOSED:
                             break
-                        elif message.type == aiohttp.WSMsgType.ERROR:
+                        elif message.type == WSMsgType.ERROR:
                             break
 
             self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
