@@ -140,13 +140,6 @@ class Hass:
                 print(exc)
                 sys.exit(1)
 
-        if "ha_url" not in self.args:
-            print("Error: ha_url not found in apps.yaml")
-            sys.exit(1)
-        if "ha_key" not in self.args:
-            print("Error: ha_key not found in apps.yaml")
-            sys.exit(1)
-
     def run_every(self, callback, next_time, run_every, **kwargs):
         """
         Run a function every x seconds
