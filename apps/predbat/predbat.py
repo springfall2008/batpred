@@ -34,7 +34,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.20.1"
+THIS_VERSION = "v7.20.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -9085,6 +9085,7 @@ class PredBat(hass.Hass):
         PRED_GLOBAL["dict"] = None
 
         self.define_service_list()
+        self.stop_thread = False
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.watch_list = []
@@ -15082,6 +15083,7 @@ class PredBat(hass.Hass):
         Called once each time the app terminates
         """
         self.log("Predbat terminating")
+        self.stop_thread = True
         if hasattr(self, "pool"):
             if self.pool:
                 self.pool.close()
@@ -15180,6 +15182,10 @@ class HAInterface:
         Web socket loop for HA interface
         """
         while True:
+            if self.base.stop_thread:
+                self.log("Info: Web socket stopping")
+                break
+
             url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
             session = ClientSession()
@@ -15206,6 +15212,11 @@ class HAInterface:
                     self.log("Info: Web Socket active")
 
                     async for message in websocket:
+                        if self.base.stop_thread:
+                            self.log("Info: Web socket stopping")
+                            await session.close()
+                            break
+
                         if message.type == WSMsgType.TEXT:
                             try:
                                 data = json.loads(message.data)
@@ -15239,8 +15250,8 @@ class HAInterface:
                                     pass
                                 elif message_type == "auth_invalid":
                                     self.log("Warn: Web Socket auth failed, check your ha_key setting")
-                                    raise Exception("Web Socket auth failed")
                                     self.websocket_active = False
+                                    raise Exception("Web Socket auth failed")
                                 else:
                                     self.log("Info: Web Socket unknown message {}".format(data))
 
@@ -15253,7 +15264,7 @@ class HAInterface:
                             break
 
             self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
-            asyncio.sleep(5)
+            await asyncio.sleep(5)
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """

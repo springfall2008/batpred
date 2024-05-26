@@ -14,8 +14,23 @@ import threading
 import os
 
 
+def check_modified(py_files, start_time):
+    """
+    Check if .py file was changed since we started
+    """
+
+    # Check the last modified timestamp of each .py file
+    for file_path in py_files:
+        last_modified = os.path.getmtime(file_path)
+        last_modified_timestamp = datetime.fromtimestamp(last_modified)
+        if last_modified_timestamp > start_time:
+            return True
+    return False
+
+
 async def main():
     print("**** Starting Standalone Predbat ****")
+    start_time = datetime.now()
 
     try:
         p_han = predbat.PredBat()
@@ -24,10 +39,22 @@ async def main():
         print("Error: Failed to start predbat {}".format(e))
         return
 
+    # Find all .py files in the directory hierarchy
+    py_files = []
+    for root, dirs, files in os.walk("."):
+        for file in files:
+            if file.endswith(".py"):
+                py_files.append(os.path.join(root, file))
+    print("Watching {} for changes".format(py_files))
+
     # Runtime loop
     while True:
         time.sleep(1)
         await p_han.timer_tick()
+        if check_modified(py_files, start_time):
+            print("Stopping Predbat due to file changes....")
+            await p_han.stop_all()
+            break
 
 
 if __name__ == "__main__":
@@ -79,7 +106,19 @@ class Hass:
         self.log("Creating task: {}".format(task), quiet=False)
         t1 = threading.Thread(name="TaskCreate", target=self.task_waiter, args=[task])
         t1.start()
+        self.threads.append(t1)
         return t1
+
+    async def stop_all(self):
+        """
+        Stop Predbat
+        """
+        self.log("Stopping Predbat", quiet=False)
+        await self.terminate()
+
+        for t in self.threads:
+            t.join()
+        self.logfile.close()
 
     def __init__(self):
         """
@@ -87,6 +126,7 @@ class Hass:
         """
         self.args = {}
         self.run_list = []
+        self.threads = []
 
         self.logfile = open("predbat.log", "a")
 
