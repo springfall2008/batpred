@@ -34,7 +34,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.20.0"
+THIS_VERSION = "v7.20.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -42,7 +42,8 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
+CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
+CONFIG_ROOTS_HA = ["/homeassistant", "/conf", "/config", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIMEOUT = 60 * 5
 
@@ -14505,9 +14506,10 @@ class PredBat(hass.Hass):
         """
         global PREDBAT_SAVE_RESTORE
         self.save_restore_dir = None
-        for root in CONFIG_ROOTS:
+        for root in CONFIG_ROOTS_HA:
             if os.path.exists(root):
                 self.save_restore_dir = root + "/predbat_save"
+                break
         if not self.save_restore_dir:
             return
 
@@ -14529,9 +14531,10 @@ class PredBat(hass.Hass):
         Restore settings from YAML file
         """
         self.save_restore_dir = None
-        for root in CONFIG_ROOTS:
+        for root in CONFIG_ROOTS_HA:
             if os.path.exists(root):
                 self.save_restore_dir = root + "/predbat_save"
+                break
         if not self.save_restore_dir:
             return
 
