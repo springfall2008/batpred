@@ -34,7 +34,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.20.2"
+THIS_VERSION = "v7.20.3"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -1164,7 +1164,7 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
+        "write_and_poll_sleep": 5,
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
@@ -3392,10 +3392,9 @@ class Inverter:
                 else:
                     self.base.set_state_wrapper(state="off", entity_id=entity_id)
             else:
-                if new_value:
-                    self.base.call_service_wrapper("turn_on", entity_id=entity_id)
-                else:
-                    self.base.call_service_wrapper("turn_off", entity_id=entity_id)
+                base_entity = entity_id.split(".")[0]
+                service = base_entity + "/turn_" + ("on" if new_value else "off")
+                self.base.call_service_wrapper(service, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
@@ -3428,8 +3427,10 @@ class Inverter:
             if domain == "sensor":
                 self.base.set_state_wrapper(entity_id, state=new_value)
             else:
-                # if isinstance(new_value, str):
-                self.base.call_service_wrapper("set_value", value=new_value, entity_id=entity_id)
+                entity_base = entity_id.split(".")[0]
+                service = entity_base + "/set_value"
+                
+                self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -3454,7 +3455,9 @@ class Inverter:
         GivTCP Workaround, keep writing until correct
         """
         for retry in range(6):
-            self.base.call_service_wrapper("select_option", option=new_value, entity_id=entity_id)
+            entity_base = entity_id.split(".")[0]
+            service = entity_base + "/select_option"
+            self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
@@ -3526,7 +3529,7 @@ class Inverter:
 
         # Set the mode
         if new_pause_mode != old_pause_mode:
-            self.write_and_poll_option("inverter_mode", entity_mode, new_pause_mode)
+            self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
