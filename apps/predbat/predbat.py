@@ -3429,7 +3429,7 @@ class Inverter:
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
-                
+
                 self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
