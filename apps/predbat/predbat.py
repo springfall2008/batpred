@@ -14809,7 +14809,7 @@ class PredBat(hass.Hass):
                     self.manual_times(name, new_value=ha_value)
                 else:
                     self.expose_config(item["name"], ha_value, quiet=quiet)
-        
+
         # Update the last time we refreshed the config
         self.set_state_wrapper(entity_id=self.prefix + ".config_refresh", state=self.now_utc.strftime(TIME_FORMAT))
 
@@ -15138,7 +15138,7 @@ class PredBat(hass.Hass):
                 config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
             except (ValueError, TypeError):
                 config_refresh_stamp = None
-        
+
         age = CONFIG_REFRESH_PERIOD
         if config_refresh_stamp:
             tdiff = self.now_utc - config_refresh_stamp
