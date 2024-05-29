@@ -34,7 +34,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.20.5"
+THIS_VERSION = "v7.20.6"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5772,7 +5772,6 @@ class PredBat(hass.Hass):
             },
         )
 
-        self.log("Info: record_status {}".format(message + extra))
         print("Info: record_status {}".format(message + extra))
 
         self.previous_status = message
@@ -15113,6 +15112,7 @@ class PredBat(hass.Hass):
         self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
+            self.ha_interface.update_states()
             self.load_user_config()
             self.update_pending = False
             try:
@@ -15252,6 +15252,7 @@ class HAInterface:
                             sid += 1
 
                         self.log("Info: Web Socket active")
+                        self.base.update_pending = True  # Force an update when web-socket reconnects
 
                         async for message in websocket:
                             if self.base.stop_thread:
