@@ -39,7 +39,7 @@ THIS_VERSION = "v7.21.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
-TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z" # 2024-05-31T18:00:00.0000000Z
+TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
@@ -5038,7 +5038,6 @@ class PredBat(hass.Hass):
         return pdata
 
     def cache_get_url(self, url, params, max_age=8 * 60):
-
         # Get data from cache
         age_minutes = 0
         data = None
@@ -5065,7 +5064,7 @@ class PredBat(hass.Hass):
                 if age_minutes < max_age:
                     self.log("Return cached data for {} age {} minutes".format(url, self.dp1(age_minutes)))
                     return data
-                
+
         # Perform fetch
         self.log("Fetching {}".format(url))
         r = requests.get(url, params=params)
@@ -5076,7 +5075,7 @@ class PredBat(hass.Hass):
                 self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
             else:
                 self.log("Warn: Error downloading data from url {}, no cached data".format(url))
-        
+
         # Store data in cache
         if data:
             self.log("Writing cache data for {} to cache file {}".format(url, cache_filename))
@@ -5094,31 +5093,31 @@ class PredBat(hass.Hass):
             self.log("Warn: Solcast API key or host not set")
             return None
         params = {"format": "json", "api_key": api_key.strip()}
-        url=f"{host}/rooftop_sites"
-        data = self.cache_get_url(url, params, max_age = 8 * 60)
+        url = f"{host}/rooftop_sites"
+        data = self.cache_get_url(url, params, max_age=8 * 60)
         if not data:
             self.log("Warn: Solcast sites could not be downloaded, check your cloud settings")
             return None
 
-        self.solcast_sites = data.get('sites', [])
+        self.solcast_sites = data.get("sites", [])
         period_data = {}
 
         for site in self.solcast_sites:
             resource_id = site.get("resource_id", None)
             if resource_id:
-                self.solcast_forecasts['resource_id'] = {}
+                self.solcast_forecasts["resource_id"] = {}
 
                 self.log("Fetch data for resource id {}".format(resource_id))
 
                 url = f"{host}/rooftop_sites/{resource_id}/forecasts"
-                data = self.cache_get_url(url, params, max_age = 8 * 60)
+                data = self.cache_get_url(url, params, max_age=8 * 60)
                 if not data:
                     self.log("Warn: Solcast forecast data could not be downloaded, check your cloud settings")
                     return None
                 forecasts = data.get("forecasts", [])
-                
+
                 url = f"{host}/rooftop_sites/{resource_id}/estimated_actuals"
-                data = self.cache_get_url(url, params, max_age = 8 * 60)
+                data = self.cache_get_url(url, params, max_age=8 * 60)
                 if not data:
                     self.log("Warn: Solcast estimated actual data could not be downloaded, check your cloud settings")
                     return None
@@ -5143,9 +5142,9 @@ class PredBat(hass.Hass):
                             "pv_estimate90": pv90,
                         }
                         if period_start_stamp in period_data:
-                            period_data[period_start_stamp]['pv_estimate'] += pv50
-                            period_data[period_start_stamp]['pv_estimate10'] += pv10
-                            period_data[period_start_stamp]['pv_estimate90'] += pv90
+                            period_data[period_start_stamp]["pv_estimate"] += pv50
+                            period_data[period_start_stamp]["pv_estimate10"] += pv10
+                            period_data[period_start_stamp]["pv_estimate90"] += pv90
                         else:
                             period_data[period_start_stamp] = data_item
 
@@ -11756,7 +11755,7 @@ class PredBat(hass.Hass):
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
 
-        if 'solcast_host' in self.args:
+        if "solcast_host" in self.args:
             self.log("Info: Using solcast cloud")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
@@ -14939,7 +14938,7 @@ class PredBat(hass.Hass):
                     self.manual_times(name, new_value=ha_value)
                 else:
                     self.expose_config(item["name"], ha_value, quiet=quiet)
-        
+
         # Update the last time we refreshed the config
         self.set_state_wrapper(entity_id=self.prefix + ".config_refresh", state=self.now_utc.strftime(TIME_FORMAT))
 
@@ -15269,7 +15268,7 @@ class PredBat(hass.Hass):
                 config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
             except (ValueError, TypeError):
                 config_refresh_stamp = None
-        
+
         age = CONFIG_REFRESH_PERIOD
         if config_refresh_stamp:
             tdiff = self.now_utc - config_refresh_stamp
@@ -15383,7 +15382,7 @@ class HAInterface:
                             sid += 1
 
                         self.log("Info: Web Socket active")
-                        self.base.update_pending = True   # Force an update when web-socket reconnects
+                        self.base.update_pending = True  # Force an update when web-socket reconnects
 
                         async for message in websocket:
                             if self.base.stop_thread:
