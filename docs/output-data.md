@@ -163,6 +163,11 @@ import rate in the 24 hour Period
 - predbat.savings_yesterday_pvbat - A sensor which tells you have much money you saved vs not having a PV and battery system at all (this includes in the Predbat savings).
 - predbat.savings_total_pvbat - A running total of the above
 
+## Solar forecast data
+
+- sensor.predbat_pv_today - Tracks the PV forecast for today, attributes give the remaining amount today and the half hourly data.
+- sensor.predbat_pv_tomorrow - Tracks the PV forecast for tomorrow, attributes give the remaining amount today and the half hourly data.
+
 ## Sample Predbat data out dashboard
 
 ![image](images/predbat-data_out_dashboard_sample.png)
