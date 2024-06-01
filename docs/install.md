@@ -199,7 +199,7 @@ Note: **Not recommended if you are using HACS**
 
 Predbat needs a solar forecast in order to predict solar generation and battery charging. If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you don't have one already register for a hobbist account on [Solcast account](https://solcast.com/) and enter the details of your system. You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels e.g. 7/10 * 240 degrees + 3/10 * 120 degrees.
+If you don't have one already register for a hobbist account on [Solcast account](https://solcast.com/) and enter the details of your system. You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
 (both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
@@ -207,7 +207,7 @@ When supplied with the unclipped Solcast forecast data, predbat can allow in its
 
 ### Predbat direct method
 
-Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly. 
+Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
 
 Keep in mind hobbist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures:
 
