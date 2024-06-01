@@ -68,11 +68,30 @@ in order to access files in different directories (i.e. within the appdaemon dir
 If you are using Studio Code Server it will default to showing just files and folders in the /config directory.
 To access the entire HA directory structure, click the three horizontal bars to the left of 'Explorer', File, Open Folder, type '/' (root) and click OK.
 
-## AppDaemon-Predbat combined install
+## Predbat add-on install
 
 **Recommended**
 
-The simplest way to install Predbat now is with a combined AppDaemon/Predbat add-on.
+The simplest way to install Predbat now is with the Predbat add-on.
+
+Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo 
+'https://github.com/springfall2008/predbat_addon' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
+Ensure 'start on boot' is enabled and click 'start'.
+
+**NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
+
+These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
+
+- **predbat.log** - Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
+- **apps/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
+
+You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
+
+If you have used the Predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
+
+## AppDaemon-Predbat combined install
+
+Another way to install Predbat now is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
 Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
