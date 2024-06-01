@@ -96,7 +96,7 @@ Another way to install Predbat now is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
 Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
-If you are already running AppDaemon then the original installation method for Predbat still exists, is still supported, and is described below 
+If you are already running AppDaemon then the original installation method for Predbat still exists, is still supported, and is described below
 in [Predbat Installation into AppDaemon](#predbat-installation-into-appdaemon).
 
 To install the combined AppDaemon-predbat add-on:
@@ -220,7 +220,7 @@ Note: **Not recommended if you are using HACS**
 
 Predbat needs a solar forecast in order to predict solar generation and battery charging. If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you don't have one already register for a hobbyist account on [Solcast account](https://solcast.com/) and enter the details of your system. You can create 2 sites maximum under one account, 
+If you don't have one already register for a hobbyist account on [Solcast account](https://solcast.com/) and enter the details of your system. You can create 2 sites maximum under one account,
 if you have more aspects then its suggested you average the angle based on the number of panels e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
@@ -257,7 +257,7 @@ If you don't have solar then use a file editor to comment out the following line
 ```
 
 Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
-(e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this. 
+(e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this.
 If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
 
 Example Solcast update automation script:
