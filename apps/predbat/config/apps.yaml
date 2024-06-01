@@ -219,7 +219,12 @@ pred_bat:
   # 1 means add 1 minute to AppDaemon time, -1 takes it away
   clock_skew: 0
 
-  # Set these to match solcast sensor names
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+
+  # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
   # If these don't match find your own names in Home Assistant
   pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
