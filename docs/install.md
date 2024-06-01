@@ -197,7 +197,32 @@ Note: **Not recommended if you are using HACS**
 
 ## Solcast Install
 
-Predbat needs a solar forecast in order to predict solar generation and battery charging.
+Predbat needs a solar forecast in order to predict solar generation and battery charging. If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
+
+If you don't have one already register for a hobbist account on [Solcast account](https://solcast.com/) and enter the details of your system. You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels e.g. 7/10 * 240 degrees + 3/10 * 120 degrees.
+
+**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging (bypassing the hybrid inverter).
+
+### Predbat direct method
+
+Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly. 
+
+Keep in mind hobbist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures:
+
+```yaml
+solcast_host: 'https://api.solcast.com.au/'
+solcast_api_key: 'xxxx'
+solcast_poll_hours: 8
+```
+
+### Solcast Home Assistant integration method
+
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
+
+Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
+configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
 If you don't have solar then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
 
@@ -208,18 +233,8 @@ If you don't have solar then use a file editor to comment out the following line
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 ```
 
-If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
-Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
-
-Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
-configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
-
-**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
-(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
-When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging (bypassing the hybrid inverter).
-
-Note that Predbat does not update Solcast for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
-(e.g. dawn, dusk, and just before your nightly charge slot).
+Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
+(e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
 
 Example Solcast update automation script:
 
