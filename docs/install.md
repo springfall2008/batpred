@@ -74,8 +74,8 @@ To access the entire HA directory structure, click the three horizontal bars to 
 
 The simplest way to install Predbat now is with the Predbat add-on.
 
-Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo 
-'https://github.com/springfall2008/predbat_addon' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
+Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo
+'<https://github.com/springfall2008/predbat_addon>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
 Ensure 'start on boot' is enabled and click 'start'.
 
 **NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
