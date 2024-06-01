@@ -31,6 +31,7 @@ You will need to install an integration to communicate with and control your inv
 | Sofar     | Sofar MQTT       | <https://github.com/cmcgerty/Sofar2mqtt> |
 | Huawei    | Huawei Modbus    | <https://github.com/wlcrs/huawei_solar> |
 | SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
+| SunSynk   | SunSynk Modbus   | <https://github.com/kellerza/sunsynk> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
 Please see [Other Inverters](other-inverters.md) for details on the install details.
@@ -68,15 +69,35 @@ in order to access files in different directories (i.e. within the appdaemon dir
 If you are using Studio Code Server it will default to showing just files and folders in the /config directory.
 To access the entire HA directory structure, click the three horizontal bars to the left of 'Explorer', File, Open Folder, type '/' (root) and click OK.
 
-## AppDaemon-Predbat combined install
+## Predbat add-on install
 
 **Recommended**
 
-The simplest way to install Predbat now is with a combined AppDaemon/Predbat add-on.
+The simplest way to install Predbat now is with the Predbat add-on.
+
+Go to settings, add-ons, select Add-on Store, three dots on the top right, Repositories, then add the following repo
+'<https://github.com/springfall2008/predbat_addon>' to the list and click close. Now refresh the list and find Predbat, click on it and click 'install'.
+Ensure 'start on boot' is enabled and click 'start'.
+
+**NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
+
+These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
+
+- **predbat.log** - Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
+- **apps/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
+
+You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
+
+If you have used the Predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
+
+## AppDaemon-Predbat combined install
+
+Another way to install Predbat now is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
 Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
-If you are already running AppDaemon then the original installation method for Predbat still exists, is still supported, and is described below in [Predbat Installation into AppDaemon](#predbat-installation-into-appdaemon).
+If you are already running AppDaemon then the original installation method for Predbat still exists, is still supported, and is described below
+in [Predbat Installation into AppDaemon](#predbat-installation-into-appdaemon).
 
 To install the combined AppDaemon-predbat add-on:
 
@@ -198,6 +219,36 @@ Note: **Not recommended if you are using HACS**
 ## Solcast Install
 
 Predbat needs a solar forecast in order to predict solar generation and battery charging.
+If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
+
+If you don't have one already register for a hobbyist account on [Solcast account](https://solcast.com/) and enter the details of your system.
+You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels
+e.g. 7/10 *240 degrees + 3/10* 120 degrees.
+
+**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
+(bypassing the hybrid inverter).
+
+### Predbat direct method
+
+Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
+
+Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations
+the total polls needs to be kept under the limit or you will experience failures:
+
+```yaml
+solcast_host: 'https://api.solcast.com.au/'
+solcast_api_key: 'xxxx'
+solcast_poll_hours: 8
+```
+
+### Solcast Home Assistant integration method
+
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
+
+Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
+configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
 If you don't have solar then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
 
@@ -208,18 +259,10 @@ If you don't have solar then use a file editor to comment out the following line
   pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
 ```
 
-If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
-Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
-
-Install the Solcast integration (<https://github.com/oziee/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
-configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
-
-**Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
-(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
-When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging (bypassing the hybrid inverter).
-
-Note that Predbat does not update Solcast for you so you will need to create your own Home Assistant automation that updates the solar forecast a few times a day
-(e.g. dawn, dusk, and just before your nightly charge slot).
+Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
+forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
+so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under
+the limit or you will experience failures.
 
 Example Solcast update automation script:
 
