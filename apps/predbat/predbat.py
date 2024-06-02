@@ -4448,7 +4448,7 @@ class PredBat(hass.Hass):
         Stub for 2 arg service wrapper
         """
         return self.call_service_wrapper(service, message=message)
-    
+
     async def async_call_notify(self, message):
         """
         Send HA notifications
@@ -5117,7 +5117,7 @@ class PredBat(hass.Hass):
         if not api_keys or not host:
             self.log("Warn: Solcast API key or host not set")
             return None
-        
+
         self.solcast_data = {}
         cache_file = cache_path + "/solcast.json"
         if os.path.exists(cache_file):
@@ -5127,7 +5127,7 @@ class PredBat(hass.Hass):
             except Exception as e:
                 self.log("Warn: Error loading Solcast cache file {}".format(e))
                 os.remove(cache_file)
-                
+
         if isinstance(api_keys, str):
             api_keys = [api_keys]
 
@@ -5159,7 +5159,7 @@ class PredBat(hass.Hass):
                 if resource_id:
                     self.log("Fetch data for resource id {}".format(resource_id))
 
-                    params = {"format": "json", "api_key": api_key.strip(), "hours" : 168}
+                    params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = self.cache_get_url(url, params, max_age=max_age)
                     if not data:
@@ -5179,12 +5179,7 @@ class PredBat(hass.Hass):
                             pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
 
-                            data_item = {
-                                "period_start": period_start_stamp.strftime(TIME_FORMAT),
-                                "pv_estimate": pv50,
-                                "pv_estimate10": pv10,
-                                "pv_estimate90": pv90
-                            }
+                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
                             if period_start_stamp in period_data:
                                 period_data[period_start_stamp]["pv_estimate"] += pv50
                                 period_data[period_start_stamp]["pv_estimate10"] += pv10
@@ -5192,11 +5187,11 @@ class PredBat(hass.Hass):
                             else:
                                 period_data[period_start_stamp] = data_item
 
-        # Merge the new data into the cached data
+        # Merge the new data into the cached data
         new_data = {}
         for key in period_data:
             self.solcast_data[key.strftime(TIME_FORMAT)] = period_data[key]
-        
+
         # Prune old data from the cache
         for key_txt in self.solcast_data:
             key = datetime.strptime(key_txt, TIME_FORMAT)
@@ -9465,7 +9460,7 @@ class PredBat(hass.Hass):
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
 
-        self.config_root = './'
+        self.config_root = "./"
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
                 self.config_root = root
@@ -11845,7 +11840,6 @@ class PredBat(hass.Hass):
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
             if this_point >= midnight_today:
-
                 day = (this_point - midnight_today).days
                 if day not in total_day:
                     total_day[day] = 0
@@ -11876,7 +11870,12 @@ class PredBat(hass.Hass):
             if day == 0:
                 self.log(
                     "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
-                        self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day10[day]), self.dp2(total_left_today), self.dp2(total_left_today10), self.dp2(total_left_today90)
+                        self.dp2(total_day[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_left_today),
+                        self.dp2(total_left_today10),
+                        self.dp2(total_left_today90),
                     )
                 )
                 self.dashboard_item(
