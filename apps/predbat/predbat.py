@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.4"
+THIS_VERSION = "v7.21.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5071,7 +5071,8 @@ class PredBat(hass.Hass):
         r = requests.get(url, params=params)
         try:
             data = r.json()
-        except requests.exceptions.JSONDecodeError:
+        except requests.exceptions.JSONDecodeError as e:
+            self.log("Warn: Error downloading data from url {}, error {} data was {}".format(url, e, r.content))
             if data:
                 self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
             else:
@@ -5143,7 +5144,7 @@ class PredBat(hass.Hass):
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
 
                             is_forecast = False
-                            if "pv_estimate10" in forecast:
+                            if 'pv_estimate10' in forecast:
                                 is_forecast = True
 
                             data_item = {
@@ -11783,7 +11784,7 @@ class PredBat(hass.Hass):
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by  # Scale kwh to power
+        power_scale = 60 / period / divide_by # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
@@ -11795,23 +11796,13 @@ class PredBat(hass.Hass):
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
                     total_left_today90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_today.append(fentry)
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
                 total_tomorrow90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_tomorrow.append(fentry)
 
         self.log(
