@@ -230,6 +230,10 @@ e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
 (bypassing the hybrid inverter).
 
+You will need your API key for the next steps:
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769)
+
 ### Predbat direct method
 
 Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
