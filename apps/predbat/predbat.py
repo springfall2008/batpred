@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.5"
+THIS_VERSION = "v7.22.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -46,7 +46,6 @@ TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
-CONFIG_ROOTS_HA = ["/homeassistant", "/conf", "/config", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
@@ -4449,7 +4448,7 @@ class PredBat(hass.Hass):
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.call_service_wrapper("notify/" + device, message=message)
+            await self.run_in_executor(self.call_service_wrapper, "notify/" + device, message=message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
@@ -5112,7 +5111,7 @@ class PredBat(hass.Hass):
         if not api_keys or not host:
             self.log("Warn: Solcast API key or host not set")
             return None
-
+        
         self.solcast_data = {}
         cache_file = cache_path + "/solcast.json"
         if os.path.exists(cache_file):
@@ -5122,7 +5121,7 @@ class PredBat(hass.Hass):
             except Exception as e:
                 self.log("Warn: Error loading Solcast cache file {}".format(e))
                 os.remove(cache_file)
-
+                
         if isinstance(api_keys, str):
             api_keys = [api_keys]
 
@@ -5154,7 +5153,7 @@ class PredBat(hass.Hass):
                 if resource_id:
                     self.log("Fetch data for resource id {}".format(resource_id))
 
-                    params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
+                    params = {"format": "json", "api_key": api_key.strip(), "hours" : 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = self.cache_get_url(url, params, max_age=max_age)
                     if not data:
@@ -5174,7 +5173,12 @@ class PredBat(hass.Hass):
                             pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
 
-                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
+                            data_item = {
+                                "period_start": period_start_stamp.strftime(TIME_FORMAT),
+                                "pv_estimate": pv50,
+                                "pv_estimate10": pv10,
+                                "pv_estimate90": pv90
+                            }
                             if period_start_stamp in period_data:
                                 period_data[period_start_stamp]["pv_estimate"] += pv50
                                 period_data[period_start_stamp]["pv_estimate10"] += pv10
@@ -5182,11 +5186,11 @@ class PredBat(hass.Hass):
                             else:
                                 period_data[period_start_stamp] = data_item
 
-        # Merge the new data into the cached data
+        # Merge the new data into the cached data
         new_data = {}
         for key in period_data:
             self.solcast_data[key.strftime(TIME_FORMAT)] = period_data[key]
-
+        
         # Prune old data from the cache
         for key_txt in self.solcast_data:
             key = datetime.strptime(key_txt, TIME_FORMAT)
@@ -9455,7 +9459,7 @@ class PredBat(hass.Hass):
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
 
-        self.config_root = "./"
+        self.config_root = './'
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
                 self.config_root = root
@@ -11835,6 +11839,7 @@ class PredBat(hass.Hass):
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
             if this_point >= midnight_today:
+
                 day = (this_point - midnight_today).days
                 if day not in total_day:
                     total_day[day] = 0
@@ -11865,12 +11870,7 @@ class PredBat(hass.Hass):
             if day == 0:
                 self.log(
                     "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
-                        self.dp2(total_day[day]),
-                        self.dp2(total_day10[day]),
-                        self.dp2(total_day10[day]),
-                        self.dp2(total_left_today),
-                        self.dp2(total_left_today10),
-                        self.dp2(total_left_today90),
+                        self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day10[day]), self.dp2(total_left_today), self.dp2(total_left_today10), self.dp2(total_left_today90)
                     )
                 )
                 self.dashboard_item(
@@ -14818,13 +14818,7 @@ class PredBat(hass.Hass):
         Update list of current Predbat settings
         """
         global PREDBAT_SAVE_RESTORE
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS_HA:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-                break
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
@@ -14843,13 +14837,7 @@ class PredBat(hass.Hass):
         """
         Restore settings from YAML file
         """
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS_HA:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-                break
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if filename != "previous.yaml":
             await self.async_save_settings_yaml("previous.yaml")
@@ -14879,8 +14867,7 @@ class PredBat(hass.Hass):
         """
         Save current Predbat settings
         """
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not filename:
             filename = self.now_utc.strftime("%y_%m_%d_%H_%M_%S")
@@ -15588,7 +15575,8 @@ class HAInterface:
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
                                 except Exception as e:
-                                    self.log("Warn Web Socket exception in update loop: {}".format(e))
+                                    self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                    self.log("Error: " + traceback.format_exc())
                                     break
 
                             elif message.type == WSMsgType.CLOSED:
@@ -15597,7 +15585,8 @@ class HAInterface:
                                 break
 
                 except Exception as e:
-                    self.log("Warn: Web Socket exception in startup: {}".format(e))
+                    self.log("Error: Web Socket exception in startup: {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
                     continue
 
             if not self.base.stop_thread:
