@@ -44,4 +44,4 @@ Example charts:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/28e79e42-84df-4a5d-a078-7b6261a8fd1b)
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/06c12e40-da0a-4acf-bead-91f6e0873f0a)
+![image](https://github.com/springfall2008/batpred/assets/48591903/ff1c1e1e-e43c-46a5-95a9-75f631425422)
