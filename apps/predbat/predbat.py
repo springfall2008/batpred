@@ -4978,7 +4978,7 @@ class PredBat(hass.Hass):
         if not pdata:
             self.log("Warn: Unable to download futurerate data from URL {}".format(url))
             self.record_status("Warn: Unable to download futurerate data from cloud", debug=url, had_errors=True)
-            if url in self.octopus_url_cache:
+            if url in self.futurerate_url_cache:
                 pdata = self.futurerate_url_cache[url]["data"]
                 return pdata
             else:
@@ -4999,6 +4999,10 @@ class PredBat(hass.Hass):
         if self.debug_enable:
             self.log("Download {}".format(url))
         r = requests.get(url)
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading futurerate data from url {}, code {}".format(url, r.status_code))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
@@ -5025,6 +5029,10 @@ class PredBat(hass.Hass):
             if self.debug_enable:
                 self.log("Download {}".format(url))
             r = requests.get(url)
+            if r.status_code not in [200, 201]:
+                self.log("Warn: Error downloading Octopus data from url {}, code {}".format(url, r.status_code))
+                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                return {}
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError:
@@ -5052,7 +5060,7 @@ class PredBat(hass.Hass):
         hash = hash.replace("?", "a")
         hash = hash.replace("&", "b")
         hash = hash.replace("*", "c")
-        cache_path = "/config/cache"
+        cache_path = self.config_root + "/cache"
         if not os.path.exists(cache_path):
             os.makedirs(cache_path)
 
@@ -5073,14 +5081,17 @@ class PredBat(hass.Hass):
         # Perform fetch
         self.log("Fetching {}".format(url))
         r = requests.get(url, params=params)
-        try:
-            data = r.json()
-        except requests.exceptions.JSONDecodeError as e:
-            self.log("Warn: Error downloading data from url {}, error {} code {}".format(url, e, r.status_code))
-            if data:
-                self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
-            else:
-                self.log("Warn: Error downloading data from url {}, no cached data".format(url))
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
+        else:
+            try:
+                data = r.json()
+            except requests.exceptions.JSONDecodeError as e:
+                self.log("Warn: Error downloading data from url {}, error {} code {}".format(url, e, r.status_code))
+                if data:
+                    self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
+                else:
+                    self.log("Warn: Error downloading data from url {}, no cached data".format(url))
 
         # Store data in cache
         if data:
@@ -5093,11 +5104,24 @@ class PredBat(hass.Hass):
         """
         Download solcast data directly from a URL or return from cache if recent.
         """
+        self.solcast_api_limit = 0
+        self.solcast_api_used = 0
+        cache_path = self.config_root + "/cache"
         host = self.args.get("solcast_host", None)
         api_keys = self.args.get("solcast_api_key", None)
         if not api_keys or not host:
             self.log("Warn: Solcast API key or host not set")
             return None
+
+        self.solcast_data = {}
+        cache_file = cache_path + "/solcast.json"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    self.solcast_data = json.load(f)
+            except Exception as e:
+                self.log("Warn: Error loading Solcast cache file {}".format(e))
+                os.remove(cache_file)
 
         if isinstance(api_keys, str):
             api_keys = [api_keys]
@@ -5107,6 +5131,16 @@ class PredBat(hass.Hass):
 
         for api_key in api_keys:
             params = {"format": "json", "api_key": api_key.strip()}
+
+            url = f"{host}/json/reply/GetUserUsageAllowance"
+            data = self.cache_get_url(url, params, max_age=0)
+            if not data:
+                self.log("Warn: Solcast, could not access usage data, check your cloud settings")
+            else:
+                self.solcast_api_limit += data.get("daily_limit", None)
+                self.solcast_api_used += data.get("daily_limit_consumed", None)
+                self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
+
             url = f"{host}/rooftop_sites"
             data = self.cache_get_url(url, params, max_age=max_age)
             if not data:
@@ -5120,6 +5154,7 @@ class PredBat(hass.Hass):
                 if resource_id:
                     self.log("Fetch data for resource id {}".format(resource_id))
 
+                    params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = self.cache_get_url(url, params, max_age=max_age)
                     if not data:
@@ -5127,15 +5162,7 @@ class PredBat(hass.Hass):
                         continue
                     forecasts = data.get("forecasts", [])
 
-                    url = f"{host}/rooftop_sites/{resource_id}/estimated_actuals"
-                    data = self.cache_get_url(url, params, max_age=max_age)
-                    if not data:
-                        self.log("Warn: Solcast estimated actual data for site {} could not be downloaded, check your cloud settings".format(site))
-                        return None
-
-                    estimated_actuals = data.get("estimated_actuals", [])
-                    full_data = estimated_actuals + forecasts
-                    for forecast in full_data:
+                    for forecast in forecasts:
                         period_end = forecast.get("period_end", None)
                         if period_end:
                             period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_SOLCAST)
@@ -5147,34 +5174,45 @@ class PredBat(hass.Hass):
                             pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
 
-                            is_forecast = False
-                            if "pv_estimate10" in forecast:
-                                is_forecast = True
-
-                            data_item = {
-                                "period_start": period_start_stamp.strftime(TIME_FORMAT),
-                                "pv_estimate": pv50,
-                                "pv_estimate10": pv10,
-                                "pv_estimate90": pv90,
-                                "is_forecast": is_forecast,
-                            }
+                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
                             if period_start_stamp in period_data:
-                                if is_forecast and not period_data[period_start_stamp]["is_forecast"]:
-                                    # Don't combine forecast's into actuals
-                                    pass
-                                else:
-                                    period_data[period_start_stamp]["pv_estimate"] += pv50
-                                    period_data[period_start_stamp]["pv_estimate10"] += pv10
-                                    period_data[period_start_stamp]["pv_estimate90"] += pv90
+                                period_data[period_start_stamp]["pv_estimate"] += pv50
+                                period_data[period_start_stamp]["pv_estimate10"] += pv10
+                                period_data[period_start_stamp]["pv_estimate90"] += pv90
                             else:
                                 period_data[period_start_stamp] = data_item
 
+        # Merge the new data into the cached data
+        new_data = {}
+        for key in period_data:
+            self.solcast_data[key.strftime(TIME_FORMAT)] = period_data[key]
+
+        # Prune old data from the cache
+        for key_txt in self.solcast_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            if key >= self.midnight_utc:
+                new_data[key_txt] = self.solcast_data[key_txt]
+        self.solcast_data = new_data
+
+        # Save to cache file
+        with open(cache_file, "w") as f:
+            json.dump(self.solcast_data, f)
+
+        # Fetch the final cached data as timestamps
+        period_data = {}
+        for key_txt in self.solcast_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            period_data[key] = self.solcast_data[key_txt]
+
+        # Sort data and return
         sorted_data = []
         if period_data:
             period_keys = list(period_data.keys())
             period_keys.sort()
             for key in period_keys:
                 sorted_data.append(period_data[key])
+
+        self.log("Solcast returned {} data points".format(len(sorted_data)))
         return sorted_data
 
     def minutes_to_time(self, updated, now):
@@ -9236,6 +9274,8 @@ class PredBat(hass.Hass):
 
         self.define_service_list()
         self.stop_thread = False
+        self.solcast_api_limit = None
+        self.solcast_api_used = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
         self.watch_list = []
@@ -9414,6 +9454,13 @@ class PredBat(hass.Hass):
         self.savings_today_actual = 0.0
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
+
+        self.config_root = "./"
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                self.config_root = root
+                break
+        self.log("Config root is {}".format(self.config_root))
 
     def optimise_charge_limit_price(
         self,
@@ -11771,93 +11818,101 @@ class PredBat(hass.Hass):
         Publish some PV stats
         """
 
-        total_today = 0
-        total_today10 = 0
-        total_today90 = 0
         total_left_today = 0
         total_left_today10 = 0
         total_left_today90 = 0
-        total_tomorrow = 0
-        total_tomorrow10 = 0
-        total_tomorrow90 = 0
-        forecast_today = []
-        forecast_tomorrow = []
+        forecast_day = {}
+        total_day = {}
+        total_day10 = {}
+        total_day90 = {}
+        days = 0
 
         midnight_today = self.midnight_utc
-        midnight_tomorrow = midnight_today + timedelta(days=1)
-        midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
         power_scale = 60 / period / divide_by  # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
-            if this_point >= midnight_today and this_point < midnight_tomorrow:
-                total_today += entry["pv_estimate"] / divide_by
-                total_today10 += entry["pv_estimate10"] / divide_by
-                total_today90 += entry["pv_estimate90"] / divide_by
-                if this_point >= now:
+            if this_point >= midnight_today:
+                day = (this_point - midnight_today).days
+                if day not in total_day:
+                    total_day[day] = 0
+                    total_day10[day] = 0
+                    total_day90[day] = 0
+                    forecast_day[day] = []
+                    days = max(days, day + 1)
+
+                total_day[day] += entry["pv_estimate"] / divide_by
+                total_day10[day] += entry["pv_estimate10"] / divide_by
+                total_day90[day] += entry["pv_estimate90"] / divide_by
+
+                if day == 0 and this_point >= now:
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
                     total_left_today90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
-                forecast_today.append(fentry)
-            if this_point >= midnight_tomorrow and this_point < midnight_next:
-                total_tomorrow += entry["pv_estimate"] / divide_by
-                total_tomorrow10 += entry["pv_estimate10"] / divide_by
-                total_tomorrow90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
-                forecast_tomorrow.append(fentry)
 
-        self.log(
-            "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
-                self.dp2(total_today), self.dp2(total_today10), self.dp2(total_today90), self.dp2(total_left_today), self.dp2(total_left_today10), self.dp2(total_left_today90)
-            )
-        )
-        self.dashboard_item(
-            "sensor." + self.prefix + "_pv_today",
-            state=self.dp2(total_today),
-            attributes={
-                "friendly_name": "PV today",
-                "state_class": "measurement",
-                "unit_of_measurement": "kWh",
-                "icon": "mdi:solar-power",
-                "device_class": "energy",
-                "total": self.dp2(total_today),
-                "total10": self.dp2(total_today10),
-                "total90": self.dp2(total_today90),
-                "remaining": self.dp2(total_left_today),
-                "remaining10": self.dp2(total_left_today10),
-                "remaining90": self.dp2(total_left_today90),
-                "detailedForecast": forecast_today,
-            },
-        )
-        self.log("PV Forecast for tomorrow is {} ({} 10%) kWh".format(self.dp2(total_tomorrow), self.dp2(total_tomorrow10)))
-        self.dashboard_item(
-            "sensor." + self.prefix + "_pv_tomorrow",
-            state=self.dp2(total_tomorrow),
-            attributes={
-                "friendly_name": "PV tomorrow",
-                "state_class": "measurement",
-                "unit_of_measurement": "kWh",
-                "icon": "mdi:solar-power",
-                "device_class": "energy",
-                "total": self.dp2(total_tomorrow),
-                "total10": self.dp2(total_tomorrow10),
-                "total90": self.dp2(total_tomorrow90),
-                "detailedForecast": forecast_tomorrow,
-            },
-        )
+                fentry = {
+                    "period_start": entry["period_start"],
+                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
+                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
+                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
+                }
+                forecast_day[day].append(fentry)
+
+        days = min(days, 7)
+        for day in range(days):
+            if day == 0:
+                self.log(
+                    "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
+                        self.dp2(total_day[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_left_today),
+                        self.dp2(total_left_today10),
+                        self.dp2(total_left_today90),
+                    )
+                )
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_today",
+                    state=self.dp2(total_day[day]),
+                    attributes={
+                        "friendly_name": "PV today",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                        "device_class": "energy",
+                        "total": self.dp2(total_day[day]),
+                        "total10": self.dp2(total_day10[day]),
+                        "total90": self.dp2(total_day90[day]),
+                        "remaining": self.dp2(total_left_today),
+                        "remaining10": self.dp2(total_left_today10),
+                        "remaining90": self.dp2(total_left_today90),
+                        "detailedForecast": forecast_day[day],
+                        "api_limit": self.solcast_api_limit,
+                        "api_used": self.solcast_api_used,
+                    },
+                )
+            else:
+                day_name = "tomorrow" if day == 1 else "d{}".format(day)
+                day_name_long = day_name if day == 1 else "day {}".format(day)
+                self.log("PV Forecast for day {} is {} ({} 10% {} 90%) kWh".format(day_name, self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day10[day])))
+
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_" + day_name,
+                    state=self.dp2(total_day[day]),
+                    attributes={
+                        "friendly_name": "PV " + day_name_long,
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                        "device_class": "energy",
+                        "total": self.dp2(total_day[day]),
+                        "total10": self.dp2(total_day10[day]),
+                        "total90": self.dp2(total_day90[day]),
+                        "detailedForecast": forecast_day[day],
+                    },
+                )
 
     def fetch_pv_forecast(self):
         """
@@ -14842,35 +14897,30 @@ class PredBat(hass.Hass):
         """
         time_now = self.now_utc.strftime("%H_%M_%S")
         basename = "/debug/predbat_debug_{}.yaml".format(time_now)
-        filename = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                filename = root + basename
-                break
-        if filename:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            debug = {}
-            debug["TIME"] = self.time_now_str()
-            debug["THIS_VERSION"] = THIS_VERSION
-            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-            debug["args"] = self.args
-            debug["charge_window_best"] = self.charge_window_best
-            debug["charge_limit_best"] = self.charge_limit_best
-            debug["discharge_window_best"] = self.discharge_window_best
-            debug["discharge_limits_best"] = self.discharge_limits_best
-            debug["low_rates"] = self.low_rates
-            debug["high_export_rates"] = self.high_export_rates
-            debug["load_forecast"] = self.load_forecast
-            debug["load_minutes_step"] = self.load_minutes_step
-            debug["load_minutes_step10"] = self.load_minutes_step10
-            debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
-            debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
-            debug["yesterday_load_step"] = self.yesterday_load_step
-            debug["yesterday_pv_step"] = self.yesterday_pv_step
+        filename = self.config_root + basename
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        debug = {}
+        debug["TIME"] = self.time_now_str()
+        debug["THIS_VERSION"] = THIS_VERSION
+        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
+        debug["args"] = self.args
+        debug["charge_window_best"] = self.charge_window_best
+        debug["charge_limit_best"] = self.charge_limit_best
+        debug["discharge_window_best"] = self.discharge_window_best
+        debug["discharge_limits_best"] = self.discharge_limits_best
+        debug["low_rates"] = self.low_rates
+        debug["high_export_rates"] = self.high_export_rates
+        debug["load_forecast"] = self.load_forecast
+        debug["load_minutes_step"] = self.load_minutes_step
+        debug["load_minutes_step10"] = self.load_minutes_step10
+        debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
+        debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
+        debug["yesterday_load_step"] = self.yesterday_load_step
+        debug["yesterday_pv_step"] = self.yesterday_pv_step
 
-            with open(filename, "w") as file:
-                yaml.dump(debug, file)
-            self.log("Wrote debug yaml to {}".format(filename))
+        with open(filename, "w") as file:
+            yaml.dump(debug, file)
+        self.log("Wrote debug yaml to {}".format(filename))
 
     def create_entity_list(self):
         """
@@ -14901,23 +14951,16 @@ class PredBat(hass.Hass):
 
         # Find path
         basename = "/predbat_dashboard.yaml"
-        filename = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                filename = root + basename
-                break
+        filename = self.config_root + basename
 
         # Write
-        if filename:
-            han = open(filename, "w")
-            if han:
-                self.log("Creating predbat dashboard at {}".format(filename))
-                han.write(text)
-                han.close()
-            else:
-                self.log("Failed to write predbat dashboard to {}".format(filename))
+        han = open(filename, "w")
+        if han:
+            self.log("Creating predbat dashboard at {}".format(filename))
+            han.write(text)
+            han.close()
         else:
-            self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
+            self.log("Failed to write predbat dashboard to {}".format(filename))
 
     def load_previous_value_from_ha(self, entity):
         """
@@ -15165,15 +15208,8 @@ class PredBat(hass.Hass):
         passed = True
         app_dirs = []
 
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                config_dir = root
-                self.log("Sanity scan files in '{}' : {}".format(config_dir, os.listdir(config_dir)))
-                break
-
-        if not config_dir:
-            self.log("Warn: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
-            passed = False
+        config_dir = self.config_root
+        self.log("Sanity scan files in '{}' : {}".format(config_dir, os.listdir(config_dir)))
 
         app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
