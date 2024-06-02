@@ -721,3 +721,111 @@ series:
     name: PV/Battery saving
     attribute: pounds
     unit: £
+###############################################
+# PV Forecast vs actual chart
+###############################################
+type: custom:apexcharts-card
+header:
+  title: Solar forecast
+  show: true
+  show_states: true
+  colorize_states: true
+apex_config:
+  chart:
+    height: 300px
+  tooltip:
+    enabled: true
+    shared: true
+    followCursor: true
+graph_span: 24h
+span:
+  start: day
+yaxis:
+  - id: capacity
+    show: true
+    opposite: true
+    decimals: 0
+    max: 100
+    min: 0
+    apex_config:
+      tickAmount: 10
+  - id: kWh
+    show: true
+    min: 0
+    apex_config:
+      tickAmount: 10
+  - id: header_only
+    show: false
+series:
+  - entity: sensor.givtcp_sa2243g277_pv_power
+    name: Solar Power
+    type: line
+    stroke_width: 2
+    float_precision: 2
+    color: Orange
+    yaxis_id: kWh
+    unit: kW
+    transform: return x/1000;
+    extend_to: now
+    show:
+      legend_value: true
+      in_header: false
+    group_by:
+      func: avg
+      duration: 5m
+  - entity: sensor.predbat_pv_today
+    name: Forecast
+    color: grey
+    opacity: 0.3
+    stroke_width: 0
+    type: area
+    extend_to: false
+    yaxis_id: kWh
+    show:
+      legend_value: false
+      in_header: false
+    data_generator: |
+      return entity.attributes.detailedForecast.map((entry) => {
+            return [new Date(entry.period_start), entry.pv_estimate];
+          });
+  - entity: sensor.predbat_pv_today
+    name: Forecast 10%
+    color: grey
+    opacity: 0.3
+    stroke_width: 0
+    type: area
+    extend_to: false
+    yaxis_id: kWh
+    show:
+      legend_value: false
+      in_header: false
+    data_generator: |
+      return entity.attributes.detailedForecast.map((entry) => {
+            return [new Date(entry.period_start), entry.pv_estimate10];
+          });
+  - entity: sensor.givtcp_sa2243g277_pv_energy_today_kwh
+    yaxis_id: header_only
+    name: Today Actual
+    stroke_width: 2
+    color: Orange
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+  - entity: sensor.predbat_pv_today
+    yaxis_id: header_only
+    name: Today Forecast
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+  - entity: sensor.predbat_pv_today
+    yaxis_id: header_only
+    attribute: remaining
+    name: Remaining
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
