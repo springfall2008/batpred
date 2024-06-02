@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.1"
+THIS_VERSION = "v7.21.2"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -6494,7 +6494,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_power",
-                    state=self.dp3(0),
+                    state=self.dp3(self.pv_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_pv_power),
                         "today": self.filtered_today(predict_pv_power),
@@ -6506,7 +6506,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power",
-                    state=self.dp3(final_soc),
+                    state=self.dp3(0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -6518,7 +6518,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".load_power",
-                    state=self.dp3(final_soc),
+                    state=self.dp3(self.load_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_load_power),
                         "today": self.filtered_today(predict_load_power),
@@ -9318,6 +9318,8 @@ class PredBat(hass.Hass):
         self.export_today_now = 0
         self.pv_today = {}
         self.pv_today_now = 0
+        self.pv_power = 0
+        self.load_power = 0
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_limit = []
@@ -11750,7 +11752,7 @@ class PredBat(hass.Hass):
                     self.log("Warn: Unable to load load forecast from {}".format(entity_id))
         return load_forecast
 
-    def publish_pv_stats(self, pv_forecast_data, divide_by):
+    def publish_pv_stats(self, pv_forecast_data, divide_by, period):
         """
         Publish some PV stats
         """
@@ -11761,27 +11763,31 @@ class PredBat(hass.Hass):
         total_left_today10 = 0
         total_tomorrow = 0
         total_tomorrow10 = 0
-        forecast_today = {}
-        forecast_tomorrow = {}
+        forecast_today = []
+        forecast_tomorrow = []
 
         midnight_today = self.midnight_utc
         midnight_tomorrow = midnight_today + timedelta(days=1)
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
+        power_scale = 60 / period / divide_by # Scale kwh to power
+
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
             if this_point >= midnight_today and this_point < midnight_tomorrow:
                 total_today += entry["pv_estimate"] / divide_by
                 total_today10 += entry["pv_estimate10"] / divide_by
-                forecast_today[entry["period_start"]] = self.dp2(entry["pv_estimate"] / divide_by)
+                entry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                forecast_today.append(entry)
                 if this_point >= now:
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
-                forecast_tomorrow[entry["period_start"]] = self.dp2(entry["pv_estimate"] / divide_by)
+                entry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                forecast_tomorrow.append(entry)
 
         self.log(
             "PV Forecast for today is {} ({} 10%) kWh and left today is {} ({} 10%) kWh".format(
@@ -11862,7 +11868,7 @@ class PredBat(hass.Hass):
                 )
 
         if pv_forecast_data:
-            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0)
+            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
 
             pv_estimate = self.get_arg("pv_estimate", default="")
             if pv_estimate is None:
@@ -13686,6 +13692,8 @@ class PredBat(hass.Hass):
         self.battery_rate_min = 0
         self.charge_rate_now = 0.0
         self.discharge_rate_now = 0.0
+        self.pv_power = 0
+        self.load_power = 0
         found_first = False
 
         # For each inverter get the details
@@ -13741,6 +13749,8 @@ class PredBat(hass.Hass):
             self.inverters.append(inverter)
             self.inverter_limit += inverter.inverter_limit
             self.export_limit += inverter.export_limit
+            self.pv_power += inverter.pv_power
+            self.load_power += inverter.load_power
 
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
