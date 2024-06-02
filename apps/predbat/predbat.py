@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.3"
+THIS_VERSION = "v7.21.4"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5129,7 +5129,7 @@ class PredBat(hass.Hass):
                         return None
 
                     estimated_actuals = data.get("estimated_actuals", [])
-                    full_data = forecasts + estimated_actuals
+                    full_data = estimated_actuals + forecasts
                     for forecast in full_data:
                         period_end = forecast.get("period_end", None)
                         if period_end:
@@ -5139,19 +5139,28 @@ class PredBat(hass.Hass):
                             period_minutes = int(period_period[2:-1])
                             period_start_stamp = period_end_stamp - timedelta(minutes=period_minutes)
                             pv50 = forecast.get("pv_estimate", 0) / 60 * period_minutes
-                            pv10 = forecast.get("pv_estimate10", pv50) / 60 * period_minutes
-                            pv90 = forecast.get("pv_estimate90", pv50) / 60 * period_minutes
+                            pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
+                            pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
+
+                            is_forecast = False
+                            if 'pv_estimate10' in forecast:
+                                is_forecast = True
 
                             data_item = {
                                 "period_start": period_start_stamp.strftime(TIME_FORMAT),
                                 "pv_estimate": pv50,
                                 "pv_estimate10": pv10,
                                 "pv_estimate90": pv90,
+                                "is_forecast": is_forecast,
                             }
                             if period_start_stamp in period_data:
-                                period_data[period_start_stamp]["pv_estimate"] += pv50
-                                period_data[period_start_stamp]["pv_estimate10"] += pv10
-                                period_data[period_start_stamp]["pv_estimate90"] += pv90
+                                if is_forecast and not period_data[period_start_stamp]["is_forecast"]:
+                                    # Don't combine forecast's into actuals
+                                    pass
+                                else:
+                                    period_data[period_start_stamp]["pv_estimate"] += pv50
+                                    period_data[period_start_stamp]["pv_estimate10"] += pv10
+                                    period_data[period_start_stamp]["pv_estimate90"] += pv90
                             else:
                                 period_data[period_start_stamp] = data_item
 
@@ -11759,10 +11768,13 @@ class PredBat(hass.Hass):
 
         total_today = 0
         total_today10 = 0
+        total_today90 = 0
         total_left_today = 0
         total_left_today10 = 0
+        total_left_today90 = 0
         total_tomorrow = 0
         total_tomorrow10 = 0
+        total_tomorrow90 = 0
         forecast_today = []
         forecast_tomorrow = []
 
@@ -11771,35 +11783,30 @@ class PredBat(hass.Hass):
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by  # Scale kwh to power
+        power_scale = 60 / period / divide_by # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
             if this_point >= midnight_today and this_point < midnight_tomorrow:
                 total_today += entry["pv_estimate"] / divide_by
                 total_today10 += entry["pv_estimate10"] / divide_by
+                total_today90 += entry["pv_estimate90"] / divide_by
                 if this_point >= now:
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                }
+                    total_left_today90 += entry["pv_estimate90"] / divide_by
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_today.append(fentry)
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                }
+                total_tomorrow90 += entry["pv_estimate90"] / divide_by
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_tomorrow.append(fentry)
 
         self.log(
-            "PV Forecast for today is {} ({} 10%) kWh and left today is {} ({} 10%) kWh".format(
-                self.dp2(total_today), self.dp2(total_today10), self.dp2(total_left_today), self.dp2(total_left_today10)
+            "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
+                self.dp2(total_today), self.dp2(total_today10), self.dp2(total_today90), self.dp2(total_left_today), self.dp2(total_left_today10), self.dp2(total_left_today90)
             )
         )
         self.dashboard_item(
@@ -11813,8 +11820,10 @@ class PredBat(hass.Hass):
                 "device_class": "energy",
                 "total": self.dp2(total_today),
                 "total10": self.dp2(total_today10),
+                "total90": self.dp2(total_today90),
                 "remaining": self.dp2(total_left_today),
                 "remaining10": self.dp2(total_left_today10),
+                "remaining90": self.dp2(total_left_today90),
                 "detailedForecast": forecast_today,
             },
         )
@@ -11830,6 +11839,7 @@ class PredBat(hass.Hass):
                 "device_class": "energy",
                 "total": self.dp2(total_tomorrow),
                 "total10": self.dp2(total_tomorrow10),
+                "total90": self.dp2(total_tomorrow90),
                 "detailedForecast": forecast_tomorrow,
             },
         )
