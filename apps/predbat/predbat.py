@@ -1874,6 +1874,7 @@ class Prediction:
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
                 # Account for inverter limit, clip battery draw if possible to avoid going over
+                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if self.inverter_hybrid and diff_tmp < 0 and abs(diff_tmp) > (self.inverter_limit * step):
                     above_limit = abs(diff_tmp + self.inverter_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
@@ -1888,7 +1889,10 @@ class Prediction:
                     pv_ac -= extra_pv
                     pv_dc += extra_pv
 
-                battery_state = "f-"
+                if battery_draw < 0:
+                    battery_state = "f/"
+                else:
+                    battery_state = "f-"
 
                 # Once force discharge starts the four hour rule is disabled
                 four_hour_rule = False
@@ -5144,7 +5148,7 @@ class PredBat(hass.Hass):
                             pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
 
                             is_forecast = False
-                            if "pv_estimate10" in forecast:
+                            if 'pv_estimate10' in forecast:
                                 is_forecast = True
 
                             data_item = {
@@ -6175,7 +6179,7 @@ class PredBat(hass.Hass):
         load_count = 0
         load_min = 99999
         load_max = 0
-        look_over = 60 * 4
+        look_over = 60 * 8
 
         for minute in range(0, look_over, PREDICT_STEP):
             load, load_raw = self.get_filtered_load_minute(load_minutes, minute, historical=True, step=PREDICT_STEP)
@@ -6195,8 +6199,8 @@ class PredBat(hass.Hass):
             load_diff_total += load_diff
 
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = load_std_dev / load_mean
-        load_divergence = min(load_divergence, 2.0)
+        load_divergence = load_std_dev / load_mean / 2.0
+        load_divergence = min(load_divergence, 1.0)
         self.log(
             "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
                 look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
@@ -6220,7 +6224,7 @@ class PredBat(hass.Hass):
         pv_factor = None
         if pv_total > 0 and (pv_total > pv_total10):
             pv_diff = pv_total - pv_total10
-            pv_factor = self.dp2(pv_diff / pv_total)
+            pv_factor = self.dp2(pv_diff / pv_total) / 2.0
             pv_factor = min(pv_factor, 1.0)
 
         if self.metric_cloud_enable:
@@ -11784,7 +11788,7 @@ class PredBat(hass.Hass):
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by  # Scale kwh to power
+        power_scale = 60 / period / divide_by # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
@@ -11796,23 +11800,13 @@ class PredBat(hass.Hass):
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
                     total_left_today90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_today.append(fentry)
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
                 total_tomorrow90 += entry["pv_estimate90"] / divide_by
-                fentry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
-                }
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale), "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale)}
                 forecast_tomorrow.append(fentry)
 
         self.log(
