@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.4"
+THIS_VERSION = "v7.21.5"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -5071,7 +5071,8 @@ class PredBat(hass.Hass):
         r = requests.get(url, params=params)
         try:
             data = r.json()
-        except requests.exceptions.JSONDecodeError:
+        except requests.exceptions.JSONDecodeError as e:
+            self.log("Warn: Error downloading data from url {}, error {} data was {}".format(url, e, r.content))
             if data:
                 self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
             else:
