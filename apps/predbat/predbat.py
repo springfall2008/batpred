@@ -11771,7 +11771,7 @@ class PredBat(hass.Hass):
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by # Scale kwh to power
+        power_scale = 60 / period / divide_by  # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
@@ -11781,12 +11781,20 @@ class PredBat(hass.Hass):
                 if this_point >= now:
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
-                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                fentry = {
+                    "period_start": entry["period_start"],
+                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
+                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
+                }
                 forecast_today.append(fentry)
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
-                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                fentry = {
+                    "period_start": entry["period_start"],
+                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
+                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
+                }
                 forecast_tomorrow.append(fentry)
 
         self.log(
