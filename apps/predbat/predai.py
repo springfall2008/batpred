@@ -17,6 +17,7 @@ TIMEOUT = 240
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_HA_DOT = "%Y-%m-%dT%H:%M:%S.%f%z"
 
+
 def timestr_to_datetime(timestamp):
     """
     Convert a Home Assistant timestamp string to a datetime object.
@@ -33,7 +34,7 @@ def timestr_to_datetime(timestamp):
     return start_time
 
 
-class HAInterface():
+class HAInterface:
     def __init__(self):
         self.ha_key = os.environ.get("SUPERVISOR_TOKEN")
         self.ha_url = "http://supervisor/core"
@@ -118,6 +119,7 @@ class HAInterface():
             data = None
         return data
 
+
 class Prophet:
     def __init__(self, period=30):
         set_log_level("ERROR")
@@ -128,7 +130,7 @@ class Prophet:
         Store the data in the dataset for training.
         """
         dataset = pd.DataFrame(columns=["ds", "y"])
-        
+
         timenow = start_time
         timenow = timenow.replace(second=0, microsecond=0, minute=0)
         data_index = 0
@@ -137,7 +139,11 @@ class Prophet:
         total = 0
         last_value = None
 
-        print("Process dataset for sensor {} start {} end {} incrementing {} reset_low {} reset_high {}".format(sensor_name, start_time, end_time, incrementing, reset_low, reset_high))
+        print(
+            "Process dataset for sensor {} start {} end {} incrementing {} reset_low {} reset_high {}".format(
+                sensor_name, start_time, end_time, incrementing, reset_low, reset_high
+            )
+        )
         while timenow <= end_time and data_index < data_len:
             try:
                 value = float(new_data[data_index]["state"])
@@ -160,7 +166,7 @@ class Prophet:
                 else:
                     total = max(total + value - last_value, 0)
             last_value = value
-        
+
             if not start_time or start_time < timenow:
                 data_index += 1
                 continue
@@ -173,10 +179,10 @@ class Prophet:
             timenow = timenow + timedelta(minutes=self.period)
 
         print(dataset)
-        # dataset.to_csv('/config/{}.csv'.format(sensor_name), index=False) 
+        # dataset.to_csv('/config/{}.csv'.format(sensor_name), index=False)
 
         return dataset, value
-    
+
     async def train(self, dataset, future_periods, n_lags=0, country=None):
         """
         Train the model on the dataset.
@@ -191,7 +197,7 @@ class Prophet:
         self.df_future = self.model.make_future_dataframe(dataset, n_historic_predictions=True, periods=future_periods)
         self.forecast = self.model.predict(self.df_future)
         print(self.forecast)
- 
+
     async def save_prediction(self, entity, now, interface, start, incrementing=False, reset_daily=False, units="", days=7):
         """
         Save the prediction to Home Assistant.
@@ -206,7 +212,7 @@ class Prophet:
             ptimestamp = row["ds"].tz_localize(timezone.utc)
             diff = ptimestamp - now
             timestamp = now + diff
-                
+
             time = timestamp.strftime(TIME_FORMAT_HA)
             value = row["yhat1"]
             value_org = row["y"]
@@ -226,7 +232,7 @@ class Prophet:
             # Avoid too much history in HA
             if diff.days < -days:
                 continue
-       
+
             if incrementing:
                 timeseries[time] = round(total, 2)
                 if value_org:
@@ -237,9 +243,10 @@ class Prophet:
                     timeseries_org[time] = round(value_org, 2)
 
         final = total if incrementing else value
-        attributes = {"last_updated": str(now), "unit_of_measurement": units, "state_class" : "measurement", "results" : timeseries, "source" : timeseries_org}
+        attributes = {"last_updated": str(now), "unit_of_measurement": units, "state_class": "measurement", "results": timeseries, "source": timeseries_org}
         print("Saving prediction to {} last_update {}".format(entity, str(now)))
-        await interface.set_state(entity, state=round(final,2), attributes=attributes)
+        await interface.set_state(entity, state=round(final, 2), attributes=attributes)
+
 
 async def subtract_set(dataset, subset, now, incrementing=False):
     """
@@ -265,9 +272,10 @@ async def subtract_set(dataset, subset, now, incrementing=False):
     print("Subtracted {} values into new set: {}".format(count, pruned))
     return pruned
 
-class Database():
+
+class Database:
     def __init__(self):
-        self.con = sqlite3.connect('/config/predai.db')
+        self.con = sqlite3.connect("/config/predai.db")
         self.cur = self.con.cursor()
 
     async def create_table(self, table):
@@ -318,6 +326,7 @@ class Database():
         print("Added {} rows to database table {}".format(added_rows, table))
         return prev
 
+
 async def print_dataset(name, dataset):
     count = 0
     for index, row in dataset.iterrows():
@@ -327,6 +336,7 @@ async def print_dataset(name, dataset):
         count += 1
         if count > 24:
             break
+
 
 async def get_history(interface, nw, sensor_name, now, incrementing, days, use_db, reset_low, reset_high):
     """
@@ -343,7 +353,8 @@ async def get_history(interface, nw, sensor_name, now, incrementing, days, use_d
         dataset = await db.store_history(table_name, dataset, prev)
         print("Stored dataset in database and retrieved full history from database length {}".format(len(dataset)))
     return dataset, start, end
-    
+
+
 async def main():
     """
     Main function for the prediction AI.
@@ -355,7 +366,7 @@ async def main():
             print("WARN: predai.yaml is missing, no work to do")
         else:
             print("Configuration loaded")
-            update_every = config.get('update_every', 30)
+            update_every = config.get("update_every", 30)
             sensors = config.get("sensors", [])
             for sensor in sensors:
                 sensor_name = sensor.get("name", None)
@@ -376,13 +387,15 @@ async def main():
                 if not sensor_name:
                     continue
 
-                
                 nw = Prophet(interval)
                 now = datetime.now(timezone.utc).astimezone()
-                now=now.replace(second=0, microsecond=0, minute=0)
-                
+                now = now.replace(second=0, microsecond=0, minute=0)
 
-                print("Update at time {} Processing sensor {} incrementing {} reset_daily {} interval {} days {} export_days {} subtract {}".format(now, sensor_name, incrementing, reset_daily, interval, days, export_days, subtract_names))
+                print(
+                    "Update at time {} Processing sensor {} incrementing {} reset_daily {} interval {} days {} export_days {} subtract {}".format(
+                        now, sensor_name, incrementing, reset_daily, interval, days, export_days, subtract_names
+                    )
+                )
 
                 # Get the data
                 dataset, start, end = await get_history(interface, nw, sensor_name, now, incrementing, days, use_db, reset_low, reset_high)
@@ -417,5 +430,6 @@ async def main():
                 print("Restarting PredAI as last-run time has gone")
                 break
             await asyncio.sleep(60)
+
 
 asyncio.run(main())
