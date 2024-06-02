@@ -5041,7 +5041,6 @@ class PredBat(hass.Hass):
     def cache_get_url(self, url, params, max_age=8 * 60):
         # Get data from cache
         age_minutes = 0
-        url += "zzz"
         data = None
         hash = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
         hash = hash.replace("/", "_")
