@@ -49,6 +49,7 @@ elif
 emszzzz
 endt
 feedin
+fentry
 Fingerbot
 firstparty
 futurerate
