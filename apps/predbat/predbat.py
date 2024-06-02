@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.5"
+THIS_VERSION = "v7.22.0"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -46,7 +46,6 @@ TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
-CONFIG_ROOTS_HA = ["/homeassistant", "/conf", "/config", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
@@ -4444,12 +4443,18 @@ class PredBat(hass.Hass):
             self.call_service_wrapper("notify/" + device, message=message)
         return True
 
+    def call_service_wrapper_stub2(self, service, message):
+        """
+        Stub for 2 arg service wrapper
+        """
+        return self.call_service_wrapper(service, message=message)
+
     async def async_call_notify(self, message):
         """
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.call_service_wrapper("notify/" + device, message=message)
+            await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
@@ -14818,13 +14823,7 @@ class PredBat(hass.Hass):
         Update list of current Predbat settings
         """
         global PREDBAT_SAVE_RESTORE
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS_HA:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-                break
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
@@ -14843,13 +14842,7 @@ class PredBat(hass.Hass):
         """
         Restore settings from YAML file
         """
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS_HA:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-                break
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if filename != "previous.yaml":
             await self.async_save_settings_yaml("previous.yaml")
@@ -14879,8 +14872,7 @@ class PredBat(hass.Hass):
         """
         Save current Predbat settings
         """
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not filename:
             filename = self.now_utc.strftime("%y_%m_%d_%H_%M_%S")
@@ -15588,7 +15580,8 @@ class HAInterface:
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
                                 except Exception as e:
-                                    self.log("Warn Web Socket exception in update loop: {}".format(e))
+                                    self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                    self.log("Error: " + traceback.format_exc())
                                     break
 
                             elif message.type == WSMsgType.CLOSED:
@@ -15597,7 +15590,8 @@ class HAInterface:
                                 break
 
                 except Exception as e:
-                    self.log("Warn: Web Socket exception in startup: {}".format(e))
+                    self.log("Error: Web Socket exception in startup: {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
                     continue
 
             if not self.base.stop_thread:
