@@ -234,7 +234,6 @@ You will need your API key for the next steps:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769)
 
-
 ### Predbat direct method
 
 Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
