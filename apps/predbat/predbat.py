@@ -5072,7 +5072,7 @@ class PredBat(hass.Hass):
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError as e:
-            self.log("Warn: Error downloading data from url {}, error {} data was {}".format(url, e, r.content))
+            self.log("Warn: Error downloading data from url {}, error {} code {}".format(url, e, r.status_code))
             if data:
                 self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
             else:
