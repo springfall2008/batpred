@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.21.2"
+THIS_VERSION = "v7.21.3"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -11771,31 +11771,23 @@ class PredBat(hass.Hass):
         midnight_next = midnight_today + timedelta(days=2)
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by  # Scale kwh to power
+        power_scale = 60 / period / divide_by # Scale kwh to power
 
         for entry in pv_forecast_data:
             this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
             if this_point >= midnight_today and this_point < midnight_tomorrow:
                 total_today += entry["pv_estimate"] / divide_by
                 total_today10 += entry["pv_estimate10"] / divide_by
-                entry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                }
-                forecast_today.append(entry)
                 if this_point >= now:
                     total_left_today += entry["pv_estimate"] / divide_by
                     total_left_today10 += entry["pv_estimate10"] / divide_by
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                forecast_today.append(fentry)
             if this_point >= midnight_tomorrow and this_point < midnight_next:
                 total_tomorrow += entry["pv_estimate"] / divide_by
                 total_tomorrow10 += entry["pv_estimate10"] / divide_by
-                entry = {
-                    "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                }
-                forecast_tomorrow.append(entry)
+                fentry = {"period_start": entry["period_start"], "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale) , "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale)}
+                forecast_tomorrow.append(fentry)
 
         self.log(
             "PV Forecast for today is {} ({} 10%) kWh and left today is {} ({} 10%) kWh".format(
