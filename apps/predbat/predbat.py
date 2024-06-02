@@ -4443,12 +4443,18 @@ class PredBat(hass.Hass):
             self.call_service_wrapper("notify/" + device, message=message)
         return True
 
+    def call_service_wrapper_stub2(self, service, message):
+        """
+        Stub for 2 arg service wrapper
+        """
+        return self.call_service_wrapper(service, message=message)
+    
     async def async_call_notify(self, message):
         """
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.run_in_executor(self.call_service_wrapper, "notify/" + device, message=message)
+            await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
