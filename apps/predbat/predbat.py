@@ -15675,9 +15675,9 @@ class HAInterface:
         """
         if not self.ha_key:
             if attributes:
-                return self.base.set_state(entity_id, state=state)
-            else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
+            else:
+                return self.base.set_state(entity_id, state=state)
 
         data = {"state": state}
         if attributes:
