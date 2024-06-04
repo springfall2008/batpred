@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.22.0"
+THIS_VERSION = "v7.22.1"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -15556,7 +15556,7 @@ class HAInterface:
                                                 if new_state:
                                                     self.update_state_item(new_state)
                                                     # Only trigger on value change or you get too many updates
-                                                    if new_state.get("state", None) != old_state.get("state", None):
+                                                    if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
                                                         await self.base.trigger_watch_list(
                                                             new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
                                                         )
