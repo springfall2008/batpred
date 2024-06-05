@@ -11848,14 +11848,22 @@ class PredBat(hass.Hass):
                     forecast_day[day] = []
                     days = max(days, day + 1)
 
-                total_day[day] += entry["pv_estimate"] / divide_by
-                total_day10[day] += entry["pv_estimate10"] / divide_by
-                total_day90[day] += entry["pv_estimate90"] / divide_by
+                pv_estimate = entry.get("pv_estimate", 0)
+                pv_estimate10 = entry.get("pv_estimate10", pv_estimate)
+                pv_estimate90 = entry.get("pv_estimate90", pv_estimate)
+
+                pv_estimate /= divide_by
+                pv_estimate10 /= divide_by
+                pv_estimate90 /= divide_by
+
+                total_day[day] += pv_estimate
+                total_day10[day] += pv_estimate10
+                total_day90[day] += pv_estimate90
 
                 if day == 0 and this_point >= now:
-                    total_left_today += entry["pv_estimate"] / divide_by
-                    total_left_today10 += entry["pv_estimate10"] / divide_by
-                    total_left_today90 += entry["pv_estimate90"] / divide_by
+                    total_left_today += pv_estimate
+                    total_left_today10 += pv_estimate10
+                    total_left_today90 += pv_estimate90
 
                 fentry = {
                     "period_start": entry["period_start"],
