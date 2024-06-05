@@ -15600,7 +15600,6 @@ class HAInterface:
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
-                    continue
 
             if not self.base.stop_thread:
                 self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
