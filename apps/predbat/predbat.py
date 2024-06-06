@@ -11840,10 +11840,16 @@ class PredBat(hass.Hass):
         midnight_today = self.midnight_utc
         now = self.now_utc
 
-        power_scale = 60 / period / divide_by  # Scale kwh to power
+        power_scale = 60 / period  # Scale kwh to power
 
         for entry in pv_forecast_data:
-            this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
+            if "period_start" not in entry:
+                continue
+            try:
+                this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
+            except (ValueError, TypeError):
+                continue
+
             if this_point >= midnight_today:
                 day = (this_point - midnight_today).days
                 if day not in total_day:
@@ -11872,9 +11878,9 @@ class PredBat(hass.Hass):
 
                 fentry = {
                     "period_start": entry["period_start"],
-                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
-                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
-                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
+                    "pv_estimate": self.dp2(pv_estimate * power_scale),
+                    "pv_estimate10": self.dp2(pv_estimate10 * power_scale),
+                    "pv_estimate90": self.dp2(pv_estimate90 * power_scale),
                 }
                 forecast_day[day].append(fentry)
 
@@ -11885,7 +11891,7 @@ class PredBat(hass.Hass):
                     "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
                         self.dp2(total_day[day]),
                         self.dp2(total_day10[day]),
-                        self.dp2(total_day10[day]),
+                        self.dp2(total_day90[day]),
                         self.dp2(total_left_today),
                         self.dp2(total_left_today10),
                         self.dp2(total_left_today90),
@@ -11914,7 +11920,7 @@ class PredBat(hass.Hass):
             else:
                 day_name = "tomorrow" if day == 1 else "d{}".format(day)
                 day_name_long = day_name if day == 1 else "day {}".format(day)
-                self.log("PV Forecast for day {} is {} ({} 10% {} 90%) kWh".format(day_name, self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day10[day])))
+                self.log("PV Forecast for day {} is {} ({} 10% {} 90%) kWh".format(day_name, self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day90[day])))
 
                 self.dashboard_item(
                     "sensor." + self.prefix + "_pv_" + day_name,
