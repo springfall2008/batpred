@@ -11843,7 +11843,7 @@ class PredBat(hass.Hass):
         power_scale = 60 / period  # Scale kwh to power
 
         for entry in pv_forecast_data:
-            if 'period_start' not in entry:
+            if "period_start" not in entry:
                 continue
             try:
                 this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
