@@ -8,6 +8,10 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
 
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
   # Timezone to work in
   timezone: Europe/London
 
@@ -155,7 +159,12 @@ pred_bat:
   # 1 means add 1 minute to AppDaemon time, -1 takes it away
   clock_skew: 0
 
-  # Set these to match solcast sensor names
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+
+  # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
   # If these don't match find your own names in Home Assistant
   pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)

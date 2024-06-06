@@ -90,6 +90,27 @@ Once you have made all other required changes to apps.yaml this line should be d
 #  template: True
 ```
 
+### Home assistant connection
+
+Predbat can speak directly to Home Assistant rather than going via AppDaemon.
+
+If you are using a standard add-on then this will be automatic and you do not need to set this.
+
+If you run AppDaemon/Predbat in a Docker then you will need to set the URL of Home Assistant and the access key which is the long
+lived access token you can create inside Home Assistant.
+
+Currently if this communication is not established Predbat will fallback to AppDaemon, however some users have experienced failures due
+to a 10-second timeout set by AppDaemon.
+
+In future versions of Predbat AppDaemon will be removed.
+
+```yaml
+  ha_url: 'http://homeassistant.local:8123'
+  ha_key: 'xxxxxxxxxxx'
+```
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/da5916ce-4630-49b4-a265-81e8e010ff86)
+
 ### threads
 
 If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as

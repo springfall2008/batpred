@@ -38,4 +38,10 @@ Example charts:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a96934d3-753a-49da-800b-925896f87cb6)
 
-![image](https://github.com/springfall2008/batpred/assets/48591903/f31bdd5e-0c54-419d-81b4-0987a98d0a53)
+![image](https://github.com/springfall2008/batpred/assets/48591903/0dfb7c90-c4b5-455b-9510-44ecfc86f12c)
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/cb52d4cd-8424-4080-93c2-8a58743bcd7a)
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/28e79e42-84df-4a5d-a078-7b6261a8fd1b)
+
+![image](https://github.com/springfall2008/batpred/assets/48591903/ff1c1e1e-e43c-46a5-95a9-75f631425422)

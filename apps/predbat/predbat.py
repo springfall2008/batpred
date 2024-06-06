@@ -3,42 +3,52 @@ Battery Prediction app
 see Readme for information
 """
 
-
 import copy
 import os
 import re
 import time
 import math
+from datetime import datetime, timedelta
+import hashlib
+import traceback
 
 # fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-from datetime import datetime, timedelta
 
-import adbase as ad
-import appdaemon.plugins.hass.hassapi as hass
+# Import AppDaemon or our standalone wrapper
+try:
+    import adbase as ad
+    import appdaemon.plugins.hass.hassapi as hass
+except:
+    import hass as hass
+
 import pytz
 import requests
 import yaml
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
+from aiohttp import web, ClientSession, WSMsgType
+import json
 
 # Only assign globals once to avoid re-creating them with processes are forked
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.19.0"
+THIS_VERSION = "v7.22.2"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
+TIME_FORMAT_SOLCAST = "%Y-%m-%dT%H:%M:%S.%f0%z"  # 2024-05-31T18:00:00.0000000Z
 TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
-CONFIG_ROOTS = ["/config", "/conf", "/homeassistant"]
+CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
-TIMEOUT = 60 * 2
+TIMEOUT = 60 * 5
+CONFIG_REFRESH_PERIOD = 60 * 8
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -208,6 +218,13 @@ CONFIG_ITEMS = [
     {
         "name": "inverter_soc_reset",
         "friendly_name": "Inverter SOC Reset",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": True,
+    },
+    {
+        "name": "inverter_set_charge_before",
+        "friendly_name": "Inverter Set charge window before start",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -515,13 +532,6 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
-        "name": "calculate_fast_plan",
-        "friendly_name": "Calculate plan faster (less accurate)",
-        "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
-    },
-    {
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
         "type": "switch",
@@ -565,7 +575,7 @@ CONFIG_ITEMS = [
         "name": "combine_charge_slots",
         "friendly_name": "Combine Charge Slots",
         "type": "switch",
-        "default": True,
+        "default": False,
     },
     {
         "name": "combine_discharge_slots",
@@ -1157,7 +1167,7 @@ INVERTER_DEF = {
         "has_ge_inverter_mode": False,
         "time_button_press": False,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        "write_and_poll_sleep": 2,
+        "write_and_poll_sleep": 5,
         "has_time_window": False,
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
@@ -1365,6 +1375,13 @@ class DummyThread:
         return self.result
 
 
+def wrapped_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
+    global PRED_GLOBAL
+    pred = Prediction()
+    pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    return pred.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
+
+
 def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
@@ -1447,6 +1464,7 @@ class Prediction:
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.best_soc_keep = base.best_soc_keep
+            self.best_soc_min = base.best_soc_min
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_gas = base.rate_gas
             self.rate_import = base.rate_import
@@ -1459,6 +1477,15 @@ class Prediction:
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
+
+    def thread_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
+        """
+        Run single prediction in a thread
+        """
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record, step=step
+        )
+        return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -1718,8 +1745,8 @@ class Prediction:
             pv_now = 0
             load_yesterday = 0
             for offset in range(0, step, PREDICT_STEP):
-                pv_now += pv_forecast_minute_step[minute + offset]
-                load_yesterday += load_minutes_step[minute + offset]
+                pv_now += pv_forecast_minute_step.get(minute + offset, 0)
+                load_yesterday += load_minutes_step.get(minute + offset, 0)
 
             # Count PV kWh
             pv_kwh += pv_now
@@ -1825,12 +1852,16 @@ class Prediction:
             discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
             battery_to_min = max(soc - self.reserve, 0) * self.battery_loss_discharge * self.inverter_loss
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss * self.inverter_loss
+            discharge_min = self.reserve
+            use_keep = self.best_soc_keep if four_hour_rule else self.reserve
+            if discharge_window_n >= 0:
+                discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
 
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
                 and discharge_limits[discharge_window_n] < 100.0
-                and (soc - step * self.battery_rate_max_discharge_scaled) > (self.soc_max * discharge_limits[discharge_window_n] / 100.0)
+                and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min
             ):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
@@ -1847,6 +1878,7 @@ class Prediction:
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
 
                 # Account for inverter limit, clip battery draw if possible to avoid going over
+                diff_tmp = load_yesterday - (battery_draw + pv_dc + pv_ac)
                 if self.inverter_hybrid and diff_tmp < 0 and abs(diff_tmp) > (self.inverter_limit * step):
                     above_limit = abs(diff_tmp + self.inverter_limit * step)
                     battery_draw = max(-charge_rate_now_curve * step, battery_draw - above_limit)
@@ -1861,7 +1893,10 @@ class Prediction:
                     pv_ac -= extra_pv
                     pv_dc += extra_pv
 
-                battery_state = "f-"
+                if battery_draw < 0:
+                    battery_state = "f/"
+                else:
+                    battery_state = "f-"
 
                 # Once force discharge starts the four hour rule is disabled
                 four_hour_rule = False
@@ -2186,11 +2221,11 @@ class Inverter:
         Attempt to restart the services required
         """
         if self.base.restart_active:
-            self.base.log("WARN: Inverter control auto restart already active, waiting...")
+            self.base.log("Warn: Inverter control auto restart already active, waiting...")
             return
 
         # Trigger restart
-        self.base.log("WARN: Inverter control auto restart trigger: {}".format(reason))
+        self.base.log("Warn: Inverter control auto restart trigger: {}".format(reason))
         restart_command = self.base.get_arg("auto_restart", [])
         if restart_command:
             self.base.restart_active = True
@@ -2211,18 +2246,18 @@ class Inverter:
                 if service:
                     if addon:
                         self.log("Calling restart service {} with addon {}".format(service, addon))
-                        self.base.call_service(service, addon=addon)
+                        self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
                         self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
-                        self.base.call_service(service, entity_id=entity_id)
+                        self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
                         self.log("Calling restart service {}".format(service))
-                        self.base.call_service(service)
+                        self.base.call_service_wrapper(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     time.sleep(15)
             raise Exception("Auto-restart triggered")
         else:
-            self.log("INFO: auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control")
+            self.log("Info: auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control")
 
     def __init__(self, base, id=0, quiet=False):
         self.id = id
@@ -2272,7 +2307,7 @@ class Inverter:
                 for key in inverter_def:
                     INVERTER_DEF[self.inverter_type][key] = inverter_def[key]
             else:
-                self.log("WARN: Inverter {}: inverter definition is not a dictionary".format(self.id))
+                self.log("Warn: Inverter {}: inverter definition is not a dictionary".format(self.id))
 
         if self.inverter_type in INVERTER_DEF:
             self.log(f"Inverter {self.id}: Type {self.inverter_type} {INVERTER_DEF[self.inverter_type]['name']}")
@@ -2280,7 +2315,7 @@ class Inverter:
             raise ValueError("Inverter type {} not defined".format(self.inverter_type))
 
         if self.inverter_type != "GE":
-            self.log("WARN: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
+            self.log("Warn: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
@@ -2326,7 +2361,7 @@ class Inverter:
         if self.inv_has_timed_pause:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
             if entity_mode:
-                old_pause_mode = self.base.get_state(entity_mode)
+                old_pause_mode = self.base.get_state_wrapper(entity_mode)
                 if old_pause_mode is None:
                     self.inv_has_timed_pause = False
                     self.log("Inverter {} does not have timed pause support enabled".format(self.id))
@@ -2354,7 +2389,7 @@ class Inverter:
                 if self.base.battery_capacity_nominal:
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
-                        self.base.log("WARN: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
+                        self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
                     self.soc_max = self.nominal_capacity
                 if invname in raw_data and "soc_force_adjust" in raw_data[invname]:
                     soc_force_adjust = raw_data[invname]["soc_force_adjust"]
@@ -2365,7 +2400,7 @@ class Inverter:
                             soc_force_adjust = 0
                         if (soc_force_adjust > 0) and (soc_force_adjust < 7):
                             self.in_calibration = True
-                            self.log("WARN: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
+                            self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
             self.soc_max *= self.battery_scaling
 
             # Max battery rate
@@ -2402,7 +2437,7 @@ class Inverter:
 
         # Battery can not be zero size
         if self.soc_max <= 0:
-            self.base.log("ERROR: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
+            self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
             raise ValueError
 
         # Battery rate max charge, discharge (all converted to kW/min)
@@ -2440,7 +2475,7 @@ class Inverter:
                 self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 10:
                 self.base.log(
-                    "WARN: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
+                    "Warn: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
                         self.inverter_time, now_utc, tdiff
                     )
                 )
@@ -2808,7 +2843,7 @@ class Inverter:
 
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
-        if not self.base.entity_exists(entity_id):
+        if self.base.get_state_wrapper(entity_id) is None:
             attributes = {
                 "state_class": "measurement",
             }
@@ -2818,8 +2853,7 @@ class Inverter:
             if device_class is not None:
                 attributes["device_class"] = device_class
 
-            entity = self.base.get_entity(entity_id)
-            entity.set_state(state=value, attributes=attributes)
+            self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
         return entity_id
 
     def update_status(self, minutes_now, quiet=False):
@@ -2948,20 +2982,19 @@ class Inverter:
                     charge_start_time = datetime.strptime(self.base.get_arg("charge_start_time", index=self.id), "%H:%M:%S")
                     charge_end_time = datetime.strptime(self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S")
                 else:
-                    self.log("ERROR: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
+                    self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
                     self.base.record_status(
-                        "Error - Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True
+                        "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True
                     )
                     raise ValueError
 
             # Update simulated charge enable time to match the charge window time.
             if not self.inv_has_charge_enable_time:
-                entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
                 if charge_start_time == charge_end_time:
                     self.charge_enable_time = False
                 else:
                     self.charge_enable_time = True
-                self.write_and_poll_switch("scheduled_charge_enable", entity, self.charge_enable_time)
+                self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
                 self.log("Inverter {} scheduled_charge_enable set to {}".format(self.id, self.charge_enable_time))
 
             # Track charge start/end
@@ -3049,8 +3082,8 @@ class Inverter:
             discharge_start = datetime.strptime(self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S")
             discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
         else:
-            self.log("ERROR: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
-            self.base.record_status("Error - Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
+            self.log("Error: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
+            self.base.record_status("Error: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
         # Update simulated discharge enable time to match the discharge window time.
@@ -3059,9 +3092,9 @@ class Inverter:
                 self.discharge_enable_time = False
             else:
                 self.discharge_enable_time = True
-            entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
-            self.write_and_poll_switch("scheduled_discharge_enable", entity, self.discharge_enable_time)
-            self.log("Inverter {} {} set to {}".format(self.id, self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), self.discharge_enable_time))
+            entity_id = self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id)
+            self.write_and_poll_switch("scheduled_discharge_enable", entity_id, self.discharge_enable_time)
+            self.log("Inverter {} {} set to {}".format(self.id, entity_id, self.discharge_enable_time))
 
         # Tracking for idle time
         if self.discharge_enable_time:
@@ -3188,8 +3221,7 @@ class Inverter:
                 if self.rest_data:
                     self.rest_setReserve(reserve)
                 else:
-                    entity_soc = self.base.get_entity(self.base.get_arg("reserve", indirect=False, index=self.id))
-                    self.write_and_poll_value("reserve", entity_soc, reserve)
+                    self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id), reserve)
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target Reserve has been changed to {} at {}".format(self.id, reserve, self.base.time_now_str()))
             self.mqtt_message(topic="set/reserve", payload=reserve)
@@ -3236,8 +3268,9 @@ class Inverter:
                     self.rest_setChargeRate(new_rate)
                 else:
                     if "charge_rate" in self.base.args:
-                        entity = self.base.get_entity(self.base.get_arg("charge_rate", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+                        self.write_and_poll_value(
+                            "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("charge", new_rate)
@@ -3284,8 +3317,12 @@ class Inverter:
                     self.rest_setDischargeRate(new_rate)
                 else:
                     if "discharge_rate" in self.base.args:
-                        entity = self.base.get_entity(self.base.get_arg("discharge_rate", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_rate", entity, new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25))
+                        self.write_and_poll_value(
+                            "discharge_rate",
+                            self.base.get_arg("discharge_rate", indirect=False, index=self.id),
+                            new_rate,
+                            fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
+                        )
 
                     if self.inv_output_charge_control == "current":
                         self.set_current_from_power("discharge", new_rate)
@@ -3332,8 +3369,7 @@ class Inverter:
                 if self.rest_data:
                     self.rest_setChargeTarget(soc)
                 else:
-                    entity_soc = self.base.get_entity(self.base.get_arg("charge_limit", indirect=False, index=self.id))
-                    self.write_and_poll_value("charge_limit", entity_soc, soc)
+                    self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id), soc)
 
                 if self.base.set_inverter_notify:
                     self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {} % at {}".format(self.id, soc, self.base.time_now_str()))
@@ -3348,14 +3384,14 @@ class Inverter:
             else:
                 self.mimic_target_soc(0)
 
-    def write_and_poll_switch(self, name, entity, new_value):
+    def write_and_poll_switch(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         # Re-written to minimise writes
-        domain = entity.domain
+        domain, entity_name = entity_id.split(".")
 
-        current_state = entity.get_state()
+        current_state = self.base.get_state_wrapper(entity_id=entity_id)
         if isinstance(current_state, str):
             current_state = current_state.lower() in ["on", "enable", "true"]
 
@@ -3364,33 +3400,33 @@ class Inverter:
             retry += 1
             if domain == "sensor":
                 if new_value:
-                    entity.set_state(state="on")
+                    self.base.set_state_wrapper(state="on", entity_id=entity_id)
                 else:
-                    entity.set_state(state="off")
+                    self.base.set_state_wrapper(state="off", entity_id=entity_id)
             else:
-                if new_value:
-                    entity.call_service("turn_on")
-                else:
-                    entity.call_service("turn_off")
+                base_entity = entity_id.split(".")[0]
+                service = base_entity + "/turn_" + ("on" if new_value else "off")
+                self.base.call_service_wrapper(service, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
-            current_state = entity.get_state()
+            current_state = self.base.get_state_wrapper(entity_id=entity_id, refresh=True)
+            self.log("Switch {} is now {}".format(entity_id, current_state))
             if isinstance(current_state, str):
                 current_state = current_state.lower() in ["on", "enable", "true"]
 
         if current_state == new_value:
-            self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, entity.get_state()))
+            self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
             return True
         else:
-            self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
-            self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
+            self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
+            self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity, new_value, fuzzy=0):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
-        domain = entity.domain
-        current_state = entity.get_state()
+        domain, entity_name = entity_id.split(".")
+        current_state = self.base.get_state_wrapper(entity_id)
 
         if isinstance(new_value, str):
             matched = current_state == new_value
@@ -3401,13 +3437,15 @@ class Inverter:
         while (not matched) and (retry < 6):
             retry += 1
             if domain == "sensor":
-                entity.set_state(state=new_value)
+                self.base.set_state_wrapper(entity_id, state=new_value)
             else:
-                # if isinstance(new_value, str):
-                entity.call_service("set_value", value=new_value)
+                entity_base = entity_id.split(".")[0]
+                service = entity_base + "/set_value"
+
+                self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
-            current_state = entity.get_state()
+            current_state = self.base.get_state_wrapper(entity_id, refresh=True)
             if isinstance(new_value, str):
                 matched = current_state == new_value
             else:
@@ -3420,23 +3458,25 @@ class Inverter:
             self.base.log(f"Inverter {self.id} Wrote {new_value} to {name}, successfully now {current_state}")
             return True
         else:
-            self.base.log(f"WARN: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}")
-            self.base.record_status(f"Warn - Inverter {self.id} write to {name} failed", had_errors=True)
+            self.base.log(f"Warn: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}")
+            self.base.record_status(f"Warn: Inverter {self.id} write to {name} failed", had_errors=True)
             return False
 
-    def write_and_poll_option(self, name, entity, new_value):
+    def write_and_poll_option(self, name, entity_id, new_value):
         """
         GivTCP Workaround, keep writing until correct
         """
         for retry in range(6):
-            entity.call_service("select_option", option=new_value)
+            entity_base = entity_id.split(".")[0]
+            service = entity_base + "/select_option"
+            self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
-            old_value = entity.get_state()
+            old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
                 return True
-        self.base.log("WARN: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, entity.get_state()))
-        self.base.record_status("Warn - Inverter {} write to {} failed".format(self.id, name), had_errors=True)
+        self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id, refresh=True)))
+        self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
         return False
 
     def adjust_pause_mode(self, pause_charge=False, pause_discharge=False):
@@ -3457,25 +3497,19 @@ class Inverter:
 
         # As not all inverters have these options we need to gracefully give up if its missing
         if entity_mode:
-            old_pause_mode = self.base.get_state(entity_mode)
-            if old_pause_mode is not None:
-                entity_mode = self.base.get_entity(entity_mode)
-            else:
+            old_pause_mode = self.base.get_state_wrapper(entity_mode)
+            if old_pause_mode is None:
                 entity_mode = None
 
         if entity_start:
-            old_start_time = self.base.get_state(entity_start)
-            if old_start_time is not None:
-                entity_start = self.base.get_entity(entity_start)
-            else:
+            old_start_time = self.base.get_state_wrapper(entity_start)
+            if old_start_time is None:
                 entity_start = None
                 self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
 
         if entity_end:
-            old_end_time = self.base.get_state(entity_end)
-            if old_end_time is not None:
-                entity_end = self.base.get_entity(entity_end)
-            else:
+            old_end_time = self.base.get_state_wrapper(entity_end)
+            if old_end_time is None:
                 self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
                 entity_end = None
 
@@ -3498,16 +3532,16 @@ class Inverter:
 
         if old_start_time and old_start_time != new_start_time:
             # Don't poll as inverters with no registers will fail
-            entity_start.set_state(state=new_start_time)
+            self.base.set_state_wrapper(entity_start, state=new_start_time)
             self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
         if old_end_time and old_end_time != new_end_time:
             # Don't poll as inverters with no registers will fail
-            entity_end.set_state(state=new_end_time)
+            self.base.set_state_wrapper(entity_end, state=new_end_time)
             self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
 
         # Set the mode
         if new_pause_mode != old_pause_mode:
-            self.write_and_poll_option("inverter_mode", entity_mode, new_pause_mode)
+            self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
@@ -3562,11 +3596,11 @@ class Inverter:
                 if self.rest_data:
                     self.rest_setBatteryMode(new_inverter_mode)
                 else:
-                    entity = self.base.get_entity(self.base.get_arg("inverter_mode", indirect=False, index=self.id))
+                    entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
                     if self.inv_has_ge_inverter_mode:
-                        self.write_and_poll_option("inverter_mode", entity, new_inverter_mode)
+                        self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
                     else:
-                        self.write_and_poll_value("inverter_mode", entity, new_inverter_mode)
+                        self.write_and_poll_value("inverter_mode", entity_id, new_inverter_mode)
 
                 # Notify
                 if self.base.set_inverter_notify:
@@ -3637,19 +3671,19 @@ class Inverter:
 
         # Write idle start/end time
         if self.inv_has_idle_time:
-            entity_idle_start_time = self.base.get_entity(self.base.get_arg("idle_start_time", indirect=False, index=self.id))
-            entity_idle_end_time = self.base.get_entity(self.base.get_arg("idle_end_time", indirect=False, index=self.id))
+            idle_start_time_id = self.base.get_arg("idle_start_time", indirect=False, index=self.id)
+            idle_end_time_id = self.base.get_arg("idle_end_time", indirect=False, index=self.id)
 
-            if entity_idle_start_time and entity_idle_end_time:
+            if idle_start_time_id and idle_end_time_id:
                 old_start = self.base.get_arg("idle_start_time", index=self.id)
                 old_end = self.base.get_arg("idle_end_time", index=self.id)
 
                 if old_start != idle_start:
                     self.base.log("Inverter {} set new idle start time to {} was {}".format(self.id, idle_start, old_start))
-                    self.write_and_poll_option("idle_start_time", entity_idle_start_time, idle_start)
+                    self.write_and_poll_option("idle_start_time", idle_start_time_id, idle_start)
                 if old_end != idle_end:
                     self.base.log("Inverter {} set new idle end time to {} was {}".format(self.id, idle_end, old_end))
-                    self.write_and_poll_option("idle_end_time", entity_idle_end_time, idle_end)
+                    self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
 
     def window2minutes(self, start, end, format, minutes_now):
         """
@@ -3711,7 +3745,7 @@ class Inverter:
                 old_end = self.base.get_arg("discharge_end_time", index=self.id)
                 old_discharge_enable = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
             else:
-                self.log("WARN: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
+                self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
                 return False
 
         # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
@@ -3758,20 +3792,18 @@ class Inverter:
                 elif "discharge_start_time" in self.base.args:
                     # Always write to this as it is the GE default
                     changed_start_end = True
-                    entity_discharge_start_time = self.base.get_entity(self.base.get_arg("discharge_start_time", indirect=False, index=self.id))
+                    entity_discharge_start_time_id = self.base.get_arg("discharge_start_time", indirect=False, index=self.id)
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("discharge_start_time", entity_discharge_start_time, new_start)
+                        self.write_and_poll_option("discharge_start_time", entity_discharge_start_time_id, new_start)
                     else:
-                        self.write_and_poll_value("discharge_start_time", entity_discharge_start_time, new_start)
+                        self.write_and_poll_value("discharge_start_time", entity_discharge_start_time_id, new_start)
 
                     if self.inv_charge_time_format == "H M":
                         # If the inverter uses hours and minutes then write to these entities too
-                        entity = self.base.get_entity(self.base.get_arg("discharge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_hour", entity, int(new_start[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("discharge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_start_minute", entity, int(new_start[3:5]))
+                        self.write_and_poll_value("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
+                        self.write_and_poll_value("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
                 else:
-                    self.log("WARN: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
+                    self.log("Warn: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
         if new_end and new_end != old_end:
@@ -3784,20 +3816,18 @@ class Inverter:
                 elif "discharge_end_time" in self.base.args:
                     # Always write to this as it is the GE default
                     changed_start_end = True
-                    entity_discharge_end_time = self.base.get_entity(self.base.get_arg("discharge_end_time", indirect=False, index=self.id))
+                    entity_discharge_end_time_id = self.base.get_arg("discharge_end_time", indirect=False, index=self.id)
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("discharge_end_time", entity_discharge_end_time, new_end)
+                        self.write_and_poll_option("discharge_end_time", entity_discharge_end_time_id, new_end)
                         # If the inverter uses hours and minutes then write to these entities too
                     else:
-                        self.write_and_poll_value("discharge_end_time", entity_discharge_end_time, new_end)
+                        self.write_and_poll_value("discharge_end_time", entity_discharge_end_time_id, new_end)
 
                     if self.inv_charge_time_format == "H M":
-                        entity = self.base.get_entity(self.base.get_arg("discharge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_hour", entity, int(new_end[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("discharge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("discharge_end_minute", entity, int(new_end[3:5]))
+                        self.write_and_poll_value("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
+                        self.write_and_poll_value("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
                 else:
-                    self.log("WARN: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
+                    self.log("Warn: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
 
         if ((new_end != old_end) or (new_start != old_start)) and self.inv_time_button_press:
             entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
@@ -3806,13 +3836,11 @@ class Inverter:
         # Change scheduled discharge enable
         if force_discharge and not old_discharge_enable:
             if not SIMULATE:
-                entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
-                self.write_and_poll_switch("scheduled_discharge_enable", entity, True)
+                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
                 self.log("Inverter {} Turning on scheduled discharge".format(self.id))
         elif not force_discharge and old_discharge_enable:
             if not SIMULATE:
-                entity = self.base.get_entity(self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id))
-                self.write_and_poll_switch("scheduled_discharge_enable", entity, False)
+                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
                 self.log("Inverter {} Turning off scheduled discharge".format(self.id))
 
         # REST version of writing slot
@@ -3874,8 +3902,7 @@ class Inverter:
                 if self.rest_data:
                     self.rest_enableChargeSchedule(False)
                 else:
-                    entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
-                    self.write_and_poll_switch("scheduled_charge_enable", entity, False)
+                    self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), False)
                     # If there's no charge enable switch then we can enable using start and end time
                     if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                         self.enable_charge_discharge_with_time_current("charge", False)
@@ -3906,8 +3933,7 @@ class Inverter:
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
             entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
-            entity = self.base.get_entity(entity_id)
-            switch = solax_modes.get(entity.get_state(), 0)
+            switch = solax_modes.get(self.base.get_state_wrapper(entity_id), 0)
 
             if direction == "charge":
                 if enable:
@@ -3929,7 +3955,7 @@ class Inverter:
 
             if new_switch != switch:
                 self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
-                self.write_and_poll_option(name=entity_id, entity=entity, new_value=new_mode)
+                self.write_and_poll_option(name=entity_id, entity=entity_id, new_value=new_mode)
             else:
                 self.base.log(f"Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
 
@@ -3946,7 +3972,7 @@ class Inverter:
         Send an MQTT message via service
         """
         if self.inv_has_mqtt_api:
-            self.base.call_service("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
+            self.base.call_service_wrapper("mqtt/publish", qos=1, retain=True, topic=(self.inv_mqtt_topic + "/" + topic), payload=payload)
 
     def enable_charge_discharge_with_time_current(self, direction, enable):
         """
@@ -3962,8 +3988,7 @@ class Inverter:
                 for x in ["start", "end"]:
                     for y in ["hour", "minute"]:
                         name = f"{direction}_{x}_{y}"
-                        entity = self.base.get_entity(self.base.get_arg(name, indirect=False, index=self.id))
-                        self.write_and_poll_value(name, entity, 0)
+                        self.write_and_poll_value(name, self.base.get_arg(name, indirect=False, index=self.id), 0)
             else:
                 self.set_current_from_power(direction, 0)
 
@@ -3972,8 +3997,7 @@ class Inverter:
         Set the timed charge/discharge current setting by converting power to current
         """
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
-        entity = self.base.get_entity(self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id))
-        self.write_and_poll_value(f"timed_{direction}_current", entity, new_current, fuzzy=1)
+        self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
     def call_service_template(self, service, data):
         """
@@ -4000,11 +4024,11 @@ class Inverter:
             if service_name:
                 service_name = service_name.replace(".", "/")
                 self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
-                self.base.call_service(service_name, **service_data)
+                self.base.call_service_wrapper(service_name, **service_data)
             else:
-                self.log("WARN: Inverter {} unable to find service name for {}".format(self.id, service))
+                self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
         else:
-            self.log("WARN: Inverter {} unable to find service template for {}".format(self.id, service))
+            self.log("Warn: Inverter {} unable to find service template for {}".format(self.id, service))
 
     def adjust_charge_immediate(self, target_soc):
         """
@@ -4080,7 +4104,7 @@ class Inverter:
                 old_end = self.base.get_arg("charge_end_time", index=self.id)
                 old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
             else:
-                self.log("WARN: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
+                self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
 
         # Apply clock skew
         charge_start_time += timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -4118,20 +4142,18 @@ class Inverter:
                     pass  # REST will be written as start/end together
                 elif "charge_start_time" in self.base.args:
                     # Always write to this as it is the GE default
-                    entity_start = self.base.get_entity(self.base.get_arg("charge_start_time", indirect=False, index=self.id))
+                    entity_id_start = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("charge_start_time", entity_start, new_start)
+                        self.write_and_poll_option("charge_start_time", entity_id_start, new_start)
                     else:
-                        self.write_and_poll_value("charge_start_time", entity_start, new_start)
+                        self.write_and_poll_value("charge_start_time", entity_id_start, new_start)
 
                     if self.inv_charge_time_format == "H M":
                         # If the inverter uses hours and minutes then write to these entities too
-                        entity = self.base.get_entity(self.base.get_arg("charge_start_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_hour", entity, int(new_start[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("charge_start_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_start_minute", entity, int(new_start[3:5]))
+                        self.write_and_poll_value("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
+                        self.write_and_poll_value("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
                 else:
-                    self.log("WARN: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
+                    self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
         # Program end slot
         if new_end != old_end:
@@ -4143,19 +4165,17 @@ class Inverter:
                     pass  # REST will be written as start/end together
                 elif "charge_end_time" in self.base.args:
                     # Always write to this as it is the GE default
-                    entity_end = self.base.get_entity(self.base.get_arg("charge_end_time", indirect=False, index=self.id))
+                    entity_id_end = self.base.get_arg("charge_end_time", indirect=False, index=self.id)
                     if self.inv_charge_time_entity_is_option:
-                        self.write_and_poll_option("charge_end_time", entity_end, new_end)
+                        self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
                     else:
-                        self.write_and_poll_value("charge_end_time", entity_end, new_end)
+                        self.write_and_poll_value("charge_end_time", entity_id_end, new_end)
 
                     if self.inv_charge_time_format == "H M":
-                        entity = self.base.get_entity(self.base.get_arg("charge_end_hour", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_hour", entity, int(new_end[:2]))
-                        entity = self.base.get_entity(self.base.get_arg("charge_end_minute", indirect=False, index=self.id))
-                        self.write_and_poll_value("charge_end_minute", entity, int(new_end[3:5]))
+                        self.write_and_poll_value("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
+                        self.write_and_poll_value("charge_end_minute", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[3:5]))
                 else:
-                    self.log("WARN: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
+                    self.log("Warn: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
         if new_start != old_start or new_end != old_end:
             if self.rest_data and not SIMULATE:
@@ -4176,12 +4196,11 @@ class Inverter:
                 if self.rest_data:
                     self.rest_enableChargeSchedule(True)
                 elif "scheduled_charge_enable" in self.base.args:
-                    entity = self.base.get_entity(self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id))
-                    self.write_and_poll_switch("scheduled_charge_enable", entity, True)
+                    self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
                     if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                         self.enable_charge_discharge_with_time_current("charge", True)
                 else:
-                    self.log("WARN: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
+                    self.log("Warn: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
                 # Only notify if it's a real change and not a temporary one
                 if (old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable") and self.base.set_inverter_notify:
@@ -4195,16 +4214,18 @@ class Inverter:
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
     def press_and_poll_button(self, entity_id):
+        """
+        Call a button press service (Solis) and wait for the data to update
+        """
         for retry in range(6):
-            self.base.call_service("button/press", entity_id=entity_id)
-            entity = self.base.get_entity(entity_id)
+            self.base.call_service_wrapper("button/press", entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
-            time_pressed = datetime.strptime(entity.get_state(), TIME_FORMAT_SECONDS)
+            time_pressed = datetime.strptime(self.base.get_state_wrapper(entity_id, refresh=True), TIME_FORMAT_SECONDS)
 
             if (pytz.timezone("UTC").localize(datetime.now()) - time_pressed).seconds < 10:
                 self.base.log(f"Successfully pressed button {entity_id} on Inverter {self.id}")
                 return True
-        self.base.log(f"WARN: Inverter {self.id} Trying to press {entity_id} didn't complete")
+        self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         return False
 
@@ -4219,7 +4240,7 @@ class Inverter:
         try:
             r = requests.get(url)
         except Exception as e:
-            self.base.log("ERROR: Exception raised {}".format(e))
+            self.base.log("Error: Exception raised {}".format(e))
             r = None
 
         if r and (r.status_code == 200):
@@ -4231,11 +4252,11 @@ class Inverter:
                     # If this is the first call in error then try to re-read the data
                     return self.rest_runAll()
                 else:
-                    self.base.log("WARN: Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url))
+                    self.base.log("Warn: Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url))
                     self.base.record_status("Inverter {} read bad REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
                     return None
         else:
-            self.base.log("WARN: Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url))
+            self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url))
             self.base.record_status("Inverter {} unable to read REST data from {} - REST will be disabled".format(self.id, url), had_errors=True)
             return None
 
@@ -4264,8 +4285,8 @@ class Inverter:
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
-        self.base.log("WARN: Inverter {} charge target {} via REST failed".format(self.id, target))
-        self.base.record_status("Warn - Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
+        self.base.log("Warn: Inverter {} charge target {} via REST failed".format(self.id, target))
+        self.base.record_status("Warn: Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
         return False
 
     def rest_setChargeRate(self, rate):
@@ -4284,8 +4305,8 @@ class Inverter:
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
-        self.base.log("WARN: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Charge_Rate"]))
-        self.base.record_status("Warn - Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
+        self.base.log("Warn: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Charge_Rate"]))
+        self.base.record_status("Warn: Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
         return False
 
     def rest_setDischargeRate(self, rate):
@@ -4304,9 +4325,9 @@ class Inverter:
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
-        self.base.log("WARN: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]))
+        self.base.log("Warn: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]))
         self.base.record_status(
-            "Warn - Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True
+            "Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True
         )
         return False
 
@@ -4325,8 +4346,8 @@ class Inverter:
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
 
-        self.base.log("WARN: Set inverter {} mode {} via REST failed".format(self.id, inverter_mode))
-        self.base.record_status("Warn - Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
+        self.base.log("Warn: Set inverter {} mode {} via REST failed".format(self.id, inverter_mode))
+        self.base.record_status("Warn: Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
         return False
 
     def rest_setReserve(self, target):
@@ -4346,8 +4367,8 @@ class Inverter:
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
-        self.base.log("WARN: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
-        self.base.record_status("Warn - Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
+        self.base.log("Warn: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
+        self.base.record_status("Warn: Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
         return False
 
     def rest_enableChargeSchedule(self, enable):
@@ -4371,8 +4392,8 @@ class Inverter:
                 self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
                 return True
 
-        self.base.log("WARN: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Charge_Schedule"]))
-        self.base.record_status("Warn - Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
+        self.base.log("Warn: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Charge_Schedule"]))
+        self.base.record_status("Warn: Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
         return False
 
     def rest_setChargeSlot1(self, start, finish):
@@ -4390,8 +4411,8 @@ class Inverter:
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
 
-        self.base.log("WARN: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn - Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
+        self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
         return False
 
     def rest_setDischargeSlot1(self, start, finish):
@@ -4409,8 +4430,8 @@ class Inverter:
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
 
-        self.base.log("WARN: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn - Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)
+        self.base.log("Warn: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn: Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)
         return False
 
 
@@ -4424,15 +4445,21 @@ class PredBat(hass.Hass):
         Sync wrapper for call_notify
         """
         for device in self.notify_devices:
-            self.call_service("notify/" + device, message=message)
+            self.call_service_wrapper("notify/" + device, message=message)
         return True
+
+    def call_service_wrapper_stub2(self, service, message):
+        """
+        Stub for 2 arg service wrapper
+        """
+        return self.call_service_wrapper(service, message=message)
 
     async def async_call_notify(self, message):
         """
         Send HA notifications
         """
         for device in self.notify_devices:
-            await self.call_service("notify/" + device, message=message)
+            await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
     def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
@@ -4443,12 +4470,12 @@ class PredBat(hass.Hass):
             if index < len(value):
                 value = value[index]
             else:
-                self.log("WARN: Out of range index {} within item {} value {}".format(index, arg, value))
+                self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                 value = None
             index = None
 
         if index:
-            self.log("WARN: Out of range index {} within item {} value {}".format(index, arg, value))
+            self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
 
         # If we have a list of items get each and add them up or return them as a list
         if isinstance(value, list):
@@ -4459,8 +4486,8 @@ class PredBat(hass.Hass):
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
-                        self.log("WARN: Return bad value {} from {} arg {}".format(got, item, arg))
-                        self.record_status("Warn - Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
+                        self.log("Warn: Return bad value {} from {} arg {}".format(got, item, arg))
+                        self.record_status("Warn: Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
                 return final
             else:
                 final = []
@@ -4481,8 +4508,8 @@ class PredBat(hass.Hass):
                     else:
                         value = value.format(**self.args)
                 except KeyError:
-                    self.log("WARN: can not resolve {} value {}".format(arg, value))
-                    self.record_status("Warn - can not resolve {} value {}".format(arg, value), had_errors=True)
+                    self.log("Warn: can not resolve {} value {}".format(arg, value))
+                    self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name
@@ -4495,9 +4522,9 @@ class PredBat(hass.Hass):
                 value, attribute = value.split("$")
 
             if attribute:
-                value = self.get_state(entity_id=value, default=default, attribute=attribute)
+                value = self.get_state_wrapper(entity_id=value, default=default, attribute=attribute)
             else:
-                value = self.get_state(entity_id=value, default=default)
+                value = self.get_state_wrapper(entity_id=value, default=default)
         return value
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None):
@@ -4522,16 +4549,16 @@ class PredBat(hass.Hass):
             try:
                 value = float(value)
             except (ValueError, TypeError):
-                self.log("WARN: Return bad float value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn - Return bad float value {} from {}".format(value, arg), had_errors=True)
+                self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
+                self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
                 value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
             try:
                 value = int(float(value))
             except (ValueError, TypeError):
-                self.log("WARN: Return bad int value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn - Return bad int value {} from {}".format(value, arg), had_errors=True)
+                self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
+                self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
                 value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
@@ -4563,8 +4590,8 @@ class PredBat(hass.Hass):
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("WARN: Error downloading GE data from url {}".format(url))
-            self.record_status("Warn - Error downloading GE data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Error downloading GE data from url {}".format(url))
+            self.record_status("Warn: Error downloading GE data from cloud", debug=url, had_errors=True)
             return False
 
         self.ge_url_cache[url] = {}
@@ -4580,12 +4607,12 @@ class PredBat(hass.Hass):
         gekey = self.args.get("ge_cloud_key", None)
 
         if not geserial:
-            self.log("ERROR: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
-            self.record_status("Warn - GE Cloud has been enabled but ge_cloud_serial is not set to your serial", had_errors=True)
+            self.log("Error: GE Cloud has been enabled but ge_cloud_serial is not set to your serial")
+            self.record_status("Warn: GE Cloud has been enabled but ge_cloud_serial is not set to your serial", had_errors=True)
             return False
         if not gekey:
-            self.log("ERROR: GE Cloud has been enabled but ge_cloud_key is not set to your appkey")
-            self.record_status("Warn - GE Cloud has been enabled but ge_cloud_key is not set to your appkey", had_errors=True)
+            self.log("Error: GE Cloud has been enabled but ge_cloud_key is not set to your appkey")
+            self.record_status("Warn: GE Cloud has been enabled but ge_cloud_key is not set to your appkey", had_errors=True)
             return False
 
         headers = {"Authorization": "Bearer  " + gekey, "Content-Type": "application/json", "Accept": "application/json"}
@@ -4600,8 +4627,8 @@ class PredBat(hass.Hass):
 
                 darray = data.get("data", None)
                 if darray is None:
-                    self.log("WARN: Error downloading GE data from url {}".format(url))
-                    self.record_status("Warn - Error downloading GE data from cloud", debug=url)
+                    self.log("Warn: Error downloading GE data from url {}".format(url))
+                    self.record_status("Warn: Error downloading GE data from cloud", debug=url)
                     return False
 
                 for item in darray:
@@ -4667,13 +4694,13 @@ class PredBat(hass.Hass):
         try:
             r = requests.get(url)
         except Exception:
-            self.log("WARN: Unable to load data from Github url: {}".format(url))
+            self.log("Warn: Unable to load data from Github url: {}".format(url))
             return []
 
         try:
             pdata = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("WARN: Unable to decode data from Github url: {}".format(url))
+            self.log("Warn: Unable to decode data from Github url: {}".format(url))
             return []
 
         # Save to cache
@@ -4772,7 +4799,7 @@ class PredBat(hass.Hass):
             self.expose_config("version", new_version, force=True)
 
         else:
-            self.log("WARN: Unable to download Predbat version information from github, return code: {}".format(data))
+            self.log("Warn: Unable to download Predbat version information from github, return code: {}".format(data))
             self.expose_config("version", False, force=True)
 
         return self.releases
@@ -4801,8 +4828,8 @@ class PredBat(hass.Hass):
 
         # Download failed?
         if not pdata:
-            self.log("WARN: Unable to download Octopus data from URL {}".format(url))
-            self.record_status("Warn - Unable to download Octopus data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+            self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]["data"]
                 return pdata
@@ -4902,7 +4929,7 @@ class PredBat(hass.Hass):
                                 extracted_keys.append(time_date_start)
                                 extracted_data[time_date_start] = item
                             else:
-                                self.log("WARN: Duplicate key {} in extracted_keys".format(time_date_start))
+                                self.log("Warn: Duplicate key {} in extracted_keys".format(time_date_start))
 
         if extracted_keys:
             extracted_keys.sort()
@@ -4959,9 +4986,9 @@ class PredBat(hass.Hass):
 
         # Download failed?
         if not pdata:
-            self.log("WARN: Unable to download futurerate data from URL {}".format(url))
-            self.record_status("Warn - Unable to download futurerate data from cloud", debug=url, had_errors=True)
-            if url in self.octopus_url_cache:
+            self.log("Warn: Unable to download futurerate data from URL {}".format(url))
+            self.record_status("Warn: Unable to download futurerate data from cloud", debug=url, had_errors=True)
+            if url in self.futurerate_url_cache:
                 pdata = self.futurerate_url_cache[url]["data"]
                 return pdata
             else:
@@ -4982,17 +5009,21 @@ class PredBat(hass.Hass):
         if self.debug_enable:
             self.log("Download {}".format(url))
         r = requests.get(url)
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading futurerate data from url {}, code {}".format(url, r.status_code))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("WARN: Error downloading futurerate data from url {}".format(url))
-            self.record_status("Warn - Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Error downloading futurerate data from url {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
         if "data" in data:
             mdata = data["data"]
         else:
-            self.log("WARN: Error downloading futurerate data from url {}".format(url))
-            self.record_status("Warn - Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Error downloading futurerate data from url {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
         return mdata
 
@@ -5008,22 +5039,191 @@ class PredBat(hass.Hass):
             if self.debug_enable:
                 self.log("Download {}".format(url))
             r = requests.get(url)
+            if r.status_code not in [200, 201]:
+                self.log("Warn: Error downloading Octopus data from url {}, code {}".format(url, r.status_code))
+                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                return {}
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError:
-                self.log("WARN: Error downloading Octopus data from url {}".format(url))
-                self.record_status("Warn - Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                self.log("Warn: Error downloading Octopus data from url {}".format(url))
+                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
-                self.log("WARN: Error downloading Octopus data from url {}".format(url))
-                self.record_status("Warn - Error downloading Octopus data from cloud", debug=url, had_errors=True)
+                self.log("Warn: Error downloading Octopus data from url {}".format(url))
+                self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             url = data.get("next", None)
             pages += 1
         pdata = self.minute_data(mdata, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
+
+    def cache_get_url(self, url, params, max_age=8 * 60):
+        # Get data from cache
+        age_minutes = 0
+        data = None
+        hash = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
+        hash = hash.replace("/", "_")
+        hash = hash.replace(":", "_")
+        hash = hash.replace("?", "a")
+        hash = hash.replace("&", "b")
+        hash = hash.replace("*", "c")
+        cache_path = self.config_root + "/cache"
+        if not os.path.exists(cache_path):
+            os.makedirs(cache_path)
+
+        cache_filename = cache_path + "/" + hash + ".json"
+        if os.path.exists(cache_filename):
+            timestamp = os.path.getmtime(cache_filename)
+            age = datetime.now() - datetime.fromtimestamp(timestamp)
+            age_minutes = (age.seconds + age.days * 24 * 60) / 60
+
+            # Read cache data
+            with open(cache_filename) as f:
+                data = json.load(f)
+
+                if age_minutes < max_age:
+                    self.log("Return cached data for {} age {} minutes".format(url, self.dp1(age_minutes)))
+                    return data
+
+        # Perform fetch
+        self.log("Fetching {}".format(url))
+        r = requests.get(url, params=params)
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
+        else:
+            try:
+                data = r.json()
+            except requests.exceptions.JSONDecodeError as e:
+                self.log("Warn: Error downloading data from url {}, error {} code {}".format(url, e, r.status_code))
+                if data:
+                    self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
+                else:
+                    self.log("Warn: Error downloading data from url {}, no cached data".format(url))
+
+        # Store data in cache
+        if data:
+            self.log("Writing cache data for {} to cache file {}".format(url, cache_filename))
+            with open(cache_filename, "w") as f:
+                json.dump(data, f)
+        return data
+
+    def download_solcast_data(self):
+        """
+        Download solcast data directly from a URL or return from cache if recent.
+        """
+        self.solcast_api_limit = 0
+        self.solcast_api_used = 0
+        cache_path = self.config_root + "/cache"
+        host = self.args.get("solcast_host", None)
+        api_keys = self.args.get("solcast_api_key", None)
+        if not api_keys or not host:
+            self.log("Warn: Solcast API key or host not set")
+            return None
+
+        self.solcast_data = {}
+        cache_file = cache_path + "/solcast.json"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file) as f:
+                    self.solcast_data = json.load(f)
+            except Exception as e:
+                self.log("Warn: Error loading Solcast cache file {}".format(e))
+                os.remove(cache_file)
+
+        if isinstance(api_keys, str):
+            api_keys = [api_keys]
+
+        period_data = {}
+        max_age = self.get_arg("solcast_poll_hours", 8) * 60
+
+        for api_key in api_keys:
+            params = {"format": "json", "api_key": api_key.strip()}
+
+            url = f"{host}/json/reply/GetUserUsageAllowance"
+            data = self.cache_get_url(url, params, max_age=0)
+            if not data:
+                self.log("Warn: Solcast, could not access usage data, check your cloud settings")
+            else:
+                self.solcast_api_limit += data.get("daily_limit", None)
+                self.solcast_api_used += data.get("daily_limit_consumed", None)
+                self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
+
+            url = f"{host}/rooftop_sites"
+            data = self.cache_get_url(url, params, max_age=max_age)
+            if not data:
+                self.log("Warn: Solcast sites could not be downloaded, check your cloud settings")
+                continue
+
+            sites = data.get("sites", [])
+
+            for site in sites:
+                resource_id = site.get("resource_id", None)
+                if resource_id:
+                    self.log("Fetch data for resource id {}".format(resource_id))
+
+                    params = {"format": "json", "api_key": api_key.strip(), "hours": 168}
+                    url = f"{host}/rooftop_sites/{resource_id}/forecasts"
+                    data = self.cache_get_url(url, params, max_age=max_age)
+                    if not data:
+                        self.log("Warn: Solcast forecast data for site {} could not be downloaded, check your cloud settings".format(site))
+                        continue
+                    forecasts = data.get("forecasts", [])
+
+                    for forecast in forecasts:
+                        period_end = forecast.get("period_end", None)
+                        if period_end:
+                            period_end_stamp = datetime.strptime(period_end, TIME_FORMAT_SOLCAST)
+                            period_end_stamp.replace(tzinfo=pytz.utc)
+                            period_period = forecast.get("period", "PT30M")
+                            period_minutes = int(period_period[2:-1])
+                            period_start_stamp = period_end_stamp - timedelta(minutes=period_minutes)
+                            pv50 = forecast.get("pv_estimate", 0) / 60 * period_minutes
+                            pv10 = forecast.get("pv_estimate10", forecast.get("pv_estimate", 0)) / 60 * period_minutes
+                            pv90 = forecast.get("pv_estimate90", forecast.get("pv_estimate", 0)) / 60 * period_minutes
+
+                            data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_estimate90": pv90}
+                            if period_start_stamp in period_data:
+                                period_data[period_start_stamp]["pv_estimate"] += pv50
+                                period_data[period_start_stamp]["pv_estimate10"] += pv10
+                                period_data[period_start_stamp]["pv_estimate90"] += pv90
+                            else:
+                                period_data[period_start_stamp] = data_item
+
+        # Merge the new data into the cached data
+        new_data = {}
+        for key in period_data:
+            self.solcast_data[key.strftime(TIME_FORMAT)] = period_data[key]
+
+        # Prune old data from the cache
+        for key_txt in self.solcast_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            if key >= self.midnight_utc:
+                new_data[key_txt] = self.solcast_data[key_txt]
+        self.solcast_data = new_data
+
+        # Save to cache file
+        with open(cache_file, "w") as f:
+            json.dump(self.solcast_data, f)
+
+        # Fetch the final cached data as timestamps
+        period_data = {}
+        for key_txt in self.solcast_data:
+            key = datetime.strptime(key_txt, TIME_FORMAT)
+            period_data[key] = self.solcast_data[key_txt]
+
+        # Sort data and return
+        sorted_data = []
+        if period_data:
+            period_keys = list(period_data.keys())
+            period_keys.sort()
+            for key in period_keys:
+                sorted_data.append(period_data[key])
+
+        self.log("Solcast returned {} data points".format(len(sorted_data)))
+        return sorted_data
 
     def minutes_to_time(self, updated, now):
         """
@@ -5059,9 +5259,27 @@ class PredBat(hass.Hass):
         """
         return self.get_history(entity_id=entity_id, days=days)
 
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False):
+        """
+        Wrapper function to get state from HA
+        """
+        return self.ha_interface.get_state(entity_id=entity_id, default=default, attribute=attribute, refresh=refresh)
+
+    def set_state_wrapper(self, entity_id, state, attributes={}):
+        """
+        Wrapper function to get state from HA
+        """
+        return self.ha_interface.set_state(entity_id, state, attributes=attributes)
+
+    def call_service_wrapper(self, service, **kwargs):
+        """
+        Wrapper function to call a HA service
+        """
+        return self.ha_interface.call_service(service, **kwargs)
+
     def get_history_wrapper(self, entity_id, days=30):
         """
-        Async function to get history from HA using Async task
+        Wrapper function to get history from HA
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
 
@@ -5106,7 +5324,7 @@ class PredBat(hass.Hass):
                 )
             else:
                 self.log("Error: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error - Unable to fetch history from {}".format(entity_id), had_errors=True)
+                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
                 raise ValueError
 
         return import_today
@@ -5152,8 +5370,8 @@ class PredBat(hass.Hass):
                     required_unit=required_unit,
                 )
             else:
-                self.log("ERROR: Unable to fetch history for {}".format(entity_id))
-                self.record_status("Error - Unable to fetch history from {}".format(entity_id), had_errors=True)
+                self.log("Error: Unable to fetch history for {}".format(entity_id))
+                self.record_status("Error: Unable to fetch history from {}".format(entity_id), had_errors=True)
                 raise ValueError
 
         if age_days is None:
@@ -5612,13 +5830,13 @@ class PredBat(hass.Hass):
             if num_gaps > 0:
                 average_day = sum_days_id[days]
                 if (average_day == 0) or (num_gaps >= 24 * 60):
-                    self.log("WARN: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
+                    self.log("Warn: Historical day {} has no data, unable to fill gaps normally using nominal 24kWh - you should fix your system!".format(days))
                     average_day = 24.0
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                     average_day /= real_data_percent
                     self.log(
-                        "WARN: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
+                        "Warn: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
                             days, num_gaps, self.dp2(sum_days_id[days]), self.dp2(average_day), self.dp0(real_data_percent * 100.0)
                         )
                     )
@@ -5737,12 +5955,15 @@ class PredBat(hass.Hass):
                 "friendly_name": "Status",
                 "detail": extra,
                 "icon": "mdi:information",
-                "last_updated": datetime.now(),
+                "last_updated": str(datetime.now()),
                 "debug": debug,
                 "version": THIS_VERSION,
                 "error": (had_errors or self.had_errors),
             },
         )
+
+        self.log("Info: record_status {}".format(message + extra))
+
         self.previous_status = message
         if had_errors:
             self.had_errors = True
@@ -5755,11 +5976,11 @@ class PredBat(hass.Hass):
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * this_minute_absolute)
             dstamp = minute_timestamp.strftime(TIME_FORMAT)
             stamp = minute_timestamp.strftime("%H:%M")
-            if record_time[dstamp] > 0:
-                break
             if txt:
                 txt += ", "
             txt += "%8s" % str(stamp)
+            if record_time[dstamp] > 0:
+                break
         return txt
 
     def scenario_summary(self, record_time, datap):
@@ -5774,11 +5995,11 @@ class PredBat(hass.Hass):
                 value = self.dp2(value)
                 if value > 10000:
                     value = self.dp0(value)
-            if record_time[stamp] > 0:
-                break
             if txt:
                 txt += ", "
             txt += "%8s" % str(value)
+            if record_time[stamp] > 0:
+                break
         return txt
 
     def scenario_summary_state(self, record_time):
@@ -6006,7 +6227,7 @@ class PredBat(hass.Hass):
         load_count = 0
         load_min = 99999
         load_max = 0
-        look_over = 60 * 4
+        look_over = 60 * 8
 
         for minute in range(0, look_over, PREDICT_STEP):
             load, load_raw = self.get_filtered_load_minute(load_minutes, minute, historical=True, step=PREDICT_STEP)
@@ -6026,8 +6247,8 @@ class PredBat(hass.Hass):
             load_diff_total += load_diff
 
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = load_std_dev / load_mean
-        load_divergence = min(load_divergence, 2.0)
+        load_divergence = load_std_dev / load_mean / 2.0
+        load_divergence = min(load_divergence, 1.0)
         self.log(
             "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
                 look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
@@ -6051,7 +6272,7 @@ class PredBat(hass.Hass):
         pv_factor = None
         if pv_total > 0 and (pv_total > pv_total10):
             pv_diff = pv_total - pv_total10
-            pv_factor = self.dp2(pv_diff / pv_total)
+            pv_factor = self.dp2(pv_diff / pv_total) / 2.0
             pv_factor = min(pv_factor, 1.0)
 
         if self.metric_cloud_enable:
@@ -6083,7 +6304,7 @@ class PredBat(hass.Hass):
         values = {}
         cloud_diff = 0
 
-        for minute in range(0, self.forecast_minutes, step):
+        for minute in range(0, self.forecast_minutes + 30, step):
             value = 0
             minute_absolute = minute + minutes_now
 
@@ -6335,7 +6556,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".pv_power",
-                    state=self.dp3(0),
+                    state=self.dp3(self.pv_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_pv_power),
                         "today": self.filtered_today(predict_pv_power),
@@ -6347,7 +6568,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".grid_power",
-                    state=self.dp3(final_soc),
+                    state=self.dp3(0),
                     attributes={
                         "results": self.filtered_times(predict_grid_power),
                         "today": self.filtered_today(predict_grid_power),
@@ -6359,7 +6580,7 @@ class PredBat(hass.Hass):
                 )
                 self.dashboard_item(
                     self.prefix + ".load_power",
-                    state=self.dp3(final_soc),
+                    state=self.dp3(self.load_power / 1000.0),
                     attributes={
                         "results": self.filtered_times(predict_load_power),
                         "today": self.filtered_today(predict_load_power),
@@ -7112,14 +7333,14 @@ class PredBat(hass.Hass):
                 try:
                     start = datetime.strptime(start_str, "%H:%M:%S")
                 except ValueError:
-                    self.log("WARN: Bad start time {} provided in energy rates".format(start_str))
+                    self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
                     self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
                 try:
                     end = datetime.strptime(end_str, "%H:%M:%S")
                 except ValueError:
-                    self.log("WARN: Bad end time {} provided in energy rates".format(end_str))
+                    self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
                     self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
 
@@ -7129,7 +7350,7 @@ class PredBat(hass.Hass):
                     try:
                         date = datetime.strptime(date_str, "%Y-%m-%d")
                     except ValueError:
-                        self.log("WARN: Bad date {} provided in energy rates".format(this_rate["date"]))
+                        self.log("Warn: Bad date {} provided in energy rates".format(this_rate["date"]))
                         self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                         continue
 
@@ -7151,7 +7372,7 @@ class PredBat(hass.Hass):
                 try:
                     rate = float(rate)
                 except ValueError:
-                    self.log("WARN: Bad rate {} provided in energy rates".format(rate))
+                    self.log("Warn: Bad rate {} provided in energy rates".format(rate))
                     self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
                     continue
 
@@ -7210,7 +7431,7 @@ class PredBat(hass.Hass):
         max_price = self.car_charging_plan_max_price[car_n]
 
         if self.car_charging_plan_smart[car_n]:
-            price_sorted = self.sort_window_by_price(low_rates)
+            price_sorted = self.sort_window_by_price(low_rates, reverse_time=True)
             price_sorted.reverse()
         else:
             price_sorted = [n for n in range(len(low_rates))]
@@ -7219,7 +7440,7 @@ class PredBat(hass.Hass):
             ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
         except ValueError:
             ready_time = datetime.strptime("07:00:00", "%H:%M:%S")
-            self.log("WARN: Car charging plan time for car {} is invalid".format(car_n))
+            self.log("Warn: Car charging plan time for car {} is invalid".format(car_n))
 
         ready_minutes = ready_time.hour * 60 + ready_time.minute
 
@@ -7295,9 +7516,9 @@ class PredBat(hass.Hass):
                 new_slot = {}
                 new_slot["start"] = start
                 new_slot["end"] = end
-                new_slot["kwh"] = kwh
+                new_slot["kwh"] = self.dp3(kwh)
                 new_slot["average"] = window["average"]
-                new_slot["cost"] = new_slot["average"] * kwh
+                new_slot["cost"] = self.dp2(new_slot["average"] * kwh)
                 plan.append(new_slot)
 
         # Return sorted back in time order
@@ -7341,7 +7562,7 @@ class PredBat(hass.Hass):
                 except ValueError:
                     start = None
                     end = None
-                    self.log("WARN: Unable to decode Octopus saving session start/end time")
+                    self.log("Warn: Unable to decode Octopus saving session start/end time")
             if state and (not start or not end):
                 self.log("Currently in saving session, assume current 30 minute slot")
                 start_minutes = int(self.minutes_now / 30) * 30
@@ -7782,68 +8003,17 @@ class PredBat(hass.Hass):
 
             if rate_low_start >= 0:
                 if (return_raw or (rate_low_end > self.minutes_now)) and (rate_low_end - rate_low_start) >= rate_low_min_window:
+                    if rate_low_average < lowest:
+                        lowest = rate_low_average
+                    if rate_low_average > highest:
+                        highest = rate_low_average
+
                     found_rates.append(window)
                 minute = rate_low_end
             else:
                 break
 
-        # Raw data only?
-        if return_raw:
-            return found_rates, 0, 0
-
-        # Sort all windows by price
-        selected_rates = []
-        total = 0
-        window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(found_rates, [], stand_alone=True)
-        if not find_high:
-            price_set.reverse()
-
-        # For each price set in order, take windows newest and then oldest picks
-        take_enable = True
-        for loop_price in price_set:
-            these_items = price_links[loop_price].copy()
-            take_front = not find_high
-            take_position = 0
-            take_counter = 0
-            while these_items:
-                remaining = len(these_items)
-                take_position = take_position % remaining
-                if take_front:
-                    from_pos = take_position
-                    key = these_items.pop(take_position)
-                else:
-                    from_pos = remaining - (take_position) - 1
-                    key = these_items.pop(from_pos)
-
-                window_id = window_index[key]["id"]
-                window_price = found_rates[window_id]["average"]
-                window_start = found_rates[window_id]["start"]
-
-                # Only count those starting inside the window, those outside appear for 'free' as they won't be optimised
-                if window_start >= (self.minutes_now + self.forecast_minutes):
-                    selected_rates.append(window_id)
-                elif take_enable or (not find_high and window_start < upcoming_period) or window_start in self.manual_all_times:
-                    if window_price < lowest:
-                        lowest = window_price
-                    if window_price > highest:
-                        highest = window_price
-                    selected_rates.append(window_id)
-                    total += 1
-
-                # Take 60 minutes together and then move on to another group
-                if take_counter >= 2:
-                    take_position += 31
-                    take_counter = 0
-                else:
-                    take_counter += 1
-
-                if total >= self.calculate_max_windows:
-                    take_enable = False
-        selected_rates.sort()
-        final_rates = []
-        for window_id in selected_rates:
-            final_rates.append(found_rates[window_id])
-        return final_rates, lowest, highest
+        return found_rates, lowest, highest
 
     def set_rate_thresholds(self):
         """
@@ -8144,7 +8314,7 @@ class PredBat(hass.Hass):
                 symbol = "?"
         return symbol
 
-    def car_charge_slot_kwh(self, minute):
+    def car_charge_slot_kwh(self, minute_start, minute_end):
         """
         Work out car charging amount in KWh for given 30-minute slot
         """
@@ -8155,8 +8325,7 @@ class PredBat(hass.Hass):
                     start = window["start"]
                     end = window["end"]
                     kwh = self.dp2(window["kwh"]) / (end - start)
-                    for offset in range(0, 30, PREDICT_STEP):
-                        minute_offset = minute + offset
+                    for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
                         if minute_offset >= start and minute_offset < end:
                             car_charging_kwh += kwh * PREDICT_STEP
             car_charging_kwh = self.dp2(car_charging_kwh)
@@ -8229,9 +8398,11 @@ class PredBat(hass.Hass):
         for minute in range(minute_now_align, end_plan, 30):
             minute_relative = minute - self.minutes_now
             minute_relative_start = max(minute_relative, 0)
+            minute_start = minute_relative_start + self.minutes_now
             minute_relative_end = minute_relative + 30
+            minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = minute_relative_end
-            minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
+            minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
             rate_start = minute_timestamp
             rate_value_import = self.dp2(self.rate_import.get(minute, 0))
             rate_value_export = self.dp2(self.rate_export.get(minute, 0))
@@ -8248,12 +8419,12 @@ class PredBat(hass.Hass):
 
             show_limit = ""
 
-            for try_minute in range(minute, minute + 30, 5):
+            for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
                 if charge_window_n >= 0:
                     break
 
-            for try_minute in range(minute, minute + 30, 5):
+            for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
                 if discharge_window_n >= 0:
                     break
@@ -8287,11 +8458,11 @@ class PredBat(hass.Hass):
             load_forecast = 0
             pv_forecast10 = 0
             load_forecast10 = 0
-            for offset in range(0, 30, PREDICT_STEP):
-                pv_forecast += pv_forecast_minute_step.get(minute_relative + offset, 0.0)
-                load_forecast += load_minutes_step.get(minute_relative + offset, 0.0)
-                pv_forecast10 += pv_forecast_minute_step10.get(minute_relative + offset, 0.0)
-                load_forecast10 += load_minutes_step10.get(minute_relative + offset, 0.0)
+            for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
+                pv_forecast += pv_forecast_minute_step.get(offset, 0.0)
+                load_forecast += load_minutes_step.get(offset, 0.0)
+                pv_forecast10 += pv_forecast_minute_step10.get(offset, 0.0)
+                load_forecast10 += load_minutes_step10.get(offset, 0.0)
 
             pv_forecast = self.dp2(pv_forecast)
             load_forecast = self.dp2(load_forecast)
@@ -8489,7 +8660,7 @@ class PredBat(hass.Hass):
 
             # Car charging?
             if self.num_cars > 0:
-                car_charging_kwh = self.car_charge_slot_kwh(minute)
+                car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
@@ -9111,8 +9282,13 @@ class PredBat(hass.Hass):
         global PRED_GLOBAL
         PRED_GLOBAL["dict"] = None
 
+        self.define_service_list()
+        self.stop_thread = False
+        self.solcast_api_limit = None
+        self.solcast_api_used = None
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.pool = None
+        self.watch_list = []
         self.restart_active = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
@@ -9172,6 +9348,7 @@ class PredBat(hass.Hass):
         self.inverter_loss = 1.0
         self.inverter_hybrid = True
         self.inverter_soc_reset = False
+        self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
         self.best_soc_margin = 0
@@ -9205,6 +9382,8 @@ class PredBat(hass.Hass):
         self.export_today_now = 0
         self.pv_today = {}
         self.pv_today_now = 0
+        self.pv_power = 0
+        self.load_power = 0
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.charge_limit = []
@@ -9280,9 +9459,18 @@ class PredBat(hass.Hass):
         self.isCharging = False
         self.isDischarging = False
         self.savings_today_predbat = 0.0
+        self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
+        self.savings_today_actual = 0.0
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
+
+        self.config_root = "./"
+        for root in CONFIG_ROOTS:
+            if os.path.exists(root):
+                self.config_root = root
+                break
+        self.log("Config root is {}".format(self.config_root))
 
     def optimise_charge_limit_price(
         self,
@@ -9290,6 +9478,7 @@ class PredBat(hass.Hass):
         price_links,
         window_index,
         record_charge_windows,
+        record_discharge_windows,
         try_charge_limit,
         charge_window,
         discharge_window,
@@ -9307,6 +9496,7 @@ class PredBat(hass.Hass):
         best_price_discharge=None,
         best_cycle=0,
         best_carbon=0,
+        tried_list=None,
     ):
         """
         Pick an import price threshold which gives the best results
@@ -9322,10 +9512,16 @@ class PredBat(hass.Hass):
             best_price_charge = price_set[-1]
         if best_price_discharge is None:
             best_price_discharge = price_set[0]
-        tried_list = {}
         step = PREDICT_STEP
         if fast:
             step = 30
+        if tried_list is None:
+            tried_list = {}
+
+        if region_start:
+            region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
+        else:
+            region_txt = "All regions"
 
         # Do we loop on discharge?
         if self.calculate_best_discharge and self.calculate_discharge_first:
@@ -9343,7 +9539,7 @@ class PredBat(hass.Hass):
         window_prices_discharge = {}
         for loop_price in all_prices:
             for modulo in [2, 3, 4, 6, 8, 16, 32]:
-                for divide in [1, 2, 3, 4, 8, 16, 32, 96]:
+                for divide in [1, 2, 3, 4, 8, 16, 32, 48, 96]:
                     all_n = []
                     all_d = []
                     highest_price_charge = price_set[-1]
@@ -9393,6 +9589,9 @@ class PredBat(hass.Hass):
                         # This price band setting for charge
                         try_charge_limit = best_limits.copy()
                         for window_n in range(record_charge_windows):
+                            if window_n >= len(charge_window):
+                                continue
+
                             if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
                                 continue
 
@@ -9409,21 +9608,26 @@ class PredBat(hass.Hass):
                             if not all_d:
                                 continue
 
-                            for window_n in all_d:
+                            for window_n in range(record_discharge_windows):
+                                if window_n >= len(discharge_window):
+                                    continue
+
                                 if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
                                     continue
-                                hit_charge = self.hit_charge_window(
-                                    self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
-                                )
-                                if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
-                                    continue
-                                if not self.car_charging_from_battery and self.hit_car_window(
-                                    self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
-                                ):
-                                    continue
-                                if window_prices_discharge[window_n] < lowest_price_discharge:
-                                    lowest_price_discharge = window_prices_discharge[window_n]
-                                try_discharge[window_n] = 0
+
+                                if window_n in all_d:
+                                    hit_charge = self.hit_charge_window(
+                                        self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                    )
+                                    if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                        continue
+                                    if not self.car_charging_from_battery and self.hit_car_window(
+                                        self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                    ):
+                                        continue
+                                    if window_prices_discharge[window_n] < lowest_price_discharge:
+                                        lowest_price_discharge = window_prices_discharge[window_n]
+                                    try_discharge[window_n] = 0
 
                         # Skip this one as it's the same as selected already
                         try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
@@ -9515,8 +9719,10 @@ class PredBat(hass.Hass):
                                     )
                                 )
         self.log(
-            "Optimise all charge for all bands best price threshold {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+            "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+                region_txt,
                 self.dp4(best_price),
+                len(tried_list),
                 self.dp4(best_price_charge),
                 self.dp4(best_cost),
                 self.dp4(best_metric),
@@ -9529,7 +9735,271 @@ class PredBat(hass.Hass):
                 best_discharge,
             )
         )
-        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
+
+    def optimise_charge_limit_price_threads(
+        self,
+        price_set,
+        price_links,
+        window_index,
+        record_charge_windows,
+        record_discharge_windows,
+        try_charge_limit,
+        charge_window,
+        discharge_window,
+        discharge_limits,
+        end_record=None,
+        region_start=None,
+        region_end=None,
+        fast=False,
+        quiet=False,
+        best_metric=9999999,
+        best_cost=0,
+        best_keep=0,
+        best_soc_min=None,
+        best_price_charge=None,
+        best_price_discharge=None,
+        best_cycle=0,
+        best_carbon=0,
+        tried_list=None,
+    ):
+        """
+        Pick an import price threshold which gives the best results
+        """
+        loop_price = price_set[-1]
+        best_price = loop_price
+        try_discharge = discharge_limits.copy()
+        best_limits = try_charge_limit.copy()
+        best_discharge = try_discharge.copy()
+        if best_soc_min is None:
+            best_soc_min = self.reserve
+        if best_price_charge is None:
+            best_price_charge = price_set[-1]
+        if best_price_discharge is None:
+            best_price_discharge = price_set[0]
+        step = PREDICT_STEP
+        if fast:
+            step = 30
+        if tried_list is None:
+            tried_list = {}
+
+        if region_start:
+            region_txt = "Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end))
+        else:
+            region_txt = "All regions"
+
+        # Do we loop on discharge?
+        if self.calculate_best_discharge and self.calculate_discharge_first:
+            discharge_enable = True
+        else:
+            discharge_enable = False
+
+        # Most expensive first
+        all_prices = price_set[::] + [self.dp1(price_set[-1] - 1)]
+        if not quiet:
+            self.log("All prices {}".format(all_prices))
+            if region_start:
+                self.log("Region {} - {}".format(self.time_abs_str(region_start), self.time_abs_str(region_end)))
+        window_prices = {}
+        window_prices_discharge = {}
+
+        for loop_price in all_prices:
+            pred_table = []
+            for modulo in [2, 3, 4, 6, 8, 16, 32]:
+                for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
+                    all_n = []
+                    all_d = []
+                    divide_count_d = 0
+                    highest_price_charge = price_set[-1]
+                    lowest_price_discharge = price_set[0]
+                    for price in price_set:
+                        links = price_links[price]
+                        if loop_price >= price:
+                            for key in links:
+                                window_n = window_index[key]["id"]
+                                typ = window_index[key]["type"]
+                                if typ == "c":
+                                    window_prices[window_n] = price
+                                    all_n.append(window_n)
+                        elif discharge_enable:
+                            # For prices above threshold try discharge
+                            for key in links:
+                                typ = window_index[key]["type"]
+                                window_n = window_index[key]["id"]
+                                if typ == "d":
+                                    window_prices_discharge[window_n] = price
+                                    if (int(divide_count_d / divide) % modulo) == 0:
+                                        all_d.append(window_n)
+                                    divide_count_d += 1
+
+                    # Sort for print out
+                    all_n.sort()
+                    all_d.sort()
+
+                    # This price band setting for charge
+                    try_charge_limit = best_limits.copy()
+                    for window_n in range(record_charge_windows):
+                        if window_n >= len(try_charge_limit):
+                            continue
+
+                        if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                            continue
+
+                        if window_n in all_n:
+                            if window_prices[window_n] > highest_price_charge:
+                                highest_price_charge = window_prices[window_n]
+                            try_charge_limit[window_n] = self.soc_max
+                        else:
+                            try_charge_limit[window_n] = 0
+
+                    # Try discharge on/off
+                    try_discharge = best_discharge.copy()
+                    for window_n in range(record_discharge_windows):
+                        if window_n >= len(discharge_limits):
+                            continue
+
+                        if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                            continue
+
+                        try_discharge[window_n] = 100
+                        if window_n in all_d:
+                            hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
+                            if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                continue
+                            if not self.car_charging_from_battery and self.hit_car_window(
+                                self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                            ):
+                                continue
+                            if window_prices_discharge[window_n] < lowest_price_discharge:
+                                lowest_price_discharge = window_prices_discharge[window_n]
+                            try_discharge[window_n] = 0
+
+                    # Skip this one as it's the same as selected already
+                    try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
+                    if try_hash in tried_list:
+                        if self.debug_enable and 0:
+                            self.log(
+                                "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
+                                    divide, all_n, all_d, discharge_enable, try_hash
+                                )
+                            )
+                        continue
+
+                    tried_list[try_hash] = True
+
+                    pred_handle = self.launch_run_prediction_single(try_charge_limit, charge_window, discharge_window, try_discharge, False, end_record=end_record, step=step)
+                    pred_item = {}
+                    pred_item["handle"] = pred_handle
+                    pred_item["charge_limit"] = try_charge_limit.copy()
+                    pred_item["discharge_limit"] = try_discharge.copy()
+                    pred_item["highest_price_charge"] = highest_price_charge
+                    pred_item["lowest_price_discharge"] = lowest_price_discharge
+                    pred_item["loop_price"] = loop_price
+                    pred_table.append(pred_item)
+
+            for pred in pred_table:
+                handle = pred["handle"]
+                try_charge_limit = pred["charge_limit"]
+                try_discharge = pred["discharge_limit"]
+                highest_price_charge = pred["highest_price_charge"]
+                lowest_price_discharge = pred["lowest_price_discharge"]
+                loop_price = pred["loop_price"]
+                cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
+
+                metric, metric10 = self.compute_metric(
+                    end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, battery_cycle, metric_keep, metric_keep, final_carbon_g, final_carbon_g
+                )
+
+                # Optimise
+                if self.debug_enable:
+                    if discharge_enable:
+                        self.log(
+                            "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge on {}".format(
+                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), try_charge_limit, try_discharge
+                            )
+                        )
+                    else:
+                        self.log(
+                            "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} windows {} discharge off".format(
+                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), try_charge_limit
+                            )
+                        )
+
+                # For the first pass just pick the most cost effective threshold, consider soc keep later
+                if metric < best_metric:
+                    best_metric = metric
+                    best_keep = metric_keep
+                    best_price = loop_price
+                    best_price_charge = highest_price_charge
+                    best_price_discharge = lowest_price_discharge
+                    best_limits = try_charge_limit.copy()
+                    best_discharge = try_discharge.copy()
+                    best_cycle = battery_cycle
+                    best_carbon = final_carbon_g
+                    best_soc_min = soc_min
+                    best_cost = cost
+                    if 1 or not quiet:
+                        self.log(
+                            "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} cost {} limits {} discharge {}".format(
+                                loop_price,
+                                best_price_charge,
+                                self.dp4(best_cost),
+                                self.dp4(best_metric),
+                                self.dp4(best_keep),
+                                self.dp4(best_cycle),
+                                self.dp0(best_carbon),
+                                self.dp4(best_cost),
+                                best_limits,
+                                best_discharge,
+                            )
+                        )
+
+        if self.debug_enable:
+            self.log(
+                "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} cost {} soc_min {} limits {} discharge {}".format(
+                    region_txt,
+                    self.dp4(best_price),
+                    len(tried_list),
+                    self.dp4(best_price_charge),
+                    self.dp4(best_cost),
+                    self.dp4(best_metric),
+                    self.dp4(best_keep),
+                    self.dp4(best_cycle),
+                    self.dp0(best_carbon),
+                    self.dp4(best_cost),
+                    self.dp4(best_soc_min),
+                    best_limits,
+                    best_discharge,
+                )
+            )
+        if 0 and not region_start:
+            # Simulate with medium PV
+            (
+                cost,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+            ) = self.run_prediction(best_limits, charge_window, discharge_window, best_discharge, False, end_record=end_record, step=PREDICT_STEP, save="level")
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, tried_list
+
+    def launch_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step=PREDICT_STEP):
+        """
+        Launch a thread to run a prediction
+        """
+        charge_limit = copy.deepcopy(charge_limit)
+        discharge_limits = copy.deepcopy(discharge_limits)
+        if self.pool:
+            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
+        else:
+            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
+        return han
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
         """
@@ -9729,17 +10199,9 @@ class PredBat(hass.Hass):
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        metric -= (
-            (soc + final_iboost)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
-            * self.metric_battery_value_scaling
-        )
-        metric10 -= (
-            (soc10 + final_iboost10)
-            * max(rate_min, 1.0, self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle)
-            * self.metric_battery_value_scaling
-        )
-
+        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -10240,7 +10702,7 @@ class PredBat(hass.Hass):
 
             window_size = try_discharge_window[window_n]["end"] - start
             window_key = str(int(this_discharge_limit)) + "_" + str(window_size)
-            window_results[window_key] = self.dp2(metric)
+            window_results[window_key] = metric
 
             if all_n:
                 min_improvement_scaled = self.metric_min_improvement_discharge
@@ -10505,8 +10967,8 @@ class PredBat(hass.Hass):
                 energy = float(energy)
             except (ValueError, TypeError):
                 energy = 0.0
-                self.log("WARN: Bad energy value {} provided via trigger {}".format(energy, name))
-                self.record_status("ERROR: Bad energy value {} provided via trigger {}".format(energy, name), had_errors=True)
+                self.log("Warn: Bad energy value {} provided via trigger {}".format(energy, name))
+                self.record_status("Error: Bad energy value {} provided via trigger {}".format(energy, name), had_errors=True)
 
             for minute in range(0, minutes, step):
                 total_energy += predict_export[minute]
@@ -10595,7 +11057,7 @@ class PredBat(hass.Hass):
                                 )
 
             else:
-                self.log("WARN: Clip charge window {} as it's already passed".format(window_n))
+                self.log("Warn: Clip charge window {} as it's already passed".format(window_n))
                 charge_limit_best[window_n] = self.best_soc_min
         return charge_window_best, charge_limit_best
 
@@ -10654,7 +11116,7 @@ class PredBat(hass.Hass):
                                     )
                                 )
             else:
-                self.log("WARN: Clip discharge window {} as it's already passed".format(window_n))
+                self.log("Warn: Clip discharge window {} as it's already passed".format(window_n))
                 discharge_limits_best[window_n] = 100
         return discharge_window_best, discharge_limits_best
 
@@ -10777,11 +11239,13 @@ class PredBat(hass.Hass):
                 best_soc_min,
                 best_cycle,
                 best_carbon,
-            ) = self.optimise_charge_limit_price(
+                tried_list,
+            ) = self.optimise_charge_limit_price_threads(
                 price_set,
                 price_links,
                 window_index,
                 record_charge_windows,
+                record_discharge_windows,
                 self.charge_limit_best,
                 self.charge_window_best,
                 self.discharge_window_best,
@@ -10795,31 +11259,35 @@ class PredBat(hass.Hass):
                 region_size = int(16 * 60)
                 while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    for region in range(0, self.end_record, region_size):
-                        region_end = min(region + region_size, self.end_record)
+                    for region in range(0, self.end_record + self.minutes_now, region_size):
+                        region_end = min(region + region_size, self.end_record + self.minutes_now)
+                        if region_end < self.minutes_now:
+                            continue
                         (
                             self.charge_limit_best,
-                            ignore_discharge_limits2,
-                            best_price_region,
-                            best_price_discharge_region,
+                            ignore_discharge_limits,
+                            ignore_best_price,
+                            ignore_best_price_discharge,
                             best_metric,
                             best_cost,
                             best_keep,
                             best_soc_min,
                             best_cycle,
                             best_carbon,
-                        ) = self.optimise_charge_limit_price(
+                            tried_list,
+                        ) = self.optimise_charge_limit_price_threads(
                             price_set,
                             price_links,
                             window_index,
                             record_charge_windows,
+                            record_discharge_windows,
                             self.charge_limit_best,
                             self.charge_window_best,
                             self.discharge_window_best,
                             ignore_discharge_limits,
                             end_record=self.end_record,
-                            region_start=region + self.minutes_now,
-                            region_end=region_end + self.minutes_now,
+                            region_start=region,
+                            region_end=region_end,
                             fast=fast_mode,
                             quiet=True,
                             best_metric=best_metric,
@@ -10830,6 +11298,7 @@ class PredBat(hass.Hass):
                             best_price_discharge=best_price_discharge,
                             best_cycle=best_cycle,
                             best_carbon=best_carbon,
+                            tried_list=tried_list,
                         )
                     region_size = int(region_size / 2)
 
@@ -10862,8 +11331,8 @@ class PredBat(hass.Hass):
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log(
-            "Starting second optimisation best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} based on".format(
-                best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
+            "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {}".format(
+                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
             )
         )
         for pass_type in ["freeze", "normal", "low"]:
@@ -11282,14 +11751,14 @@ class PredBat(hass.Hass):
             attribute = "detailedForecast"
             entity_id = self.get_arg(argname, None, indirect=False)
             if entity_id:
-                result = self.get_state(entity_id=entity_id, attribute=attribute)
+                result = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 if not result:
                     attribute = "forecast"
                 try:
-                    data = self.get_state(entity_id=self.get_arg(argname, indirect=False), attribute=attribute)
+                    data = self.get_state_wrapper(entity_id=self.get_arg(argname, indirect=False), attribute=attribute)
                 except (ValueError, TypeError):
-                    self.log("WARN: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))
-                    self.record_status("Error - {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
+                    self.log("Warn: Unable to fetch solar forecast data from sensor {} check your setting of {}".format(self.get_arg(argname, indirect=False), argname))
+                    self.record_status("Error: {} not be set correctly, check apps.yaml", debug=self.get_arg(argname, indirect=False), had_errors=True)
 
             # Solcast new vs old version
             # check the total vs the sum of 30 minute slots and work out scale factor
@@ -11316,7 +11785,7 @@ class PredBat(hass.Hass):
                     entity_id, attribute = entity_id.split("$")
                 try:
                     self.log("Loading extra load forecast from {} attribute {}".format(entity_id, attribute))
-                    data = self.get_state(entity_id=entity_id, attribute=attribute)
+                    data = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
                 except (ValueError, TypeError) as e:
                     self.log("Error: Unable to fetch load forecast data from sensor {} exception {}".format(entity_id, e))
                     data = None
@@ -11351,12 +11820,122 @@ class PredBat(hass.Hass):
                         )
                     )
                 else:
-                    self.log("WARN: Unable to load load forecast from {}".format(entity_id))
+                    self.log("Warn: Unable to load load forecast from {}".format(entity_id))
         return load_forecast
+
+    def publish_pv_stats(self, pv_forecast_data, divide_by, period):
+        """
+        Publish some PV stats
+        """
+
+        total_left_today = 0
+        total_left_today10 = 0
+        total_left_today90 = 0
+        forecast_day = {}
+        total_day = {}
+        total_day10 = {}
+        total_day90 = {}
+        days = 0
+
+        midnight_today = self.midnight_utc
+        now = self.now_utc
+
+        power_scale = 60 / period / divide_by  # Scale kwh to power
+
+        for entry in pv_forecast_data:
+            this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
+            if this_point >= midnight_today:
+                day = (this_point - midnight_today).days
+                if day not in total_day:
+                    total_day[day] = 0
+                    total_day10[day] = 0
+                    total_day90[day] = 0
+                    forecast_day[day] = []
+                    days = max(days, day + 1)
+
+                pv_estimate = entry.get("pv_estimate", 0)
+                pv_estimate10 = entry.get("pv_estimate10", pv_estimate)
+                pv_estimate90 = entry.get("pv_estimate90", pv_estimate)
+
+                pv_estimate /= divide_by
+                pv_estimate10 /= divide_by
+                pv_estimate90 /= divide_by
+
+                total_day[day] += pv_estimate
+                total_day10[day] += pv_estimate10
+                total_day90[day] += pv_estimate90
+
+                if day == 0 and this_point >= now:
+                    total_left_today += pv_estimate
+                    total_left_today10 += pv_estimate10
+                    total_left_today90 += pv_estimate90
+
+                fentry = {
+                    "period_start": entry["period_start"],
+                    "pv_estimate": self.dp2(entry["pv_estimate"] * power_scale),
+                    "pv_estimate10": self.dp2(entry["pv_estimate10"] * power_scale),
+                    "pv_estimate90": self.dp2(entry["pv_estimate90"] * power_scale),
+                }
+                forecast_day[day].append(fentry)
+
+        days = min(days, 7)
+        for day in range(days):
+            if day == 0:
+                self.log(
+                    "PV Forecast for today is {} ({} 10% {} 90%) kWh and left today is {} ({} 10% {} 90%) kWh".format(
+                        self.dp2(total_day[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_day10[day]),
+                        self.dp2(total_left_today),
+                        self.dp2(total_left_today10),
+                        self.dp2(total_left_today90),
+                    )
+                )
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_today",
+                    state=self.dp2(total_day[day]),
+                    attributes={
+                        "friendly_name": "PV today",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                        "device_class": "energy",
+                        "total": self.dp2(total_day[day]),
+                        "total10": self.dp2(total_day10[day]),
+                        "total90": self.dp2(total_day90[day]),
+                        "remaining": self.dp2(total_left_today),
+                        "remaining10": self.dp2(total_left_today10),
+                        "remaining90": self.dp2(total_left_today90),
+                        "detailedForecast": forecast_day[day],
+                        "api_limit": self.solcast_api_limit,
+                        "api_used": self.solcast_api_used,
+                    },
+                )
+            else:
+                day_name = "tomorrow" if day == 1 else "d{}".format(day)
+                day_name_long = day_name if day == 1 else "day {}".format(day)
+                self.log("PV Forecast for day {} is {} ({} 10% {} 90%) kWh".format(day_name, self.dp2(total_day[day]), self.dp2(total_day10[day]), self.dp2(total_day10[day])))
+
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_" + day_name,
+                    state=self.dp2(total_day[day]),
+                    attributes={
+                        "friendly_name": "PV " + day_name_long,
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:solar-power",
+                        "device_class": "energy",
+                        "total": self.dp2(total_day[day]),
+                        "total10": self.dp2(total_day10[day]),
+                        "total90": self.dp2(total_day90[day]),
+                        "detailedForecast": forecast_day[day],
+                    },
+                )
 
     def fetch_pv_forecast(self):
         """
         Fetch the PV Forecast data from Solcast
+        either via HA or direct to their cloud
         """
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
@@ -11364,30 +11943,39 @@ class PredBat(hass.Hass):
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
 
-        # Fetch data from each sensor
-        for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
-            data, total_data, total_sensor = self.fetch_pv_datapoints(argname)
-            if data:
-                self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
-                pv_forecast_data += data
-                pv_forecast_total_data += total_data
-                pv_forecast_total_sensor += total_sensor
+        if "solcast_host" in self.args:
+            self.log("Using solcast cloud")
+            pv_forecast_data = self.download_solcast_data()
+            divide_by = 30.0
+        else:
+            self.log("Using solcast from inside HA")
 
-        # Work out data scale factor so it adds up (New Solcast is in kW but old was kWH)
-        factor = 1.0
-        if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
-            factor = round((pv_forecast_total_data / pv_forecast_total_sensor), 1)
-        # We want to divide the data into single minute slots
-        divide_by = self.dp2(30 * factor)
+            # Fetch data from each sensor
+            for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
+                data, total_data, total_sensor = self.fetch_pv_datapoints(argname)
+                if data:
+                    self.log("PV Data for {} total {} kWh".format(argname, total_sensor))
+                    pv_forecast_data += data
+                    pv_forecast_total_data += total_data
+                    pv_forecast_total_sensor += total_sensor
 
-        if factor != 1.0 and factor != 2.0:
-            self.log(
-                "WARN: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(
-                    pv_forecast_total_data, pv_forecast_total_sensor, factor
+            # Work out data scale factor so it adds up (New Solcast is in kW but old was kWH)
+            factor = 1.0
+            if pv_forecast_total_data > 0.0 and pv_forecast_total_sensor > 0.0:
+                factor = round((pv_forecast_total_data / pv_forecast_total_sensor), 1)
+            # We want to divide the data into single minute slots
+            divide_by = self.dp2(30 * factor)
+
+            if factor != 1.0 and factor != 2.0:
+                self.log(
+                    "Warn: PV Forecast data adds up to {} kWh but total sensors add up to {} kWh, this is unexpected and hence data maybe misleading (factor {})".format(
+                        pv_forecast_total_data, pv_forecast_total_sensor, factor
+                    )
                 )
-            )
 
         if pv_forecast_data:
+            self.publish_pv_stats(pv_forecast_data, divide_by / 30.0, 30)
+
             pv_estimate = self.get_arg("pv_estimate", default="")
             if pv_estimate is None:
                 pv_estimate = "pv_estimate"
@@ -11417,7 +12005,7 @@ class PredBat(hass.Hass):
                 spreading=30,
             )
         else:
-            self.log("WARN: No solar data has been configured.")
+            self.log("Warn: No solar data has been configured.")
 
         return pv_forecast_minute, pv_forecast_minute10
 
@@ -11632,7 +12220,7 @@ class PredBat(hass.Hass):
         # Get SOC history to find yesterday SOC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
         if not soc_kwh_data:
-            self.log("WARN: No SOC data found for yesterday")
+            self.log("Warn: No SOC data found for yesterday")
             return
         soc_kwh = self.minute_data(
             soc_kwh_data[0],
@@ -11647,7 +12235,10 @@ class PredBat(hass.Hass):
             scale=1.0,
             required_unit="kWh",
         )
-        soc_yesterday = soc_kwh.get(24 * 60 + self.minutes_now, 0.0)
+        try:
+            soc_yesterday = float(self.get_state_wrapper(self.prefix + ".savings_total_soc", default=0.0))
+        except (ValueError, TypeError):
+            soc_yesterday = 0.0
 
         # Shift rates back
         past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)
@@ -11666,7 +12257,7 @@ class PredBat(hass.Hass):
         # Get Cost yesterday
         cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2)
         if not cost_today_data:
-            self.log("WARN: No cost_today data for yesterday")
+            self.log("Warn: No cost_today data for yesterday")
             return
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
@@ -11703,6 +12294,8 @@ class PredBat(hass.Hass):
         soc_max = self.soc_max
         rate_import = self.rate_import
         rate_export = self.rate_export
+        iboost_enable = self.iboost_enable
+        num_cars = self.num_cars
 
         # Fake to yesterday state
         self.minutes_now = 0
@@ -11718,25 +12311,44 @@ class PredBat(hass.Hass):
         self.load_minutes_now = 0
         self.rate_import = past_rates
         self.rate_export = past_rates_export
+        self.iboost_enable = False
+        self.num_cars = 0
 
         # Simulate yesterday
         self.prediction = Prediction(self, yesterday_pv_step, yesterday_pv_step, yesterday_load_step, yesterday_load_step)
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit_best, charge_window_best, [], [], False, end_record=24 * 60
-        )
+        (
+            metric,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            soc_min,
+            final_soc,
+            soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+        ) = self.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=(24 * 60), save="yesterday")
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.log(
-            "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} iboost {}".format(
+            "Yesterday: Predbat disabled was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} start_soc {} final_soc {}".format(
                 self.dp2(metric),
                 self.dp2(cost_yesterday),
                 self.dp2(saving),
                 self.dp2(import_kwh_house + import_kwh_battery),
                 self.dp2(export_kwh),
                 self.dp2(battery_cycle),
-                self.dp2(final_iboost),
+                self.dp2(soc_yesterday),
+                self.dp2(final_soc),
             )
         )
         self.savings_today_predbat = saving
+        self.savings_today_predbat_soc = final_soc
+        self.savings_today_actual = cost_yesterday
 
         # Save state
         self.dashboard_item(
@@ -11746,7 +12358,8 @@ class PredBat(hass.Hass):
                 "import": self.dp2(import_kwh_house + import_kwh_battery),
                 "export": self.dp2(export_kwh),
                 "battery_cycle": self.dp2(battery_cycle),
-                "iboost": self.dp2(final_iboost),
+                "soc_yesterday": self.dp2(soc_yesterday),
+                "final_soc": self.dp2(final_soc),
                 "actual_cost": self.dp2(cost_yesterday),
                 "predicted_cost": self.dp2(metric),
                 "friendly_name": "Predbat savings yesterday",
@@ -11764,17 +12377,15 @@ class PredBat(hass.Hass):
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             [], [], [], [], False, end_record=24 * 60
         )
+        # Add back in standing charge which will be in the historical data also
+        metric += self.metric_standing_charge
+
+        # Work out savings
         saving = metric - cost_yesterday
         self.savings_today_pvbat = saving
         self.log(
-            "Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {} battery_cycle {} iboost {}".format(
-                self.dp2(metric),
-                self.dp2(cost_yesterday),
-                self.dp2(saving),
-                self.dp2(import_kwh_house + import_kwh_battery),
-                self.dp2(export_kwh),
-                self.dp2(battery_cycle),
-                self.dp2(final_iboost),
+            "Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(
+                self.dp2(metric), self.dp2(cost_yesterday), self.dp2(saving), self.dp2(import_kwh_house + import_kwh_battery), self.dp2(export_kwh)
             )
         )
 
@@ -11786,7 +12397,6 @@ class PredBat(hass.Hass):
                 "import": self.dp2(import_kwh_house + import_kwh_battery),
                 "export": self.dp2(export_kwh),
                 "battery_cycle": self.dp2(battery_cycle),
-                "iboost": self.dp2(final_iboost),
                 "actual_cost": self.dp2(cost_yesterday),
                 "predicted_cost": self.dp2(metric),
                 "friendly_name": "PV/Battery system savings yesterday",
@@ -11811,6 +12421,8 @@ class PredBat(hass.Hass):
         self.soc_max = soc_max
         self.rate_import = rate_import
         self.rate_export = rate_export
+        self.iboost_enable = iboost_enable
+        self.num_cars = num_cars
 
     def calculate_plan(self, recompute=True):
         """
@@ -11818,7 +12430,7 @@ class PredBat(hass.Hass):
 
         sets:
            self.charge_window_best
-           self.charge_limits_best
+           self.charge_limit_best
            self.charge_limit_percent_best
            self.discharge_window_best
            self.discharge_limits_best
@@ -12328,11 +12940,19 @@ class PredBat(hass.Hass):
                                 )
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            self.log(
-                                "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {}".format(
-                                    self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                            if not self.inverter_set_charge_before:
+                                self.log(
+                                    "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
+                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                    )
                                 )
-                            )
+                                inverter.disable_charge_window()
+                            else:
+                                self.log(
+                                    "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {})".format(
+                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                    )
+                                )
 
                     # Set configured window minutes for the SOC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
@@ -12342,7 +12962,11 @@ class PredBat(hass.Hass):
                     self.log("No charge window required for 24-hours, disabling before the start")
                     inverter.disable_charge_window()
                 else:
-                    self.log("No change to charge window yet, waiting for schedule.")
+                    if not self.inverter_set_charge_before:
+                        self.log("No change to charge window yet, disabled while waiting for schedule.")
+                        inverter.disable_charge_window()
+                    else:
+                        self.log("No change to charge window yet, waiting for schedule.")
             elif self.set_charge_window and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
                 # No charge windows
                 self.log("No charge windows found, disabling before the start")
@@ -12386,7 +13010,7 @@ class PredBat(hass.Hass):
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + discharge_adjust))  # Add in 1 minute margin to allow Predbat to restore ECO mode
-                discharge_soc = (self.discharge_limits_best[0] * self.soc_max) / 100.0
+                discharge_soc = max((self.discharge_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
@@ -12492,7 +13116,7 @@ class PredBat(hass.Hass):
                 elif (
                     self.charge_limit_best
                     and (self.minutes_now < inverter.charge_end_time_minutes)
-                    and ((inverter.charge_start_time_minutes - self.minutes_now) < self.set_soc_minutes)
+                    and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes)
                     and not (disabled_charge_window)
                 ):
                     if inverter.inv_has_charge_enable_time or isCharging:
@@ -12604,12 +13228,12 @@ class PredBat(hass.Hass):
 
         if entity_id:
             self.log("Fetching carbon intensity data from {}".format(entity_id))
-            data_all = self.get_state(entity_id=entity_id, attribute="forecast")
+            data_all = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
             if data_all:
                 carbon_data = self.minute_data(data_all, self.forecast_days, self.now_utc, "intensity", "from", backwards=False, to_key="to")
 
         entity_id = self.prefix + ".carbon_now"
-        state = self.get_state(entity_id=entity_id)
+        state = self.get_state_wrapper(entity_id=entity_id)
         if state is not None:
             try:
                 carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
@@ -12635,22 +13259,22 @@ class PredBat(hass.Hass):
             # and the sensor is replaced with an event - try to support the old settings and find the new events
 
             if self.debug_enable:
-                self.log("Info: Fetch Octopus rates from {}".format(entity_id))
+                self.log("Fetch Octopus rates from {}".format(entity_id))
 
             # Previous rates
             if "_current_rate" in entity_id:
                 # Try as event
                 prev_rate_id = entity_id.replace("_current_rate", "_previous_day_rates").replace("sensor.", "event.")
-                data_import = self.get_state(entity_id=prev_rate_id, attribute="rates")
+                data_import = self.get_state_wrapper(entity_id=prev_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
                 else:
                     prev_rate_id = entity_id.replace("_current_rate", "_previous_rate")
-                    data_import = self.get_state(entity_id=prev_rate_id, attribute="all_rates")
+                    data_import = self.get_state_wrapper(entity_id=prev_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
                     else:
-                        self.log("WARN: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
+                        self.log("Warn: No Octopus data in sensor {} attribute 'all_rates'".format(prev_rate_id))
 
             # Current rates
             if "_current_rate" in entity_id:
@@ -12659,29 +13283,29 @@ class PredBat(hass.Hass):
                 current_rate_id = entity_id
 
             data_import = (
-                self.get_state(entity_id=current_rate_id, attribute="rates")
-                or self.get_state(entity_id=current_rate_id, attribute="all_rates")
-                or self.get_state(entity_id=current_rate_id, attribute="raw_today")
+                self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="all_rates")
+                or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
             )
             if data_import:
                 data_all += data_import
             else:
-                self.log("WARN: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
+                self.log("Warn: No Octopus data in sensor {} attribute 'all_rates' / 'rates' / 'raw_today'".format(current_rate_id))
 
             # Next rates
             if "_current_rate" in entity_id:
                 next_rate_id = entity_id.replace("_current_rate", "_next_day_rates").replace("sensor.", "event.")
-                data_import = self.get_state(entity_id=next_rate_id, attribute="rates")
+                data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="rates")
                 if data_import:
                     data_all += data_import
                 else:
                     next_rate_id = entity_id.replace("_current_rate", "_next_rate")
-                    data_import = self.get_state(entity_id=next_rate_id, attribute="all_rates")
+                    data_import = self.get_state_wrapper(entity_id=next_rate_id, attribute="all_rates")
                     if data_import:
                         data_all += data_import
             else:
                 # Nordpool tomorrow
-                data_import = self.get_state(entity_id=current_rate_id, attribute="raw_tomorrow")
+                data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_tomorrow")
                 if data_import:
                     data_all += data_import
 
@@ -12754,12 +13378,12 @@ class PredBat(hass.Hass):
                 self.load_minutes_now = max(self.load_minutes.get(0, 0) - self.load_minutes.get(self.minutes_now, 0), 0)
             else:
                 if self.load_forecast:
-                    self.log("Info: Using load forecast from load_forecast sensor")
+                    self.log("Using load forecast from load_forecast sensor")
                     self.load_minutes_now = self.load_forecast.get(0, 0)
                     self.load_minutes_age = 0
                 else:
                     self.log("Error: You have not set load_today or load_forecast, you will have no load data")
-                    self.record_status(message="Error - load_today not set correctly", had_errors=True)
+                    self.record_status(message="Error: load_today not set correctly", had_errors=True)
                     raise ValueError
 
             # Load import today data
@@ -12767,21 +13391,21 @@ class PredBat(hass.Hass):
                 self.import_today = self.minute_data_import_export(self.now_utc, "import_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.import_today_now = max(self.import_today.get(0, 0) - self.import_today.get(self.minutes_now, 0), 0)
             else:
-                self.log("WARN: You have not set import_today in apps.yaml, you will have no previous import data")
+                self.log("Warn: You have not set import_today in apps.yaml, you will have no previous import data")
 
             # Load export today data
             if "export_today" in self.args:
                 self.export_today = self.minute_data_import_export(self.now_utc, "export_today", scale=self.import_export_scaling, required_unit="kWh")
                 self.export_today_now = max(self.export_today.get(0, 0) - self.export_today.get(self.minutes_now, 0), 0)
             else:
-                self.log("WARN: You have not set export_today in apps.yaml, you will have no previous export data")
+                self.log("Warn: You have not set export_today in apps.yaml, you will have no previous export data")
 
             # PV today data
             if "pv_today" in self.args:
                 self.pv_today = self.minute_data_import_export(self.now_utc, "pv_today", required_unit="kWh")
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
-                self.log("WARN: You have not set pv_today in apps.yaml, you will have no previous pv data")
+                self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
@@ -12806,7 +13430,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
             if not self.rate_import:
                 self.log("Error: metric_octopus_import is not set correctly or no energy rates can be read")
-                self.record_status(message="Error - metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
+                self.record_status(message="Error: metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
         else:
             # Basic rates defined by user over time
@@ -12818,7 +13442,7 @@ class PredBat(hass.Hass):
             self.rate_gas = self.fetch_octopus_rates(entity_id)
             if not self.rate_gas:
                 self.log("Error: metric_octopus_gas is not set correctly or no energy rates can be read")
-                self.record_status(message="Error - rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
+                self.record_status(message="Error: rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
@@ -12843,13 +13467,15 @@ class PredBat(hass.Hass):
             vehicle_pref = {}
             entity_id = self.get_arg("octopus_intelligent_slot", indirect=False)
             try:
-                completed = self.get_state(entity_id=entity_id, attribute="completedDispatches") or self.get_state(entity_id=entity_id, attribute="completed_dispatches")
-                planned = self.get_state(entity_id=entity_id, attribute="plannedDispatches") or self.get_state(entity_id=entity_id, attribute="planned_dispatches")
-                vehicle = self.get_state(entity_id=entity_id, attribute="registeredKrakenflexDevice")
-                vehicle_pref = self.get_state(entity_id=entity_id, attribute="vehicleChargingPreferences")
+                completed = self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches") or self.get_state_wrapper(
+                    entity_id=entity_id, attribute="completed_dispatches"
+                )
+                planned = self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches")
+                vehicle = self.get_state_wrapper(entity_id=entity_id, attribute="registeredKrakenflexDevice")
+                vehicle_pref = self.get_state_wrapper(entity_id=entity_id, attribute="vehicleChargingPreferences")
             except (ValueError, TypeError):
-                self.log("WARN: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
-                self.record_status(message="Error - octopus_intelligent_slot not set correctly", had_errors=True)
+                self.log("Warn: Unable to get data from {} - octopus_intelligent_slot may not be set correctly".format(entity_id))
+                self.record_status(message="Error: octopus_intelligent_slot not set correctly", had_errors=True)
 
             # Completed and planned slots
             if completed:
@@ -12867,8 +13493,8 @@ class PredBat(hass.Hass):
                     self.car_charging_battery_size[0] = float(vehicle.get("vehicleBatterySizeInKwh", self.car_charging_battery_size[0]))
                     self.car_charging_rate[0] = float(vehicle.get("chargePointPowerInKw", self.car_charging_rate[0]))
                 else:
-                    size = self.get_state(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
-                    rate = self.get_state(entity_id=entity_id, attribute="charge_point_power_in_kw")
+                    size = self.get_state_wrapper(entity_id=entity_id, attribute="vehicle_battery_size_in_kwh")
+                    rate = self.get_state_wrapper(entity_id=entity_id, attribute="charge_point_power_in_kw")
                     if size:
                         self.car_charging_battery_size[0] = size
                     if rate:
@@ -12944,7 +13570,7 @@ class PredBat(hass.Hass):
             self.rate_export = self.fetch_octopus_rates(entity_id)
             if not self.rate_export:
                 self.log("Warning: metric_octopus_export is not set correctly or no energy rates can be read")
-                self.record_status(message="Error - metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
+                self.record_status(message="Error: metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "export")
@@ -12959,12 +13585,12 @@ class PredBat(hass.Hass):
             if entity_id:
                 state = self.get_arg("octopus_saving_session", False)
 
-                joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
                 if not joined_events:
                     entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
-                    joined_events = self.get_state(entity_id=entity_id, attribute="joined_events")
+                    joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
 
-                available_events = self.get_state(entity_id=entity_id, attribute="available_events")
+                available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
                 if available_events:
                     for event in available_events:
                         code = event.get("code", None)  # decode the available events structure for code, start/end time & rate
@@ -13042,7 +13668,7 @@ class PredBat(hass.Hass):
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
-            self.record_status(message="Error - No import rate data provided", had_errors=True)
+            self.record_status(message="Error: No import rate data provided", had_errors=True)
 
         # Replicate and scan export rates
         if self.rate_export:
@@ -13056,7 +13682,7 @@ class PredBat(hass.Hass):
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
-            self.record_status(message="Error - No export rate data provided", had_errors=True)
+            self.record_status(message="Error: No export rate data provided", had_errors=True)
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -13172,6 +13798,8 @@ class PredBat(hass.Hass):
         self.battery_rate_min = 0
         self.charge_rate_now = 0.0
         self.discharge_rate_now = 0.0
+        self.pv_power = 0
+        self.load_power = 0
         found_first = False
 
         # For each inverter get the details
@@ -13227,6 +13855,8 @@ class PredBat(hass.Hass):
             self.inverters.append(inverter)
             self.inverter_limit += inverter.inverter_limit
             self.export_limit += inverter.export_limit
+            self.pv_power += inverter.pv_power
+            self.load_power += inverter.load_power
 
         # Remove extra decimals
         self.soc_max = self.dp2(self.soc_max)
@@ -13385,21 +14015,15 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg("debug_enable")
-        self.previous_status = self.get_state(self.prefix + ".status")
-        forecast_hours = self.get_arg("forecast_hours", 48)
-        self.calculate_fast_plan = self.get_arg("calculate_fast_plan")
-
-        if self.calculate_fast_plan:
-            self.calculate_max_windows = max(int(forecast_hours), 12)
-        else:
-            self.calculate_max_windows = max(int(forecast_hours * 2), 24)
+        self.previous_status = self.get_state_wrapper(self.prefix + ".status")
+        forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
 
         self.log(
-            "Configuration: forecast_hours {} max_windows {} num_cars {} debug enable is {} calculate_plan_every {} calculate_fast_plan {}".format(
-                forecast_hours, self.calculate_max_windows, self.num_cars, self.debug_enable, self.calculate_plan_every, self.calculate_fast_plan
+            "Configuration: forecast_hours {} num_cars {} debug enable is {} calculate_plan_every {}".format(
+                forecast_hours, self.num_cars, self.debug_enable, self.calculate_plan_every
             )
         )
 
@@ -13472,7 +14096,7 @@ class PredBat(hass.Hass):
             # Check power curve is a dictionary
             if not isinstance(self.battery_charge_power_curve, dict):
                 self.battery_charge_power_curve = {}
-                self.log("WARN: battery_charge_power_curve is incorrectly configured - ignoring")
+                self.log("Warn: battery_charge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_charge_power_curve is incorrectly configured - ignoring", had_errors=True)
 
         # Discharge curve
@@ -13484,7 +14108,7 @@ class PredBat(hass.Hass):
             # Check power curve is a dictionary
             if not isinstance(self.battery_discharge_power_curve, dict):
                 self.battery_discharge_power_curve = {}
-                self.log("WARN: battery_discharge_power_curve is incorrectly configured - ignoring")
+                self.log("Warn: battery_discharge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
@@ -13494,6 +14118,10 @@ class PredBat(hass.Hass):
         self.best_soc_keep = self.get_arg("best_soc_keep")
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
+        self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")
+        if not self.inverter_set_charge_before:
+            self.set_soc_minutes = 0
+            self.set_window_minutes = 0
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.get_car_charging_planned()
@@ -13502,8 +14130,8 @@ class PredBat(hass.Hass):
         self.combine_rate_threshold = self.get_arg("combine_rate_threshold")
         self.combine_discharge_slots = self.get_arg("combine_discharge_slots")
         self.combine_charge_slots = self.get_arg("combine_charge_slots")
-        self.charge_slot_split = 60
-        self.discharge_slot_split = 60 if self.calculate_fast_plan else 30
+        self.charge_slot_split = 30
+        self.discharge_slot_split = 30
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
 
@@ -13616,7 +14244,7 @@ class PredBat(hass.Hass):
         local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
         skew = self.args.get("clock_skew", 0)
         if skew:
-            self.log("WARN: Clock skew is set to {} minutes".format(skew))
+            self.log("Warn: Clock skew is set to {} minutes".format(skew))
         self.now_utc_real = datetime.now(local_tz)
         now_utc = self.now_utc_real + timedelta(minutes=skew)
         now = datetime.now() + timedelta(minutes=skew)
@@ -13636,7 +14264,6 @@ class PredBat(hass.Hass):
         self.minutes_to_midnight = 24 * 60 - self.minutes_now
         self.log("--------------- PredBat - update at {} with clock skew {} minutes, minutes now {}".format(now_utc, skew, self.minutes_now))
 
-    @ad.app_lock
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -13720,28 +14347,65 @@ class PredBat(hass.Hass):
             except (ValueError, TypeError):
                 savings_total_pvbat = 0.0
 
+            savings_total_soc = self.load_previous_value_from_ha(self.prefix + ".savings_total_soc")
+            try:
+                savings_total_soc = float(savings_total_soc)
+            except (ValueError, TypeError):
+                savings_total_soc = 0.0
+
+            savings_total_actual = self.load_previous_value_from_ha(self.prefix + ".savings_total_actual")
+            try:
+                savings_total_actual = float(savings_total_actual)
+            except (ValueError, TypeError):
+                savings_total_actual = 0.0
+
             # Increment total at midnight for next day
             if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
                 savings_total_predbat += self.savings_today_predbat
                 savings_total_pvbat += self.savings_today_pvbat
+                savings_total_soc = self.savings_today_predbat_soc
+                savings_total_actual += self.savings_today_actual
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
-                state=savings_total_predbat,
+                state=self.dp2(savings_total_predbat),
                 attributes={
                     "friendly_name": "Total Predbat savings",
                     "state_class": "measurement",
                     "unit_of_measurement": "p",
+                    "pounds": self.dp2(savings_total_predbat / 100.0),
+                    "icon": "mdi:cash-multiple",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".savings_total_soc",
+                state=self.dp2(savings_total_soc),
+                attributes={
+                    "friendly_name": "Predbat savings, yesterday SOC",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:battery-50",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".savings_total_actual",
+                state=self.dp2(savings_total_actual),
+                attributes={
+                    "friendly_name": "Actual total energy cost",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "p",
+                    "pounds": self.dp2(savings_total_actual / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
             )
             self.dashboard_item(
                 self.prefix + ".savings_total_pvbat",
-                state=savings_total_pvbat,
+                state=self.dp2(savings_total_pvbat),
                 attributes={
                     "friendly_name": "Total Savings vs no PV/Battery system",
                     "state_class": "measurement",
                     "unit_of_measurement": "p",
+                    "pounds": self.dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
             )
@@ -13824,7 +14488,7 @@ class PredBat(hass.Hass):
                     han.write(data)
             return data
         else:
-            self.log("WARN: Downloading Predbat file failed, URL {}".format(url))
+            self.log("Warn: Downloading Predbat file failed, URL {}".format(url))
             return None
 
     async def async_download_predbat_version(self, version):
@@ -13844,7 +14508,7 @@ class PredBat(hass.Hass):
             bool: True if the download and update were successful, False otherwise.
         """
         if version == THIS_VERSION:
-            self.log("WARN: Predbat update requested for the same version as we are running ({}), no update required".format(version))
+            self.log("Warn: Predbat update requested for the same version as we are running ({}), no update required".format(version))
             return
 
         self.expose_config("version", True, force=True, in_progress=True)
@@ -13879,7 +14543,7 @@ class PredBat(hass.Hass):
 
                 # Kill the current threads
                 if self.pool:
-                    self.log("WARN: Killing current threads before update...")
+                    self.log("Warn: Killing current threads before update...")
                     self.pool.close()
                     self.pool.join()
                     self.pool = None
@@ -13897,7 +14561,7 @@ class PredBat(hass.Hass):
                 os.system(cmd)
                 return True
             else:
-                self.log("WARN: Predbat update failed to download Predbat version {}".format(version))
+                self.log("Warn: Predbat update failed to download Predbat version {}".format(version))
         return False
 
     async def select_event(self, event, data, kwargs):
@@ -14086,7 +14750,7 @@ class PredBat(hass.Hass):
                         unit = item["unit"]
                         unit = unit.replace("£", self.currency_symbols[0])
                         unit = unit.replace("p", self.currency_symbols[1])
-                        self.set_state(
+                        self.set_state_wrapper(
                             entity_id=entity,
                             state=value,
                             attributes={
@@ -14101,7 +14765,7 @@ class PredBat(hass.Hass):
                     elif item["type"] == "switch":
                         """SWITCH"""
                         icon = item.get("icon", "mdi:light-switch")
-                        self.set_state(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
+                        self.set_state_wrapper(entity_id=entity, state=("on" if value else "off"), attributes={"friendly_name": item["friendly_name"], "icon": icon})
                     elif item["type"] == "select":
                         """SELECT"""
                         icon = item.get("icon", "mdi:format-list-bulleted")
@@ -14110,10 +14774,10 @@ class PredBat(hass.Hass):
                         options = item["options"]
                         if value not in options:
                             options.append(value)
-                        old_state = self.get_state(entity_id=entity)
+                        old_state = self.get_state_wrapper(entity_id=entity)
                         if old_state and old_state != value:
-                            self.set_state(entity_id=entity, state=old_state, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
-                        self.set_state(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
+                            self.set_state_wrapper(entity_id=entity, state=old_state, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
+                        self.set_state_wrapper(entity_id=entity, state=value, attributes={"friendly_name": item["friendly_name"], "options": options, "icon": icon})
                     elif item["type"] == "update":
                         """UPDATE"""
                         summary = self.releases.get("latest_body", "")
@@ -14121,7 +14785,7 @@ class PredBat(hass.Hass):
                         state = "off"
                         if item["installed_version"] != latest:
                             state = "on"
-                        self.set_state(
+                        self.set_state_wrapper(
                             entity_id=entity,
                             state=state,
                             attributes={
@@ -14153,14 +14817,14 @@ class PredBat(hass.Hass):
                 else:
                     return True
             else:
-                self.log("WARN: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item["name"]))
+                self.log("Warn: Badly formed CONFIG enable item {}, please raise a Github ticket".format(item["name"]))
         return True
 
     def dashboard_item(self, entity, state, attributes):
         """
         Publish state and log dashboard item
         """
-        self.set_state(entity_id=entity, state=state, attributes=attributes)
+        self.set_state_wrapper(entity_id=entity, state=state, attributes=attributes)
         if entity not in self.dashboard_index:
             self.dashboard_index.append(entity)
 
@@ -14172,12 +14836,7 @@ class PredBat(hass.Hass):
         Update list of current Predbat settings
         """
         global PREDBAT_SAVE_RESTORE
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not os.path.exists(self.save_restore_dir):
             os.mkdir(self.save_restore_dir)
@@ -14196,12 +14855,7 @@ class PredBat(hass.Hass):
         """
         Restore settings from YAML file
         """
-        self.save_restore_dir = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                self.save_restore_dir = root + "/predbat_save"
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if filename != "previous.yaml":
             await self.async_save_settings_yaml("previous.yaml")
@@ -14231,8 +14885,7 @@ class PredBat(hass.Hass):
         """
         Save current Predbat settings
         """
-        if not self.save_restore_dir:
-            return
+        self.save_restore_dir = self.config_root + "/predbat_save"
 
         if not filename:
             filename = self.now_utc.strftime("%y_%m_%d_%H_%M_%S")
@@ -14249,35 +14902,30 @@ class PredBat(hass.Hass):
         """
         time_now = self.now_utc.strftime("%H_%M_%S")
         basename = "/debug/predbat_debug_{}.yaml".format(time_now)
-        filename = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                filename = root + basename
-                break
-        if filename:
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            debug = {}
-            debug["TIME"] = self.time_now_str()
-            debug["THIS_VERSION"] = THIS_VERSION
-            debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-            debug["args"] = self.args
-            debug["charge_window_best"] = self.charge_window_best
-            debug["charge_limit_best"] = self.charge_limit_best
-            debug["discharge_window_best"] = self.discharge_window_best
-            debug["discharge_limits_best"] = self.discharge_limits_best
-            debug["low_rates"] = self.low_rates
-            debug["high_export_rates"] = self.high_export_rates
-            debug["load_forecast"] = self.load_forecast
-            debug["load_minutes_step"] = self.load_minutes_step
-            debug["load_minutes_step10"] = self.load_minutes_step10
-            debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
-            debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
-            debug["yesterday_load_step"] = self.yesterday_load_step
-            debug["yesterday_pv_step"] = self.yesterday_pv_step
+        filename = self.config_root + basename
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        debug = {}
+        debug["TIME"] = self.time_now_str()
+        debug["THIS_VERSION"] = THIS_VERSION
+        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
+        debug["args"] = self.args
+        debug["charge_window_best"] = self.charge_window_best
+        debug["charge_limit_best"] = self.charge_limit_best
+        debug["discharge_window_best"] = self.discharge_window_best
+        debug["discharge_limits_best"] = self.discharge_limits_best
+        debug["low_rates"] = self.low_rates
+        debug["high_export_rates"] = self.high_export_rates
+        debug["load_forecast"] = self.load_forecast
+        debug["load_minutes_step"] = self.load_minutes_step
+        debug["load_minutes_step10"] = self.load_minutes_step10
+        debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
+        debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
+        debug["yesterday_load_step"] = self.yesterday_load_step
+        debug["yesterday_pv_step"] = self.yesterday_pv_step
 
-            with open(filename, "w") as file:
-                yaml.dump(debug, file)
-            self.log("Wrote debug yaml to {}".format(filename))
+        with open(filename, "w") as file:
+            yaml.dump(debug, file)
+        self.log("Wrote debug yaml to {}".format(filename))
 
     def create_entity_list(self):
         """
@@ -14308,29 +14956,22 @@ class PredBat(hass.Hass):
 
         # Find path
         basename = "/predbat_dashboard.yaml"
-        filename = None
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                filename = root + basename
-                break
+        filename = self.config_root + basename
 
         # Write
-        if filename:
-            han = open(filename, "w")
-            if han:
-                self.log("Creating predbat dashboard at {}".format(filename))
-                han.write(text)
-                han.close()
-            else:
-                self.log("Failed to write predbat dashboard to {}".format(filename))
+        han = open(filename, "w")
+        if han:
+            self.log("Creating predbat dashboard at {}".format(filename))
+            han.write(text)
+            han.close()
         else:
-            self.log("Failed to write predbat dashboard as can not find config root in {}".format(CONFIG_ROOTS))
+            self.log("Failed to write predbat dashboard to {}".format(filename))
 
     def load_previous_value_from_ha(self, entity):
         """
         Load HA value either from state or from history if there is any
         """
-        ha_value = self.get_state(entity)
+        ha_value = self.get_state_wrapper(entity)
         if ha_value is not None:
             return ha_value
         history = self.get_history_wrapper(entity_id=entity)
@@ -14338,6 +14979,52 @@ class PredBat(hass.Hass):
             history = history[0]
             ha_value = history[-1]["state"]
         return ha_value
+
+    async def trigger_watch_list(self, entity_id, attribute, old, new):
+        """
+        Trigger a watch event for an entity
+        """
+        for entity in self.watch_list:
+            if entity_id == entity:
+                await self.watch_event(entity, attribute, old, new, None)
+
+    async def trigger_callback(self, service_data):
+        """
+        Trigger a callback for a service via HA Interface
+        """
+        for item in self.EVENT_LISTEN_LIST:
+            if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
+                await item["callback"](item["service"], service_data, None)
+
+    def define_service_list(self):
+        self.SERVICE_REGISTER_LIST = [
+            {"domain": "input_number", "service": "set_value"},
+            {"domain": "input_number", "service": "increment"},
+            {"domain": "input_number", "service": "decrement"},
+            {"domain": "switch", "service": "turn_on"},
+            {"domain": "switch", "service": "turn_off"},
+            {"domain": "switch", "service": "toggle"},
+            {"domain": "select", "service": "select_option"},
+            {"domain": "select", "service": "select_first"},
+            {"domain": "select", "service": "select_last"},
+            {"domain": "select", "service": "select_next"},
+            {"domain": "select", "service": "select_previous"},
+        ]
+        self.EVENT_LISTEN_LIST = [
+            {"domain": "switch", "service": "turn_on", "callback": self.switch_event},
+            {"domain": "switch", "service": "turn_off", "callback": self.switch_event},
+            {"domain": "switch", "service": "toggle", "callback": self.switch_event},
+            {"domain": "input_number", "service": "set_value", "callback": self.number_event},
+            {"domain": "input_number", "service": "increment", "callback": self.number_event},
+            {"domain": "input_number", "service": "decrement", "callback": self.number_event},
+            {"domain": "select", "service": "select_option", "callback": self.select_event},
+            {"domain": "select", "service": "select_first", "callback": self.select_event},
+            {"domain": "select", "service": "select_last", "callback": self.select_event},
+            {"domain": "select", "service": "select_next", "callback": self.select_event},
+            {"domain": "select", "service": "select_previous", "callback": self.select_event},
+            {"domain": "update", "service": "install", "callback": self.update_event},
+            {"domain": "update", "service": "skip", "callback": self.update_event},
+        ]
 
     def load_user_config(self, quiet=True, register=False):
         """
@@ -14377,9 +15064,9 @@ class PredBat(hass.Hass):
                 item["value"] = None
 
                 # Remove the state if the entity still exists
-                ha_value = self.get_state(entity)
+                ha_value = self.get_state_wrapper(entity)
                 if ha_value is not None:
-                    self.set_state(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
+                    self.set_state_wrapper(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
                 continue
 
             # Get from current state?
@@ -14421,38 +15108,24 @@ class PredBat(hass.Hass):
                 else:
                     self.expose_config(item["name"], ha_value, quiet=quiet)
 
+        # Update the last time we refreshed the config
+        self.set_state_wrapper(entity_id=self.prefix + ".config_refresh", state=self.now_utc.strftime(TIME_FORMAT))
+
         # Register HA services
         if register:
-            self.fire_event("service_registered", domain="input_number", service="set_value")
-            self.fire_event("service_registered", domain="input_number", service="increment")
-            self.fire_event("service_registered", domain="input_number", service="decrement")
-            self.fire_event("service_registered", domain="switch", service="turn_on")
-            self.fire_event("service_registered", domain="switch", service="turn_off")
-            self.fire_event("service_registered", domain="switch", service="toggle")
-            self.fire_event("service_registered", domain="select", service="select_option")
-            self.fire_event("service_registered", domain="select", service="select_first")
-            self.fire_event("service_registered", domain="select", service="select_last")
-            self.fire_event("service_registered", domain="select", service="select_next")
-            self.fire_event("service_registered", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_on")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="turn_off")
-            self.listen_select_handle = self.listen_event(self.switch_event, event="call_service", domain="switch", service="toggle")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="set_value")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="increment")
-            self.listen_select_handle = self.listen_event(self.number_event, event="call_service", domain="input_number", service="decrement")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_option")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_first")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_last")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_next")
-            self.listen_select_handle = self.listen_event(self.select_event, event="call_service", domain="select", service="select_previous")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="install")
-            self.listen_select_handle = self.listen_event(self.update_event, event="call_service", domain="update", service="skip")
+            self.watch_list = self.get_arg("watch_list", [], indirect=False)
+            self.log("Watch list {}".format(self.watch_list))
 
-            watch_list = self.get_arg("watch_list", [], indirect=False)
-            self.log("Watch list {}".format(watch_list))
-            for entity in watch_list:
-                if entity and isinstance(entity, str) and ("." in entity):
-                    self.listen_state(self.watch_event, entity_id=entity)
+            if not self.ha_interface.websocket_active:
+                # Registering HA events as Websocket is not active
+                for item in self.SERVICE_REGISTER_LIST:
+                    self.fire_event("service_registered", domain=item["domain"], service=item["service"])
+                for item in self.EVENT_LISTEN_LIST:
+                    self.listen_select_handle = self.listen_event(item["callback"], event="call_service", domain=item["domain"], service=item["service"])
+
+                for entity in self.watch_list:
+                    if entity and isinstance(entity, str) and ("." in entity):
+                        self.listen_state(self.watch_event, entity_id=entity)
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
@@ -14465,7 +15138,7 @@ class PredBat(hass.Hass):
             for item_value in arg_value:
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("WARN: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
+                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
                     new_list.append(None)
                 else:
                     new_list.append(item_value)
@@ -14476,7 +15149,7 @@ class PredBat(hass.Hass):
                 item_value = arg_value[item_name]
                 item_matched, item_value = self.resolve_arg_re(arg, item_value, state_keys)
                 if not item_matched:
-                    self.log("WARN: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
+                    self.log("Warn: Regular argument {} expression {} failed to match - disabling this item".format(arg, item_value))
                     new_dict[item_name] = None
                 else:
                     new_dict[item_name] = item_value
@@ -14505,7 +15178,7 @@ class PredBat(hass.Hass):
         match arguments with sensors
         """
 
-        states = self.get_state()
+        states = self.get_state_wrapper()
         state_keys = states.keys()
         disabled = []
 
@@ -14522,7 +15195,7 @@ class PredBat(hass.Hass):
             arg_value = self.args[arg]
             matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
             if not matched:
-                self.log("WARN: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
+                self.log("Warn: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
                 disabled.append(arg)
             else:
                 self.args[arg] = arg_value
@@ -14540,15 +15213,8 @@ class PredBat(hass.Hass):
         passed = True
         app_dirs = []
 
-        for root in CONFIG_ROOTS:
-            if os.path.exists(root):
-                config_dir = root
-                self.log("Sanity scan files in '{}' : {}".format(config_dir, os.listdir(config_dir)))
-                break
-
-        if not config_dir:
-            self.log("WARN: Unable to find config directory in roots {}".format(CONFIG_ROOTS))
-            passed = False
+        config_dir = self.config_root
+        self.log("Sanity scan files in '{}' : {}".format(config_dir, os.listdir(config_dir)))
 
         app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
@@ -14558,7 +15224,7 @@ class PredBat(hass.Hass):
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError:
-                    self.log("ERROR: Unable to read /config/appdaemon.yaml file correctly!")
+                    self.log("Error: Unable to read /config/appdaemon.yaml file correctly!")
                     passed = False
 
                 if data and ("appdaemon" in data):
@@ -14569,11 +15235,11 @@ class PredBat(hass.Hass):
                         app_dirs.append(app_dir)
                     self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
-                    self.log("WARN: appdaemon section is missing from appdaemon.yaml")
+                    self.log("Warn: appdaemon section is missing from appdaemon.yaml")
                     passed = False
         else:
-            self.log("WARN: unable to find {}".format(appdaemon_config))
-            passed = False
+            self.log("Warn: unable to find {} skipping checks as maybe outside AppDaemon".format(appdaemon_config))
+            return
 
         self.log("Sanity: Scanning app_dirs: {}".format(app_dirs))
         apps_yaml = []
@@ -14590,7 +15256,7 @@ class PredBat(hass.Hass):
                         predbat_py.append(filepath)
 
         if not apps_yaml:
-            self.log("WARN: Unable to find any apps.yaml files, please check your configuration")
+            self.log("Warn: Unable to find any apps.yaml files, please check your configuration")
             passed = False
 
         # Check apps.yaml to find predbat configuration
@@ -14601,24 +15267,24 @@ class PredBat(hass.Hass):
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError:
-                    self.log("ERROR: Unable to read {} file correctly!".format(filename))
+                    self.log("Error: Unable to read {} file correctly!".format(filename))
                     passed = False
                 if data and "pred_bat" in data:
                     self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
                     validPred += 1
         if not validPred:
-            self.log("WARN: Unable to find any valid Predbat configurations")
+            self.log("Warn: Unable to find any valid Predbat configurations")
             passed = False
         if validPred > 1:
-            self.log("WARN: You have multiple valid Predbat configurations")
+            self.log("Warn: You have multiple valid Predbat configurations")
             passed = False
 
         # Check predbat.py
         if not predbat_py:
-            self.log("WARN: Unable to find predbat.py, please check your configuration")
+            self.log("Warn: Unable to find predbat.py, please check your configuration")
             passed = False
         elif len(predbat_py) > 1:
-            self.log("WARN: Found multiple predbat.py files, please check your configuration")
+            self.log("Warn: Found multiple predbat.py files, please check your configuration")
             passed = False
         else:
             filename = predbat_py[0]
@@ -14631,19 +15297,19 @@ class PredBat(hass.Hass):
                             version = res.group(1)
                             foundVersion = True
                             if version != THIS_VERSION:
-                                self.log("WARN: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
+                                self.log("Warn: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
                                 passed = False
                             else:
                                 self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))
             if not foundVersion:
-                self.log("WARN: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
+                self.log("Warn: Unable to find THIS_VERSION in Predbat.py file, please check your setup")
                 passed = False
 
         if passed:
             self.log("Sanity check has passed")
         else:
             self.log("Sanity check FAILED!")
-            self.record_status("WARN: Sanity startup checked has FAILED, see your logs for details")
+            self.record_status("Warn: Sanity startup checked has FAILED, see your logs for details")
         return passed
 
     def initialize(self):
@@ -14657,22 +15323,22 @@ class PredBat(hass.Hass):
         run_every = RUN_EVERY * 60
         now = self.now
 
-        self.ha_interface = HAInterface(self)
-
         try:
             self.reset()
+            self.ha_interface = HAInterface(self)
             self.sanity()
+            self.ha_interface.update_states()
             self.auto_config()
             self.load_user_config(quiet=False, register=True)
         except Exception as e:
-            self.log("ERROR: Exception raised {}".format(e))
-            self.record_status("ERROR: Exception raised {}".format(e))
+            self.log("Error: Exception raised {}".format(e))
+            self.record_status("Error: Exception raised {}".format(e))
             raise e
 
         # Catch template configurations and exit
         if self.get_arg("template", False):
-            self.log("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
-            self.record_status("ERROR: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
+            self.log("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
+            self.record_status("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
 
         if SIMULATE and SIMULATE_LENGTH:
@@ -14722,6 +15388,8 @@ class PredBat(hass.Hass):
         Called once each time the app terminates
         """
         self.log("Predbat terminating")
+        self.stop_thread = True
+        await asyncio.sleep(0)
         if hasattr(self, "pool"):
             if self.pool:
                 self.pool.close()
@@ -14729,27 +15397,52 @@ class PredBat(hass.Hass):
                 self.pool = None
         self.log("Predbat terminated")
 
-    @ad.app_lock
     def update_time_loop(self, cb_args):
         """
         Called every 15 seconds
         """
+        self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
+            self.ha_interface.update_states()
             self.load_user_config()
             self.update_pending = False
             try:
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
             except Exception as e:
-                self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.log("Error: Exception raised {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e))
                 raise e
             finally:
                 self.prediction_started = False
             self.prediction_started = False
 
-    @ad.app_lock
+    def check_entity_refresh(self):
+        """
+        Check if we need to refresh the config entities with HA
+        """
+        # Check if we need to refresh the config entities with HA
+        config_refresh = self.get_state_wrapper(entity_id=self.prefix + ".config_refresh")
+        config_refresh_stamp = None
+        if config_refresh:
+            try:
+                config_refresh_stamp = datetime.strptime(config_refresh, TIME_FORMAT)
+            except (ValueError, TypeError):
+                config_refresh_stamp = None
+
+        age = CONFIG_REFRESH_PERIOD
+        if config_refresh_stamp:
+            tdiff = self.now_utc - config_refresh_stamp
+            age = tdiff.seconds / 60 + tdiff.days * 60 * 24
+            if age >= CONFIG_REFRESH_PERIOD:
+                self.log("Info: Refresh config entities due to their age of {} minutes".format(age))
+                self.update_pending = True
+        else:
+            self.log("Info: Refresh config entities as config_refresh state is unknown")
+            self.update_pending = True
+
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
@@ -14757,15 +15450,20 @@ class PredBat(hass.Hass):
         if not self.prediction_started:
             config_changed = False
             self.prediction_started = True
+            self.ha_interface.update_states()
+            self.check_entity_refresh()
+
             if self.update_pending:
                 self.load_user_config()
                 config_changed = True
+
             self.update_pending = False
             try:
                 self.update_pred(scheduled=True)
             except Exception as e:
-                self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
+                self.log("Error: Exception raised {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e))
                 raise e
             finally:
                 self.prediction_started = False
@@ -14781,9 +15479,10 @@ class PredBat(hass.Hass):
             try:
                 self.balance_inverters()
             except Exception as e:
-                self.log("ERROR: Exception raised {}".format(e))
-                self.record_status("ERROR: Exception raised {}".format(e))
-                raise
+                self.log("Error: Exception raised {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e))
+                raise e
 
 
 class HAInterface:
@@ -14792,12 +15491,180 @@ class HAInterface:
     """
 
     def __init__(self, base):
-        self.ha_key = os.environ.get("SUPERVISOR_TOKEN", None)
-        self.ha_url = "http://supervisor/core"
+        """
+        Initialize the interface to Home Assistant.
+        """
+        self.ha_url = base.args.get("ha_url", "http://supervisor/core")
+        self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
+        self.websocket_active = False
+
         self.base = base
         self.log = base.log
+        self.state_data = {}
         if not self.ha_key:
-            self.log("WARN: Supervisor token not found, will use direct HA API")
+            self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
+        else:
+            check = self.api_call("/api/")
+            if not check:
+                self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
+                self.ha_key = None
+            else:
+                self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
+                self.base.create_task(self.socketLoop())
+                self.websocket_active = True
+                self.log("Info: Web Socket task started")
+
+    async def socketLoop(self):
+        """
+        Web socket loop for HA interface
+        """
+        while True:
+            if self.base.stop_thread:
+                self.log("Info: Web socket stopping")
+                break
+
+            url = "{}/api/websocket".format(self.ha_url)
+            self.log("Info: Start socket for url {}".format(url))
+            async with ClientSession() as session:
+                try:
+                    async with session.ws_connect(url) as websocket:
+                        await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+                        sid = 1
+
+                        # Subscribe to all state changes
+                        await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "state_changed"})
+                        sid += 1
+
+                        # Listen for services
+                        await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
+                        sid += 1
+
+                        # Fire events to say we have registered services
+                        for item in self.base.SERVICE_REGISTER_LIST:
+                            await websocket.send_json(
+                                {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
+                            )
+                            sid += 1
+
+                        self.log("Info: Web Socket active")
+                        self.base.update_pending = True  # Force an update when web-socket reconnects
+
+                        async for message in websocket:
+                            if self.base.stop_thread:
+                                self.log("Info: Web socket stopping")
+                                break
+
+                            if message.type == WSMsgType.TEXT:
+                                try:
+                                    data = json.loads(message.data)
+                                    if data:
+                                        message_type = data.get("type", "")
+                                        if message_type == "event":
+                                            event_info = data.get("event", {})
+                                            event_type = event_info.get("event_type", "")
+                                            if event_type == "state_changed":
+                                                event_data = event_info.get("data", {})
+                                                old_state = event_data.get("old_state", {})
+                                                new_state = event_data.get("new_state", {})
+                                                if new_state:
+                                                    self.update_state_item(new_state)
+                                                    # Only trigger on value change or you get too many updates
+                                                    if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
+                                                        await self.base.trigger_watch_list(
+                                                            new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
+                                                        )
+                                            elif event_type == "call_service":
+                                                service_data = event_info.get("data", {})
+                                                await self.base.trigger_callback(service_data)
+                                            else:
+                                                self.log("Info: Web Socket unknown message {}".format(data))
+                                        elif message_type == "result":
+                                            success = data.get("success", False)
+                                            if not success:
+                                                self.log("Warn: Web Socket result failed {}".format(data))
+                                        elif message_type == "auth_required":
+                                            pass
+                                        elif message_type == "auth_ok":
+                                            pass
+                                        elif message_type == "auth_invalid":
+                                            self.log("Warn: Web Socket auth failed, check your ha_key setting")
+                                            self.websocket_active = False
+                                            raise Exception("Web Socket auth failed")
+                                        else:
+                                            self.log("Info: Web Socket unknown message {}".format(data))
+                                except Exception as e:
+                                    self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                    self.log("Error: " + traceback.format_exc())
+                                    break
+
+                            elif message.type == WSMsgType.CLOSED:
+                                break
+                            elif message.type == WSMsgType.ERROR:
+                                break
+
+                except Exception as e:
+                    self.log("Error: Web Socket exception in startup: {}".format(e))
+                    self.log("Error: " + traceback.format_exc())
+
+            if not self.base.stop_thread:
+                self.log("Warn: Web Socket closed, will try to reconnect in 5 seconds")
+                await asyncio.sleep(5)
+
+    def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
+        """
+        Get state from cached HA data (or from appDaemon if used)
+        """
+        if not self.ha_key:
+            return self.base.get_state(entity_id=entity_id, default=default, attribute=attribute)
+
+        if not entity_id:
+            return self.state_data
+        elif entity_id.lower() in self.state_data:
+            if refresh:
+                self.update_state(entity_id)
+            state_info = self.state_data[entity_id.lower()]
+            if attribute:
+                if attribute in state_info["attributes"]:
+                    return state_info["attributes"][attribute]
+                else:
+                    return default
+            else:
+                return state_info["state"]
+        else:
+            return default
+
+    def update_state(self, entity_id):
+        """
+        Update state for entity_id
+        """
+        if not self.ha_key:
+            return
+        item = self.api_call("/api/states/{}".format(entity_id))
+        if item:
+            self.update_state_item(item)
+
+    def update_state_item(self, item):
+        """
+        Update state table for item
+        """
+        entity_id = item["entity_id"]
+        attributes = item["attributes"]
+        last_changed = item["last_changed"]
+        state = item["state"]
+        self.state_data[entity_id.lower()] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+
+    def update_states(self):
+        """
+        Update the state data from Home Assistant.
+        """
+        if not self.ha_key:
+            return
+        res = self.api_call("/api/states")
+        if res:
+            for item in res:
+                self.update_state_item(item)
+        else:
+            self.log("Warn: Failed to update state data from HA")
 
     def get_history(self, sensor, now, days=30):
         """
@@ -14814,20 +15681,33 @@ class HAInterface:
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
 
-    def set_state(self, entity_id, state, attributes=None):
+    def set_state(self, entity_id, state, attributes={}):
         """
         Set the state of an entity in Home Assistant.
         """
         if not self.ha_key:
             if attributes:
-                return self.base.set_state(entity_id, state=state)
-            else:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
+            else:
+                return self.base.set_state(entity_id, state=state)
 
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
+        self.update_state(entity_id)
+
+    def call_service(self, service, **kwargs):
+        """
+        Call a service in Home Assistant.
+        """
+        if not self.ha_key:
+            return self.base.call_service(service, **kwargs)
+
+        data = {}
+        for key in kwargs:
+            data[key] = kwargs[key]
+        self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False):
         """
@@ -14857,7 +15737,7 @@ class HAInterface:
         try:
             data = response.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Failed to decode response from {}".format(url))
+            self.log("Warn: Failed to decode response {} from {}".format(response, url))
             data = None
         except (requests.Timeout, requests.exceptions.ReadTimeout):
             self.log("Warn: Timeout from {}".format(url))

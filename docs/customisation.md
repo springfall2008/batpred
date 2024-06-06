@@ -89,8 +89,9 @@ keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 min
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's
 quite CPU intensive and provides very little improvement for most systems.
 
-If you have performance problems turn **switch.predbat_calculate_fast_plan** (_expert mode_) On to help
-reduce your CPU load.
+You can can enable **combine_charge_slots** and **combine_discharge_slots** in order to speed up planning.
+Note: Combining discharge slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
+longer periods of fixed rates but can limit the planning ability in some cases.
 
 The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
 if you don't have multiple CPUs available or set it to 'auto' (the default) to use one thread per CPU. Its recommended you don't set this to an odd number of threads.
@@ -243,12 +244,6 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
 mode.
 
-**switch.predbat_calculate_fast_plan** (_expert mode_) When True the plan is calculated with a limited number of
-windows to make calculations faster. When False (default) all windows are considered but planning will take a little
-longer but be more accurate.
-The end result is unlikely to change in fast mode as the next 8 windows are always considered in the plan, but the
-longer term plan will be less accurate.
-
 **switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
 disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
 
@@ -286,10 +281,10 @@ A value of 0 disables this feature.
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or discharge slots together into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
-**switch.predbat_combine_charge_slots** Controls if charge slots of > 60 minutes can be combined. When disabled they will be split up,
+**switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
 increasing run times but potentially more accurate for planning. Turn this off if you want to enable ad-hoc import
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
-a saving session). The default is enable (True)
+a saving session). The default is disabled (False)
 
 **switch.predbat_combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
 they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
