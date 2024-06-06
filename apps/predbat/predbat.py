@@ -1464,6 +1464,7 @@ class Prediction:
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.best_soc_keep = base.best_soc_keep
+            self.best_soc_min = base.best_soc_min
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_gas = base.rate_gas
             self.rate_import = base.rate_import
@@ -1851,12 +1852,16 @@ class Prediction:
             discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
             battery_to_min = max(soc - self.reserve, 0) * self.battery_loss_discharge * self.inverter_loss
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss * self.inverter_loss
+            discharge_min = self.reserve
+            use_keep = self.best_soc_keep if four_hour_rule else self.reserve
+            if discharge_window_n >= 0:
+                discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
 
             if (
                 not self.set_discharge_freeze_only
                 and (discharge_window_n >= 0)
                 and discharge_limits[discharge_window_n] < 100.0
-                and (soc - step * self.battery_rate_max_discharge_scaled) > (self.soc_max * discharge_limits[discharge_window_n] / 100.0)
+                and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min
             ):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
@@ -13005,7 +13010,7 @@ class PredBat(hass.Hass):
 
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + discharge_adjust))  # Add in 1 minute margin to allow Predbat to restore ECO mode
-                discharge_soc = (self.discharge_limits_best[0] * self.soc_max) / 100.0
+                discharge_soc = max((self.discharge_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
