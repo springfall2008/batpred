@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SIMULATE, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES
 from utils import calc_percent_limit
 
+
 class Inverter:
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
@@ -2270,4 +2271,3 @@ class Inverter:
         self.base.log("Warn: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)
         return False
-

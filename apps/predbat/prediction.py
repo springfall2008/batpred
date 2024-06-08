@@ -22,9 +22,11 @@ from utils import remove_intersecting_windows, get_charge_rate_curve, get_discha
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
+
 def reset_prediction_globals():
     global PRED_GLOBAL
     PRED_GLOBAL = {}
+
 
 def wrapped_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
     global PRED_GLOBAL
@@ -45,6 +47,7 @@ def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, char
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+
 
 class Prediction:
     """

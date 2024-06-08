@@ -34,9 +34,29 @@ import json
 THIS_VERSION = "v8.0.0"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py"]
 
-from config import (TIME_FORMAT, TIME_FORMAT_SOLCAST, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, PREDICT_STEP, MINUTE_WATT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_MONITOR, CONFIG_ITEMS, RUN_EVERY, 
-                   INVERTER_TEST, SIMULATE, MAX_INCREMENT, CONFIG_ROOTS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, SIMULATE_LENGTH, CONFIG_REFRESH_PERIOD,
-                   TIME_FORMAT_HA, TIMEOUT)
+from config import (
+    TIME_FORMAT,
+    TIME_FORMAT_SOLCAST,
+    TIME_FORMAT_SECONDS,
+    TIME_FORMAT_OCTOPUS,
+    PREDICT_STEP,
+    MINUTE_WATT,
+    PREDBAT_MODE_OPTIONS,
+    PREDBAT_MODE_MONITOR,
+    CONFIG_ITEMS,
+    RUN_EVERY,
+    INVERTER_TEST,
+    SIMULATE,
+    MAX_INCREMENT,
+    CONFIG_ROOTS,
+    PREDBAT_MODE_CONTROL_SOC,
+    PREDBAT_MODE_CONTROL_CHARGE,
+    PREDBAT_MODE_CONTROL_CHARGEDISCHARGE,
+    SIMULATE_LENGTH,
+    CONFIG_REFRESH_PERIOD,
+    TIME_FORMAT_HA,
+    TIMEOUT,
+)
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_discharge, reset_prediction_globals
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
 from inverter import Inverter
@@ -45,6 +65,7 @@ from ha import HAInterface
 """
 Used to mimic threads when they are disabled
 """
+
 
 class DummyThread:
     def __init__(self, result):
@@ -58,7 +79,6 @@ class DummyThread:
         Return the result
         """
         return self.result
-
 
 
 class PredBat(hass.Hass):
@@ -7467,7 +7487,7 @@ class PredBat(hass.Hass):
         power_scale = 60 / period  # Scale kwh to power
 
         for entry in pv_forecast_data:
-            if 'period_start' not in entry:
+            if "period_start" not in entry:
                 continue
             try:
                 this_point = datetime.strptime(entry["period_start"], TIME_FORMAT)
@@ -11114,5 +11134,3 @@ class PredBat(hass.Hass):
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e))
                 raise e
-
-

@@ -1182,4 +1182,3 @@ SOLAX_SOLIS_MODES_NEW = {
     "Feed-in priority - No Timed Charge/Discharge": 96,
     "Feed-in priority": 98,
 }
-

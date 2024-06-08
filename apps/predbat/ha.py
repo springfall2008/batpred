@@ -21,6 +21,7 @@ import requests
 import traceback
 from config import TIME_FORMAT_HA, TIMEOUT
 
+
 class HAInterface:
     """
     Direct interface to Home Assistant

@@ -16,6 +16,7 @@ import math
 from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP
 
+
 def calc_percent_limit(charge_limit, soc_max):
     """
     Calculate a charge limit in percent
@@ -30,6 +31,7 @@ def calc_percent_limit(charge_limit, soc_max):
             return 0
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
     """
