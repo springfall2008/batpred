@@ -14537,7 +14537,7 @@ class PredBat(hass.Hass):
                         files = files.replace("[", "")
                         files = files.replace("]", "")
                         files = files.replace('"', "")
-                        files = files.replace(' ', "")
+                        files = files.replace(" ", "")
                         files = files.split(",")
                         self.log("Predbat update files are {}".format(files))
                         break
