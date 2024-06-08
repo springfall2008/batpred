@@ -10160,7 +10160,7 @@ class PredBat(hass.Hass):
         if version == THIS_VERSION:
             self.log("Warn: Predbat update requested for the same version as we are running ({}), no update required".format(version))
             return
-            
+
         self.log("Update Predbat to version {}".format(version))
         self.expose_config("version", True, force=True, in_progress=True)
         tag_split = version.split(" ")
