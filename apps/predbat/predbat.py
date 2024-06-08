@@ -36,7 +36,7 @@ import json
 if not "PRED_GLOBAL" in globals():
     PRED_GLOBAL = {}
 
-THIS_VERSION = "v7.22.3"
+THIS_VERSION = "v7.22.4"
 PREDBAT_FILES = ["predbat.py"]
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 TIME_FORMAT_SECONDS = "%Y-%m-%dT%H:%M:%S.%f%z"
@@ -15037,6 +15037,7 @@ class PredBat(hass.Hass):
         Load config from HA
         """
         self.config_index = {}
+        self.log("Refreshing Predbat configuration")
 
         # New install, used to set default of expert mode
         new_install = True
@@ -15112,7 +15113,7 @@ class PredBat(hass.Hass):
                 if item.get("manual"):
                     self.manual_times(name, new_value=ha_value)
                 else:
-                    self.expose_config(item["name"], ha_value, quiet=quiet)
+                    self.expose_config(item["name"], ha_value, quiet=quiet, force=True)
 
         # Update the last time we refreshed the config
         self.set_state_wrapper(entity_id=self.prefix + ".config_refresh", state=self.now_utc.strftime(TIME_FORMAT))
@@ -15667,6 +15668,7 @@ class HAInterface:
             return
         res = self.api_call("/api/states")
         if res:
+            self.state_data = {}
             for item in res:
                 self.update_state_item(item)
         else:
