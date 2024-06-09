@@ -10499,7 +10499,7 @@ class PredBat(hass.Hass):
                             await self.async_expose_config(item["name"], item["value"], event=True)
                 await self.async_call_notify("Predbat settings restored from {}".format(filename))
         await self.async_expose_config("saverestore", None)
-    
+
     def load_current_config(self):
         """
         Load the current configuration from a json file
@@ -10512,7 +10512,7 @@ class PredBat(hass.Hass):
                     current = self.config_index.get(name, None)
                     if current:
                         item_value = settings[name]
-                        if current.get('value', None) != item_value:
+                        if current.get("value", None) != item_value:
                             self.log("Restore saved setting: {} = {} (was {})".format(name, item_value, current.get("value", None)))
                             current["value"] = item_value
 
@@ -10525,7 +10525,7 @@ class PredBat(hass.Hass):
         for item in CONFIG_ITEMS:
             if item.get("save", True):
                 if item.get("value", None) is not None:
-                    save_array[item["name"]] = item['value']
+                    save_array[item["name"]] = item["value"]
         with open(filepath, "w") as file:
             json.dump(save_array, file)
         self.log("Saved current settings to {}".format(filepath))
@@ -11063,7 +11063,7 @@ class PredBat(hass.Hass):
         """
         Called every 15 seconds
         """
-        self.check_entity_refresh()            
+        self.check_entity_refresh()
         if self.update_pending and not self.prediction_started:
             self.prediction_started = True
             self.ha_interface.update_states()
