@@ -8682,6 +8682,7 @@ class PredBat(hass.Hass):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
+                        inverter.adjust_pause_mode()
                         resetDischarge = False
                         isDischarging = True
 
