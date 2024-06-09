@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -15,6 +14,7 @@ import re
 import time
 import math
 import requests
+
 
 def download_predbat_file_from_github(tag, filename, new_filename):
     """
@@ -41,6 +41,7 @@ def download_predbat_file_from_github(tag, filename, new_filename):
         print("Error: Failed to download {}".format(url))
         return None
 
+
 def predbat_update_move(version, files):
     """
     Move the updated files into place
@@ -57,6 +58,7 @@ def predbat_update_move(version, files):
         return True
     return False
 
+
 def get_files_from_predbat(predbat_code):
     files = ["predbat.py"]
     for line in predbat_code.split("\n"):
@@ -69,6 +71,7 @@ def get_files_from_predbat(predbat_code):
             files = files.split(",")
             break
     return files
+
 
 def check_install():
     """
@@ -90,6 +93,7 @@ def check_install():
                     return False
         return True
     return False
+
 
 def predbat_update_download(version):
     """
