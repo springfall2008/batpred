@@ -697,6 +697,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:state-machine",
         "default": None,
         "restore": False,
+        "save": False,
     },
     {
         "name": "manual_charge",
@@ -756,6 +757,7 @@ CONFIG_ITEMS = [
         "icon": "mdi:state-machine",
         "default": "",
         "restore": False,
+        "save": False,
     },
     {
         "name": "auto_update",
@@ -856,7 +858,6 @@ CONFIG_ITEMS = [
         "unit": "W",
         "enable": "iboost_enable",
         "default": 2400,
-        "restore": False,
     },
     {
         "name": "iboost_min_power",

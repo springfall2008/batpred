@@ -9938,6 +9938,7 @@ class PredBat(hass.Hass):
         self.dashboard_index = []
 
         self.update_time()
+        self.save_current_config()
 
         self.expose_config("active", True)
 
@@ -10105,6 +10106,7 @@ class PredBat(hass.Hass):
                 extra=status_extra,
             )
         self.expose_config("active", False)
+        self.save_current_config()
 
     async def update_event(self, event, data, kwargs):
         """
@@ -10335,7 +10337,7 @@ class PredBat(hass.Hass):
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         return await self.run_in_executor(self.expose_config, name, value, quiet, event, force, in_progress)
 
-    def expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
+    def expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False, force_ha=False):
         """
         Share the config with HA
         """
@@ -10347,11 +10349,12 @@ class PredBat(hass.Hass):
                 item["value"] = None
             else:
                 entity = item.get("entity")
-                if entity and ((item.get("value") is None) or (value != item["value"]) or force):
-                    if item.get("reset_inverter", False):
+                has_changed = ((item.get("value", None) is None) or (value != item.get("value", None))) or force
+                if entity and (has_changed or force_ha):
+                    if has_changed and item.get("reset_inverter", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter on item {}".format(name))
-                    if item.get("reset_inverter_force", False):
+                    if has_changed and item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
                         if event:
@@ -10497,6 +10500,36 @@ class PredBat(hass.Hass):
                 await self.async_call_notify("Predbat settings restored from {}".format(filename))
         await self.async_expose_config("saverestore", None)
 
+    def load_current_config(self):
+        """
+        Load the current configuration from a json file
+        """
+        filepath = self.config_root + "/predbat_config.json"
+        if os.path.exists(filepath):
+            with open(filepath, "r") as file:
+                settings = json.load(file)
+                for name in settings:
+                    current = self.config_index.get(name, None)
+                    if current:
+                        item_value = settings[name]
+                        if current.get("value", None) != item_value:
+                            self.log("Restore saved setting: {} = {} (was {})".format(name, item_value, current.get("value", None)))
+                            current["value"] = item_value
+
+    def save_current_config(self):
+        """
+        Saves the currently defined configuration to a json file
+        """
+        filepath = self.config_root + "/predbat_config.json"
+        save_array = {}
+        for item in CONFIG_ITEMS:
+            if item.get("save", True):
+                if item.get("value", None) is not None:
+                    save_array[item["name"]] = item["value"]
+        with open(filepath, "w") as file:
+            json.dump(save_array, file)
+        self.log("Saved current settings to {}".format(filepath))
+
     async def async_save_settings_yaml(self, filename=None):
         """
         Save current Predbat settings
@@ -10590,6 +10623,7 @@ class PredBat(hass.Hass):
         ha_value = self.get_state_wrapper(entity)
         if ha_value is not None:
             return ha_value
+
         history = self.get_history_wrapper(entity_id=entity)
         if history:
             history = history[0]
@@ -10646,6 +10680,7 @@ class PredBat(hass.Hass):
         """
         Load config from HA
         """
+
         self.config_index = {}
         self.log("Refreshing Predbat configuration")
 
@@ -10664,6 +10699,11 @@ class PredBat(hass.Hass):
 
             if name == "mode" and new_install:
                 item["default"] = PREDBAT_MODE_OPTIONS[PREDBAT_MODE_MONITOR]
+
+        # Load current config (if there is one)
+        if register:
+            self.log("Loading current config")
+            self.load_current_config()
 
         # Find values and monitor config
         for item in CONFIG_ITEMS:
@@ -10686,8 +10726,10 @@ class PredBat(hass.Hass):
                     self.set_state_wrapper(entity_id=entity, state=ha_value, attributes={"friendly_name": "[Disabled] " + item["friendly_name"]})
                 continue
 
-            # Get from current state?
-            ha_value = self.load_previous_value_from_ha(entity)
+            # Get from current state, if not from HA directly
+            ha_value = item.get("value", None)
+            if ha_value is None:
+                ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
             if name == "update":
@@ -10723,7 +10765,7 @@ class PredBat(hass.Hass):
                 if item.get("manual"):
                     self.manual_times(name, new_value=ha_value)
                 else:
-                    self.expose_config(item["name"], ha_value, quiet=quiet, force=True)
+                    self.expose_config(item["name"], ha_value, quiet=quiet, force_ha=True)
 
         # Update the last time we refreshed the config
         self.set_state_wrapper(entity_id=self.prefix + ".config_refresh", state=self.now_utc.strftime(TIME_FORMAT))
@@ -10743,6 +10785,9 @@ class PredBat(hass.Hass):
                 for entity in self.watch_list:
                     if entity and isinstance(entity, str) and ("." in entity):
                         self.listen_state(self.watch_event, entity_id=entity)
+
+        # Save current config to file if it was pending
+        self.save_current_config()
 
     def resolve_arg_re(self, arg, arg_value, state_keys):
         """
