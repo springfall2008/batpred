@@ -13,6 +13,7 @@ import os
 import re
 import time
 import math
+import sys
 from datetime import datetime, timedelta
 import hashlib
 import traceback
@@ -32,7 +33,21 @@ import asyncio
 import json
 
 THIS_VERSION = "v8.0.0"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py"]
+from download import predbat_update_move, predbat_update_download, check_install
+
+# Sanity check the install and re-download if corrupted
+if not check_install():
+    print("Warn: Predbat files are not installed correctly, trying to download them")
+    files = predbat_update_download(THIS_VERSION)
+    if files:
+        print("Downloaded files, moving into place")
+        predbat_update_move(THIS_VERSION, files)
+    else:
+        print("Warn: Failed to download predbat files for version {}, it may not exist or you may have network issues".format(THIS_VERSION))
+    sys.exit(1)
+else:
+    print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
 
 from config import (
     TIME_FORMAT,
@@ -10116,31 +10131,6 @@ class PredBat(hass.Hass):
         elif data and data.get("service", "") == "skip":
             self.log("Requested to skip the update, this is not yet supported...")
 
-    def download_predbat_file_from_github(self, tag, filename, new_filename):
-        """
-        Downloads a predbat source file from github and returns the contents
-
-        Args:
-            tag (str): The tag to download from (e.g. v1.0.0)
-            filename (str): The filename to download (e.g. predbat.py)
-            new_filename (str): The new filename to save the file as
-        Returns:
-            str: The contents of the file
-        """
-        url = "https://raw.githubusercontent.com/springfall2008/batpred/" + tag + "/apps/predbat/{}".format(filename)
-        self.log("Downloading Predbat file from {} to {}".format(url, new_filename))
-        r = requests.get(url, headers={})
-        if r.ok:
-            data = r.text
-            if new_filename:
-                self.log("Write new version {} bytes to {}".format(len(data), new_filename))
-                with open(new_filename, "w") as han:
-                    han.write(data)
-            return data
-        else:
-            self.log("Warn: Downloading Predbat file failed, URL {}".format(url))
-            return None
-
     async def async_download_predbat_version(self, version):
         """
         Sync wrapper for async download_predbat_version
@@ -10163,59 +10153,31 @@ class PredBat(hass.Hass):
 
         self.log("Update Predbat to version {}".format(version))
         self.expose_config("version", True, force=True, in_progress=True)
-        tag_split = version.split(" ")
-        this_path = os.path.dirname(__file__)
-        self.log("Split returns {}".format(tag_split))
-        if tag_split:
-            tag = tag_split[0]
 
-            # Download predbat.py
-            file = "predbat.py"
-            predbat_code = self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
-            if predbat_code:
-                # Get the list of other files to download by searching for PREDBAT_FILES in predbat.py
-                files = ["predbat.py"]
-                for line in predbat_code.split("\n"):
-                    if line.startswith("PREDBAT_FILES"):
-                        files = line.split("=")[1].strip()
-                        files = files.replace("[", "")
-                        files = files.replace("]", "")
-                        files = files.replace('"', "")
-                        files = files.replace(" ", "")
-                        files = files.split(",")
-                        self.log("Predbat update files are {}".format(files))
-                        break
+        files = predbat_update_download(version)
+        if files:
+            # Kill the current threads
+            self.log("Kill current threads before update")
+            self.stop_thread = True
+            if self.pool:
+                self.log("Warn: Killing current threads before update...")
+                self.pool.close()
+                self.pool.join()
+                self.pool = None
 
-                # Download the remaining files
-                if files:
-                    for file in files:
-                        # Download the remaining files
-                        if file != "predbat.py":
-                            self.download_predbat_file_from_github(tag, file, os.path.join(this_path, file + "." + tag))
+            # Notify that we are about to update
+            self.call_notify("Predbat: update to: {}".format(version))
 
-                # Kill the current threads
-                self.log("Kill current threads before update")
-                self.stop_thread = True
-                if self.pool:
-                    self.log("Warn: Killing current threads before update...")
-                    self.pool.close()
-                    self.pool.join()
-                    self.pool = None
-
-                # Notify that we are about to update
-                self.call_notify("Predbat: update to: {}".format(version))
-
-                # Perform the update
-                self.log("Perform the update.....")
-                cmd = ""
-                for file in files:
-                    cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
-                cmd += "echo 'Update complete'"
-                self.log("Performing update with command: {}".format(cmd))
-                os.system(cmd)
+            # Perform the update
+            self.log("Perform the update.....")
+            if predbat_update_move(version, files):
+                self.log("Update to version {} completed".format(version))
                 return True
             else:
-                self.log("Warn: Predbat update failed to download Predbat version {}".format(version))
+                self.log("Warn: Predbat update failed to move Predbat version {}".format(version))
+                return False
+        else:
+            self.log("Warn: Predbat update failed to download Predbat version {}".format(version))
         return False
 
     async def select_event(self, event, data, kwargs):
