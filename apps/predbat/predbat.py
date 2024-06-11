@@ -1226,12 +1226,12 @@ class PredBat(hass.Hass):
                 else:
                     if smoothing:
                         # Reset to zero, sometimes not exactly zero
-                        if clean_increment and state < last_state and (state <= (last_state / 10.0)):
+                        if clean_increment and (state < last_state) and ((last_state - state) >= 1.0):
                             while minute < minutes_to:
                                 mdata[minute] = state
                                 minute += 1
                         else:
-                            # Can't really go backwards as incrementing data
+                            # Incrementing data can't go backwards
                             if clean_increment and state < last_state:
                                 state = last_state
 
@@ -1408,7 +1408,10 @@ class PredBat(hass.Hass):
                     pass
                 else:
                     increment += nxt - last
-            last = nxt
+                last = nxt
+            elif nxt < last:
+                if nxt <= 0 or ((last - nxt) >= (1.0)):
+                    last = nxt
             new_data[rindex] = increment
 
         return new_data
