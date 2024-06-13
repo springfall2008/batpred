@@ -360,7 +360,8 @@ See section below on [creating the battery charge power curve](#workarounds).
 As described in the [Predbat installation instructions](install.md#solcast-install), Predbat needs a solar forecast
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
-The template `apps.yaml` is pre-configured with regular expressions for the following configuration items that should auto-discover the Solcast entity names.
+By default the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.
+The `apps.yaml` contains regular expressions for the following configuration items that should auto-discover the Solcast forecast entity names.
 They are unlikely to need changing although a few people have reported their entity names don't contain 'solcast' so worth checking, or edit if you have non-standard names:
 
 - **pv_forecast_today** - Entity name for today's Solcast forecast
@@ -370,11 +371,32 @@ They are unlikely to need changing although a few people have reported their ent
 
 If you do not have a PV array then comment out or delete these Solcast lines from `apps.yaml`.
 
-If you have multiple PV arrays connected to GivEnergy Hybrid inverters or you have GivEnergy AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
+Alternatively, Predbat can obtain the [solar forecast directly from Solcast](install.md#predbat-direct-solcast-method) and the Solcast integration is thus not required.
+Uncomment the following Solcast cloud interface settings in `apps.yaml` and set the API key correctly:
 
-If however you have a mixed PV array setup with some PV that does not feed into your GivEnergy inverters
+```yaml
+solcast_host: 'https://api.solcast.com.au/'
+solcast_api_key: 'xxxx'
+solcast_poll_hours: 8
+```
+
+If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list, i.e.:
+
+```yaml
+api_key:
+  - xxxx_API_key_1
+  - yyyy_API_key_2
+```
+
+Keep in mind hobbyist accounts only have 10 polls per day so you need to ensure that the solcast_poll_hours refresh period is set so that you do not exceed the 10 poll limit.
+If you have two arrays then each Solcast refresh will consume 2 polls.
+If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
+
+If you have multiple PV arrays connected to hybrid inverters or you have AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
+
+If however you have a mixed PV array setup with some PV that does not feed into the inverters that Predbat is managing
 (e.g. hybrid GE inverters but a separate older FIT array that directly feeds AC into the house),
-then it's recommended that Solcast is only configured for the PV connected to the GivEnergy inverters.
+then it's recommended that Solcast is only configured for the PV connected to the inverters that Predbat is managing.
 
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (worst case) PV forecast, and the '90%' (best case) PV forecast.<BR>
 By default Predbat will use the central estimate and applies to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.

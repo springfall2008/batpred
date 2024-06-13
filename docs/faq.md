@@ -196,7 +196,9 @@ If you get this warning message in the Predbat log file or you see that the 'PV 
 
 - Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )
-- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log)
+- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log).
+If you see an error 429 message in the log then this is as a result of  Solcast's rate limiting for Hobbyist accounts.
+The only fix is to re-run the 'Solcast update' automation and hope that Solcast isn't as busy when you re-run.
 - Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
 and checking that you can see the half-hourly solar forecasts in the Solcast entities
 - If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities

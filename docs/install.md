@@ -221,7 +221,7 @@ Note: **Not recommended if you are using HACS**
 Predbat needs a solar forecast in order to predict solar generation and battery charging.
 If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you don't have one already register for a hobbyist account on [Solcast account](https://solcast.com/) and enter the details of your system.
+If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
 You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels
 e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
@@ -234,12 +234,12 @@ You will need your API key for the next steps:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769)
 
-### Predbat direct method
+### Predbat direct Solcast method
 
-Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
+Predbat can obtain the solar forecast directly from Solcast and the Solcast integration described below is not required.
 
-Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations
-the total polls needs to be kept under the limit or you will experience failures:
+First get your API key from the Solcast web site, then as described in the [Solcast apps.yaml documentation](apps-yaml.md#solcast-solar-forecast),
+uncomment the Solcast cloud interface settings in `apps.yaml` and set the API key correctly:
 
 ```yaml
 solcast_host: 'https://api.solcast.com.au/'
@@ -249,12 +249,12 @@ solcast_poll_hours: 8
 
 ### Solcast Home Assistant integration method
 
-Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
-
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-If you don't have solar then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
+
+If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
 
 ```yaml
   pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
@@ -265,8 +265,11 @@ If you don't have solar then use a file editor to comment out the following line
 
 Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
 forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
-so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under
-the limit or you will experience failures.
+so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
+
+Due to the popularity of the Solcast Hobbyist service, Solcast have introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
+Solcast recommend that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.
+The sample Solcast automation below contains non-precise poll times for just this reason.
 
 Example Solcast update automation script:
 
@@ -275,13 +278,13 @@ alias: Solcast update
 description: "Update Solcast solar forecast"
 trigger:
   - platform: time
-    at: "06:00:00"
+    at: "06:02:34"
   - platform: time
-    at: "12:00:00"
+    at: "12:07:47"
   - platform: time
-    at: "18:00:00"
+    at: "18:09:56"
   - platform: time
-    at: "23:00:00"
+    at: "23:11:18"
 condition: []
 action:
   - service: solcast_solar.update_forecasts
