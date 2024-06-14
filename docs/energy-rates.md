@@ -11,6 +11,11 @@ or the `/config/appdaemon/apps/batpred/config/` directory depending on [what typ
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
+There are three different ways of configuring your Energy rates in `apps.yaml`, using the [Octopus Energy Integration](#octopus-energy-integration), using [Octopus Rates URL's](#octopus-rates-url),
+or manually [defining your rates and time periods](#rate-bands-to-manually-configure-energy-rates).
+
+At least one of these methods must be used to define your import and export rates. If you don't then Predbat will assume zero for your energy rates.
+
 ## Octopus Energy integration
 
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information
@@ -69,7 +74,7 @@ but you can comment out the regular expression lines to disable, or you set them
 - **metric_octopus_import** - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_current_rate
 - **metric_octopus_export** - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_export_current_rate
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_<meter_number>_current_rate
-- **octopus_intelligent_slot** - If you have the Octopus Intelligent GO tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_<account_id>_intelligent_dispatching
+- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_<account_id>_intelligent_dispatching
 
 metric_octopus_gas is (as above) only required to be configured if you are using Predbat to determine whether to heat your hot water via your iBoost or gas.
 
@@ -168,7 +173,7 @@ start and end can be omitted and Predbat will assume that you are on a single fl
 
 If there are any gaps in the 24-hour period then a zero rate will be assumed.
 
-If you don't use gas then you can not put this one in the configuration.
+The gas rates are only required if you have a gas boiler, an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.
 
 ## Manually over-riding energy rates
 
