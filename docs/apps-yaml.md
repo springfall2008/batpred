@@ -1,23 +1,23 @@
 # apps.yaml settings
 
-The basic configuration for Predbat is configured in the `apps.yaml` file.
+The basic Predbat configuration is defined in the `apps.yaml` file.
 
-Depending on whether you have used the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) or the
-[HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), the `apps.yaml` file will be held in one of two directories in Home Assistant:
+Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- `/addon_configs/46f69597_appdaemon-predbat/apps` if you used the combined AppDaemon/Predbat add-on installation method
+- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat/apps`,
 
+- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`,
 or
 
-- `/config/appdaemon/apps/batpred/config/` if you used the HACS, AppDaemon add-on then Predbat installation method
+- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/config/appdaemon/apps/batpred/config/`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 This section of the documentation describes what the different configuration items in `apps.yaml` do.
 
-When you edit `apps.yaml`, AppDaemon will automatically detect the change and Predbat will be reloaded with the updated file.
-You don't need to restart the AppDaemon add-on for your edits to take effect.
+When you edit `apps.yaml`, the change will automatically be detected and Predbat will be reloaded with the updated file.
+You don't need to restart the Predbat or AppDaemon add-on for your edits to take effect.
 
 ## Warning! apps.yaml file format
 
@@ -46,9 +46,9 @@ The two spaces before the dash are especially critical. Its easy to mis-edit and
 You can find template configurations in the following location: <https://github.com/springfall2008/batpred/tree/main/templates>
 
 The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
-where your `apps.yaml` is stored, and modify it from there.
+where your `apps.yaml` is stored, replacing the existing apps.yaml file, and modify it from there.
 
-Please read: [Other Inverters](other-inverters.md) for non Givenergy inverters
+Please read: [Other Inverters](other-inverters.md) for non GivEnergy inverters
 
 ## Basics
 

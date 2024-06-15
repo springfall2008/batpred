@@ -92,7 +92,7 @@ If you have used the Predbat add-on installation method you do not need to insta
 
 ## AppDaemon-Predbat combined install
 
-Another way to install Predbat now is with a combined AppDaemon/Predbat add-on.
+Another way to install Predbat is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
 Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
