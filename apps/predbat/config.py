@@ -388,6 +388,18 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "metric_self_sufficiency",
+        "friendly_name": "Metric Self Sufficiency",
+        "type": "input_number",
+        "min": 0,
+        "max": 100,
+        "step": 0.5,
+        "unit": "p/kWh",
+        "icon": "mdi:currency-usd",
+        "enable": "expert_mode",
+        "default": 0.0,
+    },
+    {
         "name": "set_reserve_min",
         "friendly_name": "Set Reserve Min",
         "type": "input_number",
