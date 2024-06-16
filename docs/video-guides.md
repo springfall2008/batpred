@@ -24,7 +24,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Multiple cars](https://www.youtube.com/watch?v=F7L5tpgyqOs)
 - [How to Tune your system for better performance](https://youtu.be/fW8nG-7mJic)
-- [Issues with Solcast hobbist accounts and Home Assistant](https://youtu.be/K0KOMqoN-WI)
+- [Issues with Solcast free accounts and Home Assistant](https://youtu.be/K0KOMqoN-WI)
 - [How to Install Predbat with the new Add On](https://youtu.be/PvGyENVJup8)
 
 ## Features
@@ -41,7 +41,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [Charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 - [Controlling my car based on Predbat Slot](https://youtu.be/805Blbfc9Os)
 - [Manual plan overrides for force charge/discharge/idle](https://youtu.be/yDwO_-eXbvI)
-- [GivTCP auto restat feature](https://youtu.be/z4V_wa74jbo)
+- [GivTCP auto restart feature](https://youtu.be/z4V_wa74jbo)
 - [GivEnergy Inverter Pause, Manual Freeze Charge/Discharge](https://youtu.be/4cJhKmB5vkY)
 - [Optimising for Carbon Footprint](https://youtu.be/uVUnrESRZXs)
 - [Calculating your cost savings](https://youtu.be/NQ9YD9fBLxM)
