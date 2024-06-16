@@ -64,7 +64,7 @@ pred_bat:
   # When this is set load_today, import_today and export_today are not used
   #
   ge_cloud_data: False
-  ge_cloud_serial: '{geseriale}'
+  ge_cloud_serial: '{geserial}'
   ge_cloud_key: 'xxxx'
 
   # Controls/status - must by 1 per inverter
