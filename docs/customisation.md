@@ -132,7 +132,7 @@ The battery value is accounted for in the optimisations at the lowest future imp
 A value of 1.0 means no change to this, while lower than 1.0 means to value future battery levels less,
 greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
 
-**input_number.metric_self_sufficiency** (_export mode_) A price in pence per kWh used to skew the calculations towards self sufficiency. Effectively saying to Predbat to 
+**input_number.metric_self_sufficiency** (_export mode_) A price in pence per kWh used to skew the calculations towards self sufficiency. Effectively saying to Predbat to
 account for imports at a higher price than reality in the calculation and thus selecting plans with less import. If you want to be as self sufficent as possible then set
 this to the difference between your lowest import rate and the highest export rate to take exports that require additional import appear unprofitable. This setting will not
 impact the real calculated costs and is only used for plan selection. Values of 5-10p maybe worth trying if you prefer to avoid importing even if it saves you money.
