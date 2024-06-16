@@ -8,7 +8,7 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 - [Setting Up HomeAssistant Basics, File Editor, SSH, HACS, Octopus, eWelink](https://youtu.be/zMDLxynHExs?si=QLCDs30bIo3C3Edx)
 - [Installing MQTT and GivTCP on Home Assistant](https://youtu.be/kdqXo2TQWNk?si=jSDL_8jtGR6m-Xtf)
-- [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans](https://youtu.be/44NyYbyd8PY?si=ZCWaJDAKIxJExlk0)
+- [Predbat installation - Predbat, Solcast, Dashboard, Charts and Plans - Add On Method](https://youtu.be/QMvRIbAcpk8)
 
 - [Configuration of apps.yaml](https://youtu.be/VE15l3maDOk)
 - [Configuration of Predbat inside Home Assistant](https://youtu.be/qsLWDd5SLkY)
@@ -22,10 +22,10 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 
 [Playlist of other Predbat configuration videos](https://www.youtube.com/watch?v=kfFmp_firGY&list=PLTjtFJ0drtonvXiCQ5OGu1RISLLo4HnDQ)
 
-- [AppDaemon Configuration process](https://www.youtube.com/watch?v=kfFmp_firGY&t=15s)
-- [Fixing the new version so HACS still works (after updating AppDaemon)](https://www.youtube.com/watch?v=2dEMjnWUttI&t=12s)
 - [Multiple cars](https://www.youtube.com/watch?v=F7L5tpgyqOs)
-- [Octopus Energy plugin >v9.0.0](https://www.youtube.com/watch?v=sL0AXFhGHvU)
+- [How to Tune your system for better performance](https://youtu.be/fW8nG-7mJic)
+- [Issues with Solcast free accounts and Home Assistant](https://youtu.be/K0KOMqoN-WI)
+- [How to Install Predbat with the new Add On](https://youtu.be/PvGyENVJup8)
 
 ## Features
 
@@ -39,6 +39,12 @@ All the video guides are now available on my YouTube channel: [Springfall2008](h
 - [Saving and restoring settings](https://youtu.be/zhfJzKNkq4Q?si=06aYAE4yKv8bylaY)
 - [Manual plan override](https://youtu.be/yDwO_-eXbvI?si=o8tiOEKSPIPo6tEP)
 - [Charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+- [Controlling my car based on Predbat Slot](https://youtu.be/805Blbfc9Os)
+- [Manual plan overrides for force charge/discharge/idle](https://youtu.be/yDwO_-eXbvI)
+- [GivTCP auto restart feature](https://youtu.be/z4V_wa74jbo)
+- [GivEnergy Inverter Pause, Manual Freeze Charge/Discharge](https://youtu.be/4cJhKmB5vkY)
+- [Optimising for Carbon Footprint](https://youtu.be/uVUnrESRZXs)
+- [Calculating your cost savings](https://youtu.be/NQ9YD9fBLxM)
 
 ## Energy Tariffs
 
