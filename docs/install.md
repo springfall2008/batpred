@@ -461,3 +461,5 @@ You should check the Log tab to ensure it all starts properly, but it should do 
 Note that if you are using the [Predbat direct connection to Solcast](#predbat-direct-solcast-method) then the add-on will need to download your solar forecast
 so will use up one or two of your daily API calls (hobbyist accounts have a 10 API a day limit).
 If you are using the [Solcast integration](#solcast-home-assistant-integration-method) then this won't be required.
+
+When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
