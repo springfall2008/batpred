@@ -213,7 +213,7 @@ A manual install is suitable for those running Docker type systems where HACS do
 
 Note: **Not recommended if you are using HACS**
 
-- Copy the file apps/predbat/predbat.py to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
+- Copy all the .py files to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
 - Copy apps/predbat/apps.yaml to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
 - Edit in Home Assistant the `/config/appdaemon/apps/apps.yaml` file to configure Predbat
 
