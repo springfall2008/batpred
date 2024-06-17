@@ -247,6 +247,10 @@ solcast_api_key: 'xxxx'
 solcast_poll_hours: 8
 ```
 
+NB: If you use Predbat to obtain your solcast solar forecast then (at present) you can't
+[include the Solar Forecast within the Home Assistant Energy dashboard](https://www.home-assistant.io/dashboards/energy/#solar-production-graph)
+as you can with the Solcast integration described below.
+
 ### Solcast Home Assistant integration method
 
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
