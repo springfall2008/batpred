@@ -427,26 +427,28 @@ These steps assume you already have a working Predbat system and want to upgrade
 Using the Predbat add-on is the strategic direction for Predbat and resolves some performance and data load issues that can occur with AppDaemon.
 The Predbat code that runs is exactly the same and the configuration is exactly the same, its just changing the 'container' that Predbat runs within.
 
-Before starting, watch the [installing Predbat add-on video](https://www.youtube.com/watch?v=PvGyENVJup8)
+1. Before starting, watch the [installing Predbat add-on video](https://www.youtube.com/watch?v=PvGyENVJup8)
 
-1. [Install the Predbat add-on](#predbat-add-on-install):
+2. Although the upgrade steps are low risk, take a full backup of Home Assistant before starting
+
+3. [Install the Predbat add-on](#predbat-add-on-install):
     - Add the predbat add-on to the list of Repositories in the add-on store
     - Install the Predbat add-on
     - But **do not** start it - *yet*
 
-2. [Install a file editor](#editing-configuration-files-in-home-assistant) if you don't have one already installed - either File Editor or Studio Code Server, it doesn't matter
+4. [Install a file editor](#editing-configuration-files-in-home-assistant) if you don't have one already installed - either File Editor or Studio Code Server, it doesn't matter
 
-3. Open your file editor and open your existing `apps.yaml` file:
+5. Open your file editor and open your existing `apps.yaml` file:
     - If you are using the [combined AppDaemon/Predbat add-on installation method](#appdaemon-predbat-combined-install), it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
 or
     - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
 
-4. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
+6. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
 
-5. Now open the template `apps.yaml` file that's supplied with the Predbat add-on which will be in the directory `/addon_configs/6adb4f0d_predbat/apps`,
+7. Now open the template `apps.yaml` file that's supplied with the Predbat add-on which will be in the directory `/addon_configs/6adb4f0d_predbat/apps`,
 select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
 
-6. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:
+8. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:
     - Go to Settings/Add-ons
     - Click on the existing AppDaemon/AppDaemon-predbat add-on
     - Click STOP, and untick 'Start on boot'
@@ -462,4 +464,4 @@ Note that if you are using the [Predbat direct connection to Solcast](#predbat-d
 so will use up one or two of your daily API calls (hobbyist accounts have a 10 API a day limit).
 If you are using the [Solcast integration](#solcast-home-assistant-integration-method) then this won't be required.
 
-When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
+9. When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
