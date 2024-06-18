@@ -87,7 +87,7 @@ Ensure 'start on boot' is enabled and click 'start'.
 These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
 
 - **predbat.log** - Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
-- **apps/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
+- **apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
 You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
 
@@ -449,7 +449,7 @@ or
 
 6. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
 
-7. Now open the template `apps.yaml` file that's supplied with the Predbat add-on which will be in the directory `/addon_configs/6adb4f0d_predbat/apps`,
+7. Now open the template `apps.yaml` file that's supplied with the Predbat add-on which will be in the directory `/addon_configs/6adb4f0d_predbat`,
 select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
 
 8. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:

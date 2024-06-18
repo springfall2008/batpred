@@ -4,7 +4,7 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat/apps`,
+- if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat`,
 
 - if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`,
 or

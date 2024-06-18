@@ -5,7 +5,7 @@ Your Import and Export rates can be simple flat rates,
 more complex time of day tariffs (e.g. Economy 7, Octopus Flux),
 or daily/half-hourly rates that track electricity market prices (e.g. Octopus Agile or Tracker).
 
-Energy rates are all configured in the `apps.yaml` file that's stored in either the directory `/addon_configs/6adb4f0d_predbat/apps`,
+Energy rates are all configured in the `apps.yaml` file that's stored in either the directory `/addon_configs/6adb4f0d_predbat`,
 `/addon_configs/46f69597_appdaemon-predbat/apps` or the `/config/appdaemon/apps/batpred/config/` directory depending on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
