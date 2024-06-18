@@ -58,7 +58,7 @@ or Off when Predbat is waiting for the next time it needs to perform a plan calc
 If you toggle this switch in Home Assistant it will force Predbat to perform an update now (useful for automations).
 
 - **predbat.status** - Gives the current status & errors and logs any changes that Predbat makes to your inverter.
-The different Predbat status values and their meanings are detailed in [what does predbat do](what-does-predbat-do.md#predbat-status).
+The different Predbat status values and their meanings are detailed in [what does Predbat do](what-does-predbat-do.md#predbat-status).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e24914b8-93d9-4217-812a-ac25a569a52c)
 
@@ -348,7 +348,7 @@ This automation will raise an alert if Predbat's status turns to *ERROR* for mor
 The script will need to be customised for your mobile details.
 
 ```yaml
-alias: predbat error monitor
+alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trigger:
   - platform: state
@@ -374,7 +374,7 @@ action:
       title: Predbat status issue
       message: |
         {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
-        predbat status is {{ states('predbat.status') }}, error={{
+        Predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
       data:
         visibility: public

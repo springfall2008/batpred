@@ -229,8 +229,8 @@ You can create 2 sites maximum under one account, if you have more aspects then 
 e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
-(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
-When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let Predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, Predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
 (bypassing the hybrid inverter).
 
 You will need your API key for the next steps:
@@ -250,9 +250,11 @@ solcast_api_key: 'xxxx'
 solcast_poll_hours: 8
 ```
 
-NB: If you use Predbat to obtain your solcast solar forecast then (at present) you can't
+NB: If you use Predbat to obtain your solcast solar forecast then you can't
 [include the Solar Forecast within the Home Assistant Energy dashboard](https://www.home-assistant.io/dashboards/energy/#solar-production-graph)
-as you can with the Solcast integration described below.
+as you can with the Solcast integration described below.<BR>
+The Solcast integration also contains a 'solar dampening' feature that may be useful to reduce the solar forecast that Predbat receives at certain times of day,
+e.g. if your panels are shaded by trees or buildings.
 
 ### Solcast Home Assistant integration method
 
@@ -276,7 +278,8 @@ so the refresh period needs to be less than this. If you use the same Solcast ac
 
 Due to the popularity of the Solcast Hobbyist service, Solcast have introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
 Solcast recommend that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.
-The sample Solcast automation below contains non-precise poll times for just this reason.
+The Solcast integration will auto-retry if it gets a 429 error,
+but to minimise potential rate limiting the sample Solcast automation below contains non-precise poll times for just this reason.
 
 Example Solcast update automation script:
 
@@ -349,7 +352,7 @@ By now you should have successfully installed and configured Predbat in AppDaemo
 
 You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
 
-You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
+You have configured Predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
 
 In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
 
@@ -410,14 +413,15 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
-If you have used the [Combined AppDaemon and Predbat add-on installation method](#appdaemon-predbat-combined-install) then
-once installed and configured you should update Predbat to the latest version by using the **select.predbat_update** selector or by enabling the **switch.predbat_auto_update**.
+If you have used either the [Predbat add-on](#predbat-add-on-install) or [Combined AppDaemon and Predbat add-on](#appdaemon-predbat-combined-install) installation method then
+once installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
+or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
 
 ## Manual update of Predbat
 
 **Expert only**
 
-You can go to Github and download predbat.py from the releases tab and then manually copy this file
+You can go to Github and download all the .py files from the releases tab and then manually copy these files
 over the existing version in `/config/appdaemon/apps/batpred/` manually.
 
 ## Upgrading from AppDaemon to Predbat add-on
@@ -432,7 +436,7 @@ The Predbat code that runs is exactly the same and the configuration is exactly 
 2. Although the upgrade steps are low risk, take a full backup of Home Assistant before starting
 
 3. [Install the Predbat add-on](#predbat-add-on-install):
-    - Add the predbat add-on to the list of Repositories in the add-on store
+    - Add the Predbat add-on to the list of Repositories in the add-on store
     - Install the Predbat add-on
     - But **do not** start it - *yet*
 

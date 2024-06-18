@@ -56,7 +56,7 @@ Basic configuration items
 
 ### prefix
 
-Set to the prefix name to be used for all entities that predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
+Set to the prefix name to be used for all entities that Predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
 
 ```yaml
   prefix: predbat

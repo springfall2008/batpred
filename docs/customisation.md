@@ -35,7 +35,7 @@ The mode that Predbat operates in will change the operation, this can be configu
 
 If the **switch.predbat_set_read_only** is set to True then this prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
 Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
-This is useful if you want to over-ride what predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works prior to turning it on 'in anger'.
+This is useful if you want to over-ride what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works prior to turning it on 'in anger'.
 
 _NOTE: Changing the Predbat mode or the read only switch will cause Predbat to reset the inverter settings to default, this will disable
 both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
@@ -419,7 +419,7 @@ To turn the model on, **switch.predbat_iboost_enable** needs to be enabled.
 
 The predicted output from the iBoost solar diverter model is returned in **predbat.iboost_best** and is populated in the 'iBoost' column of the [Predbat plan](predbat-plan-card.md).
 
-When you turn on predbat_iBoost_enable the following additional Home Assistant entities are created by Predbat:
+When you turn on predbat_iboost_enable the following additional Home Assistant entities are created by Predbat:
 
 - **switch.predbat_iboost_solar** When enabled assumes the solar diverter will use solar power to boost the hot water heating.
 
