@@ -323,7 +323,7 @@ CONFIG_ITEMS = [
         "unit": "p/kWh",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
-        "default": 0.5,
+        "default": 0,
     },
     {
         "name": "metric_battery_value_scaling",
