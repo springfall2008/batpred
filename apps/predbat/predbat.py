@@ -6348,6 +6348,7 @@ class PredBat(hass.Hass):
                     if self.carbon_enable:
                         carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
                         average += carbon_intensity * self.carbon_metric / 1000.0
+                    average += self.metric_self_sufficiency
                 if secondary_order:
                     average_export = self.dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
