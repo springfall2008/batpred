@@ -1911,8 +1911,13 @@ class PredBat(hass.Hass):
             load_diff_total += load_diff
 
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = load_std_dev / load_mean / 2.0
-        load_divergence = min(load_divergence, 1.0)
+        if load_mean > 0:
+            load_divergence = load_std_dev / load_mean / 2.0
+            load_divergence = min(load_divergence, 1.0)
+        else:
+            self.log("Warn: Load mean is zero, unable to calculate divergence!")
+            load_divergence = 0
+            
         self.log(
             "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
                 look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
@@ -5338,19 +5343,7 @@ class PredBat(hass.Hass):
                         self.debug_enable = was_debug
 
                         metric = self.compute_metric(
-                            end_record,
-                            soc,
-                            soc,
-                            cost,
-                            cost,
-                            final_iboost,
-                            final_iboost,
-                            battery_cycle,
-                            metric_keep,
-                            final_carbon_g,
-                            import_kwh_battery,
-                            import_kwh_house,
-                            export_kwh,
+                            end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh
                         )
 
                         # Optimise
@@ -5416,20 +5409,7 @@ class PredBat(hass.Hass):
                 best_discharge,
             )
         )
-        return (
-            best_limits,
-            best_discharge,
-            best_price_charge,
-            best_price_discharge,
-            best_metric,
-            best_cost,
-            best_keep,
-            best_soc_min,
-            best_cycle,
-            best_carbon,
-            best_import,
-            tried_list,
-        )
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, tried_list
 
     def optimise_charge_limit_price_threads(
         self,
@@ -5685,20 +5665,7 @@ class PredBat(hass.Hass):
                 final_iboost,
                 final_carbon_g,
             ) = self.run_prediction(best_limits, charge_window, discharge_window, best_discharge, False, end_record=end_record, step=PREDICT_STEP, save="level")
-        return (
-            best_limits,
-            best_discharge,
-            best_price_charge,
-            best_price_discharge,
-            best_metric,
-            best_cost,
-            best_keep,
-            best_soc_min,
-            best_cycle,
-            best_carbon,
-            best_import,
-            tried_list,
-        )
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, tried_list
 
     def launch_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step=PREDICT_STEP):
         """
@@ -7136,11 +7103,7 @@ class PredBat(hass.Hass):
                         self.discharge_limits_best[window_n] = best_soc
                         self.discharge_window_best[window_n]["start"] = best_start
                 if (count % 16) == 0:
-                    self.log(
-                        "Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(
-                            typ, window_n, best_metric, self.dp2(best_keep), self.dp0(best_carbon), self.dp2(best_import), self.dp2(best_cost)
-                        )
-                    )
+                    self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, self.dp2(best_keep), self.dp0(best_carbon), self.dp2(best_import), self.dp2(best_cost)))
                 count += 1
             self.log(
                 "Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(
