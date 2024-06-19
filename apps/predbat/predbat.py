@@ -5338,19 +5338,7 @@ class PredBat(hass.Hass):
                         self.debug_enable = was_debug
 
                         metric = self.compute_metric(
-                            end_record,
-                            soc,
-                            soc,
-                            cost,
-                            cost,
-                            final_iboost,
-                            final_iboost,
-                            battery_cycle,
-                            metric_keep,
-                            final_carbon_g,
-                            import_kwh_battery,
-                            import_kwh_house,
-                            export_kwh,
+                            end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh
                         )
 
                         # Optimise
@@ -5416,20 +5404,7 @@ class PredBat(hass.Hass):
                 best_discharge,
             )
         )
-        return (
-            best_limits,
-            best_discharge,
-            best_price_charge,
-            best_price_discharge,
-            best_metric,
-            best_cost,
-            best_keep,
-            best_soc_min,
-            best_cycle,
-            best_carbon,
-            best_import,
-            tried_list,
-        )
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, tried_list
 
     def optimise_charge_limit_price_threads(
         self,
@@ -5685,20 +5660,7 @@ class PredBat(hass.Hass):
                 final_iboost,
                 final_carbon_g,
             ) = self.run_prediction(best_limits, charge_window, discharge_window, best_discharge, False, end_record=end_record, step=PREDICT_STEP, save="level")
-        return (
-            best_limits,
-            best_discharge,
-            best_price_charge,
-            best_price_discharge,
-            best_metric,
-            best_cost,
-            best_keep,
-            best_soc_min,
-            best_cycle,
-            best_carbon,
-            best_import,
-            tried_list,
-        )
+        return best_limits, best_discharge, best_price_charge, best_price_discharge, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, tried_list
 
     def launch_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step=PREDICT_STEP):
         """
@@ -6348,6 +6310,7 @@ class PredBat(hass.Hass):
                     if self.carbon_enable:
                         carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
                         average += carbon_intensity * self.carbon_metric / 1000.0
+                    average += self.metric_self_sufficiency
                 if secondary_order:
                     average_export = self.dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
@@ -7135,11 +7098,7 @@ class PredBat(hass.Hass):
                         self.discharge_limits_best[window_n] = best_soc
                         self.discharge_window_best[window_n]["start"] = best_start
                 if (count % 16) == 0:
-                    self.log(
-                        "Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(
-                            typ, window_n, best_metric, self.dp2(best_keep), self.dp0(best_carbon), self.dp2(best_import), self.dp2(best_cost)
-                        )
-                    )
+                    self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, self.dp2(best_keep), self.dp0(best_carbon), self.dp2(best_import), self.dp2(best_cost)))
                 count += 1
             self.log(
                 "Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(
