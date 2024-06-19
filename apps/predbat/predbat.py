@@ -1911,8 +1911,13 @@ class PredBat(hass.Hass):
             load_diff_total += load_diff
 
         load_std_dev = math.sqrt(load_diff_total / load_count)
-        load_divergence = load_std_dev / load_mean / 2.0
-        load_divergence = min(load_divergence, 1.0)
+        if load_mean > 0:
+            load_divergence = load_std_dev / load_mean / 2.0
+            load_divergence = min(load_divergence, 1.0)
+        else:
+            self.log("Warn: Load mean is zero, unable to calculate divergence!")
+            load_divergence = 0
+
         self.log(
             "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(
                 look_over / 60.0, self.dp2(load_mean), self.dp2(load_min), self.dp2(load_max), self.dp2(load_std_dev), self.dp2(load_divergence * 100.0)
