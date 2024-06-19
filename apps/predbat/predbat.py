@@ -11005,6 +11005,16 @@ class PredBat(hass.Hass):
         if self.get_arg("template", False):
             self.log("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             self.record_status("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
+
+            # before terminating, create predbat dashboard for new users
+            try:
+                self.create_entity_list()
+            except Exception as e:
+                self.log("Error: Exception raised {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e))
+                raise e
+
             return
 
         if SIMULATE and SIMULATE_LENGTH:
