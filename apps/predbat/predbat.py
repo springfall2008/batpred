@@ -5005,6 +5005,7 @@ class PredBat(hass.Hass):
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
         self.metric_standing_charge = 0.0
+        self.metric_self_sufficiency = 0.0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_gas = {}
