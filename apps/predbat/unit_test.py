@@ -21,18 +21,20 @@ import numpy as np
 from predbat import PredBat
 from prediction import Prediction
 
+
 class TestHAInterface:
     def __init__(self):
         self.step = 5
         self.build_history()
         pass
+
     def build_history(self, days=30):
         history = []
         now = datetime.now()
         start = now - timedelta(days=days)
         state = 0.0
         for count in range(int(days * 24 * 60 / self.step)):
-            point = start + timedelta(minutes=count*self.step)
+            point = start + timedelta(minutes=count * self.step)
             point_str = point.strftime("%Y-%m-%dT%H:%M:%SZ")
             history.append({"state": state, "last_changed": point})
         self.history = history
@@ -43,24 +45,30 @@ class TestHAInterface:
             return {}
         else:
             return None
+
     def call_service(self, domain, service, data):
         print("Calling service: {} {}".format(domain, service))
         return None
+
     def set_state(self, entity_id, state, attributes=None):
         print("Setting state: {} to {}".format(entity_id, state))
         return None
+
     def get_history(self, entity_id, now=None, days=30):
         print("Getting history for {}".format(entity_id))
         return [self.history]
 
-class TestInverter():
+
+class TestInverter:
     def __init__(self):
         pass
 
+
 def reset_rates(my_predbat, ir, xr):
-    for minute in range(my_predbat.forecast_minutes + 24*60):
+    for minute in range(my_predbat.forecast_minutes + 24 * 60):
         my_predbat.rate_import[minute] = ir
         my_predbat.rate_export[minute] = xr
+
 
 def reset_inverter(my_predbat):
     my_predbat.inverter_limit = 1 / 60.0
@@ -95,6 +103,7 @@ def reset_inverter(my_predbat):
     my_predbat.battery_rate_max_scaling = 1.0
     my_predbat.battery_rate_max_scaling_discharge = 1.0
 
+
 def plot(name, prediction):
     """
     Plot the prediction
@@ -107,15 +116,30 @@ def plot(name, prediction):
     metric_pence = list(prediction.predict_metric_best.values())
     metric = [round(x / 100, 2) for x in metric_pence]
     metric = np.array(metric)
-    ax.plot(minutes, predict_soc, label='soc')
-    ax.plot(minutes, metric, label='metric')
+    ax.plot(minutes, predict_soc, label="soc")
+    ax.plot(minutes, metric, label="metric")
     ax.set_xticks(range(0, prediction.forecast_minutes, 240))
-    ax.set(xlabel='time (minutes)', ylabel='Value', title=name)
+    ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
     ax.legend()
     plt.savefig("{}.png".format(name))
     plt.show()
 
-def simple_scenario(name, my_predbat, load_amount, pv_amount, assert_final_metric, assert_final_soc, with_battery=True, battery_loss=1.0, battery_size=100.0, battery_soc=0.0, hybrid=False, export_limit=10.0, inverter_limit=1.0):
+
+def simple_scenario(
+    name,
+    my_predbat,
+    load_amount,
+    pv_amount,
+    assert_final_metric,
+    assert_final_soc,
+    with_battery=True,
+    battery_loss=1.0,
+    battery_size=100.0,
+    battery_soc=0.0,
+    hybrid=False,
+    export_limit=10.0,
+    inverter_limit=1.0,
+):
     """
     No PV, No Load
     """
@@ -170,6 +194,7 @@ def simple_scenario(name, my_predbat, load_amount, pv_amount, assert_final_metri
         plot(name, prediction)
     return failed
 
+
 def main():
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
@@ -180,7 +205,7 @@ def main():
     my_predbat.auto_config()
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
-    my_predbat.forecast_minutes = 24*60
+    my_predbat.forecast_minutes = 24 * 60
     reset_inverter(my_predbat)
     import_rate = 10.0
     export_rate = 5.0
@@ -189,23 +214,28 @@ def main():
     print("**** Testing Predbat ****")
     failed = False
     failed |= simple_scenario("zero", my_predbat, 0, 0, 0, 0, with_battery=False)
-    failed |= simple_scenario("load_only", my_predbat, 1, 0, assert_final_metric=import_rate*24, assert_final_soc=0, with_battery=False)
+    failed |= simple_scenario("load_only", my_predbat, 1, 0, assert_final_metric=import_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
-    failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate*24, assert_final_soc=0, with_battery=False)
+    failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only_bat", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=24, with_battery=True)
     failed |= simple_scenario("pv_only_bat_loss", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=12, with_battery=True, battery_loss=0.5)
-    failed |= simple_scenario("pv_only_bat_100%", my_predbat, 0, 1, assert_final_metric=-export_rate*14, assert_final_soc=10, with_battery=True, battery_size=10)
-    failed |= simple_scenario("pv_only_bat_ac_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate*24, assert_final_soc=24, with_battery=True)
-    failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate*48, assert_final_soc=24, with_battery=True)
-    failed |= simple_scenario("pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate*24*0.5, assert_final_soc=24, with_battery=True, export_limit=0.5)
-    failed |= simple_scenario("pv_only_bat_dc_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate*24, assert_final_soc=24, with_battery=True, hybrid=True)
-    failed |= simple_scenario("pv_only_bat_dc_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate*24, assert_final_soc=24, with_battery=True, hybrid=True)
-    failed |= simple_scenario("pv_only_bat_dc_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate*24*0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5)
+    failed |= simple_scenario("pv_only_bat_100%", my_predbat, 0, 1, assert_final_metric=-export_rate * 14, assert_final_soc=10, with_battery=True, battery_size=10)
+    failed |= simple_scenario("pv_only_bat_ac_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True)
+    failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 48, assert_final_soc=24, with_battery=True)
+    failed |= simple_scenario(
+        "pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5
+    )
+    failed |= simple_scenario("pv_only_bat_dc_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
+    failed |= simple_scenario("pv_only_bat_dc_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
+    failed |= simple_scenario(
+        "pv_only_bat_dc_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5
+    )
     if failed:
         print("**** ERROR: Some tests failed ****")
         sys.exit(1)
     print("**** Tests passed ****")
     sys.exit(0)
-    
+
+
 if __name__ == "__main__":
     main()
