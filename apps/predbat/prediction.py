@@ -584,7 +584,7 @@ class Prediction:
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period
-                    # Skew against selecting solar charging in this case
+                    # Skew against selecting solar charging in this case
                     # as it will likely create an import as in reality the rate won't be reduced
                     if pv_dc < (charge_rate_now_curve * step):
                         potential_import = (charge_rate_now_curve * step) - pv_dc
