@@ -16,6 +16,17 @@ This PR should describe the work you've done in a way that
 makes it easy for someone to review your work, and either
 add comments or approve it.
 
+## Unit level testing
+
+Predbat now has some unit level tests, to run them on your local machine:
+
+1. Copy apps.yaml locally
+2. Run python3 6adb4f0d_predbat/unit_test.py
+
+If the tests fail then debug them.
+
+Note you will need to install python_matplotlib (e.g. brew install python_matplotlib or pip install matplotlib)
+
 ## Editing the code
 
 There are at least a couple of ways of working on the code, outlined here.
