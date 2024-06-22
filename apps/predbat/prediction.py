@@ -487,9 +487,8 @@ class Prediction:
             if self.set_discharge_freeze:
                 charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
-                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
-                    if self.set_discharge_freeze_only or ((soc - step * self.battery_rate_max_discharge_scaled) < (self.soc_max * discharge_limits[discharge_window_n] / 100.0)):
-                        charge_rate_now = self.battery_rate_min  # 0
+                if (discharge_window_n >= 0) and (discharge_limits[discharge_window_n] == 99.0 or self.set_discharge_freeze_only):
+                    charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
             if not self.set_discharge_during_charge:
@@ -509,6 +508,9 @@ class Prediction:
             use_keep = self.best_soc_keep if four_hour_rule else self.reserve
             if discharge_window_n >= 0:
                 discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
+
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute {} charge_rate_now_curve {} discharge_rate_now_curve {} soc {} rate_max_charge {} rate_max_scaling {} curve {} get {}".format(minute, charge_rate_now_curve, discharge_rate_now_curve, soc, self.battery_rate_max_charge, self.battery_rate_max_scaling, self.battery_charge_power_curve, get_charge_rate_curve(self, soc, charge_rate_now, debug=True)))
 
             if (
                 not self.set_discharge_freeze_only
@@ -600,6 +602,8 @@ class Prediction:
                         battery_state = "e+"
                     else:
                         battery_state = "e~"
+                # if save=="best" and ((minute % 60) == 0):
+                #    print("Minute {} ECO Mode load_yesterday {} pv_ac {} pv_dc {} battery_draw {} battery_state {}, offset {} battery_to_max {} charge_rate {}".format(minute, load_yesterday, pv_ac, pv_dc, battery_draw, battery_state, load_yesterday - pv_ac - pv_dc, -battery_to_max, -charge_rate_now_curve * step))
 
             # Account for inverter limit, clip battery draw if possible to avoid going over
             if self.inverter_hybrid:
@@ -613,6 +617,8 @@ class Prediction:
 
             if total_inverted > self.inverter_limit * step:
                 reduce_by = total_inverted - (self.inverter_limit * step)
+                # if save == "best" and (minute % 60) == 0:
+                #    print("Minute {} reduce_by {} total_inverted {} inverter_limit {} battery_draw {}".format(minute, reduce_by, total_inverted, self.inverter_limit * step, battery_draw))
                 if battery_draw < 0:
                     pv_ac -= reduce_by
                     if not self.inverter_hybrid and pv_ac < 0:
