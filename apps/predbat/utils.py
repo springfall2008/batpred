@@ -98,12 +98,14 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge
     return new_limit_best, new_window_best
 
 
-def get_charge_rate_curve(model, soc, charge_rate_setting):
+def get_charge_rate_curve(model, soc, charge_rate_setting, debug=False):
     """
     Compute true charging rate from SOC and charge rate setting
     """
     soc_percent = calc_percent_limit(soc, model.soc_max)
     max_charge_rate = model.battery_rate_max_charge * model.battery_charge_power_curve.get(soc_percent, 1.0) * model.battery_rate_max_scaling
+    if debug:
+        print("Max charge rate: {} SOC: {} Charge rate setting: {}".format(max_charge_rate, soc, charge_rate_setting))
     return max(min(charge_rate_setting, max_charge_rate), model.battery_rate_min)
 
 
