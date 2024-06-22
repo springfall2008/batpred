@@ -33,7 +33,7 @@ import asyncio
 import json
 
 THIS_VERSION = "v8.1.1"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -5005,6 +5005,7 @@ class PredBat(hass.Hass):
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
         self.metric_standing_charge = 0.0
+        self.metric_self_sufficiency = 0.0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_gas = {}
