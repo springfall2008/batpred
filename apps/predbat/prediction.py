@@ -487,7 +487,7 @@ class Prediction:
             if self.set_discharge_freeze:
                 charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
-                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
+                if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] == 99.0:
                     if self.set_discharge_freeze_only or ((soc - step * self.battery_rate_max_discharge_scaled) < (self.soc_max * discharge_limits[discharge_window_n] / 100.0)):
                         charge_rate_now = self.battery_rate_min  # 0
 
@@ -509,6 +509,9 @@ class Prediction:
             use_keep = self.best_soc_keep if four_hour_rule else self.reserve
             if discharge_window_n >= 0:
                 discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
+
+            #if save=="best" and ((minute % 60) == 0):
+            #    print("Minute {} charge_rate_now_curve {} discharge_rate_now_curve {} soc {} rate_max_charge {} rate_max_scaling {} curve {} get {}".format(minute, charge_rate_now_curve, discharge_rate_now_curve, soc, self.battery_rate_max_charge, self.battery_rate_max_scaling, self.battery_charge_power_curve, get_charge_rate_curve(self, soc, charge_rate_now, debug=True)))
 
             if (
                 not self.set_discharge_freeze_only
@@ -600,6 +603,8 @@ class Prediction:
                         battery_state = "e+"
                     else:
                         battery_state = "e~"
+                #if save=="best" and ((minute % 60) == 0):
+                #    print("Minute {} ECO Mode load_yesterday {} pv_ac {} pv_dc {} battery_draw {} battery_state {}, offset {} battery_to_max {} charge_rate {}".format(minute, load_yesterday, pv_ac, pv_dc, battery_draw, battery_state, load_yesterday - pv_ac - pv_dc, -battery_to_max, -charge_rate_now_curve * step))
 
             # Account for inverter limit, clip battery draw if possible to avoid going over
             if self.inverter_hybrid:
@@ -607,12 +612,14 @@ class Prediction:
             else:
                 total_inverted = abs(battery_draw)
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute {} SOC {} pv_ac {} pv_dc {} load_yesterday {} export_kwh {} import_kwh {} battery_draw {} charge_rate_now {} discharge_rate_now {} total_inverted {} hybrid {} inverter_limit {} export_limit {} battery_state {}".format(
             #           minute, soc, pv_ac, pv_dc, load_yesterday, export_kwh, import_kwh, battery_draw, charge_rate_now * step, discharge_rate_now * step, total_inverted, self.inverter_hybrid, self.inverter_limit * step, self.export_limit * step, battery_state))
 
             if total_inverted > self.inverter_limit * step:
                 reduce_by = total_inverted - (self.inverter_limit * step)
+                #if save == "best" and (minute % 60) == 0:
+                #    print("Minute {} reduce_by {} total_inverted {} inverter_limit {} battery_draw {}".format(minute, reduce_by, total_inverted, self.inverter_limit * step, battery_draw))
                 if battery_draw < 0:
                     pv_ac -= reduce_by
                     if not self.inverter_hybrid and pv_ac < 0:
@@ -621,9 +628,9 @@ class Prediction:
                 else:
                     battery_draw = max(0, battery_draw - reduce_by)
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute1 {} battery draw now {} pv_dc {} pv_ac {}".format(minute, battery_draw, pv_dc, pv_ac))
-
+                
             # Clamp battery at reserve for discharge
             if battery_draw > 0:
                 # All battery discharge must go through the inverter too
@@ -632,7 +639,7 @@ class Prediction:
                     battery_draw -= (reserve_expected - soc) * self.battery_loss_discharge * self.inverter_loss
                     soc = reserve_expected
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute2 {} battery draw now {} soc {}".format(minute, battery_draw, soc))
 
             # Clamp battery at max when charging
@@ -659,19 +666,19 @@ class Prediction:
 
                 battery_draw = battery_draw_ac + battery_draw_dc
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute3 {} battery draw now {} soc {}".format(minute, battery_draw, soc))
 
             # Rounding on SOC
             soc = round(soc, 6)
-
+                
             # Count battery cycles
             battery_cycle = round(battery_cycle + abs(battery_draw), 4)
 
             # Work out left over energy after battery adjustment
             diff = round(load_yesterday - (battery_draw + pv_dc + pv_ac), 6)
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute4 {} diff now {} pv_dc {} pv_ac {} battery_draw {}".format(minute, diff, load_yesterday, pv_dc, pv_ac, battery_draw))
 
             if self.inverter_hybrid:
@@ -690,7 +697,7 @@ class Prediction:
                 # Can not export over export limit, so cap at that
                 diff = max(diff, -self.export_limit * step)
 
-            # if save=="best" and ((minute % 60) == 0):
+            #if save=="best" and ((minute % 60) == 0):
             #    print("Minute5 {} diff now {} pv_dc {} pv_ac {} battery_draw {}".format(minute, diff, load_yesterday, pv_dc, pv_ac, battery_draw))
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery

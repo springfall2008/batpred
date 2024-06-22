@@ -1705,7 +1705,10 @@ class PredBat(hass.Hass):
             elif discharge_window_n >= 0:
                 discharge_target = self.discharge_limits_best[discharge_window_n]
                 if discharge_target >= soc_percent_max:
-                    value = "FrzDis"
+                    if discharge_target == 99:
+                        value = "FrzDis"
+                    else:
+                        value = "HldDis"
                 else:
                     value = "Dis"
 
@@ -6650,8 +6653,8 @@ class PredBat(hass.Hass):
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
 
-            if limit == 100:
-                # Ignore disabled windows
+            if limit == 100 or limit == 99:
+                # Ignore disabled windows & discharge freeze slots
                 pass
             elif window_length > 0:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
@@ -8617,7 +8620,7 @@ class PredBat(hass.Hass):
                     else:
                         inverter.adjust_force_discharge(False)
                         disabled_discharge = True
-                        if self.set_discharge_freeze:
+                        if self.set_discharge_freeze and (self.discharge_limits_best[0] == 99):
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
                             inverter.adjust_pause_mode(pause_charge=True)
