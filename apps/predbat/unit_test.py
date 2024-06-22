@@ -126,7 +126,19 @@ def plot(name, prediction):
 
 
 def simple_scenario(
-    name, my_predbat, load_amount, pv_amount, assert_final_metric, assert_final_soc, with_battery=True, battery_loss=1.0, battery_size=100.0, battery_soc=0.0, hybrid=False
+    name,
+    my_predbat,
+    load_amount,
+    pv_amount,
+    assert_final_metric,
+    assert_final_soc,
+    with_battery=True,
+    battery_loss=1.0,
+    battery_size=100.0,
+    battery_soc=0.0,
+    hybrid=False,
+    export_limit=10.0,
+    inverter_limit=1.0,
 ):
     """
     No PV, No Load
@@ -141,6 +153,8 @@ def simple_scenario(
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = 0.0
     my_predbat.inverter_hybrid = hybrid
+    my_predbat.export_limit = export_limit / 60.0
+    my_predbat.inverter_limit = inverter_limit / 60.0
 
     assert_final_metric = round(assert_final_metric / 100.0, 2)
     assert_final_soc = round(assert_final_soc, 2)
@@ -206,9 +220,22 @@ def main():
     failed |= simple_scenario("pv_only_bat", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=24, with_battery=True)
     failed |= simple_scenario("pv_only_bat_loss", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=12, with_battery=True, battery_loss=0.5)
     failed |= simple_scenario("pv_only_bat_100%", my_predbat, 0, 1, assert_final_metric=-export_rate * 14, assert_final_soc=10, with_battery=True, battery_size=10)
-    failed |= simple_scenario("pv_only_bat_ac_clips", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True)
+    failed |= simple_scenario("pv_only_bat_ac_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True)
+    failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 48, assert_final_soc=24, with_battery=True)
+    failed |= simple_scenario(
+        "pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5
+    )
+    failed |= simple_scenario(
+        "pv_only_bat_ac_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5
+    )
     failed |= simple_scenario("pv_only_bat_dc_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
     failed |= simple_scenario("pv_only_bat_dc_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True)
+    failed |= simple_scenario(
+        "pv_only_bat_dc_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5
+    )
+    failed |= simple_scenario(
+        "pv_only_bat_dc_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5
+    )
     if failed:
         print("**** ERROR: Some tests failed ****")
         sys.exit(1)
