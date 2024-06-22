@@ -5001,6 +5001,7 @@ class PredBat(hass.Hass):
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
+        self.metric_standing_charge = 0.0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_gas = {}
@@ -5134,6 +5135,28 @@ class PredBat(hass.Hass):
         self.savings_today_actual = 0.0
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
+        self.rate_import = {}
+        self.rate_import_replicated = {}
+        self.rate_export = {}
+        self.rate_export_replicated = {}
+        self.rate_slots = []
+        self.io_adjusted = {}
+        self.low_rates = []
+        self.high_export_rates = []
+        self.octopus_slots = []
+        self.cost_today_sofar = 0
+        self.carbon_today_sofar = 0
+        self.import_today = {}
+        self.export_today = {}
+        self.pv_today = {}
+        self.load_minutes = {}
+        self.load_minutes_age = 0
+        self.load_forecast = {}
+        self.pv_forecast_minute = {}
+        self.pv_forecast_minute10 = {}
+        self.load_scaling_dynamic = {}
+        self.carbon_intensity = {}
+        self.carbon_history = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
