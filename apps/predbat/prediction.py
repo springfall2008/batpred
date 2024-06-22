@@ -608,7 +608,7 @@ class Prediction:
                 total_inverted = abs(battery_draw)
 
             # if save=="best" and ((minute % 60) == 0):
-            #    print("Minute {} SOC {} pv_ac {} pv_dc {} load_yesterday {} export_kwh {} import_kwh {} battery_draw {} charge_rate_now {} discharge_rate_now {} total_inverterd {} inverter_limit {} battery_state {}".format(
+            #    print("Minute {} SOC {} pv_ac {} pv_dc {} load_yesterday {} export_kwh {} import_kwh {} battery_draw {} charge_rate_now {} discharge_rate_now {} total_inverted {} inverter_limit {} battery_state {}".format(
             #           minute, soc, pv_ac, pv_dc, load_yesterday, export_kwh, import_kwh, battery_draw, charge_rate_now, discharge_rate_now, total_inverted, self.inverter_limit * step, battery_state))
 
             if total_inverted > self.inverter_limit * step:
