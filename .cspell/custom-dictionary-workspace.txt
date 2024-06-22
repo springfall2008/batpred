@@ -85,6 +85,7 @@ linebreak
 localfolder
 lockstep
 markdownlint
+matplotlib
 maximise
 mdlrc
 metricb
@@ -166,5 +167,7 @@ venv
 Wallbox
 welink
 xaxis
+xticks
 yaxis
+ylabel
 zappi
