@@ -605,7 +605,11 @@ class Prediction:
             if self.inverter_hybrid:
                 total_inverted = pv_ac + max(pv_dc + battery_draw, 0)
             else:
-                total_inverted = pv_ac + pv_dc + abs(battery_draw)
+                total_inverted = abs(battery_draw)
+
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute {} SOC {} pv_ac {} pv_dc {} load_yesterday {} export_kwh {} import_kwh {} battery_draw {} charge_rate_now {} discharge_rate_now {} total_inverted {} inverter_limit {} battery_state {}".format(
+            #           minute, soc, pv_ac, pv_dc, load_yesterday, export_kwh, import_kwh, battery_draw, charge_rate_now, discharge_rate_now, total_inverted, self.inverter_limit * step, battery_state))
 
             if total_inverted > self.inverter_limit * step:
                 reduce_by = total_inverted - (self.inverter_limit * step)
@@ -617,6 +621,9 @@ class Prediction:
                 else:
                     battery_draw = max(0, battery_draw - reduce_by)
 
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute1 {} battery draw now {} pv_dc {} pv_ac {}".format(minute, battery_draw, pv_dc, pv_ac))
+
             # Clamp battery at reserve for discharge
             if battery_draw > 0:
                 # All battery discharge must go through the inverter too
@@ -624,6 +631,9 @@ class Prediction:
                 if soc < reserve_expected:
                     battery_draw -= (reserve_expected - soc) * self.battery_loss_discharge * self.inverter_loss
                     soc = reserve_expected
+
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute2 {} battery draw now {} soc {}".format(minute, battery_draw, soc))
 
             # Clamp battery at max when charging
             if battery_draw < 0:
@@ -649,6 +659,9 @@ class Prediction:
 
                 battery_draw = battery_draw_ac + battery_draw_dc
 
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute3 {} battery draw now {} soc {}".format(minute, battery_draw, soc))
+
             # Rounding on SOC
             soc = round(soc, 6)
 
@@ -657,6 +670,9 @@ class Prediction:
 
             # Work out left over energy after battery adjustment
             diff = round(load_yesterday - (battery_draw + pv_dc + pv_ac), 6)
+
+            # if save=="best" and ((minute % 60) == 0):
+            #    print("Minute4 {} diff now {} pv_dc {} pv_ac {} battery_draw {}".format(minute, diff, load_yesterday, pv_dc, pv_ac, battery_draw))
 
             if diff < 0:
                 # Can not export over inverter limit, load must be taken out first from the inverter limit
