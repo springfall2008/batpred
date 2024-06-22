@@ -167,6 +167,7 @@ venv
 Wallbox
 welink
 xaxis
+xlabel
 xticks
 yaxis
 ylabel
