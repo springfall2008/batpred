@@ -581,6 +581,14 @@ class Prediction:
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0, -battery_to_max)
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
+
+                if (charge_limit_n - soc) < (charge_rate_now_curve * step):
+                    # The battery will hit the charge limit in this period
+                    # Skew against selecting solar charging in this case
+                    # as it will likely create an import as in reality the rate won't be reduced
+                    if pv_dc >= (charge_limit_n - soc) and (pv_dc < (charge_rate_now_curve * step)):
+                        potential_import = (charge_rate_now_curve * step) - pv_dc
+                        metric += potential_import * rate_import.get(minute_absolute, 0)
             else:
                 # ECO Mode
                 if load_yesterday - pv_ac - pv_dc > 0:
