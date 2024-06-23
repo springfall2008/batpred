@@ -8665,6 +8665,7 @@ class PredBat(hass.Hass):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
             # Car charging from battery disable?
+            carHolding = False
             if not self.car_charging_from_battery:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
@@ -8679,6 +8680,7 @@ class PredBat(hass.Hass):
                                 inverter.adjust_discharge_rate(0)
                                 inverter.adjust_pause_mode(pause_discharge=True)
                                 resetDischarge = False
+                                carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if status != "Idle":
                                     status += ", Hold for car"
@@ -8691,7 +8693,7 @@ class PredBat(hass.Hass):
                 inverter.adjust_charge_immediate(0)
 
             # Pause charge off
-            if not isCharging and not isDischarging:
+            if not isCharging and not isDischarging and not carHolding:
                 inverter.adjust_pause_mode()
 
             # Reset discharge rate?
