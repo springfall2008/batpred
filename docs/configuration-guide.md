@@ -14,6 +14,13 @@ the [Predbat customisation guide](customisation.md) details all the Predbat cust
 
 You should try to tune **input_number.predbat_inverter_loss**, **input_number.predbat_battery_loss** and **input_number.predbat_battery_loss_discharge** to the correct % loss
 for your system in order to get more accurate predictions. Around 4% for each is good for a hybrid inverter.
+
+For a Hybrid inverter the inverter loss includes the loss on inverting PV as well going AC to DC when importing. Battery loss charge and discharge are factors to account for the loss
+in charging and discharging the battery as DC.
+
+For a AC coupled inverter the inverter loss is just the loss of the battery inverter, if you need to model the loss of your PV inverter then use **input_number.predbat_pv_scaling** 
+or adjust your Solcast output. Battery loss charge and discharge are factors to account for the loss in charging and discharging the battery as DC.
+
 Also set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
 
 The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to put a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
