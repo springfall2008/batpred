@@ -18,7 +18,7 @@ for your system in order to get more accurate predictions. Around 4% for each is
 For a Hybrid inverter the inverter loss includes the loss on inverting PV as well going AC to DC when importing. Battery loss charge and discharge are factors to account for the loss
 in charging and discharging the battery as DC.
 
-For a AC coupled inverter the inverter loss is just the loss of the battery inverter, if you need to model the loss of your PV inverter then use **input_number.predbat_pv_scaling** 
+For a AC coupled inverter the inverter loss is just the loss of the battery inverter, if you need to model the loss of your PV inverter then use **input_number.predbat_pv_scaling**
 or adjust your Solcast output. Battery loss charge and discharge are factors to account for the loss in charging and discharging the battery as DC.
 
 Also set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
