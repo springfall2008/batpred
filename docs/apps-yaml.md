@@ -59,7 +59,7 @@ Basic configuration items
 Set to the prefix name to be used for all entities that Predbat creates in Home Assistant. Default 'predbat'. Unlikely that you will need to change this.
 
 ```yaml
-  prefix: predbat
+prefix: predbat
 ```
 
 ### timezone
@@ -68,7 +68,7 @@ Set to your local timezone, default is Europe/London. It must be set to a
 [valid Python time zone for your location](https://gist.github.com/heyalexej/8bf688fd67d7199be4a1682b3eec7568)
 
 ```yaml
-  timezone: Europe/London
+timezone: Europe/London
 ```
 
 ### currency_symbols
@@ -76,18 +76,18 @@ Set to your local timezone, default is Europe/London. It must be set to a
 Sets your symbol to use for your main currency e.g. £ or $ and for 1/100th unit e.g. p or c
 
 ```yaml
- currency_symbols:
-   - '£'
-   - 'p'
+currency_symbols:
+  - '£'
+  - 'p'
 ```
 
 ### template
 
 Initially set to True, this is used to stop Predbat from operating until you have finished configuring your apps.yaml.
-Once you have made all other required changes to apps.yaml this line should be deleted or commented out.
+Once you have made all other required changes to apps.yaml this line should be deleted or commented out:
 
 ```yaml
-#  template: True
+template: True
 ```
 
 ### Home assistant connection
@@ -102,26 +102,27 @@ lived access token you can create inside Home Assistant.
 Currently if this communication is not established Predbat will fallback to AppDaemon, however some users have experienced failures due
 to a 10-second timeout set by AppDaemon.
 
-In future versions of Predbat AppDaemon will be removed.
+In future versions of Predbat, AppDaemon will be removed.
 
 ```yaml
-  ha_url: 'http://homeassistant.local:8123'
-  ha_key: 'xxxxxxxxxxx'
+ha_url: 'http://homeassistant.local:8123'
+ha_key: 'xxxxxxxxxxx'
 ```
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/da5916ce-4630-49b4-a265-81e8e010ff86)
 
 ### threads
 
-If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as
-you have CPUs in your system.
+If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as you have CPUs in your system.
+
 Valid values are:
-    - 'auto' - Use the same number of threads as your CPU count
-    - '0' - Don't use threads - disabled
-    - 'N' - Use N threads, recommended values are between 2 and 8
+
+- 'auto' - Use the same number of threads as your CPU count
+- '0' - Don't use threads - disabled
+- 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml
-  threads: auto
+threads: auto
 ```
 
 ### notify_devices
@@ -129,8 +130,8 @@ Valid values are:
 A list of device names to notify when Predbat sends a notification. The default is just 'notify' which contacts all mobile devices
 
 ```yaml
-  notify_devices:
-    - mobile_app_treforsiphone12_2
+notify_devices:
+  - mobile_app_treforsiphone12_2
 ```
 
 ### days_previous
@@ -143,16 +144,16 @@ It's recommended that you set days_previous so Predbat calculates an average hou
 For example, if you just want Predbat to assume the house load on a particular day is the same as the same day of last week:
 
 ```yaml
-  days_previous:
-    - 7
+days_previous:
+  - 7
 ```
 
 Or if you want Predbat to take the average of the same day for the last two weeks:
 
 ```yaml
-  days_previous:
-    - 7
-    - 14
+days_previous:
+  - 7
+  - 14
 ```
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
@@ -161,8 +162,8 @@ Do keep in mind that Home Assistant only keeps 10 days history by default, so if
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
 
 ```yaml
-  recorder:
-    purge_keep_days: 14
+recorder:
+  purge_keep_days: 14
 ```
 
 **days_previous_weight** - A list (again with one entry per line) of weightings to be applied to each of the days in days_previous.
@@ -170,16 +171,16 @@ kept in HA before it is purged by editing and adding the following to the `/home
 For example, to apply a 100% weighting for the first day entry in days_previous, but only a 50% weighting to the second day in days_previous:
 
 ```yaml
-  days_previous_weight:
-    - 1
-    - 0.5
+days_previous_weight:
+  - 1
+  - 0.5
 ```
 
 The default value is 1, that all history days are equally weighted, so if you don't want to weight individual days you can simply use:
 
 ```yaml
-  days_previous_weight:
-    - 1
+days_previous_weight:
+  - 1
 ```
 
 ### forecast_hours
@@ -188,7 +189,7 @@ the number of hours that Predbat will forecast ahead, 48 is the suggested amount
 such as 30 or 36 if you have a small battery and thus don't need to forecast 2 days ahead.
 
 ```yaml
-  forecast_hours: 48
+forecast_hours: 48
 ```
 
 ## Inverter information
@@ -202,7 +203,7 @@ For other inverter brands, see [Other Inverters](other-inverters.md)
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
 
 ```yaml
-  num_inverters: 1
+num_inverters: 1
 ```
 
 ### geserial
@@ -211,8 +212,8 @@ Only for GE inverters, this is a helper regular expression to find your serial n
 If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
 
 ```yaml
-  geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+geserial: 're:sensor.givtcp_(.+)_soc_kwh'
+geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
 ## Historical data
@@ -259,8 +260,9 @@ e.g.
 If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
 Obviously connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
-- **ge_cloud_data** - When True Predbat will use the GE Cloud for data rather than load_today, import_today and export_today
-- **ge_cloud_serial** - Set the inverter serial number to use for the Cloud data
+- **ge_cloud_data** - When True Predbat will use the [GE Cloud integration](https://github.com/springfall2008/ge_cloud)
+for inverter data rather than GivTCP sensors for load_today, import_today and export_today
+- **ge_cloud_serial** - Set the inverter serial number to use for the cloud data
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
 
 ## Load filtering
@@ -276,7 +278,7 @@ To disable, set it to 1440.
 
 - **inverter_limit** - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
 This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
-If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR><BR>
+If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR>
 For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
 If though you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
 
@@ -574,9 +576,9 @@ load_forecast:
 Set **load_forecast_only** to True if you do not wish to use the Predbat forecast but instead want to use this as your only forecast data e.g using PredAi:
 
 ```yaml
-  load_forecast_only: True
-  load_forecast:
-     - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
+load_forecast_only: True
+load_forecast:
+   - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction$results
 ```
 
 ## Balance Inverters
@@ -588,7 +590,7 @@ Most of the Predbat configuration for balancing inverters is through a number of
 but there is one configuration item in `apps.yaml`:
 
 ```yaml
-  balance_inverters_seconds: seconds
+balance_inverters_seconds: seconds
 ```
 
 Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
@@ -601,7 +603,7 @@ weirdness you may have from your inverter and battery setup.
 ### Clock skew
 
 ```yaml
-  clock_skew: minutes
+clock_skew: minutes
 ```
 
 Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
@@ -616,15 +618,15 @@ Separate start and end options are applied to the start and end time windows, mo
 You can adjust the charge and discharge times written to the inverter by setting the following in `apps.yaml`:
 
 ```yaml
-  inverter_clock_skew_start: minutes
-  inverter_clock_skew_end: minutes
+inverter_clock_skew_start: minutes
+inverter_clock_skew_end: minutes
 ```
 
 Skews the setting of the charge slot registers vs the predicted start time
 
 ```yaml
-  inverter_clock_skew_discharge_start: minutes
-  inverter_clock_skew_discharge_end: minutes
+inverter_clock_skew_discharge_start: minutes
+inverter_clock_skew_discharge_end: minutes
 ```
 
 Skews the setting of the discharge slot registers vs the predicted start time
@@ -632,8 +634,8 @@ Skews the setting of the discharge slot registers vs the predicted start time
 ### Battery size scaling
 
 ```yaml
-  battery_scaling:
-    - scale
+battery_scaling:
+  - scale
 ```
 
 Default value 1.0. Multiple battery size scales can be entered, one per inverter on separate lines.
@@ -653,7 +655,7 @@ rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything l
 ### Import export scaling
 
 ```yaml
-  import_export_scaling: scale
+import_export_scaling: scale
 ```
 
 Default value 1.0. Used to scale the import & export kWh data from GivTCP if the inverter information is incorrect.
@@ -661,7 +663,7 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
 ### Inverter rate minimum
 
 ```yaml
-  inverter_battery_rate_min: watts
+inverter_battery_rate_min: watts
 ```
 
 One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
@@ -671,7 +673,7 @@ Recommended setting is 200 for Gen 1 hybrids with this issue.
 ### Inverter reserve maximum
 
 ```yaml
-  inverter_reserve_max: percent
+inverter_reserve_max: percent
 ```
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
@@ -726,12 +728,12 @@ NB: In order for Predbat to have calculate your charging curve it needs to have 
 If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in `apps.yaml`:
 
 ```yaml
-  charge_rate:
-    - number.givtcp_{geserial}_battery_charge_rate
-  battery_power:
-    - sensor.givtcp_{geserial}_battery_power
-  soc_kw:
-    - sensor.givtcp_{geserial}_soc_kwh
+charge_rate:
+  - number.givtcp_{geserial}_battery_charge_rate
+battery_power:
+  - sensor.givtcp_{geserial}_battery_power
+soc_kw:
+  - sensor.givtcp_{geserial}_soc_kwh
 ```
 
  Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
@@ -739,17 +741,17 @@ If you are using the recommended default [REST mode to control your inverter](#i
 Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
 ```yaml
-  battery_charge_power_curve:
-    91 : 0.91
-    92 : 0.81
-    93 : 0.71
-    94 : 0.62
-    95 : 0.52
-    96 : 0.43
-    97 : 0.33
-    98 : 0.24
-    99 : 0.24
-    100 : 0.24
+battery_charge_power_curve:
+  91 : 0.91
+  92 : 0.81
+  93 : 0.71
+  94 : 0.62
+  95 : 0.52
+  96 : 0.43
+  97 : 0.33
+  98 : 0.24
+  99 : 0.24
+  100 : 0.24
 ```
 
 - **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low SoC% and this optional configuration item enables you to model this in Predbat.
@@ -770,12 +772,12 @@ In the same way as for the battery charge curve above, Predbat needs to have acc
 If you are using REST mode to control your inverter then the following entries in `apps.yaml` will need to be uncommented :
 
 ```yaml
-  discharge_rate:
-    - number.givtcp_{geserial}_battery_discharge_rate
-  battery_power:
-    - sensor.givtcp_{geserial}_battery_power
-  soc_kw:
-    - sensor.givtcp_{geserial}_soc_kwh
+discharge_rate:
+  - number.givtcp_{geserial}_battery_discharge_rate
+battery_power:
+  - sensor.givtcp_{geserial}_battery_power
+soc_kw:
+  - sensor.givtcp_{geserial}_soc_kwh
 ```
 
 ## Triggers
@@ -830,9 +832,9 @@ As described earlier, **days_previous** is a list of the previous days of histor
 e.g., if you want the average of the same day for the last 2 weeks:
 
 ```yaml
-  days_previous:
-    - 7
-    - 14
+days_previous:
+  - 7
+  - 14
 ```
 
 This section describes in more detail how days_previous is used by Predbat in creating the future battery plan, and gives some worked examples and a 'gotcha' to be aware of.
@@ -843,8 +845,8 @@ This is best explained through a worked example:
 In this example, days_previous is set to use history from 2 days ago:
 
 ```yaml
-  days_previous:
-    - 2
+days_previous:
+  - 2
 ```
 
 If right now today it's Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
@@ -859,8 +861,8 @@ requires Predbat to operate some additional special processing if days_previous 
 Extending the previous example but this time days_previous is set to use history from just the previous day:
 
 ```yaml
-  days_previous:
-    - 1
+days_previous:
+  - 1
 ```
 
 Today its still Monday 3:15pm and Predbat is predicting the forward plan for the next 48 hours:
@@ -888,12 +890,12 @@ Its recommended therefore that days_previous isn't set to 1, or if it is, that y
 If you want to set days_previous to take an average of the house load over all the days of the last week its suggested that it be set as:
 
 ```yaml
-  days_previous:
-    - 2
-    - 3
-    - 4
-    - 5
-    - 6
-    - 7
-    - 8
+days_previous:
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
 ```

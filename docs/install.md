@@ -333,10 +333,10 @@ The entities are all prefixed *predbat* and can be seen (and changed) from the S
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
 
-The [Output Data](output-data.md) section describes these points in more detail.
+The [Output Data](output-data.md) section describes these points in more detail including using the auto-generated `predbat_dashboard.yaml` dashboard file.
 
 The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
-Detailed progress messages and error logging is written to the Predbat logfile which you can view within Home Assistant using a file editor.
+Detailed progress messages and error logging is written to the [Predbat logfile](output-data.md#predbat-logfile) which you can view within Home Assistant using a [file editor](#editing-configuration-files-in-home-assistant).
 
 The [Predbat Configuration Guide](configuration-guide.md) gives an overview of the main Predbat configuration items and
 detail of 'standard Predbat configuration' settings for different electricity tariff types - e.g. a cheap overnight rate,
@@ -346,20 +346,27 @@ The detailed [Predbat Customisation Guide](customisation.md) details all the Pre
 
 ## Ready to light the touch-paper
 
-By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
+By now you should have successfully installed and configured Predbat and the other components it is dependent upon (e.g. a inverter controller such as GivTCP, Solcast, Octopus Integration).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/48cffa4a-5f05-4cbc-9356-68eb3d8fb730)
 
-You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
+You have checked the [Predbat log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
 
-You have configured Predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
-
-In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
+You have configured Predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat generating your plan.
 
 You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the [Predbat Plan](predbat-plan-card.md).
 In *Monitor* mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.<BR>
 NB: In *Monitor* mode Predbat will *NOT* plan any battery charge or discharge activity of its own,
 it will report on the predicted battery charge level based on the current inverter charge & discharge settings, predicted house load and predicted solar generation.
+
+In order to enable Predbat to start generating your plan you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
+
+Predbat will automatically run, analyse your house load, battery status, solar prediction, etc and produce a plan based upon the current battery settings.
+
+Check the [Predbat logfile](output-data.md#predbat-logfile) again for errors. Voluminous output is quite normal but any errors or warnings should be investigated.
+Also check the [Predbat status **predbat.status**](what-does-predbat-do.md#predbat-status) - major errors will also be flagged here.
+
+Once Predbat is running successfully 
 
 The recommended next step is to start Predbat planning your inverter charging and discharging activity but not (yet) make any changes to the inverter.
 This enables you to get a feel for the Predbat plan and [customise Predbat's settings](customisation.md) to meet your needs.
