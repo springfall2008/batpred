@@ -445,7 +445,7 @@ Predbat is able to include electric vehicle charging in its plan and manage the 
 (although you can over-ride this if you wish by setting the **switch.predbat_car_charging_from_battery** to True in Home Assistant).
 
 There are two different ways of planning car charging into cheap slots with Predbat, either by the Octopus Energy integration or by Predbat identifying the cheapest slots.
-These approaches and the set of settings that need to be configured together are described in [Car Charging Planning](car-charge-planning.md).
+These approaches and the set of settings that need to be configured together are described in [Car Charging](car-charging.md).
 
 The full list of car charging configuration items in `apps.yaml` that are used to plan car charging activity within Predbat are described below.
 The Home Assistant controls (switches, input numbers, selectors, etc) related to car charging are described in [Car Charging configuration within Home Assistant](customisation.md#car-charging),
@@ -470,25 +470,25 @@ This can be set to a list of car charging energy sensors, one per line if you ha
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
 
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
-to multiply the car_charging_energy data by if required (e.g. set to 0.001 to convert Watts to kW).
+to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
 
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml`
 and configure the following Home Assistant entity:
 
-- **input_number.predbat_car_charging_threshold** - Sets the threshold above which home consumption is assumed to be car charging and
-will be removed from the home load data (default 6 = 6kW).
+- **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
+and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
 
 ### Planned Car Charging
 
 These features allow Predbat to know when you plan to charge your car.
 
-If you have Intelligent Octopus setup then planning of charging is done via the Octopus app and Predbat obtains this information through the Octopus Energy integration in Home Assistant.
+If you have Intelligent Octopus tariff then planning of charging is done via the Octopus app and Predbat obtains this information through the Octopus Energy integration in Home Assistant.
 
 - **switch.predbat_octopus_intelligent_charging** - When this Home Assistant switch is enabled, Predbat will plan charging around the Intelligent Octopus slots, taking
 it into account for battery load and generating the slot information
 
 The following `apps.yaml` configuration items are pre-defined with regular expressions to point to appropriate sensors in the Octopus Energy integration.
-You should not normally need to change these if you have Octopus Intelligent:
+You should not normally need to change these if you have the Octopus Intelligent tariff:
 
 - **octopus_intelligent_slot** - Points to the Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot, and provides the list of future planned charging activity.

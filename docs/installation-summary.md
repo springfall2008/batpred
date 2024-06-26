@@ -25,9 +25,9 @@ or `/config/appdaemon/apps/predbat/config/` depending on which Predbat install m
     - Inverter settings match the names in GivTCP - should be automatic (but if you have 2 names you will have to edit apps.yaml)
         - You have set the right number of inverters (**num_inverters**)
         - Adjust your **inverter_limit** and **export_limit** as required
-    - You have your energy rates set correctly either using Octopus Energy integration or entered manually
+    - You have your [energy rates](energy-rates.md) set correctly either using Octopus Energy integration or entered manually
     - That the Solcast integration (if being used) is matching the configuration correctly - should be automatic
-    - If you have a car charging sensor you might want to add that also to help make predictions more accurate
+    - If you have an electric car you have setup the [Car Charging](apps-yaml.md#car-charging-integration) configuration
 8. Add the Predbat entities to your dashboard - [Output data](output-data.md)
 9. Follow the [Configuration Guide](configuration-guide.md) to set 'standard' Predbat configuration settings depending on your import and export tariffs
 10. The detailed [Customisation Guide](customisation.md) lists all Predbat's controls and settings in Home Assistant that can be tuned for your system

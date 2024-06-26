@@ -91,7 +91,7 @@ minute by minute prediction data (in attributes) which can be charted with Apex 
 - predbat.battery_cycle - Predicted battery cycle in kWh (total kWh processed)
 - predbat.pv_power - Predicted PV power per minute, for charting
 - predbat.grid_power - Predicted Grid power per minute, for charting
-- predbat.car_soc - Predicted car battery %
+- predbat.car_soc - The expected charge level of your car at the end of the plan. Can also be charted
 - input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
 increments during the day and is reset to zero at 11:30pm each night
 
@@ -130,7 +130,7 @@ Predbat outputs the following 'best' entities from the simulation based on the l
 - predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed)
 - predbat.pv_power_best - Predicted best PV power per minute, for charting
 - predbat.grid_power - Predicted best Grid power per minute, for charting
-- predbat.car_soc_best - Predicted car battery % in  best plan
+- predbat.car_soc_best - The expected charge level of your car in best plan at the end of the plan using the proposed SoC%/Window. Can also be charted
 - predbat.iboost_best - Gives the predicted energy going into the iBoost solar diverter
 
 ## Best PV 10%
@@ -175,13 +175,11 @@ Useful for automations if for example you want to turn off car charging when the
 - predbat.rates - The current energy rates in Pence (also can be charted)
 - predbat.rates_export - The current energy export rates in Pence (also can be charted)
 - predbat.cost_today - The total cost of energy so far today (since midnight)
-- predbat.car_soc - The expected charge level of your car at the end of the simulation. Can also be charted
-- predbat.car_soc_best - The expected charge level of your car at the end of the simulation using the proposed SoC%/Window. Can also be charted
 
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
-as described in [Predbat led car charging](car-charge-planning.md)
+as described in [Predbat led car charging](car-charging.md#car-charging-planning)
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
 
 ## iBoost Solar Diverter data

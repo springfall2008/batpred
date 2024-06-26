@@ -21,7 +21,7 @@ If you do something like have export>import then Predbat will try to export as m
 - Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
 - You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
-- Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
+- Maybe your historical data includes car charging, you might want to filter this out using [car_charging_hold in apps.yaml](apps-yaml.md#car-charging-filtering)
 
 ## Why didn't the slot actually get configured?
 
@@ -50,7 +50,7 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
 - Make sure your inverter max AC rate has been set correctly
 - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable - see
-[Car charging planning](car-charge-planning.md)
+[Car charging](car-charging.md)
 - Do you have a solar diverter? If so maybe you want to try using the [iBoost model settings](customisation.md#iboost-model-solar-diverter-options).
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
