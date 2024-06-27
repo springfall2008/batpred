@@ -456,6 +456,23 @@ class Prediction:
             if record:
                 final_load_kwh = load_kwh
 
+            # IBoost solar diverter on load, don't do on discharge
+            iboost_amount = 0
+            if self.iboost_enable and (discharge_window_n < 0):
+                if iboost_today_kwh < self.iboost_max_energy:
+                    if self.iboost_gas:
+                        if rate_gas:
+                            # iBoost on cheap electric rates
+                            gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                            electric_rate = rate_import.get(minute_absolute, 0)
+                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
+                                iboost_amount = self.iboost_max_power * step
+                                load_yesterday += iboost_amount
+                    elif self.iboost_charging:
+                        if charge_window_n >= 0:
+                            iboost_amount = self.iboost_max_power * step
+                            load_yesterday += iboost_amount
+
             # discharge freeze, reset charge rate by default
             if self.set_discharge_freeze:
                 charge_rate_now = self.battery_rate_max_charge
