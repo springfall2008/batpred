@@ -21,8 +21,8 @@ pred_bat:
 
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
-   - '£'
-   - 'p'
+    - '£'
+    - 'p'
 
   # Number of threads to use in plan calculation
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
@@ -34,7 +34,7 @@ pred_bat:
 
   # The maximum rate of the battery charge/discharge in watts
   battery_rate_max:
-   - 8000
+    - 8000
 
   # To disable set it to 1440
   load_filter_threshold: 30
@@ -62,12 +62,7 @@ pred_bat:
   #load_forecast:
   #  - predheat.heat_energy$external
   #
-  # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
-  # this is usually less efficient and of course prone to internet downtime, but could be useful if you lost your GivTCP data
-  # Set the serial to the inverter serial to pull the data from and the key to your API key
-  # When this is set load_today, import_today and export_today are not used
-  #
-
+  
   #
   # Controls/status - must by 1 per inverter
   #
@@ -87,70 +82,26 @@ pred_bat:
     entity_id: "select.sunsynk_inverter_work_mode."
     option: "Selling first"
 
-
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
 
-  # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:
-  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
-  #  Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
-
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
   charge_rate:
-     - sensor.max_battery_charge_rate
+    - sensor.max_battery_charge_rate
   discharge_rate:
-     - sensor.max_battery_discharge_rate
+    - sensor.max_battery_discharge_rate
   battery_power:
-     - number.sunsynk_inverter_battery_power
+    - number.sunsynk_inverter_battery_power
   pv_power:
     - sensor.sunsynk_pv
     - sensor.solis_ac_output_total_power
   load_power:
     - sensor.calculated_house_load_w
   soc_kw:
-     - sensor.sunsynk_battery_soc_kw
-#  soc_max:
- #   - sensor.givtcp_{geserial}_battery_capacity_kwh
- #   - sensor.givtcp2_{geserial2}_battery_capacity_kwh
-#reserve:
-#    - number.givtcp_{geserial}_battery_power_reserve
-#    - number.givtcp2_{geserial2}_battery_power_reserve
- # inverter_mode:
-#    - select.givtcp_{geserial}_mode
-#    - select.givtcp2_{geserial2}_mode
- # inverter_time:
- #   - sensor.givtcp_{geserial}_invertor_time
- #   - sensor.givtcp2_{geserial2}_invertor_time
-#  charge_start_time:
- #   - select.givtcp_{geserial}_charge_start_time_slot_1
- #   - select.givtcp2_{geserial2}_charge_start_time_slot_1
- # charge_end_time:
- #   - select.givtcp_{geserial}_charge_end_time_slot_1
- #   - select.givtcp2_{geserial2}_charge_end_time_slot_1
+    - sensor.sunsynk_battery_soc_kw
   charge_limit:
     - number.sunsynk_inverter_capacity_point_6
- # scheduled_charge_enable:
-#    - switch.givtcp_{geserial}_enable_charge_schedule
-#    - switch.givtcp2_{geserial2}_enable_charge_schedule
-#  scheduled_discharge_enable:
-#    - switch.givtcp_{geserial}_enable_discharge_schedule
- #   - switch.givtcp2_geserial2}_enable_discharge_schedule
-#  discharge_start_time:
-#    - select.givtcp_{geserial}_discharge_start_time_slot_1
-#select.givtcp2_{geserial2}_discharge_start_time_slot_1
-#  discharge_end_time:
-#    - select.givtcp_{geserial}_discharge_end_time_slot_1
-  #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
@@ -170,7 +121,7 @@ pred_bat:
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
- # inverter_reserve_max : 98
+  # inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -323,15 +274,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
   #rates_import:
-  #  -  start: "00:30:00"
-  #     end: "04:30:00"
-  #     rate: 7.5
-  #  -  start: "04:30:00"
-  #     end: "00:30:00"
-  #     rate: 40.0
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
   #
   #rates_export:
-  #  -  rate: 4.2
+  #  - rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -349,7 +300,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2023-09-10'
+  #  - date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 112
@@ -394,12 +345,12 @@ pred_bat:
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
   export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not

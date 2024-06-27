@@ -23,13 +23,13 @@ pred_bat:
   threads: auto
 
   currency_symbols:
-   - '£'
-   - 'p'
+    - '£'
+    - 'p'
 
-  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work or if you have more than one inverter you will need to list both
+  # Set to your GivEnergy serial number
+  # If you have more than one inverter you will need to uncomment geserial2 lines
   geserial: 'cexxxx'
-  geserial2: 'ceyyyy'
+  #geserial2: 'ceyyyy'
 
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
@@ -64,109 +64,87 @@ pred_bat:
   # When this is set load_today, import_today and export_today are not used
   #
   ge_cloud_data: False
-  ge_cloud_serial: '{geseriale}'
+  ge_cloud_serial: '{geserial}'
   ge_cloud_key: 'xxxx'
 
-  # Controls/status - must by 1 per inverter
+  # Controls/status - must be 1 per inverter
   #
   num_inverters: 1
   inverter_type:
-   - 'GEC'
-   - 'GEC'
+    - 'GEC'
+  #  - 'GEC'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
-  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
-  # Set one per inverter
-  # If using Docker then change homeassistant.local to the Docker IP address
-  #givtcp_rest:
-  # - 'http://homeassistant.local:6345'
-  # - 'http://homeassistant.local:6346'
-
-  # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:
-  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: switch/turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_addon
-
-  # Alternative method to restart GivTCP add-on via HA
-  #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
-  # Example on how to restart the inverter via GivTCP
-  #  - service: switch.turn_on
-  #    entity_id: switch.givtcp_{geserial}_reboot_invertor
-
   # If not using REST then instead set the Control here (one for each inverter)
   # - you can delete this section if using REST
   charge_rate:
     - number.ge_inverter_{geserial}_battery_charge_power
-    - number.ge_inverter_{geserial2}_battery_charge_power
+  #  - number.ge_inverter_{geserial2}_battery_charge_power
   discharge_rate:
     - number.ge_inverter_{geserial}_battery_discharge_power
-    - number.ge_inverter_{geserial2}_battery_discharge_power
+  #  - number.ge_inverter_{geserial2}_battery_discharge_power
   battery_power:
     - sensor.ge_inverter_{geserial}_battery_power
-    - sensor.ge_inverter_{geserial2}_battery_power
+  #  - sensor.ge_inverter_{geserial2}_battery_power
   pv_power:
     - sensor.ge_inverter_{geserial}_solar_power
-    - sensor.ge_inverter_{geserial2}_solar_power
+  #  - sensor.ge_inverter_{geserial2}_solar_power
   load_power:
     - sensor.ge_inverter_{geserial}_consumption_power
-    - sensor.ge_inverter_{geserial2}_consumption_power
+  #  - sensor.ge_inverter_{geserial2}_consumption_power
   soc_percent:
     - sensor.ge_inverter_{geserial}_battery_soc
-    - sensor.ge_inverter_{geserial2}_battery_soc
+  #  - sensor.ge_inverter_{geserial2}_battery_soc
   soc_max:
     - sensor.ge_inverter_{geserial}_battery_size
-    - sensor.ge_inverter_{geserial2}_battery_size
+  #  - sensor.ge_inverter_{geserial2}_battery_size
   reserve:
     - number.ge_inverter_{geserial}_battery_reserve_limit
-    - number.ge_inverter_{geserial2}_battery_reserve_limit
+  #  - number.ge_inverter_{geserial2}_battery_reserve_limit
   inverter_time:
-   - sensor.ge_inverter_{geserial}_inverter_time
-   - sensor.ge_inverter_{geserial2}_inverter_time
+    - sensor.ge_inverter_{geserial}_inverter_time
+  #  - sensor.ge_inverter_{geserial2}_inverter_time
   charge_start_time:
     - select.ge_inverter_{geserial}_ac_charge_1_start_time
-    - select.ge_inverter_{geserial2}_ac_charge_1_start_time
+  #  - select.ge_inverter_{geserial2}_ac_charge_1_start_time
   charge_end_time:
     - select.ge_inverter_{geserial}_ac_charge_1_end_time
-    - select.ge_inverter_{geserial2}_ac_charge_1_end_time
+  #  - select.ge_inverter_{geserial2}_ac_charge_1_end_time
   charge_limit:
     - number.ge_inverter_{geserial}_ac_charge_upper_limit
-    - number.ge_inverter_{geserial2}_ac_charge_upper_limit
+  #  - number.ge_inverter_{geserial2}_ac_charge_upper_limit
   discharge_start_time:
     - select.ge_inverter_{geserial}_dc_discharge_1_start_time
-    - select.ge_inverter_{geserial2}_dc_discharge_1_start_time
+  #  - select.ge_inverter_{geserial2}_dc_discharge_1_start_time
   discharge_end_time:
     - select.ge_inverter_{geserial}_dc_discharge_1_end_time
-    - select.ge_inverter_{geserial2}_dc_discharge_1_end_time
+  #  - select.ge_inverter_{geserial2}_dc_discharge_1_end_time
   scheduled_charge_enable:
     - switch.ge_inverter_{geserial}_ac_charge_enable
-    - switch.ge_inverter_{geserial2}_ac_charge_enable
+  #  - switch.ge_inverter_{geserial2}_ac_charge_enable
   scheduled_discharge_enable:
     - switch.ge_inverter_{geserial}_enable_dc_discharge
-    - switch.ge_inverter_{geserial2}_enable_dc_discharge
+  #  - switch.ge_inverter_{geserial2}_enable_dc_discharge
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
     - 3600
-    - 3600
+  #  - 3600
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
-  # - 3600
-  # - 3600
+  #  - 3600
+  #  - 3600
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
   inverter_battery_rate_min:
     - 200
-    - 200
+  #  - 200
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
@@ -324,15 +302,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
   #rates_import:
-  #  -  start: "00:30:00"
-  #     end: "04:30:00"
-  #     rate: 7.5
-  #  -  start: "04:30:00"
-  #     end: "00:30:00"
-  #     rate: 40.0
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
   #
   #rates_export:
-  #  -  rate: 4.2
+  #  - rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -350,7 +328,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2024-01-23'
+  #  - date: '2024-01-23'
   #    start: '11:00:00'
   #    end: '11:30:00'
   #    rate: 0
@@ -358,7 +336,7 @@ pred_bat:
 
   # To improve on saving sessions avoid export during peak periods
   rates_export_override:
-   -  start: '17:00:00'
+    - start: '17:00:00'
       end: '19:00:00'
       rate_increment: -10
 
@@ -390,7 +368,7 @@ pred_bat:
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
   battery_scaling:
     - 1.0
-    - 1.0
+  #  - 1.0
 
   # Can be used to scale import and export data, used for workarounds
   import_export_scaling: 1.0
@@ -401,12 +379,12 @@ pred_bat:
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
   export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not

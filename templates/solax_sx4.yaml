@@ -17,8 +17,8 @@ pred_bat:
 
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
-   - '£'
-   - 'p'
+    - '£'
+    - 'p'
 
   # Number of threads to use in plan calculation
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
@@ -101,7 +101,7 @@ pred_bat:
   #  - number.solis_timed_discharge_current
 
   #discharge_start_hour:
-   # - number.solis_timed_discharge_start_hours
+  #  - number.solis_timed_discharge_start_hours
   #discharge_start_minute:
   #  - number.solis_timed_discharge_start_minutes
   #discharge_end_hour:
@@ -120,16 +120,16 @@ pred_bat:
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
-  # - 3600
-  # - 3600
+  #  - 3600
+  #  - 3600
   #
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
   # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
   #
   #inverter_limit_charge:
-  # - 2000
+  #  - 2000
   #inverter_limit_discharge:
-  # - 2600
+  #  - 2600
 
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
@@ -251,15 +251,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with 0
   # rates_import:
-  #   -  start: "23:30:00"
-  #      end: "05:30:00"
-  #      rate: 7.5
-  #   -  start: "05:30:00"
-  #      end: "23:30:00"
-  #      rate: 30.0
+  #   - start: "23:30:00"
+  #     end: "05:30:00"
+  #     rate: 7.5
+  #   - start: "05:30:00"
+  #     end: "23:30:00"
+  #     rate: 30.0
 
   # rates_export:
-  #   -  rate: 15.0
+  #   - rate: 15.0
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -277,7 +277,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2023-09-10'
+  #  - date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 5
@@ -327,12 +327,12 @@ pred_bat:
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
   export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not
