@@ -71,7 +71,11 @@ predbat.status additionally has the following attributes that are automatically 
 
 ## Baseline data
 
-What your battery is expected to do with no changes made by Predbat:
+What your battery is expected to do *over the forecast_hours duration of the plan* with no changes made by Predbat:
+
+NB: Predbat forecasts are from 'now' to the forecast_hours duration (set in apps.yaml) into the future and shouldn't be confused with 'today' figures.
+e.g. predbat.pv_energy is the predicted PV energy for today and forecast_hours (typically 48) ahead
+so will be much larger than sensor.solcast_pv_forecast_today which is today's Solcast PV forecast.
 
 - predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out (stops at the maximum prediction time)
 - predbat.charge_limit - The current charge limit used for the scenario in %
@@ -97,7 +101,7 @@ increments during the day and is reset to zero at 11:30pm each night
 
 ## PV 10% baseline data
 
-The calculated baseline results under PV 10% scenario:
+The calculated baseline results under PV 10% scenario for the forecast_hours duration of the plan:
 
 - predbat.soc_kw_base10 - As soc_kw but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
 - predbat.base10_pv_energy - Predicted PV 10% energy in kWh
@@ -108,7 +112,7 @@ The calculated baseline results under PV 10% scenario:
 
 ## Best
 
-Predbat outputs the following 'best' entities from the simulation based on the lowest cost consumption plan:
+Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan:
 
 - predbat.best_battery_hours_left - Number of hours left under best plan
 - predbat.best_export_energy - Predicted exports under best plan
@@ -135,7 +139,7 @@ Predbat outputs the following 'best' entities from the simulation based on the l
 
 ## Best PV 10%
 
-The calculated best results under the PV 10% scenario:
+The calculated best results under the PV 10% scenario for the forecast_hours duration:
 
 - predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
 - predbat.best10_pv_energy - Predicted best PV 10% energy in kWh
