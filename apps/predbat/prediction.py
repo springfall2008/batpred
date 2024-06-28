@@ -463,11 +463,11 @@ class Prediction:
                             gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
                             electric_rate = rate_import.get(minute_absolute, 0)
                             if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
-                                iboost_amount = self.iboost_max_power * step
+                                iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
                                 load_yesterday += iboost_amount
                     elif self.iboost_charging:
                         if charge_window_n >= 0:
-                            iboost_amount = self.iboost_max_power * step
+                            iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
                             load_yesterday += iboost_amount
 
             # Count load
@@ -511,8 +511,9 @@ class Prediction:
 
             if save == "test" and ((minute % 60) == 0):
                 print(
-                    "Minute {} charge_rate_now_curve {} discharge_rate_now_curve {} soc {} pv_now {} rate_max_charge {} rate_max_scaling {} curve {} get {}".format(
+                    "Minute {} metric {} charge_rate_now_curve {} discharge_rate_now_curve {} soc {} pv_now {} rate_max_charge {} rate_max_scaling {} curve {} get {}".format(
                         minute,
+                        metric,
                         charge_rate_now_curve * 60,
                         discharge_rate_now_curve * 60,
                         soc,
@@ -816,7 +817,7 @@ class Prediction:
                 if iboost_today_kwh < self.iboost_max_energy and (
                     self.iboost_solar and pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
                 ):
-                    iboost_amount = min(pv_ac, self.iboost_max_power * step)
+                    iboost_amount = min(iboost_amount + pv_ac, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
                     pv_ac -= iboost_amount
 
                 # Cumulative energy
@@ -834,6 +835,20 @@ class Prediction:
                         self.iboost_running = True
                     else:
                         self.iboost_running = False
+
+            if save == "test" and ((minute % 60) == 0):
+                print(
+                    "Minute {} iboost amount {} today {} running {} next {} rate_gas {} max_energy {} max_power {}".format(
+                        minute,
+                        iboost_amount,
+                        iboost_today_kwh,
+                        self.iboost_running,
+                        self.iboost_next,
+                        rate_gas.get(minute_absolute, 99),
+                        self.iboost_max_energy,
+                        self.iboost_max_power,
+                    )
+                )
 
             # Rounding on SOC
             soc = round(soc, 6)
@@ -916,7 +931,7 @@ class Prediction:
                 final_import_kwh_battery = import_kwh_battery
                 final_import_kwh_house = import_kwh_house
                 final_export_kwh = export_kwh
-                final_iboost_kwh = iboost_today_kwh
+                final_iboost_kwh += iboost_amount
                 final_battery_cycle = battery_cycle
                 final_metric_keep = metric_keep
                 final_carbon_g = carbon_g

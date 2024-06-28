@@ -65,7 +65,7 @@ class TestInverter:
 
 
 def reset_rates(my_predbat, ir, xr):
-    for minute in range(my_predbat.forecast_minutes + 24 * 60):
+    for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now):
         my_predbat.rate_import[minute] = ir
         my_predbat.rate_export[minute] = xr
     my_predbat.rate_export_min = xr
@@ -121,6 +121,9 @@ def reset_inverter(my_predbat):
     my_predbat.car_charging_from_battery = True
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
+    my_predbat.iboost_gas = False
+    my_predbat.iboost_charging = False
+    my_predbat.minutes_now = 12 * 60
 
 
 def plot(name, prediction):
@@ -167,6 +170,13 @@ def simple_scenario(
     charge_car=0,
     car_charging_from_battery=True,
     iboost_solar=False,
+    iboost_gas=False,
+    rate_gas=0,
+    gas_scale=1.0,
+    iboost_charging=False,
+    iboost_max_energy=100.0,
+    assert_final_iboost=0.0,
+    end_record=None,
 ):
     """
     No PV, No Load
@@ -188,15 +198,20 @@ def simple_scenario(
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
 
-    if iboost_solar:
-        my_predbat.iboost_enable = True
-        my_predbat.iboost_solar = True
-        my_predbat.iboost_min_power = 0.0
-        my_predbat.iboost_max_power = export_limit / 60.0
-        my_predbat.iboost_max_energy = 100.0
+    my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_charging
+    my_predbat.iboost_gas = iboost_gas
+    my_predbat.iboost_solar = iboost_solar
+    my_predbat.iboost_min_power = 0.0
+    my_predbat.iboost_max_power = export_limit / 60.0
+    my_predbat.iboost_max_energy = iboost_max_energy
+    my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
+    my_predbat.iboost_gas_scale = gas_scale
+    my_predbat.iboost_charging = iboost_charging
+
+    if end_record:
+        my_predbat.end_record = end_record
     else:
-        my_predbat.iboost_enable = False
-        my_predbat.iboost_solar = False
+        my_predbat.end_record = my_predbat.forecast_minutes
 
     assert_final_metric = round(assert_final_metric / 100.0, 2)
     assert_final_soc = round(assert_final_soc, 2)
@@ -239,9 +254,10 @@ def simple_scenario(
         metric_keep,
         final_iboost,
         final_carbon_g,
-    ) = prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, False, end_record=(my_predbat.forecast_minutes), save="best")
+    ) = prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, False, end_record=(my_predbat.end_record), save="best")
     metric = round(metric / 100.0, 2)
     final_soc = round(final_soc, 2)
+    final_iboost = round(final_iboost, 2)
 
     failed = False
     if abs(metric - assert_final_metric) >= 0.1:
@@ -250,9 +266,12 @@ def simple_scenario(
     if abs(final_soc - assert_final_soc) >= 0.1:
         print("ERROR: Final SOC {} should be {}".format(final_soc, assert_final_soc))
         failed = True
+    if abs(final_iboost - assert_final_iboost) >= 0.1:
+        print("ERROR: Final iBoost {} should be {}".format(final_iboost, assert_final_iboost))
+        failed = True
 
     if failed:
-        prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, False, end_record=(my_predbat.forecast_minutes), save="test")
+        prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, False, end_record=(my_predbat.end_record), save="test")
         plot(name, prediction)
     return failed
 
@@ -1069,7 +1088,77 @@ def run_model_tests(my_predbat):
         hybrid=True,
         inverter_limit=2.0,
     )
-    failed |= simple_scenario("pv_only_iboost", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_solar=True)
+    failed |= simple_scenario("iboost_pv", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_solar=True, assert_final_iboost=24)
+    failed |= simple_scenario(
+        "iboost_gas1",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=0,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_gas=True,
+        rate_gas=5.0,
+        gas_scale=0.8,
+        iboost_charging=False,
+        assert_final_iboost=0,
+    )
+    failed |= simple_scenario(
+        "iboost_gas2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 200,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_gas=True,
+        rate_gas=10.0,
+        gas_scale=1.2,
+        iboost_charging=False,
+        export_limit=10,
+        assert_final_iboost=200,
+    )
+    failed |= simple_scenario(
+        "iboost_charge1",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * (10 * 2 * 10 + 10),
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        iboost_charging=True,
+        assert_final_iboost=200,
+    )
+    failed |= simple_scenario(
+        "iboost_charge2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * (10 * 10 + 10),
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        iboost_charging=True,
+        assert_final_iboost=100,
+        end_record=12 * 60,
+    )
+    failed |= simple_scenario(
+        "iboost_discharge1",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-export_rate * 10,
+        assert_final_soc=0,
+        battery_soc=10,
+        with_battery=True,
+        discharge=0,
+        battery_size=10,
+        iboost_charging=True,
+        assert_final_iboost=0,
+    )
 
     if failed:
         print("**** ERROR: Some Model tests failed ****")
