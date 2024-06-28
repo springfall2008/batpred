@@ -8209,11 +8209,12 @@ class PredBat(hass.Hass):
                             resetDischarge = False
                             pausedDischarge = True
 
+                        inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
+                                inverter.adjust_pause_mode(pause_discharge=True)
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                                inverter.adjust_pause_mode(pause_discharge=True)
                                 pausedDischarge = True
 
                             if not pausedDischarge:
@@ -8228,15 +8229,14 @@ class PredBat(hass.Hass):
                                 and (inverter.reserve_max >= inverter.soc_percent)
                             ):
                                 status = "Hold charging"
+                                inverter.adjust_pause_mode(pause_discharge=True)
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                                inverter.adjust_pause_mode(pause_discharge=True)
                             else:
                                 status = "Charging"
                                 if not pausedDischarge:
                                     inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
-                        inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         isCharging = True
 
                     if not disabled_charge_window:

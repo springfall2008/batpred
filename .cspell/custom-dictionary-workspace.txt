@@ -69,6 +69,7 @@ hassio
 heatsink
 homeassistant
 houseb
+htmlcov
 husforbrukning
 hypervolt
 iboost
