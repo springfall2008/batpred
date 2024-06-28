@@ -34,7 +34,6 @@ For coverage analysis installed the 'coverage' library with Python
 2. python3 -m coverage html
 3. Open htmlcov/index.html in your web broswer
 
-
 ## Editing the code
 
 There are at least a couple of ways of working on the code, outlined here.
