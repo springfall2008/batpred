@@ -860,21 +860,26 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
             diff = round(diff, 6)
 
-            if save == "test" and ((minute % 60) == 0):
-                print("Minute4 {} diff {} load_yesterday {} pv_dc {} pv_ac {} battery_draw {}".format(minute, diff, load_yesterday, pv_dc, pv_ac, battery_draw))
-
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if (soc < self.best_soc_keep) and (soc > self.reserve):
+            if soc < self.best_soc_keep:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
-                if battery_draw > 0:
-                    metric_keep += rate_import[minute_absolute] * battery_draw * keep_minute_scaling
-            elif soc < self.best_soc_keep:
-                # It seems odd but the reason to add in metric keep when the battery is empty because otherwise you weight an empty battery quite heavily
-                # and end up forcing it all to zero
                 keep_diff = get_diff(0, 0, pv_now, load_yesterday, inverter_loss)
                 if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
+                if save == "test" and ((minute % 60) == 0):
+                    print(
+                        "Minute Keep {} diff {} load_yesterday {} pv_dc {} pv_ac {} battery_draw {} keep {} keep_diff {} keep_minute_scaling {}".format(
+                            minute, diff * 60 / step, load_yesterday * 60 / step, pv_dc, pv_ac, battery_draw * 60 / step, metric_keep, keep_diff * 60 / step, keep_minute_scaling
+                        )
+                    )
+
+            if save == "test" and ((minute % 60) == 0):
+                print(
+                    "Minute4 {} diff {} load_yesterday {} pv_dc {} pv_ac {} battery_draw {} keep {}".format(
+                        minute, diff * 60 / step, load_yesterday * 60 / step, pv_dc, pv_ac, battery_draw * 60 / step, metric_keep
+                    )
+                )
 
             if diff > 0:
                 # Import
