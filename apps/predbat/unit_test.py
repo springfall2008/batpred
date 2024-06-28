@@ -119,6 +119,8 @@ def reset_inverter(my_predbat):
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []
     my_predbat.car_charging_from_battery = True
+    my_predbat.car_charging_soc[0] = 0
+    my_predbat.car_charging_limit[0] = 100.0
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
     my_predbat.iboost_gas = False
@@ -215,6 +217,8 @@ def simple_scenario(
     my_predbat.iboost_gas_scale = gas_scale
     my_predbat.iboost_charging = iboost_charging
     my_predbat.best_soc_keep = keep
+    my_predbat.car_charging_soc[0] = 0
+    my_predbat.car_charging_limit[0] = 100.0
 
     if end_record:
         my_predbat.end_record = end_record
@@ -668,6 +672,17 @@ def run_model_tests(my_predbat):
         car_charging_from_battery=False,
     )
     failed |= simple_scenario("load_discharge", my_predbat, 1, 0, assert_final_metric=import_rate * 14, assert_final_soc=0, battery_soc=10.0, with_battery=True)
+    failed |= simple_scenario(
+        "load_discharge_car",
+        my_predbat,
+        0.5,
+        0,
+        assert_final_metric=import_rate * 14 * 4.5 + import_rate * 10 * 3.5,
+        assert_final_soc=0,
+        battery_soc=10.0,
+        with_battery=True,
+        charge_car=4.0,
+    )
     failed |= simple_scenario("load_discharge_fast", my_predbat, 2, 0, assert_final_metric=import_rate * 38, assert_final_soc=0, battery_soc=10.0, with_battery=True)
     failed |= simple_scenario("load_discharge_fast_big", my_predbat, 2, 0, assert_final_metric=import_rate * 24, assert_final_soc=76, battery_soc=100.0, with_battery=True)
     failed |= simple_scenario(

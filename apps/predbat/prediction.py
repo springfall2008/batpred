@@ -442,12 +442,15 @@ class Prediction:
                     car_soc[car_n] = round(car_soc[car_n] + car_load_scale, 3)
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
+                    if save == "test" and ((minute % 60) == 0):
+                        print(
+                            "Minute Car {} num_cars {} Car load {} car_load_scale {} car_charging_loss {} car_freeze {} load_yesterday {} car_soc {}".format(
+                                minute, self.num_cars, car_load[car_n], car_load_scale, self.car_charging_loss, car_freeze, load_yesterday, car_soc[car_n]
+                            )
+                        )
                     if not self.car_charging_from_battery:
                         discharge_rate_now = self.battery_rate_min  # 0
                         car_freeze = True
-
-            if save == "test" and ((minute % 60) == 0):
-                print("Minute {} num_cars {} Car load {} car_freeze {}".format(minute, self.num_cars, car_load, car_freeze))
 
             # Reset modelled discharge rate if no car is charging
             if not self.car_charging_from_battery and not car_freeze:
