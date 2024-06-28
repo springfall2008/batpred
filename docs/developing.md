@@ -32,7 +32,7 @@ For coverage analysis installed the 'coverage' library with Python
 
 1. python3 -m coverage run /path/6adb4f0d_predbat/unit_test.py
 2. python3 -m coverage html
-3. Open htmlcov/index.html in your web broswer
+3. Open htmlcov/index.html in your web browser
 
 ## Editing the code
 
