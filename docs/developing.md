@@ -18,14 +18,22 @@ add comments or approve it.
 
 ## Unit level testing
 
+Note you will need to install python_matplotlib (e.g. brew install python_matplotlib or pip install matplotlib)
+
 Predbat now has some unit level tests, to run them on your local machine:
 
-1. Copy apps.yaml locally
-2. Run python3 6adb4f0d_predbat/unit_test.py
+1. Creat a test directory somehwere
+2. Copy apps.yaml to your test area
+3. Run python3 /path/6adb4f0d_predbat/unit_test.py
 
 If the tests fail then debug them.
 
-Note you will need to install python_matplotlib (e.g. brew install python_matplotlib or pip install matplotlib)
+For coverage analysis installed the 'coverage' library with Python
+
+1. python3 -m coverage run /path/6adb4f0d_predbat/unit_test.py
+2. python3 -m coverage html
+3. Open htmlcov/index.html in your web broswer
+
 
 ## Editing the code
 
