@@ -22,7 +22,7 @@ Note you will need to install python_matplotlib (e.g. brew install python_matplo
 
 Predbat now has some unit level tests, to run them on your local machine:
 
-1. Creat a test directory somehwere
+1. Create a test directory somewhere
 2. Copy apps.yaml to your test area
 3. Run python3 /path/6adb4f0d_predbat/unit_test.py
 
