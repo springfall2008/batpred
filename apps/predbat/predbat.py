@@ -5303,9 +5303,7 @@ class PredBat(hass.Hass):
                             hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
                             if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                 continue
-                            if not self.car_charging_from_battery and self.hit_car_window(
-                                discharge_window[window_n]["start"], discharge_window[window_n]["end"]
-                            ):
+                            if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
                                 continue
                             if window_prices_discharge[window_n] < lowest_price_discharge:
                                 lowest_price_discharge = window_prices_discharge[window_n]
@@ -5352,13 +5350,32 @@ class PredBat(hass.Hass):
                     if discharge_enable:
                         self.log(
                             "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} import {} export {} soc {} windows {} discharge on {}".format(
-                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), self.dp4(import_kwh_battery + import_kwh_house), self.dp4(export_kwh), self.dp4(soc), try_charge_limit, try_discharge
+                                loop_price,
+                                divide,
+                                modulo,
+                                self.dp4(metric),
+                                self.dp4(metric_keep),
+                                self.dp4(soc_min),
+                                self.dp4(import_kwh_battery + import_kwh_house),
+                                self.dp4(export_kwh),
+                                self.dp4(soc),
+                                try_charge_limit,
+                                try_discharge,
                             )
                         )
                     else:
                         self.log(
                             "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} import {} export {}  soc {} windows {} discharge off".format(
-                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), self.dp4(import_kwh_battery + import_kwh_house), self.dp4(export_kwh), self.dp4(soc), try_charge_limit
+                                loop_price,
+                                divide,
+                                modulo,
+                                self.dp4(metric),
+                                self.dp4(metric_keep),
+                                self.dp4(soc_min),
+                                self.dp4(import_kwh_battery + import_kwh_house),
+                                self.dp4(export_kwh),
+                                self.dp4(soc),
+                                try_charge_limit,
                             )
                         )
 
@@ -7029,7 +7046,7 @@ class PredBat(hass.Hass):
                     self.car_charging_battery_size,
                     self.car_charging_limit,
                     self.car_charging_rate,
-                    self.car_charging_exclusive
+                    self.car_charging_exclusive,
                 )
             )
 
