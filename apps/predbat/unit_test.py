@@ -966,13 +966,13 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0.5,
-        assert_final_metric=import_rate*10*0.5,
-        assert_final_soc=10 + 14*0.5,
+        assert_final_metric=import_rate * 10 * 0.5,
+        assert_final_soc=10 + 14 * 0.5,
         with_battery=True,
         charge=10,
         battery_size=100,
         hybrid=True,
-        assert_keep=import_rate/60*5*0.5
+        assert_keep=import_rate / 60 * 5 * 0.5,
     )
     failed |= simple_scenario(
         "battery_charge_pv_load1",

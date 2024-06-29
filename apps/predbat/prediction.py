@@ -742,7 +742,7 @@ class Prediction:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
                 keep_diff = get_diff(0, 0, pv_now, load_yesterday, inverter_loss)
-                if keep_diff > 0:                    
+                if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
 
             if diff > 0:
