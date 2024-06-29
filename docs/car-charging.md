@@ -99,6 +99,18 @@ as otherwise the car SoC sensor will be ignored
 NOTE: Multiple cars can be planned with Predbat.
 
 ## Additional Car charging configurations
+If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to True to indicate that only one
+car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to False then it is assumed each car
+can charge independently and hence two or more could charge at once
+
+```yaml
+car_charging_exclusive:
+  - True
+  - True
+```
+
+See [Car charging filtering](apps-yaml.md#car-charging-filtering) and [Planned car charging](apps-yaml.md#planned-car-charging)
+in the [apps.yaml settings](apps-yaml.md) section of the documentation.
 
 - **switch.predbat_car_charging_from_battery** - When set to True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
 When set to False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid.

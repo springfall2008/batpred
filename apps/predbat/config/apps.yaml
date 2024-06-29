@@ -289,6 +289,10 @@ pred_bat:
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
 
+  # One per car, when true only one car can charge at once, when False multiple cars can charge at once
+  #car_charging_exclusive:
+  #  - True
+
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
