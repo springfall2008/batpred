@@ -5303,7 +5303,9 @@ class PredBat(hass.Hass):
                             hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
                             if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
                                 continue
-                            if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
+                            if not self.car_charging_from_battery and self.hit_car_window(
+                                discharge_window[window_n]["start"], discharge_window[window_n]["end"]
+                            ):
                                 continue
                             if window_prices_discharge[window_n] < lowest_price_discharge:
                                 lowest_price_discharge = window_prices_discharge[window_n]
@@ -5350,32 +5352,13 @@ class PredBat(hass.Hass):
                     if discharge_enable:
                         self.log(
                             "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} import {} export {} soc {} windows {} discharge on {}".format(
-                                loop_price,
-                                divide,
-                                modulo,
-                                self.dp4(metric),
-                                self.dp4(metric_keep),
-                                self.dp4(soc_min),
-                                self.dp4(import_kwh_battery + import_kwh_house),
-                                self.dp4(export_kwh),
-                                self.dp4(soc),
-                                try_charge_limit,
-                                try_discharge,
+                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), self.dp4(import_kwh_battery + import_kwh_house), self.dp4(export_kwh), self.dp4(soc), try_charge_limit, try_discharge
                             )
                         )
                     else:
                         self.log(
                             "Optimise all for buy/sell price band <= {} divide {} modulo {} metric {} keep {} soc_min {} import {} export {}  soc {} windows {} discharge off".format(
-                                loop_price,
-                                divide,
-                                modulo,
-                                self.dp4(metric),
-                                self.dp4(metric_keep),
-                                self.dp4(soc_min),
-                                self.dp4(import_kwh_battery + import_kwh_house),
-                                self.dp4(export_kwh),
-                                self.dp4(soc),
-                                try_charge_limit,
+                                loop_price, divide, modulo, self.dp4(metric), self.dp4(metric_keep), self.dp4(soc_min), self.dp4(import_kwh_battery + import_kwh_house), self.dp4(export_kwh), self.dp4(soc), try_charge_limit
                             )
                         )
 
@@ -6994,6 +6977,7 @@ class PredBat(hass.Hass):
         self.car_charging_limit = [100.0 for c in range(self.num_cars)]
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(self.num_cars)]
+        self.car_charging_exclusive = [False for c in range(self.num_cars)]
 
         self.car_charging_planned_response = self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])
         self.car_charging_now_response = self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])
@@ -7030,6 +7014,7 @@ class PredBat(hass.Hass):
             self.car_charging_battery_size[car_n] = float(self.get_arg("car_charging_battery_size", 100.0, index=car_n))
             self.car_charging_rate[car_n] = float(self.get_arg("car_charging_rate"))
             self.car_charging_limit[car_n] = self.dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
+            self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
 
         if self.num_cars > 0:
             self.log(
@@ -8854,13 +8839,19 @@ class PredBat(hass.Hass):
                     self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]:
                         self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
-                        self.log(
-                            "Car 0 using Octopus Intelligent, charging limit {}, ready time {} - battery size {}".format(
-                                self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]
+                        if self.car_charging_slots[0]:
+                            self.log(
+                                "Car 0 using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(
+                                    self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]
+                                )
                             )
-                        )
+                            self.car_charging_planned[0] = True
+                        else:
+                            self.log("Car 0 using Octopus Intelligent, not charging is planned")
+                            self.car_charging_planned[0] = False
                     else:
                         self.log("Car 0 using Octopus Intelligent is unplugged")
+                        self.car_charging_planned[0] = False
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
@@ -8875,7 +8866,7 @@ class PredBat(hass.Hass):
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
             self.log(
-                "Current Car SOC kWh: {} Charge limit {} plan time {} battery size {}".format(
+                "Cars: SOC kWh: {} Charge limit {} plan time {} battery size {}".format(
                     self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size
                 )
             )
@@ -9028,10 +9019,13 @@ class PredBat(hass.Hass):
         # Work out car plan?
         for car_n in range(self.num_cars):
             if self.octopus_intelligent_charging and car_n == 0:
-                self.log("Car 0 is using Octopus intelligent schedule")
+                if self.car_charging_planned[car_n]:
+                    self.log("Car 0 on Octopus Intelligent, active plan for charge")
+                else:
+                    self.log("Car 0 on Octopus Intelligent, no active plan")
             elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                 self.log(
-                    "Plan car {} charging from {} to {} with slots {} from soc {} to {} ready by {}".format(
+                    "Car {} plan charging from {} to {} with slots {} from soc {} to {} ready by {}".format(
                         car_n,
                         self.car_charging_soc[car_n],
                         self.car_charging_limit[car_n],
@@ -9043,11 +9037,15 @@ class PredBat(hass.Hass):
                 )
                 self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
             else:
-                self.log("Not planning car charging for car {} - car charging planned is False".format(car_n))
+                self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
 
             # Log the charging plan
             if self.car_charging_slots[car_n]:
                 self.log("Car {} charging plan is: {}".format(car_n, self.car_charging_slots[car_n]))
+
+            if self.car_charging_planned[car_n] and self.car_charging_exclusive[car_n]:
+                self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
+                break
 
         # Publish the car plan
         self.publish_car_plan()
