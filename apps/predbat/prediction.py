@@ -600,11 +600,20 @@ class Prediction:
                 battery_state = "f+"
                 first_charge = min(first_charge, minute)
 
-                if self.inverter_hybrid:
+                if inverter_hybrid:
                     pv_dc = min(abs(battery_draw), pv_now)
                 else:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
+
+                if (charge_limit_n - soc) < (charge_rate_now_curve * step):
+                    # The battery will hit the charge limit in this period, so if the charge was spread over the period
+                    # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
+                    # won't cover it and it will likely create an import.
+                    pv_compare = pv_dc + pv_ac
+                    if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
+                        potential_import = (charge_rate_now_curve * step) - pv_compare
+                        metric_keep += potential_import * rate_import.get(minute_absolute, 0)
             else:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
@@ -612,7 +621,7 @@ class Prediction:
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
                 required_for_load = load_yesterday / inverter_loss_ac
-                if self.inverter_hybrid:
+                if inverter_hybrid:
                     potential_to_charge = pv_now
                 else:
                     potential_to_charge = pv_ac
@@ -629,15 +638,15 @@ class Prediction:
                     else:
                         battery_state = "e~"
 
-                    if self.inverter_hybrid:
+                    if inverter_hybrid:
                         pv_dc = min(abs(battery_draw), pv_now)
                     else:
                         pv_dc = 0
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
             # Clamp at inverter limit
-            if self.inverter_hybrid:
-                battery_inverted = get_total_inverted(battery_draw, pv_dc, 0, inverter_loss, self.inverter_hybrid)
+            if inverter_hybrid:
+                battery_inverted = get_total_inverted(battery_draw, pv_dc, 0, inverter_loss, inverter_hybrid)
                 if battery_inverted > inverter_limit:
                     over_limit = battery_inverted - inverter_limit
 
@@ -652,14 +661,14 @@ class Prediction:
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 # Clip battery discharge back
-                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit and (battery_draw + pv_dc) > 0:
                     over_limit = total_inverted - inverter_limit
                     if battery_draw + pv_dc > 0:
                         battery_draw = max(battery_draw - over_limit, 0)
 
                     if battery_draw == 0:
-                        total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                        total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                         if total_inverted > inverter_limit:
                             over_limit = total_inverted - inverter_limit
                         battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve * step, -battery_to_max, -pv_ac)
@@ -669,12 +678,12 @@ class Prediction:
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 # Clip solar
-                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
                     pv_ac = max(pv_ac - over_limit * inverter_loss, 0)
             else:
-                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
                     if battery_draw > 0:
