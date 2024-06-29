@@ -48,22 +48,28 @@ def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, char
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
     return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
 
+
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=False):
     """
     Get AC output difference
     """
-    battery_balance = (battery_draw + pv_dc)
+    battery_balance = battery_draw + pv_dc
     battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance / inverter_loss
     diff = load_yesterday - battery_balance - pv_ac
     if debug:
-        print("battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(battery_draw*60/5, pv_dc*60/5, pv_ac*60/5, load_yesterday*60/5, battery_balance*60/5, diff*60/5))
+        print(
+            "battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(
+                battery_draw * 60 / 5, pv_dc * 60 / 5, pv_ac * 60 / 5, load_yesterday * 60 / 5, battery_balance * 60 / 5, diff * 60 / 5
+            )
+        )
     return diff
+
 
 def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid):
     """
     Get total inverter power
     """
-    battery_balance = (battery_draw + pv_dc)
+    battery_balance = battery_draw + pv_dc
 
     if battery_balance > 0:
         total_inverted = battery_balance
@@ -74,6 +80,7 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
         total_inverted = total_inverted + pv_ac / inverter_loss
 
     return total_inverted
+
 
 class Prediction:
     """
@@ -260,7 +267,6 @@ class Prediction:
                         break
         return load_amount
 
-    
     def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, return the results
@@ -482,7 +488,7 @@ class Prediction:
                         if charge_window_n >= 0:
                             iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
                             load_yesterday += iboost_amount
-                
+
             # Count load
             load_kwh += load_yesterday
             if record:
@@ -547,7 +553,7 @@ class Prediction:
 
                     if inverter_hybrid and battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
-                        pv_ac = (pv_now  - pv_dc) * inverter_loss_ac
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 # Exceeds inverter limit, scale back discharge?
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybrid)
@@ -564,7 +570,7 @@ class Prediction:
 
                         if battery_draw < 0:
                             pv_dc = min(abs(battery_draw), pv_now)
-                        pv_ac = (pv_now  - pv_dc) * inverter_loss_ac
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
                 else:
                     if total_inverted > inverter_limit:
                         over_limit = total_inverted - inverter_limit
@@ -639,7 +645,7 @@ class Prediction:
                         battery_draw = max(battery_draw - over_limit, 0)
                     else:
                         battery_draw = min(battery_draw + over_limit * inverter_loss, 0)
-                    
+
                     # Adjustment to charging from solar case
                     if battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
@@ -651,7 +657,7 @@ class Prediction:
                     over_limit = total_inverted - inverter_limit
                     if battery_draw + pv_dc > 0:
                         battery_draw = max(battery_draw - over_limit, 0)
-                    
+
                     if battery_draw == 0:
                         total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
                         if total_inverted > inverter_limit:
@@ -661,7 +667,6 @@ class Prediction:
                     if battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
-                                                    
 
                 # Clip solar
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
@@ -688,7 +693,7 @@ class Prediction:
                 soc = max(soc - battery_draw / self.battery_loss_discharge, reserve_expected)
             else:
                 soc = min(soc - battery_draw * self.battery_loss, self.soc_max)
-                
+
             # iBoost solar diverter model
             if self.iboost_enable:
                 if iboost_today_kwh < self.iboost_max_energy and (
@@ -715,7 +720,7 @@ class Prediction:
 
             # Rounding on SOC
             soc = round(soc, 6)
-                
+
             # Count battery cycles
             battery_cycle = round(battery_cycle + abs(battery_draw), 4)
 
@@ -724,13 +729,13 @@ class Prediction:
             diff = round(diff, 6)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if (soc < self.best_soc_keep):
+            if soc < self.best_soc_keep:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
                 keep_diff = get_diff(0, 0, pv_now, load_yesterday, inverter_loss)
                 if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
- 
+
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
