@@ -290,7 +290,7 @@ pred_bat:
   #  - 're:sensor.tsunami_battery'
 
   # One per car, when true only one car can charge at once, when False multiple cars can charge at once
-  #car_charging_exclusive: 
+  #car_charging_exclusive:
   #  - True
 
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
