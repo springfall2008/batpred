@@ -7035,7 +7035,7 @@ class PredBat(hass.Hass):
 
         if self.num_cars > 0:
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}, plan_time {}, battery size {}, limit {}, rate {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}, plan_time {}, battery size {}, limit {}, rate {}, exclusive {}".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
@@ -7046,6 +7046,7 @@ class PredBat(hass.Hass):
                     self.car_charging_battery_size,
                     self.car_charging_limit,
                     self.car_charging_rate,
+                    self.car_charging_exclusive,
                 )
             )
 
@@ -8251,12 +8252,17 @@ class PredBat(hass.Hass):
                                 inverter.disable_charge_window()
                             else:
                                 # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
-                                self.log(
-                                    "Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
-                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                # If we are going into freeze mode but haven't yet then don't configure the charge window as it will mean a spike of charging first
+                                if not isCharging and self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
+                                    self.log("Charge window will be disabled as freeze charging is planned")
+                                    inverter.disable_charge_window()
+                                else:
+                                    self.log(
+                                        "Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
+                                            self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
+                                        )
                                     )
-                                )
-                                inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+                                    inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
                             if not self.inverter_set_charge_before:
                                 self.log(
