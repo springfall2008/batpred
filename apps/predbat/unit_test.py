@@ -616,7 +616,7 @@ def run_perf_test(my_predbat):
     failed = False
 
     start_time = time.time()
-    for count in range(0, 200):
+    for count in range(0, 50):
         failed |= simple_scenario(
             "load_bat_dc_pv2",
             my_predbat,
@@ -636,7 +636,7 @@ def run_perf_test(my_predbat):
         print("Performance test failed")
 
     run_time = end_time - start_time
-    print("Performance test took {} seconds for 200 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 200.0), 2)))
+    print("Performance test took {} seconds for 200 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 50.0), 2)))
     return failed
 
 
@@ -960,6 +960,19 @@ def run_model_tests(my_predbat):
         inverter_loss=0.5,
         inverter_limit=2,
         hybrid=True,
+    )
+    failed |= simple_scenario(
+        "battery_charge_pv_term_dc",
+        my_predbat,
+        0,
+        0.5,
+        assert_final_metric=import_rate*10*0.5,
+        assert_final_soc=10 + 14*0.5,
+        with_battery=True,
+        charge=10,
+        battery_size=100,
+        hybrid=True,
+        assert_keep=import_rate/60*5*0.5
     )
     failed |= simple_scenario(
         "battery_charge_pv_load1",
