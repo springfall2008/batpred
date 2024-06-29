@@ -448,11 +448,22 @@ There are two different ways of planning car charging into cheap slots with Pred
 These approaches and the set of settings that need to be configured together are described in [Car Charging](car-charging.md).
 
 The full list of car charging configuration items in `apps.yaml` that are used to plan car charging activity within Predbat are described below.
-The Home Assistant controls (switches, input numbers, selectors, etc) related to car charging are described in [Car Charging configuration within Home Assistant](customisation.md#car-charging),
+The Home Assistant controls (switches, input numbers, selectors, etc) related to car charging are described in [Car Charging configuration within Home Assistant](car-charging.md),
 with brief mention of pertinent controls included here alongside the apps.yaml configuration items where relevant for context.
 
 - **num_cars** should be set in apps.yaml to the number of cars you want Predbat to plan for.
 Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can safely be commented out or deleted as they won't be required).
+
+- **car_charging_exclusive** should be set to True for each car in apps.yaml if you have multiple cars configured in Predbat, but only one car charger.
+This indicates that only one car may charge at once (the first car reporting as plugged in will be considered as charging).
+If you set this to False for each car then it is assumed that the car can charge independently, and hence two or more cars could charge at once.
+One entry per car.
+
+```yaml
+car_charging_exclusive:
+  - True
+  - True
+```
 
 ### Car Charging Filtering
 
