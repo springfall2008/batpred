@@ -49,13 +49,19 @@ def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, char
     return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
 
 
-def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss):
+def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=False):
     """
     Get AC output difference
     """
     battery_balance = battery_draw + pv_dc
     battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance / inverter_loss
     diff = load_yesterday - battery_balance - pv_ac
+    if debug:
+        print(
+            "battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(
+                battery_draw * 60 / 5, pv_dc * 60 / 5, pv_ac * 60 / 5, load_yesterday * 60 / 5, battery_balance * 60 / 5, diff * 60 / 5
+            )
+        )
     return diff
 
 
@@ -65,10 +71,14 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
     """
     battery_balance = battery_draw + pv_dc
 
-    if inverter_hybrid:
-        total_inverted = (abs(battery_balance) + pv_ac) / inverter_loss
+    if battery_balance > 0:
+        total_inverted = battery_balance
     else:
         total_inverted = abs(battery_balance) / inverter_loss
+
+    if inverter_hybrid:
+        total_inverted = total_inverted + pv_ac / inverter_loss
+
     return total_inverted
 
 
@@ -546,25 +556,34 @@ class Prediction:
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
 
+                if save == "test" and ((minute % 60) == 0):
+                    diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+                    print(
+                        "Minute Discharge {} battery_draw {} battery_state {} pc_ac {} pv_dc {} load {} diff {}".format(
+                            minute, battery_draw * 60 / step, battery_state, pv_ac * 60 / step, pv_dc * 60 / step, load_yesterday * 60 / step, diff * 60 / step
+                        )
+                    )
+
                 # Exceed export limit?
                 diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
                 if diff < 0 and abs(diff) > export_limit:
                     over_limit = abs(diff) - export_limit
-                    reduce_by = over_limit * inverter_loss
-                    if reduce_by > battery_draw:
-                        battery_draw = max(battery_draw - reduce_by, -battery_to_min, -charge_rate_now_curve * step)
-                    else:
-                        battery_draw = min(battery_draw - reduce_by, battery_to_max, discharge_rate_now_curve * step)
+                    reduce_by = over_limit
 
-                    if self.inverter_hybrid:
-                        if battery_draw < 0:
-                            pv_dc = min(abs(battery_draw), pv_now)
+                    if reduce_by > battery_draw:
+                        reduce_by = reduce_by - battery_draw
+                        battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
+                    else:
+                        battery_draw = battery_draw - reduce_by
+
+                    if self.inverter_hybrid and battery_draw < 0:
+                        pv_dc = min(abs(battery_draw), pv_now)
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                     if save == "test" and ((minute % 60) == 0):
                         diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
                         print(
-                            "Minute DischargeE {} battery_draw {} battery_state {} pc_ac {} pv_dc {} load {} diff {} over_export_limit {}".format(
+                            "Minute Discharge Export Limit {} battery_draw {} battery_state {} pc_ac {} pv_dc {} load {} diff {} over_export_limit {}".format(
                                 minute,
                                 battery_draw * 60 / step,
                                 battery_state,
@@ -579,14 +598,15 @@ class Prediction:
                 # Exceeds inverter limit, scale back discharge?
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
                 if self.inverter_hybrid:
+                    over_limit = total_inverted - inverter_limit
                     if total_inverted > inverter_limit:
-                        over_limit = total_inverted - inverter_limit
-                        reduce_by = over_limit * inverter_loss
-
+                        reduce_by = over_limit
                         if reduce_by > battery_draw:
-                            battery_draw = max(battery_draw - reduce_by, -battery_to_min, -charge_rate_now_curve * step)
+                            reduce_by = reduce_by - battery_draw
+                            battery_draw = 0
+                            battery_draw = max(-reduce_by * inverter_loss, -battery_to_min, -charge_rate_now_curve * step)
                         else:
-                            battery_draw = min(battery_draw - reduce_by, battery_to_max, discharge_rate_now_curve * step)
+                            battery_draw = battery_draw - reduce_by
 
                         if battery_draw < 0:
                             pv_dc = min(abs(battery_draw), pv_now)
@@ -626,16 +646,16 @@ class Prediction:
                                 )
                             )
 
-                battery_state = "f-"
-
                 if battery_draw < 0:
                     battery_state = "f/"
+                else:
+                    battery_state = "f-"
 
                 if save == "test" and ((minute % 60) == 0):
                     diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
                     print(
                         "Minute Discharge2 {} battery_draw {} battery_state {} pc_ac {} pv_dc {} load {} diff {}".format(
-                            minute, battery_draw, battery_state, pv_ac, pv_dc, load_yesterday, diff
+                            minute, battery_draw * 60 / step, battery_state, pv_ac * 60 / step, pv_dc * 60 / step, load_yesterday * 60 / step, diff * 60 / step
                         )
                     )
 
@@ -703,7 +723,7 @@ class Prediction:
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 if save == "test" and ((minute % 60) == 0):
-                    diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+                    diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=True)
                     print(
                         "Minute ECO {} battery_draw {} battery_state {} pc_ac {} pv_dc {} load {} diff {}".format(
                             minute, battery_draw * 60 / step, battery_state, pv_ac * 60 / step, pv_dc * 60 / step, load_yesterday * 60 / step, diff * 60 / step
@@ -712,12 +732,12 @@ class Prediction:
 
             # Clamp at inverter limit
             if self.inverter_hybrid:
-                battery_inverted = abs(battery_draw + pv_dc) / inverter_loss
+                battery_inverted = get_total_inverted(battery_draw, pv_dc, 0, inverter_loss, self.inverter_hybrid)
                 if battery_inverted > inverter_limit:
                     over_limit = battery_inverted - inverter_limit
 
                     if battery_draw + pv_dc > 0:
-                        battery_draw = max(battery_draw - over_limit * inverter_loss, 0)
+                        battery_draw = max(battery_draw - over_limit, 0)
                     else:
                         battery_draw = min(battery_draw + over_limit * inverter_loss, 0)
 
@@ -727,7 +747,7 @@ class Prediction:
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                     if save == "test" and ((minute % 60) == 0):
-                        diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
+                        diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=True)
                         print(
                             "Minute Clamp-Hybrid1 {} battery_draw {} over_limit {} battery_inverted {} battery_state {} pc_ac {} pv_dc {} load {} diff {}".format(
                                 minute,
@@ -741,6 +761,23 @@ class Prediction:
                                 diff * 60 / step,
                             )
                         )
+
+                # Clip battery discharge back
+                total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                if total_inverted > inverter_limit and (battery_draw + pv_dc) > 0:
+                    over_limit = total_inverted - inverter_limit
+                    if battery_draw + pv_dc > 0:
+                        battery_draw = max(battery_draw - over_limit, 0)
+
+                    if battery_draw == 0:
+                        total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
+                        if total_inverted > inverter_limit:
+                            over_limit = total_inverted - inverter_limit
+                        battery_draw = max(-over_limit * inverter_loss, -charge_rate_now_curve * step, -battery_to_max, -pv_ac)
+
+                    if battery_draw < 0:
+                        pv_dc = min(abs(battery_draw), pv_now)
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 # Clip solar
                 total_inverted = get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, self.inverter_hybrid)
@@ -768,7 +805,7 @@ class Prediction:
                 if total_inverted > inverter_limit:
                     over_limit = total_inverted - inverter_limit
                     if battery_draw > 0:
-                        battery_draw = max(battery_draw - over_limit * inverter_loss, 0)
+                        battery_draw = max(battery_draw - over_limit, 0)
                     else:
                         battery_draw = min(battery_draw + over_limit * inverter_loss, 0)
 
@@ -880,7 +917,7 @@ class Prediction:
             if save == "test" and ((minute % 60) == 0):
                 print(
                     "Minute4 {} diff {} load_yesterday {} pv_dc {} pv_ac {} battery_draw {} keep {}".format(
-                        minute, diff * 60 / step, load_yesterday * 60 / step, pv_dc, pv_ac, battery_draw * 60 / step, metric_keep
+                        minute, diff * 60 / step, load_yesterday * 60 / step, pv_dc * 60 / step, pv_ac * 60 / step, battery_draw * 60 / step, metric_keep
                     )
                 )
 
