@@ -34,6 +34,7 @@ from prediction import wrapped_run_prediction_single
 
 KEEP_SCALE = 0.5
 
+
 class TestHAInterface:
     def __init__(self):
         self.step = 5
@@ -1042,7 +1043,17 @@ def run_model_tests(my_predbat):
     )
     failed |= simple_scenario("battery_discharge", my_predbat, 0, 0, assert_final_metric=-export_rate * 10, assert_final_soc=0, with_battery=True, discharge=0, battery_soc=10)
     failed |= simple_scenario(
-        "battery_discharge_keep", my_predbat, 0, 0, assert_final_metric=-export_rate * 10, assert_final_soc=0, with_battery=True, discharge=0, battery_soc=10, assert_keep=1 * import_rate * KEEP_SCALE, keep=1
+        "battery_discharge_keep",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-export_rate * 10,
+        assert_final_soc=0,
+        with_battery=True,
+        discharge=0,
+        battery_soc=10,
+        assert_keep=1 * import_rate * KEEP_SCALE,
+        keep=1,
     )
     failed |= simple_scenario(
         "battery_discharge_loss",
