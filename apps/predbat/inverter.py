@@ -1609,6 +1609,12 @@ class Inverter:
         if not force_discharge:
             self.adjust_inverter_mode(force_discharge)
 
+        # Turn off scheduled discharge
+        if not force_discharge and old_discharge_enable:
+            if not SIMULATE:
+                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
+                self.log("Inverter {} Turning off scheduled discharge".format(self.id))
+
         self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, old_start, old_end, new_start, new_end))
         changed_start_end = False
 
@@ -1671,21 +1677,17 @@ class Inverter:
             entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
             self.press_and_poll_button(entity_id)
 
-        # Change scheduled discharge enable
-        if force_discharge and not old_discharge_enable:
-            if not SIMULATE:
-                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-                self.log("Inverter {} Turning on scheduled discharge".format(self.id))
-        elif not force_discharge and old_discharge_enable:
-            if not SIMULATE:
-                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
-                self.log("Inverter {} Turning off scheduled discharge".format(self.id))
-
         # REST version of writing slot
         if self.rest_data and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
             changed_start_end = True
             if not SIMULATE:
                 self.rest_setDischargeSlot1(new_start, new_end)
+
+        # Change scheduled discharge enable
+        if force_discharge and not old_discharge_enable:
+            if not SIMULATE:
+                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
+                self.log("Inverter {} Turning on scheduled discharge".format(self.id))
 
         # Force discharge, turn it on after we change the window
         if force_discharge:
