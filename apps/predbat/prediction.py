@@ -380,9 +380,9 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / (4 * 60)), 1.0)
+                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
             else:
-                keep_minute_scaling = 1.0
+                keep_minute_scaling = 0.5
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -741,7 +741,7 @@ class Prediction:
             if soc < self.best_soc_keep:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
-                keep_diff = get_diff(0, 0, pv_now, load_yesterday, inverter_loss)
+                keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
                 if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
 
