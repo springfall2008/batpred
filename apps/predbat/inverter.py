@@ -1645,12 +1645,6 @@ class Inverter:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
             self.log("Inverter {} Turning on scheduled discharge".format(self.id))
 
-        # Change scheduled discharge enable
-        if force_discharge and not old_discharge_enable:
-            if not SIMULATE:
-                self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-                self.log("Inverter {} Turning on scheduled discharge".format(self.id))
-
         # Force discharge, turn it on after we change the window
         if force_discharge:
             self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
