@@ -28,8 +28,6 @@ CONFIG_REFRESH_PERIOD = 60 * 8
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
 
-SIMULATE = False  # Debug option, when set don't write to entities but simulate each 30 min period
-SIMULATE_LENGTH = 23 * 60  # How many periods to simulate, set to 0 for just current
 INVERTER_TEST = False  # Run inverter control self test
 
 # Create an array of times in the day in 5-minute intervals

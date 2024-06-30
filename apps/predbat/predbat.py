@@ -61,13 +61,11 @@ from config import (
     CONFIG_ITEMS,
     RUN_EVERY,
     INVERTER_TEST,
-    SIMULATE,
     MAX_INCREMENT,
     CONFIG_ROOTS,
     PREDBAT_MODE_CONTROL_SOC,
     PREDBAT_MODE_CONTROL_CHARGE,
     PREDBAT_MODE_CONTROL_CHARGEDISCHARGE,
-    SIMULATE_LENGTH,
     CONFIG_REFRESH_PERIOD,
     TIME_FORMAT_HA,
     TIMEOUT,
@@ -2162,7 +2160,7 @@ class PredBat(hass.Hass):
                     self.log(" STATE:  [{}]".format(self.scenario_summary_state(record_time)))
 
             # Save data to HA state
-            if save and save == "base" and not SIMULATE:
+            if save and save == "base":
                 self.dashboard_item(
                     self.prefix + ".battery_hours_left",
                     state=self.dp2(hours_left),
@@ -2392,7 +2390,7 @@ class PredBat(hass.Hass):
                         },
                     )
 
-            if save and save == "best" and not SIMULATE:
+            if save and save == "best":
                 self.dashboard_item(
                     self.prefix + ".best_battery_hours_left",
                     state=self.dp2(hours_left),
@@ -2629,7 +2627,7 @@ class PredBat(hass.Hass):
                         },
                     )
 
-            if save and save == "debug" and not SIMULATE:
+            if save and save == "debug":
                 self.dashboard_item(
                     self.prefix + ".pv_power_debug",
                     state=self.dp3(final_soc),
@@ -2679,7 +2677,7 @@ class PredBat(hass.Hass):
                     },
                 )
 
-            if save and save == "best10" and not SIMULATE:
+            if save and save == "best10":
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best10",
                     state=self.dp3(final_soc),
@@ -2748,7 +2746,7 @@ class PredBat(hass.Hass):
                     },
                 )
 
-            if save and save == "base10" and not SIMULATE:
+            if save and save == "base10":
                 self.dashboard_item(
                     self.prefix + ".soc_kw_base10",
                     state=self.dp3(final_soc),
@@ -3433,7 +3431,7 @@ class PredBat(hass.Hass):
 
                 time_format_time = "%H:%M:%S"
 
-                if window_n == 0 and not SIMULATE:
+                if window_n == 0:
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_start",
                         state=rate_high_start_date.strftime(time_format_time),
@@ -3480,7 +3478,7 @@ class PredBat(hass.Hass):
                         state=high_rate_minutes,
                         attributes={"friendly_name": "Next high export rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
                     )
-                if window_n == 1 and not SIMULATE:
+                if window_n == 1:
                     self.dashboard_item(
                         self.prefix + ".high_rate_export_start_2",
                         state=rate_high_start_date.strftime(time_format_time),
@@ -3521,7 +3519,7 @@ class PredBat(hass.Hass):
             self.log("High export rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.high_export_rates and not SIMULATE:
+        if not self.high_export_rates:
             self.log("No high rate period found")
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start",
@@ -3567,7 +3565,7 @@ class PredBat(hass.Hass):
                 state=0,
                 attributes={"friendly_name": "Next high export rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
-        if len(self.high_export_rates) < 2 and not SIMULATE:
+        if len(self.high_export_rates) < 2:
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start_2",
                 state="undefined",
@@ -3795,7 +3793,7 @@ class PredBat(hass.Hass):
                 rate_low_end_date = self.midnight_utc + timedelta(minutes=rate_low_end)
 
                 time_format_time = "%H:%M:%S"
-                if window_n == 0 and not SIMULATE:
+                if window_n == 0:
                     self.dashboard_item(
                         self.prefix + ".low_rate_start",
                         state=rate_low_start_date.strftime(time_format_time),
@@ -3844,7 +3842,7 @@ class PredBat(hass.Hass):
                         state=low_rate_minutes,
                         attributes={"friendly_name": "Next low rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
                     )
-                if window_n == 1 and not SIMULATE:
+                if window_n == 1:
                     self.dashboard_item(
                         self.prefix + ".low_rate_start_2",
                         state=rate_low_start_date.strftime(time_format_time),
@@ -3886,7 +3884,7 @@ class PredBat(hass.Hass):
         self.log("Low import rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.low_rates and not SIMULATE:
+        if not self.low_rates:
             self.log("No low rate period found")
             self.dashboard_item(
                 self.prefix + ".low_rate_start",
@@ -3927,7 +3925,7 @@ class PredBat(hass.Hass):
             self.dashboard_item(
                 "binary_sensor." + self.prefix + "_low_rate_slot", state="off", attributes={"friendly_name": "Predbat low rate slot", "icon": "mdi:home-lightning-bolt-outline"}
             )
-        if len(self.low_rates) < 2 and not SIMULATE:
+        if len(self.low_rates) < 2:
             self.dashboard_item(
                 self.prefix + ".low_rate_start_2",
                 state="undefined",
@@ -4452,54 +4450,53 @@ class PredBat(hass.Hass):
         else:
             self.publish_rates_import()
 
-        if not SIMULATE:
-            if export:
-                self.dashboard_item(
-                    self.prefix + ".rates_export",
-                    state=self.dp2(rates[self.minutes_now]),
-                    attributes={
-                        "min": self.dp2(self.rate_export_min),
-                        "max": self.dp2(self.rate_export_max),
-                        "average": self.dp2(self.rate_export_average),
-                        "threshold": self.dp2(self.rate_export_cost_threshold),
-                        "results": self.filtered_times(rates_time),
-                        "friendly_name": "Export rates",
-                        "state_class": "measurement",
-                        "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
-                    },
-                )
-            elif gas:
-                self.dashboard_item(
-                    self.prefix + ".rates_gas",
-                    state=self.dp2(rates[self.minutes_now]),
-                    attributes={
-                        "min": self.dp2(self.rate_gas_min),
-                        "max": self.dp2(self.rate_gas_max),
-                        "average": self.dp2(self.rate_gas_average),
-                        "results": self.filtered_times(rates_time),
-                        "friendly_name": "Gas rates",
-                        "state_class": "measurement",
-                        "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
-                    },
-                )
-            else:
-                self.dashboard_item(
-                    self.prefix + ".rates",
-                    state=self.dp2(rates[self.minutes_now]),
-                    attributes={
-                        "min": self.dp2(self.rate_min),
-                        "max": self.dp2(self.rate_max),
-                        "average": self.dp2(self.rate_average),
-                        "threshold": self.dp2(self.rate_import_cost_threshold),
-                        "results": self.filtered_times(rates_time),
-                        "friendly_name": "Import rates",
-                        "state_class": "measurement",
-                        "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
-                    },
-                )
+        if export:
+            self.dashboard_item(
+                self.prefix + ".rates_export",
+                state=self.dp2(rates[self.minutes_now]),
+                attributes={
+                    "min": self.dp2(self.rate_export_min),
+                    "max": self.dp2(self.rate_export_max),
+                    "average": self.dp2(self.rate_export_average),
+                    "threshold": self.dp2(self.rate_export_cost_threshold),
+                    "results": self.filtered_times(rates_time),
+                    "friendly_name": "Export rates",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                },
+            )
+        elif gas:
+            self.dashboard_item(
+                self.prefix + ".rates_gas",
+                state=self.dp2(rates[self.minutes_now]),
+                attributes={
+                    "min": self.dp2(self.rate_gas_min),
+                    "max": self.dp2(self.rate_gas_max),
+                    "average": self.dp2(self.rate_gas_average),
+                    "results": self.filtered_times(rates_time),
+                    "friendly_name": "Gas rates",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                },
+            )
+        else:
+            self.dashboard_item(
+                self.prefix + ".rates",
+                state=self.dp2(rates[self.minutes_now]),
+                attributes={
+                    "min": self.dp2(self.rate_min),
+                    "max": self.dp2(self.rate_max),
+                    "average": self.dp2(self.rate_average),
+                    "threshold": self.dp2(self.rate_import_cost_threshold),
+                    "results": self.filtered_times(rates_time),
+                    "friendly_name": "Import rates",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                },
+            )
         return rates
 
     def today_cost(self, import_today, export_today):
@@ -4553,52 +4550,51 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
 
-        if not SIMULATE:
+        self.dashboard_item(
+            self.prefix + ".cost_today",
+            state=self.dp2(day_cost),
+            attributes={
+                "results": self.filtered_times(day_cost_time),
+                "friendly_name": "Cost so far today",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
+            },
+        )
+        if self.carbon_enable:
             self.dashboard_item(
-                self.prefix + ".cost_today",
-                state=self.dp2(day_cost),
+                self.prefix + ".carbon_today",
+                state=self.dp2(carbon_g),
                 attributes={
-                    "results": self.filtered_times(day_cost_time),
-                    "friendly_name": "Cost so far today",
+                    "results": self.filtered_times(day_carbon_time),
+                    "friendly_name": "Carbon today so far",
                     "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
+                    "unit_of_measurement": "g",
+                    "icon": "mdi:carbon-molecule",
                 },
             )
-            if self.carbon_enable:
-                self.dashboard_item(
-                    self.prefix + ".carbon_today",
-                    state=self.dp2(carbon_g),
-                    attributes={
-                        "results": self.filtered_times(day_carbon_time),
-                        "friendly_name": "Carbon today so far",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "g",
-                        "icon": "mdi:carbon-molecule",
-                    },
-                )
-            self.dashboard_item(
-                self.prefix + ".cost_today_import",
-                state=self.dp2(day_cost_import),
-                attributes={
-                    "results": self.filtered_times(day_cost_time_import),
-                    "friendly_name": "Cost so far today import",
-                    "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
-                },
-            )
-            self.dashboard_item(
-                self.prefix + ".cost_today_export",
-                state=self.dp2(day_cost_export),
-                attributes={
-                    "results": self.filtered_times(day_cost_time_export),
-                    "friendly_name": "Cost so far today export",
-                    "state_class": "measurement",
-                    "unit_of_measurement": self.currency_symbols[1],
-                    "icon": "mdi:currency-usd",
-                },
-            )
+        self.dashboard_item(
+            self.prefix + ".cost_today_import",
+            state=self.dp2(day_cost_import),
+            attributes={
+                "results": self.filtered_times(day_cost_time_import),
+                "friendly_name": "Cost so far today import",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".cost_today_export",
+            state=self.dp2(day_cost_export),
+            attributes={
+                "results": self.filtered_times(day_cost_time_export),
+                "friendly_name": "Cost so far today export",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
+            },
+        )
         self.log(
             "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
                 self.dp2(day_energy),
@@ -4653,134 +4649,133 @@ class PredBat(hass.Hass):
                 discharge_limit_time_kw[stamp] = self.dp2(soc_kw)
             prev_limit = soc_perc
 
-        if not SIMULATE:
-            discharge_start_str = ""
-            discharge_end_str = ""
-            discharge_start_date = None
-            discharge_end_date = None
-            discharge_average = None
-            discharge_start_in_minutes = self.forecast_minutes
-            discharge_end_in_minutes = self.forecast_minutes
+        discharge_start_str = ""
+        discharge_end_str = ""
+        discharge_start_date = None
+        discharge_end_date = None
+        discharge_average = None
+        discharge_start_in_minutes = self.forecast_minutes
+        discharge_end_in_minutes = self.forecast_minutes
 
-            if discharge_window and (discharge_window[0]["end"] < (24 * 60 + self.minutes_now)):
-                discharge_start_minutes = discharge_window[0]["start"]
-                discharge_end_minutes = discharge_window[0]["end"]
-                discharge_average = discharge_window[0].get("average", None)
-                discharge_start_in_minutes = max(discharge_start_minutes - self.minutes_now, 0)
-                discharge_end_in_minutes = max(discharge_end_minutes - self.minutes_now, 0)
+        if discharge_window and (discharge_window[0]["end"] < (24 * 60 + self.minutes_now)):
+            discharge_start_minutes = discharge_window[0]["start"]
+            discharge_end_minutes = discharge_window[0]["end"]
+            discharge_average = discharge_window[0].get("average", None)
+            discharge_start_in_minutes = max(discharge_start_minutes - self.minutes_now, 0)
+            discharge_end_in_minutes = max(discharge_end_minutes - self.minutes_now, 0)
 
-                time_format_time = "%H:%M:%S"
-                discharge_startt = self.midnight_utc + timedelta(minutes=discharge_start_minutes)
-                discharge_endt = self.midnight_utc + timedelta(minutes=discharge_end_minutes)
-                discharge_start_str = discharge_startt.strftime(time_format_time)
-                discharge_end_str = discharge_endt.strftime(time_format_time)
-                discharge_start_date = discharge_startt.strftime(TIME_FORMAT)
-                discharge_end_date = discharge_endt.strftime(TIME_FORMAT)
+            time_format_time = "%H:%M:%S"
+            discharge_startt = self.midnight_utc + timedelta(minutes=discharge_start_minutes)
+            discharge_endt = self.midnight_utc + timedelta(minutes=discharge_end_minutes)
+            discharge_start_str = discharge_startt.strftime(time_format_time)
+            discharge_end_str = discharge_endt.strftime(time_format_time)
+            discharge_start_date = discharge_startt.strftime(TIME_FORMAT)
+            discharge_end_date = discharge_endt.strftime(TIME_FORMAT)
 
-            if best:
-                self.dashboard_item(
-                    self.prefix + ".best_discharge_limit_kw",
-                    state=self.dp2(discharge_limit_soc),
-                    attributes={
-                        "results": self.filtered_times(discharge_limit_time_kw),
-                        "friendly_name": "Predicted discharge limit kWh best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_discharge_limit",
-                    state=discharge_limit_percent,
-                    attributes={
-                        "results": self.filtered_times(discharge_limit_time),
-                        "rate": discharge_average,
-                        "friendly_name": "Predicted discharge limit best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "%",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_discharge_start",
-                    state=discharge_start_str,
-                    attributes={
-                        "minutes_to": discharge_start_in_minutes,
-                        "timestamp": discharge_start_date,
-                        "friendly_name": "Predicted discharge start time best",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": discharge_average,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_discharge_end",
-                    state=discharge_end_str,
-                    attributes={
-                        "minutes_to": discharge_end_in_minutes,
-                        "timestamp": discharge_end_date,
-                        "friendly_name": "Predicted discharge end time best",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": discharge_average,
-                    },
-                )
-            else:
-                self.dashboard_item(
-                    self.prefix + ".discharge_limit_kw",
-                    state=self.dp2(discharge_limit_soc),
-                    attributes={
-                        "results": self.filtered_times(discharge_limit_time_kw),
-                        "friendly_name": "Predicted discharge limit kWh",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".discharge_limit",
-                    state=discharge_limit_percent,
-                    attributes={
-                        "results": self.filtered_times(discharge_limit_time),
-                        "rate": discharge_average,
-                        "friendly_name": "Predicted discharge limit",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "%",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".discharge_start",
-                    state=discharge_start_str,
-                    attributes={
-                        "minutes_to": discharge_start_in_minutes,
-                        "timestamp": discharge_start_date,
-                        "friendly_name": "Predicted discharge start time",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": discharge_average,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".discharge_end",
-                    state=discharge_end_str,
-                    attributes={
-                        "minutes_to": discharge_end_in_minutes,
-                        "timestamp": discharge_end_date,
-                        "friendly_name": "Predicted discharge end time",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": discharge_average,
-                    },
-                )
+        if best:
+            self.dashboard_item(
+                self.prefix + ".best_discharge_limit_kw",
+                state=self.dp2(discharge_limit_soc),
+                attributes={
+                    "results": self.filtered_times(discharge_limit_time_kw),
+                    "friendly_name": "Predicted discharge limit kWh best",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_discharge_limit",
+                state=discharge_limit_percent,
+                attributes={
+                    "results": self.filtered_times(discharge_limit_time),
+                    "rate": discharge_average,
+                    "friendly_name": "Predicted discharge limit best",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_discharge_start",
+                state=discharge_start_str,
+                attributes={
+                    "minutes_to": discharge_start_in_minutes,
+                    "timestamp": discharge_start_date,
+                    "friendly_name": "Predicted discharge start time best",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": discharge_average,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_discharge_end",
+                state=discharge_end_str,
+                attributes={
+                    "minutes_to": discharge_end_in_minutes,
+                    "timestamp": discharge_end_date,
+                    "friendly_name": "Predicted discharge end time best",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": discharge_average,
+                },
+            )
+        else:
+            self.dashboard_item(
+                self.prefix + ".discharge_limit_kw",
+                state=self.dp2(discharge_limit_soc),
+                attributes={
+                    "results": self.filtered_times(discharge_limit_time_kw),
+                    "friendly_name": "Predicted discharge limit kWh",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".discharge_limit",
+                state=discharge_limit_percent,
+                attributes={
+                    "results": self.filtered_times(discharge_limit_time),
+                    "rate": discharge_average,
+                    "friendly_name": "Predicted discharge limit",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".discharge_start",
+                state=discharge_start_str,
+                attributes={
+                    "minutes_to": discharge_start_in_minutes,
+                    "timestamp": discharge_start_date,
+                    "friendly_name": "Predicted discharge start time",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": discharge_average,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".discharge_end",
+                state=discharge_end_str,
+                attributes={
+                    "minutes_to": discharge_end_in_minutes,
+                    "timestamp": discharge_end_date,
+                    "friendly_name": "Predicted discharge end time",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": discharge_average,
+                },
+            )
 
     def publish_charge_limit(self, charge_limit, charge_window, charge_limit_percent, best=False, soc={}):
         """
@@ -4820,138 +4815,137 @@ class PredBat(hass.Hass):
                 charge_limit_time_kw[stamp] = soc_kw
             prev_perc = soc_perc
 
-        if not SIMULATE:
-            charge_limit_first = 0
-            charge_limit_percent_first = 0
-            charge_average_first = None
-            charge_start_str = ""
-            charge_end_str = ""
-            charge_start_date = None
-            charge_end_date = None
-            charge_start_in_minutes = self.forecast_days * 24 * 60
-            charge_end_in_minutes = self.forecast_days * 24 * 60
+        charge_limit_first = 0
+        charge_limit_percent_first = 0
+        charge_average_first = None
+        charge_start_str = ""
+        charge_end_str = ""
+        charge_start_date = None
+        charge_end_date = None
+        charge_start_in_minutes = self.forecast_days * 24 * 60
+        charge_end_in_minutes = self.forecast_days * 24 * 60
 
-            if charge_limit and charge_window[0]["end"] <= (24 * 60 + self.minutes_now):
-                charge_limit_first = charge_limit[0]
-                charge_limit_percent_first = charge_limit_percent[0]
-                charge_start_minutes = charge_window[0]["start"]
-                charge_end_minutes = charge_window[0]["end"]
-                charge_average_first = charge_window[0].get("average", None)
-                charge_start_in_minutes = max(charge_start_minutes - self.minutes_now, 0)
-                charge_end_in_minutes = max(charge_end_minutes - self.minutes_now, 0)
+        if charge_limit and charge_window[0]["end"] <= (24 * 60 + self.minutes_now):
+            charge_limit_first = charge_limit[0]
+            charge_limit_percent_first = charge_limit_percent[0]
+            charge_start_minutes = charge_window[0]["start"]
+            charge_end_minutes = charge_window[0]["end"]
+            charge_average_first = charge_window[0].get("average", None)
+            charge_start_in_minutes = max(charge_start_minutes - self.minutes_now, 0)
+            charge_end_in_minutes = max(charge_end_minutes - self.minutes_now, 0)
 
-                time_format_time = "%H:%M:%S"
-                charge_startt = self.midnight_utc + timedelta(minutes=charge_start_minutes)
-                charge_endt = self.midnight_utc + timedelta(minutes=charge_end_minutes)
-                charge_start_str = charge_startt.strftime(time_format_time)
-                charge_end_str = charge_endt.strftime(time_format_time)
-                charge_start_date = charge_startt.strftime(TIME_FORMAT)
-                charge_end_date = charge_endt.strftime(TIME_FORMAT)
+            time_format_time = "%H:%M:%S"
+            charge_startt = self.midnight_utc + timedelta(minutes=charge_start_minutes)
+            charge_endt = self.midnight_utc + timedelta(minutes=charge_end_minutes)
+            charge_start_str = charge_startt.strftime(time_format_time)
+            charge_end_str = charge_endt.strftime(time_format_time)
+            charge_start_date = charge_startt.strftime(TIME_FORMAT)
+            charge_end_date = charge_endt.strftime(TIME_FORMAT)
 
-            if best:
-                self.dashboard_item(
-                    self.prefix + ".best_charge_limit_kw",
-                    state=self.dp2(charge_limit_first),
-                    attributes={
-                        "results": self.filtered_times(charge_limit_time_kw),
-                        "friendly_name": "Predicted charge limit kWh best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_charge_limit",
-                    state=charge_limit_percent_first,
-                    attributes={
-                        "results": self.filtered_times(charge_limit_time),
-                        "friendly_name": "Predicted charge limit best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "%",
-                        "icon": "mdi:battery-charging",
-                        "rate": charge_average_first,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_charge_start",
-                    state=charge_start_str,
-                    attributes={
-                        "timestamp": charge_start_date,
-                        "minutes_to": charge_start_in_minutes,
-                        "friendly_name": "Predicted charge start time best",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": charge_average_first,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".best_charge_end",
-                    state=charge_end_str,
-                    attributes={
-                        "timestamp": charge_end_date,
-                        "minutes_to": charge_end_in_minutes,
-                        "friendly_name": "Predicted charge end time best",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": charge_average_first,
-                    },
-                )
-            else:
-                self.dashboard_item(
-                    self.prefix + ".charge_limit_kw",
-                    state=self.dp2(charge_limit_first),
-                    attributes={
-                        "results": self.filtered_times(charge_limit_time_kw),
-                        "friendly_name": "Predicted charge limit kWh",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery-charging",
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".charge_limit",
-                    state=charge_limit_percent_first,
-                    attributes={
-                        "results": self.filtered_times(charge_limit_time),
-                        "friendly_name": "Predicted charge limit",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "%",
-                        "icon": "mdi:battery-charging",
-                        "rate": charge_average_first,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".charge_start",
-                    state=charge_start_str,
-                    attributes={
-                        "timestamp": charge_start_date,
-                        "minutes_to": charge_start_in_minutes,
-                        "friendly_name": "Predicted charge start time",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": charge_average_first,
-                    },
-                )
-                self.dashboard_item(
-                    self.prefix + ".charge_end",
-                    state=charge_end_str,
-                    attributes={
-                        "timestamp": charge_end_date,
-                        "minutes_to": charge_end_in_minutes,
-                        "friendly_name": "Predicted charge end time",
-                        "device_class": "timestamp",
-                        "state_class": None,
-                        "unit_of_measurement": None,
-                        "icon": "mdi:table-clock",
-                        "rate": charge_average_first,
-                    },
-                )
+        if best:
+            self.dashboard_item(
+                self.prefix + ".best_charge_limit_kw",
+                state=self.dp2(charge_limit_first),
+                attributes={
+                    "results": self.filtered_times(charge_limit_time_kw),
+                    "friendly_name": "Predicted charge limit kWh best",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_charge_limit",
+                state=charge_limit_percent_first,
+                attributes={
+                    "results": self.filtered_times(charge_limit_time),
+                    "friendly_name": "Predicted charge limit best",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-charging",
+                    "rate": charge_average_first,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_charge_start",
+                state=charge_start_str,
+                attributes={
+                    "timestamp": charge_start_date,
+                    "minutes_to": charge_start_in_minutes,
+                    "friendly_name": "Predicted charge start time best",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": charge_average_first,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".best_charge_end",
+                state=charge_end_str,
+                attributes={
+                    "timestamp": charge_end_date,
+                    "minutes_to": charge_end_in_minutes,
+                    "friendly_name": "Predicted charge end time best",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": charge_average_first,
+                },
+            )
+        else:
+            self.dashboard_item(
+                self.prefix + ".charge_limit_kw",
+                state=self.dp2(charge_limit_first),
+                attributes={
+                    "results": self.filtered_times(charge_limit_time_kw),
+                    "friendly_name": "Predicted charge limit kWh",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kWh",
+                    "icon": "mdi:battery-charging",
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".charge_limit",
+                state=charge_limit_percent_first,
+                attributes={
+                    "results": self.filtered_times(charge_limit_time),
+                    "friendly_name": "Predicted charge limit",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-charging",
+                    "rate": charge_average_first,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".charge_start",
+                state=charge_start_str,
+                attributes={
+                    "timestamp": charge_start_date,
+                    "minutes_to": charge_start_in_minutes,
+                    "friendly_name": "Predicted charge start time",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": charge_average_first,
+                },
+            )
+            self.dashboard_item(
+                self.prefix + ".charge_end",
+                state=charge_end_str,
+                attributes={
+                    "timestamp": charge_end_date,
+                    "minutes_to": charge_end_in_minutes,
+                    "friendly_name": "Predicted charge end time",
+                    "device_class": "timestamp",
+                    "state_class": None,
+                    "unit_of_measurement": None,
+                    "icon": "mdi:table-clock",
+                    "rate": charge_average_first,
+                },
+            )
 
     def reset(self):
         """
@@ -5093,19 +5087,6 @@ class PredBat(hass.Hass):
         self.car_charging_manual_soc = False
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
-        self.simulate_offset = 0
-        self.sim_soc = 0
-        self.sim_soc_kw = 0
-        self.sim_reserve = 4
-        self.sim_inverter_mode = "Eco"
-        self.sim_charge_start_time = "00:00:00"
-        self.sim_charge_end_time = "00:00:00"
-        self.sim_discharge_start = "00:00"
-        self.sim_discharge_end = "23:59"
-        self.sim_charge_schedule_enable = "on"
-        self.sim_charge_rate_now = 2600
-        self.sim_discharge_rate_now = 2600
-        self.sim_soc_charge = []
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.futurerate_url_cache = {}
@@ -9592,9 +9573,6 @@ class PredBat(hass.Hass):
         now = datetime.now() + timedelta(minutes=skew)
         now = now.replace(second=0, microsecond=0, minute=(now.minute - (now.minute % PREDICT_STEP)))
         now_utc = now_utc.replace(second=0, microsecond=0, minute=(now_utc.minute - (now_utc.minute % PREDICT_STEP)))
-        if SIMULATE:
-            now += timedelta(minutes=self.simulate_offset)
-            now_utc += timedelta(minutes=self.simulate_offset)
 
         self.now_utc = now_utc
         self.now = now
@@ -10655,7 +10633,6 @@ class PredBat(hass.Hass):
         """
         Setup the app, called once each time the app starts
         """
-        global SIMULATE
         self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
@@ -10680,47 +10657,33 @@ class PredBat(hass.Hass):
             self.record_status("Error: You still have a template configuration, please edit apps.yaml or restart AppDaemon if you just updated with HACS")
             return
 
-        if SIMULATE and SIMULATE_LENGTH:
-            # run once to get data
-            SIMULATE = False
-            self.update_pred(scheduled=False)
-            soc_best = self.predict_soc_best.copy()
-            self.log("Best SOC array {}".format(soc_best))
-            SIMULATE = True
+        # Run every N minutes aligned to the minute
+        seconds_now = (now - self.midnight).seconds
 
-            for offset in range(0, SIMULATE_LENGTH, 30):
-                self.simulate_offset = offset + 30 - (self.minutes_now % 30)
-                self.sim_soc_kw = soc_best[int(self.simulate_offset / 5) * 5]
-                self.log(">>>>>>>>>> Simulated offset {} soc {} <<<<<<<<<<<<".format(self.simulate_offset, self.sim_soc_kw))
-                self.update_pred(scheduled=True)
+        # Calculate next run time to exactly align with the run_every time
+        seconds_offset = seconds_now % run_every
+        seconds_next = seconds_now + (run_every - seconds_offset)
+        next_time = self.midnight + timedelta(seconds=seconds_next)
+        self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
+
+        # First run is now
+        self.update_pending = True
+
+        # And then every N minutes
+        if not INVERTER_TEST:
+            self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
+            self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
         else:
-            # Run every N minutes aligned to the minute
-            seconds_now = (now - self.midnight).seconds
+            self.update_time_loop(None)
 
-            # Calculate next run time to exactly align with the run_every time
-            seconds_offset = seconds_now % run_every
-            seconds_next = seconds_now + (run_every - seconds_offset)
-            next_time = self.midnight + timedelta(seconds=seconds_next)
-            self.log("Predbat: Next run time will be {} and then every {} seconds".format(next_time, run_every))
-
-            # First run is now
-            self.update_pending = True
-
-            # And then every N minutes
-            if not INVERTER_TEST:
-                self.run_every(self.run_time_loop, next_time, run_every, random_start=0, random_end=0)
-                self.run_every(self.update_time_loop, datetime.now(), 15, random_start=0, random_end=0)
-            else:
-                self.update_time_loop(None)
-
-            # Balance inverters
-            run_every_balance = self.get_arg("balance_inverters_seconds", 60)
-            if run_every_balance > 0:
-                self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
-                seconds_offset_balance = seconds_now % run_every_balance
-                seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
-                next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
-                self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
+        # Balance inverters
+        run_every_balance = self.get_arg("balance_inverters_seconds", 60)
+        if run_every_balance > 0:
+            self.log("Balance inverters will run every {} seconds (if enabled)".format(run_every_balance))
+            seconds_offset_balance = seconds_now % run_every_balance
+            seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
+            next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
+            self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
 
     async def terminate(self):
         """
