@@ -34,7 +34,6 @@ from prediction import wrapped_run_prediction_single
 
 KEEP_SCALE = 0.5
 
-
 class TestHAInterface:
     def __init__(self):
         self.step = 5
@@ -221,6 +220,9 @@ def simple_scenario(
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
 
     my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_charging
@@ -738,9 +740,7 @@ def run_model_tests(my_predbat):
         hybrid=True,
     )
     failed |= simple_scenario("load_car", my_predbat, 1, 0, assert_final_metric=import_rate * 24 * 3, assert_final_soc=0, with_battery=False, charge_car=2.0)
-    failed |= simple_scenario(
-        "load_car_bat_yes", my_predbat, 1, 0, assert_final_metric=import_rate * 24 * 2, assert_final_soc=100.0 - 24 * 1, with_battery=True, charge_car=2.0, battery_soc=100.0
-    )
+    failed |= simple_scenario("load_car_bat_yes", my_predbat, 1, 0, assert_final_metric=import_rate * 24 * 2, assert_final_soc=100.0 - 24 * 1, with_battery=True, charge_car=2.0, battery_soc=100.0)
     failed |= simple_scenario(
         "load_car_bat_no",
         my_predbat,
@@ -769,43 +769,24 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_discharge2", my_predbat, 1, 0, assert_final_metric=0, assert_final_soc=100 - 24, battery_soc=100.0, with_battery=True)
     failed |= simple_scenario("load_discharge3", my_predbat, 1, 0, assert_final_metric=0, assert_final_soc=100 - 48, battery_soc=100.0, with_battery=True, battery_loss=0.5)
     failed |= simple_scenario("load_discharge4", my_predbat, 1, 0, assert_final_metric=import_rate * 14, assert_final_soc=0, battery_soc=100.0, with_battery=True, battery_loss=0.1)
-    failed |= simple_scenario(
-        "load_discharge_car",
-        my_predbat,
-        0.5,
-        0,
-        assert_final_metric=import_rate * 14 * 4.5 + import_rate * 10 * 3.5,
-        assert_final_soc=0,
-        battery_soc=10.0,
-        with_battery=True,
-        charge_car=4.0,
-    )
+    failed |= simple_scenario("load_discharge_car",my_predbat, 0.5, 0, assert_final_metric=import_rate * 14 * 4.5 + import_rate * 10 * 3.5, assert_final_soc=0, battery_soc=10.0, with_battery=True, charge_car=4.0)
+    failed |= simple_scenario("load_discharge_car2",my_predbat, 0, 0, assert_final_metric=import_rate * 24 * 1.5, assert_final_soc=100-24*2.5, battery_soc=100.0, with_battery=True, charge_car=4.0, discharge=0, inverter_limit=3.5, battery_rate_max_charge=2.5)
     failed |= simple_scenario("load_discharge_fast", my_predbat, 2, 0, assert_final_metric=import_rate * 38, assert_final_soc=0, battery_soc=10.0, with_battery=True)
     failed |= simple_scenario("load_discharge_fast_big", my_predbat, 2, 0, assert_final_metric=import_rate * 24, assert_final_soc=76, battery_soc=100.0, with_battery=True)
-    failed |= simple_scenario(
-        "load_discharge_reserve", my_predbat, 1, 0, assert_final_metric=import_rate * 15, assert_final_soc=1, battery_soc=10.0, with_battery=True, reserve=1.0
-    )
-    failed |= simple_scenario(
-        "load_discharge_reserve2", my_predbat, 1, 0, assert_final_metric=import_rate * 20, assert_final_soc=2, battery_soc=10.0, with_battery=True, reserve=2.0, battery_loss=0.5
-    )
-    failed |= simple_scenario(
-        "load_discharge_loss", my_predbat, 1, 0, assert_final_metric=import_rate * 19, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_loss=0.5
-    )
+    failed |= simple_scenario("load_discharge_reserve", my_predbat, 1, 0, assert_final_metric=import_rate * 15, assert_final_soc=1, battery_soc=10.0, with_battery=True, reserve=1.0)
+    failed |= simple_scenario("load_discharge_reserve2", my_predbat, 1, 0, assert_final_metric=import_rate * 20, assert_final_soc=2, battery_soc=10.0, with_battery=True, reserve=2.0, battery_loss=0.5)
+    failed |= simple_scenario("load_discharge_loss", my_predbat, 1, 0, assert_final_metric=import_rate * 19, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_loss=0.5)
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
     failed |= simple_scenario("pv_only_loss_ac", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, inverter_loss=0.5)
-    failed |= simple_scenario(
-        "pv_only_loss_hybrid", my_predbat, 0, 1, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=0, with_battery=False, inverter_loss=0.5, hybrid=True
-    )
+    failed |= simple_scenario("pv_only_loss_hybrid", my_predbat, 0, 1, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=0, with_battery=False, inverter_loss=0.5, hybrid=True)
     failed |= simple_scenario("pv_only_bat", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=24, with_battery=True)
     failed |= simple_scenario("pv_only_bat_loss", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=12, with_battery=True, battery_loss=0.5)
     failed |= simple_scenario("pv_only_bat_100%", my_predbat, 0, 1, assert_final_metric=-export_rate * 14, assert_final_soc=10, with_battery=True, battery_size=10)
     failed |= simple_scenario("pv_only_bat_ac_clips2", my_predbat, 0, 2, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True)
     failed |= simple_scenario("pv_only_bat_ac_clips3", my_predbat, 0, 3, assert_final_metric=-export_rate * 48, assert_final_soc=24, with_battery=True)
-    failed |= simple_scenario(
-        "pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5
-    )
+    failed |= simple_scenario("pv_only_bat_ac_export_limit", my_predbat, 0, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, export_limit=0.5)
     failed |= simple_scenario(
         "pv_only_bat_ac_export_limit_loss",
         my_predbat,
@@ -1043,17 +1024,7 @@ def run_model_tests(my_predbat):
     )
     failed |= simple_scenario("battery_discharge", my_predbat, 0, 0, assert_final_metric=-export_rate * 10, assert_final_soc=0, with_battery=True, discharge=0, battery_soc=10)
     failed |= simple_scenario(
-        "battery_discharge_keep",
-        my_predbat,
-        0,
-        0,
-        assert_final_metric=-export_rate * 10,
-        assert_final_soc=0,
-        with_battery=True,
-        discharge=0,
-        battery_soc=10,
-        assert_keep=1 * import_rate * KEEP_SCALE,
-        keep=1,
+        "battery_discharge_keep", my_predbat, 0, 0, assert_final_metric=-export_rate * 10, assert_final_soc=0, with_battery=True, discharge=0, battery_soc=10, assert_keep=1 * import_rate * KEEP_SCALE, keep=1
     )
     failed |= simple_scenario(
         "battery_discharge_loss",
