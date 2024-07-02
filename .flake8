@@ -1,5 +1,5 @@
 [flake8]
-max-line-length = 180
+max-line-length = 250
 max-complexity = 15
 exclude = build/*
 extend-ignore =
