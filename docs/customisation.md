@@ -442,7 +442,7 @@ It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% eff
 - **input_number.predbat_iboost_value_scaling** Sets how to account for the value of iBoost units of energy.
 The default value of 0.75 means that each kWh of energy diverted is accounted for a 0.75 x The lowest future import rate.
 
-Higher values will generate plans with more solar diversion while lower values will generate less. 
+Higher values will generate plans with more solar diversion while lower values will generate less.
 A value of 0 means all diverted energy should be ignored in planning (assumed to be zero value).
 
 - **switch.predbat_iboost_charging** If set to on, the solar diverter will only operate when the battery is charging (can be combined with iboost_gas or not).
