@@ -92,6 +92,7 @@ class Prediction:
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
+            self.time_abs_str = base.time_abs_str
             self.forecast_minutes = base.forecast_minutes
             self.midnight_utc = base.midnight_utc
             self.soc_kw = base.soc_kw
@@ -432,8 +433,8 @@ class Prediction:
             if save and (save in ["best", "test"]):
                 self.predict_soc_best[minute] = round(soc, 3)
                 self.predict_metric_best[minute] = round(metric, 3)
-                self.predict_iboost_best[minute] = iboost_today_kwh
-                self.predict_carbon_best[minute] = carbon_g
+                self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
+                self.predict_carbon_best[minute] = round(carbon_g, 0)
 
             # Add in standing charge, only for the final plan when we save the results
             if save and (save in ["best", "base", "base10", "best10", "test"]) and (minute_absolute % (24 * 60)) < step:
@@ -461,7 +462,7 @@ class Prediction:
                     car_load_scale = car_load[car_n] * step / 60.0
                     car_load_scale = car_load_scale * self.car_charging_loss
                     car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
-                    car_soc[car_n] = round(car_soc[car_n] + car_load_scale, 3)
+                    car_soc[car_n] = car_soc[car_n] + car_load_scale
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
                     if not self.car_charging_from_battery:
@@ -606,13 +607,16 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
+                if save == 'test':
+                    print("minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc))
+
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
                     # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
                     # won't cover it and it will likely create an import.
                     pv_compare = pv_dc + pv_ac
                     if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
-                        potential_import = (charge_rate_now_curve * step) - pv_compare
+                        potential_import = min((charge_rate_now_curve * step) - pv_compare, (charge_limit_n - soc))
                         metric_keep += potential_import * rate_import.get(minute_absolute, 0)
             else:
                 # ECO Mode
@@ -702,6 +706,7 @@ class Prediction:
                 soc = max(soc - battery_draw / self.battery_loss_discharge, reserve_expected)
             else:
                 soc = min(soc - battery_draw * self.battery_loss, self.soc_max)
+            soc = round(soc, 6)
 
             # iBoost solar diverter model
             if self.iboost_enable:
@@ -727,15 +732,11 @@ class Prediction:
                     else:
                         self.iboost_running = False
 
-            # Rounding on SOC
-            soc = round(soc, 6)
-
             # Count battery cycles
-            battery_cycle = round(battery_cycle + abs(battery_draw), 4)
+            battery_cycle = battery_cycle + abs(battery_draw)
 
             # Work out left over energy after battery adjustment
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
-            diff = round(diff, 6)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if soc < self.best_soc_keep:
@@ -744,7 +745,6 @@ class Prediction:
                 keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
                 if keep_diff > 0:
                     metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
-
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
@@ -775,12 +775,6 @@ class Prediction:
                     grid_state = ">"
                 else:
                     grid_state = "~"
-
-            # Rounding for next stage
-            metric = round(metric, 4)
-            import_kwh_battery = round(import_kwh_battery, 6)
-            import_kwh_house = round(import_kwh_house, 6)
-            export_kwh = round(export_kwh, 6)
 
             # Store the number of minutes until the battery runs out
             if record and soc <= self.reserve:
@@ -849,23 +843,23 @@ class Prediction:
         self.hours_left = hours_left
         self.final_car_soc = final_car_soc
         self.predict_car_soc_time = predict_car_soc_time
-        self.final_soc = final_soc
-        self.final_metric = final_metric
-        self.final_metric_keep = final_metric_keep
-        self.final_import_kwh = final_import_kwh
-        self.final_import_kwh_battery = final_import_kwh_battery
-        self.final_import_kwh_house = final_import_kwh_house
-        self.final_export_kwh = final_export_kwh
-        self.final_load_kwh = final_load_kwh
-        self.final_pv_kwh = final_pv_kwh
-        self.final_iboost_kwh = final_iboost_kwh
-        self.final_battery_cycle = final_battery_cycle
-        self.final_soc_min = soc_min
+        self.final_soc = round(final_soc, 4)
+        self.final_metric = round(final_metric, 4)
+        self.final_metric_keep = round(final_metric_keep, 4)
+        self.final_import_kwh = round(final_import_kwh, 4)
+        self.final_import_kwh_battery = round(final_import_kwh_battery, 4)
+        self.final_import_kwh_house = round(final_import_kwh_house, 4)
+        self.final_export_kwh = round(final_export_kwh, 4)
+        self.final_load_kwh = round(final_load_kwh, 4)
+        self.final_pv_kwh = round(final_pv_kwh, 4)
+        self.final_iboost_kwh = round(final_iboost_kwh, 4)
+        self.final_battery_cycle = round(final_battery_cycle, 4)
+        self.final_soc_min = round(soc_min, 4)
         self.final_soc_min_minute = soc_min_minute
         self.export_to_first_charge = export_to_first_charge
         self.predict_soc_time = predict_soc_time
         self.first_charge = first_charge
-        self.first_charge_soc = first_charge_soc
+        self.first_charge_soc = round(first_charge_soc, 4)
         self.predict_state = predict_state
         self.predict_battery_power = predict_battery_power
         self.predict_battery_power = predict_battery_power
@@ -879,10 +873,10 @@ class Prediction:
         self.record_time = record_time
         self.predict_battery_cycle = predict_battery_cycle
         self.predict_battery_power = predict_battery_power
-        self.pv_kwh_h0 = pv_kwh_h0
-        self.import_kwh_h0 = import_kwh_h0
-        self.export_kwh_h0 = export_kwh_h0
-        self.load_kwh_h0 = load_kwh_h0
+        self.pv_kwh_h0 = round(pv_kwh_h0, 4)
+        self.import_kwh_h0 = round(import_kwh_h0, 4)
+        self.export_kwh_h0 = round(export_kwh_h0, 4)
+        self.load_kwh_h0 = round(load_kwh_h0, 4)
         self.load_kwh_time = load_kwh_time
         self.pv_kwh_time = pv_kwh_time
         self.import_kwh_time = import_kwh_time
@@ -893,7 +887,7 @@ class Prediction:
             round(import_kwh_battery, 4),
             round(import_kwh_house, 4),
             round(export_kwh, 4),
-            soc_min,
+            round(soc_min, 4),
             round(final_soc, 4),
             soc_min_minute,
             round(final_battery_cycle, 4),
