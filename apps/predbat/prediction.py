@@ -607,8 +607,12 @@ class Prediction:
                     pv_dc = 0
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                if save == 'test':
-                    print("minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc))
+                if save == "test":
+                    print(
+                        "minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(
+                            minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc
+                        )
+                    )
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
