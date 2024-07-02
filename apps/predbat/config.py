@@ -893,6 +893,18 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {
+        "name": "iboost_value_scaling",
+        "friendly_name": "iBoost value scaling",
+        "type": "input_number",
+        "min": 0,
+        "max": 2.0,
+        "step": 0.1,
+        "unit": "*",
+        "enable": "iboost_enable",
+        "icon": "mdi:multiplication",
+        "default": 0.75,
+    },
+    {
         "name": "holiday_days_left",
         "friendly_name": "Holiday days left",
         "type": "input_number",
