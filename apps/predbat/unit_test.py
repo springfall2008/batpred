@@ -221,6 +221,9 @@ def simple_scenario(
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
+    my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
 
     my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_charging
@@ -780,6 +783,20 @@ def run_model_tests(my_predbat):
         with_battery=True,
         charge_car=4.0,
     )
+    failed |= simple_scenario(
+        "load_discharge_car2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 24 * 1.5,
+        assert_final_soc=100 - 24 * 2.5,
+        battery_soc=100.0,
+        with_battery=True,
+        charge_car=4.0,
+        discharge=0,
+        inverter_limit=3.5,
+        battery_rate_max_charge=2.5,
+    )
     failed |= simple_scenario("load_discharge_fast", my_predbat, 2, 0, assert_final_metric=import_rate * 38, assert_final_soc=0, battery_soc=10.0, with_battery=True)
     failed |= simple_scenario("load_discharge_fast_big", my_predbat, 2, 0, assert_final_metric=import_rate * 24, assert_final_soc=76, battery_soc=100.0, with_battery=True)
     failed |= simple_scenario(
@@ -964,7 +981,7 @@ def run_model_tests(my_predbat):
         hybrid=True,
     )
     failed |= simple_scenario(
-        "battery_charge_pv_term_dc",
+        "battery_charge_pv_term_dc1",
         my_predbat,
         0,
         0.5,
@@ -974,7 +991,20 @@ def run_model_tests(my_predbat):
         charge=10,
         battery_size=100,
         hybrid=True,
-        assert_keep=import_rate / 60 * 5 * 0.5,
+        assert_keep=0,
+    )
+    failed |= simple_scenario(
+        "battery_charge_pv_term_dc2",
+        my_predbat,
+        0,
+        0.5,
+        assert_final_metric=import_rate * 10 * 0.5,
+        assert_final_soc=10 + 14 * 0.5,
+        with_battery=True,
+        charge=9.95,
+        battery_size=100,
+        hybrid=True,
+        assert_keep=((1 / 60 * 5) - 0.05) * import_rate,
     )
     failed |= simple_scenario(
         "battery_charge_pv_load1",

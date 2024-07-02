@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.2.2"
+THIS_VERSION = "v8.2.3"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -5497,8 +5497,8 @@ class PredBat(hass.Hass):
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (soc + final_iboost) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
-        metric10 -= (soc10 + final_iboost10) * max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+        metric -= (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        metric10 -= (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
@@ -5965,7 +5965,7 @@ class PredBat(hass.Hass):
 
             if self.debug_enable:
                 self.log(
-                    "Sim: Discharge {} window {} start {} end {}, import {} export {} min_soc {} @ {} soc {} cost {} cost10 {} metric {} cycle {} end_record {}".format(
+                    "Sim: Discharge {} window {} start {} end {}, import {} export {} min_soc {} @ {} soc {} soc10 {} cost {} cost10 {} metric {} cycle {} iboost {} iboost10 {} carbon {} keep {} end_record {}".format(
                         this_discharge_limit,
                         window_n,
                         self.time_abs_str(start),
@@ -5975,10 +5975,15 @@ class PredBat(hass.Hass):
                         self.dp4(soc_min),
                         self.time_abs_str(soc_min_minute),
                         self.dp4(soc),
+                        self.dp4(soc10),
                         self.dp4(cost),
                         self.dp4(cost10),
                         self.dp4(metric),
                         self.dp4(battery_cycle * self.metric_battery_cycle),
+                        self.dp4(final_iboost),
+                        self.dp4(final_iboost10),
+                        self.dp4(final_carbon_g),
+                        self.dp4(metric_keep),
                         end_record,
                     )
                 )
@@ -9538,6 +9543,7 @@ class PredBat(hass.Hass):
         self.iboost_min_power = self.get_arg("iboost_min_power") / MINUTE_WATT
         self.iboost_min_soc = self.get_arg("iboost_min_soc")
         self.iboost_today = self.get_arg("iboost_today")
+        self.iboost_value_scaling = self.get_arg("iboost_value_scaling")
         self.iboost_next = self.iboost_today
         self.iboost_running = False
         self.iboost_energy_today = {}
