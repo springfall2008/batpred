@@ -10872,7 +10872,7 @@ class PredBat(hass.Hass):
 
     def sanity(self):
         """
-        Sanity check appdaemon setup
+        Sanity check AppDaemon setup
         """
         self.log("Sanity check:")
         config_dir = ""
@@ -10904,7 +10904,7 @@ class PredBat(hass.Hass):
                     self.log("Warn: appdaemon section is missing from appdaemon.yaml")
                     passed = False
         else:
-            self.log("Warn: unable to find {} skipping checks as maybe outside AppDaemon".format(appdaemon_config))
+            self.log("Warn: unable to find {} skipping checks as maybe running Predbat outside of AppDaemon".format(appdaemon_config))
             return
 
         self.log("Sanity: Scanning app_dirs: {}".format(app_dirs))
@@ -10963,7 +10963,7 @@ class PredBat(hass.Hass):
                             version = res.group(1)
                             foundVersion = True
                             if version != THIS_VERSION:
-                                self.log("Warn: The version in predbat.py is {} but this code is version {} - please re-start appdaemon".format(version, THIS_VERSION))
+                                self.log("Warn: The version in predbat.py is {} but this code is version {} - please re-start Predbat".format(version, THIS_VERSION))
                                 passed = False
                             else:
                                 self.log("Sanity: Confirmed correct version {} is in predbat.py".format(version))

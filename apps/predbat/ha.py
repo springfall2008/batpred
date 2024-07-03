@@ -149,7 +149,7 @@ class HAInterface:
 
     def get_state(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
-        Get state from cached HA data (or from appDaemon if used)
+        Get state from cached HA data (or from AppDaemon if used)
         """
         if not self.ha_key:
             return self.base.get_state(entity_id=entity_id, default=default, attribute=attribute)

@@ -310,15 +310,15 @@ class Inverter:
             tdiff = self.inverter_time - now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
-                self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
+                self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 10:
                 self.base.log(
-                    "Warn: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
+                    "Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     )
                 )
                 self.base.record_status(
-                    "Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
+                    "Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     ),
                     had_errors=True,
