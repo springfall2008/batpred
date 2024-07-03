@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.2.3"
+THIS_VERSION = "v8.2.4"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -790,6 +790,7 @@ class PredBat(hass.Hass):
                     self.solcast_data = json.load(f)
             except Exception as e:
                 self.log("Warn: Error loading Solcast cache file {}".format(e))
+                self.log("Warn: " + traceback.format_exc())
                 os.remove(cache_file)
 
         if isinstance(api_keys, str):
@@ -5003,6 +5004,7 @@ class PredBat(hass.Hass):
         self.metric_inday_adjust_damping = 1.0
         self.metric_standing_charge = 0.0
         self.metric_self_sufficiency = 0.0
+        self.iboost_value_scaling = 1.0
         self.rate_import = {}
         self.rate_export = {}
         self.rate_gas = {}
@@ -5446,7 +5448,7 @@ class PredBat(hass.Hass):
         """
         charge_limit = copy.deepcopy(charge_limit)
         discharge_limits = copy.deepcopy(discharge_limits)
-        if self.pool:
+        if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
         else:
             han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step))
@@ -5456,7 +5458,7 @@ class PredBat(hass.Hass):
         """
         Launch a thread to run a prediction
         """
-        if self.pool:
+        if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(
                 wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
             )
@@ -5470,7 +5472,7 @@ class PredBat(hass.Hass):
         """
         Launch a thread to run a prediction
         """
-        if self.pool:
+        if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(
                 wrapped_run_prediction_discharge,
                 (this_discharge_limit, start, window_n, try_charge_limit, charge_window, try_discharge_window, try_discharge, pv10, all_n, end_record),
@@ -8063,8 +8065,12 @@ class PredBat(hass.Hass):
 
         # Destroy pool
         if self.pool:
-            self.pool.close()
-            self.pool.join()
+            try:
+                self.pool.close()
+                self.pool.join()
+            except Exception as e:
+                self.log("Warn: failed to close thread pool: {}".format(e))
+                self.log("Warn: " + traceback.format_exc())
             self.pool = None
         # Return if we recomputed or not
         return recompute
@@ -9824,8 +9830,12 @@ class PredBat(hass.Hass):
             self.stop_thread = True
             if self.pool:
                 self.log("Warn: Killing current threads before update...")
-                self.pool.close()
-                self.pool.join()
+                try:
+                    self.pool.close()
+                    self.pool.join()
+                except Exception as e:
+                    self.log("Warn: Failed to close thread pool: {}".format(e))
+                    self.log("Warn: " + traceback.format_exc())
                 self.pool = None
 
             # Notify that we are about to update
@@ -10654,6 +10664,7 @@ class PredBat(hass.Hass):
             self.load_user_config(quiet=False, register=True)
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
+            self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e))
             raise e
 
@@ -10700,8 +10711,12 @@ class PredBat(hass.Hass):
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
             if self.pool:
-                self.pool.close()
-                self.pool.join()
+                try:
+                    self.pool.close()
+                    self.pool.join()
+                except Exception as e:
+                    self.log("Warn: Failed to close thread pool {}".format(e))
+                    self.log("Warn: " + traceback.format_exc())
                 self.pool = None
         self.log("Predbat terminated")
 
