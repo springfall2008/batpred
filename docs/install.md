@@ -451,21 +451,31 @@ The Predbat code that runs is exactly the same and the configuration is exactly 
 
 4. [Install a file editor](#editing-configuration-files-in-home-assistant) if you don't have one already installed - either File Editor or Studio Code Server, it doesn't matter
 
-5. Open your file editor and open your existing `apps.yaml` file:
+5. Shutdown your existing AppDaemon or AppDaemon-predbat add-on:
+    - Go to Settings/Add-ons
+    - Click on the existing AppDaemon/AppDaemon-predbat add-on
+    - Click STOP, and untick 'Start on boot'
+
+6. Briefly start the new Predbat add-on so that it creates the addon_config folder and the template `apps.yaml` file:
+    - Go to Settings/Add-ons
+    - Click on the Predbat add-on
+    - Click START, wait a minute for the add-on to initialise itself, then click STOP
+
+7. Open your file editor and open your existing `apps.yaml` file:
     - If you are using the [combined AppDaemon/Predbat add-on installation method](#appdaemon-predbat-combined-install), it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
     or
 
     - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
 
-6. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
+8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
 
-7. Now open the template `apps.yaml` file that's supplied with the Predbat add-on which will be in the directory `/addon_configs/6adb4f0d_predbat`,
+9. Now open the template `apps.yaml` file that's supplied with the Predbat add-on and has been created in the directory `/addon_configs/6adb4f0d_predbat`,
 select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
 
-8. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:
+10. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:
     - Go to Settings/Add-ons
     - Click on the existing AppDaemon/AppDaemon-predbat add-on
-    - Click STOP, and untick 'Start on boot'
+    - Make sure it is not running and 'Start on boot' is not ticked
     - Click the back arrow
     - Click on the Predbat add-on
     - Click START, and tick 'Start on boot'
@@ -481,4 +491,4 @@ If you are using the [Solcast integration](#solcast-home-assistant-integration-m
 You may find that the Predbat add-on installed with an older version of Predbat than you were previously using,
 which might require you to [update Predbat to the correct version](#predbat-built-in-update).
 
-9. When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
+11. When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
