@@ -181,10 +181,10 @@ logger:
 
 If you get this error in the Predbat log file:
 
-- Check that the Octopus integration is working and that **event.octopus_energy_electricity_<meter_number>_current_day_rates**
-and **sensor.octopus_electricity_energy_<meter_number>_current_rate** are both populated by the integration.
+- Check that the Octopus integration is working and that **event.octopus_energy_electricity_METER_NUMBER_current_day_rates**
+and **sensor.octopus_electricity_energy_METER_NUMBER_current_rate** are both populated by the integration.
 - Ensure that you have followed the [Octopus Integration Installation instructions](install.md#octopus-energy), including enabling the Octopus Integration events.
-- If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named **sensor.electricity_<meter_number>_current_rate**
+- If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named **sensor.electricity_METER_NUMBER_current_rate**
 (i.e. no 'octopus_energy_' prefix) but the 'event' entities have the 'octopus_energy' prefix.<BR>
 If the 'event' and 'sensor' entities are not consistently named then Predbat will not be able to find the event entities if the sensor names don't match what's expected.<BR>
 To fix this, uninstall the Octopus integration, reboot Home Assistant,

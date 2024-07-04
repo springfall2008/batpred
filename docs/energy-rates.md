@@ -71,10 +71,10 @@ The following configuration items in apps.yaml are used to configure Predbat to 
 They are set to a regular expression and should be auto-discovered so that Predbat automatically uses the Octopus Energy integration,
 but you can comment out the regular expression lines to disable, or you set them manually.
 
-- **metric_octopus_import** - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_current_rate
-- **metric_octopus_export** - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_<meter_number>_export_current_rate
-- **metric_octopus_gas** - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_<meter_number>_current_rate
-- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_<account_id>_intelligent_dispatching
+- **metric_octopus_import** - Import rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_current_rate
+- **metric_octopus_export** - Export rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_electricity_METER_NUMBER_export_current_rate
+- **metric_octopus_gas** - Gas rates from the Octopus Energy integration, should point to the sensor sensor.octopus_energy_gas_METER_NUMBER_current_rate
+- **octopus_intelligent_slot** - If you have the Octopus Intelligent Go tariff this should point to the 'slot' sensor binary_sensor.octopus_energy_ACCOUNT_ID_intelligent_dispatching
 
 metric_octopus_gas is (as above) only required to be configured if you are using Predbat to determine whether to heat your hot water via your iBoost or gas.
 
@@ -85,7 +85,7 @@ If you do not have an export rate, or are not on the Octopus Go tariff, then the
 Predbat can also (optionally) include the daily standing charge in cost predictions.
 The following configuration item in apps.yaml defaults to obtaining the standing charge from the Octopus Energy integration:
 
-- **metric_standing_charge** - Standing charge in pounds. By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_<meter_number>_current_standing_charge
+- **metric_standing_charge** - Standing charge in pounds. By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_METER_NUMBER_current_standing_charge
 
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
@@ -97,7 +97,7 @@ Predbat is able to automatically join you to Octopus saving sessions and plan ba
 For Predbat to automatically manage Octopus saving sessions the following additional configuration item in apps.yaml is used.
 Like the electricity rates this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
 
-- **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_<account_id>_octoplus_saving_sessions.
+- **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_ACCOUNT_ID_octoplus_saving_sessions.
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 

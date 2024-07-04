@@ -619,8 +619,8 @@ weirdness you may have from your inverter and battery setup.
 clock_skew: minutes
 ```
 
-Skews the local (computer) time that Predbat uses (from AppDaemon).<BR>
-Set to 1 means add a minute to the AppDaemon time, set to -1 means take a minute off the AppDaemon time.
+Skews the local (computer) time that Predbat uses (from the computer that Predbat is running on).<BR>
+Set to 1 means add a minute to the Predbat computer time, set to -1 means take a minute off the Predbat computer time.
 This clock adjustment will be used by Predbat when real-time actions happen e.g. triggering a charge or discharge.
 
 If your inverter's time is different to the time on the computer running Home Assistant, you may need to skew the time settings made on the inverter when you trigger charging or discharging.
@@ -663,7 +663,7 @@ so set battery_scaling to 0.8 to report the correct usable capacity figure to Pr
 *TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.
 
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
-rather than the usual *givtcp_<serial_number>_soc* GivTCP entity so everything lines up.
+rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
 
 ### Import export scaling
 
