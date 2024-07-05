@@ -778,6 +778,8 @@ class PredBat(hass.Hass):
         self.solcast_api_limit = 0
         self.solcast_api_used = 0
         cache_path = self.config_root + "/cache"
+        cache_path_p = self.config_root_p + "/cache"
+
         host = self.args.get("solcast_host", None)
         api_keys = self.args.get("solcast_api_key", None)
         if not api_keys or not host:
@@ -786,12 +788,14 @@ class PredBat(hass.Hass):
 
         self.solcast_data = {}
         cache_file = cache_path + "/solcast.json"
+        cache_file_p = cache_path_p + "/solcast.json"
+
         if os.path.exists(cache_file):
             try:
                 with open(cache_file) as f:
                     self.solcast_data = json.load(f)
             except Exception as e:
-                self.log("Warn: Error loading Solcast cache file {}".format(e))
+                self.log("Warn: Error loading Solcast cache file {}, error {}".format(cache_file_p, e))
                 os.remove(cache_file)
 
         if isinstance(api_keys, str):
@@ -5132,7 +5136,6 @@ class PredBat(hass.Hass):
             if os.path.exists(root):
                 self.config_root = root
                 break
-        self.log("Config root is {}".format(self.config_root))
 
     def optimise_charge_limit_price(
         self,
@@ -10480,6 +10483,9 @@ class PredBat(hass.Hass):
         """
         self.save_restore_dir = self.config_root + "/predbat_save"
 
+        # Create full hierarchical version of filepath to write to the logfile
+        filepath_p = self.config_root_p + "/predbat_save"
+
         if filename != "previous.yaml":
             await self.async_save_settings_yaml("previous.yaml")
 
@@ -10493,7 +10499,9 @@ class PredBat(hass.Hass):
         else:
             filepath = os.path.join(self.save_restore_dir, filename)
             if os.path.exists(filepath):
-                self.log("Restore settings from {}".format(filepath))
+                filepath_p = filepath_p + "/" + filename
+
+                self.log("Restore settings from {}".format(filepath_p))
                 with open(filepath, "r") as file:
                     settings = yaml.safe_load(file)
                     for item in settings:
@@ -10525,6 +10533,10 @@ class PredBat(hass.Hass):
         Saves the currently defined configuration to a json file
         """
         filepath = self.config_root + "/predbat_config.json"
+
+        # Create full hierarchical version of filepath to write to the logfile
+        filepath_p = self.config_root_p + "/predbat_config.json"
+
         save_array = {}
         for item in CONFIG_ITEMS:
             if item.get("save", True):
@@ -10532,21 +10544,24 @@ class PredBat(hass.Hass):
                     save_array[item["name"]] = item["value"]
         with open(filepath, "w") as file:
             json.dump(save_array, file)
-        self.log("Saved current settings to {}".format(filepath))
+        self.log("Saved current settings to {}".format(filepath_p))
 
     async def async_save_settings_yaml(self, filename=None):
         """
         Save current Predbat settings
         """
         self.save_restore_dir = self.config_root + "/predbat_save"
+        filepath_p = self.config_root_p + "/predbat_save"
 
         if not filename:
             filename = self.now_utc.strftime("%y_%m_%d_%H_%M_%S")
             filename += ".yaml"
         filepath = os.path.join(self.save_restore_dir, filename)
+        filepath_p = filepath_p + "/" + filename
+
         with open(filepath, "w") as file:
             yaml.dump(CONFIG_ITEMS, file)
-        self.log("Saved Predbat settings to {}".format(filepath))
+        self.log("Saved Predbat settings to {}".format(filepath_p))
         await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
     def create_debug_yaml(self):
@@ -10556,6 +10571,9 @@ class PredBat(hass.Hass):
         time_now = self.now_utc.strftime("%H_%M_%S")
         basename = "/debug/predbat_debug_{}.yaml".format(time_now)
         filename = self.config_root + basename
+        # Create full hierarchical version of filepath to write to the logfile
+        filename_p = self.config_root_p + basename
+
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         debug = {}
         debug["TIME"] = self.time_now_str()
@@ -10578,7 +10596,7 @@ class PredBat(hass.Hass):
 
         with open(filename, "w") as file:
             yaml.dump(debug, file)
-        self.log("Wrote debug yaml to {}".format(filename))
+        self.log("Wrote debug yaml to {}".format(filename_p))
 
     def create_entity_list(self):
         """
@@ -10611,14 +10629,17 @@ class PredBat(hass.Hass):
         basename = "/predbat_dashboard.yaml"
         filename = self.config_root + basename
 
+        # Create full hierarchical version of filename to write to the logfile
+        filename_p = self.config_root_p + basename
+
         # Write
         han = open(filename, "w")
         if han:
-            self.log("Creating predbat dashboard at {}".format(filename))
+            self.log("Creating predbat dashboard at {}".format(filename_p))
             han.write(text)
             han.close()
         else:
-            self.log("Failed to write predbat dashboard to {}".format(filename))
+            self.log("Failed to write predbat dashboard to {}".format(filename_p))
 
     def load_previous_value_from_ha(self, entity):
         """
@@ -10884,13 +10905,15 @@ class PredBat(hass.Hass):
 
         app_dir = config_dir + "/apps"
         appdaemon_config = config_dir + "/appdaemon.yaml"
+        appdaemon_config_p = self.config_root_p + "/appdaemon.yaml"
+
         if config_dir and os.path.exists(appdaemon_config):
             with open(appdaemon_config, "r") as han:
                 data = None
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError:
-                    self.log("Error: Unable to read /config/appdaemon.yaml file correctly!")
+                    self.log("Error: Unable to read {} file correctly!".format(appdaemon_config_p))
                     passed = False
 
                 if data and ("appdaemon" in data):
@@ -10901,10 +10924,10 @@ class PredBat(hass.Hass):
                         app_dirs.append(app_dir)
                     self.log("Sanity: Got app_dir {}".format(app_dir))
                 elif data:
-                    self.log("Warn: appdaemon section is missing from appdaemon.yaml")
+                    self.log("Warn: appdaemon section is missing from {}".format(appdaemon_config_p))
                     passed = False
         else:
-            self.log("Warn: unable to find {} skipping checks as maybe running Predbat outside of AppDaemon".format(appdaemon_config))
+            self.log("Warn: unable to find {} skipping checks as Predbat maybe running outside of AppDaemon".format(appdaemon_config_p))
             return
 
         self.log("Sanity: Scanning app_dirs: {}".format(app_dirs))
@@ -10933,7 +10956,7 @@ class PredBat(hass.Hass):
                 try:
                     data = yaml.safe_load(han)
                 except yaml.YAMLError:
-                    self.log("Error: Unable to read {} file correctly!".format(filename))
+                    self.log("Error: Unable to read YAML file {} correctly!".format(filename))
                     passed = False
                 if data and "pred_bat" in data:
                     self.log("Sanity: {} is a valid pred_bat configuration".format(filename))
@@ -10992,6 +11015,18 @@ class PredBat(hass.Hass):
         try:
             self.reset()
             self.ha_interface = HAInterface(self)
+            self.config_root_p = self.config_root
+
+            # Get add-on info by making API call to HA supervisor
+            res = self.ha_interface.api_call("/addons/self/info")
+
+            if res:
+                # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # and use slug name to determine printable config_root pathname when writing debug info to the log file
+                self.config_root_p = "/addon_configs/" + res["data"]["slug"]
+
+            self.log("Config root is {} and printable config_root_p is now {}".format(self.config_root, self.config_root_p))
+
             self.sanity()
             self.ha_interface.update_states()
             self.auto_config()
