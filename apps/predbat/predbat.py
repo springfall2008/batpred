@@ -6522,6 +6522,9 @@ class PredBat(hass.Hass):
         best_price_discharge = 0
         fast_mode = True
 
+        minutes_now_was = self.minutes_now
+        self.minutes_now = int(self.minutes_now / 30) * 30
+
         # Optimise all windows by picking a price threshold default
         if price_set and self.calculate_best_charge and self.charge_window_best:
             self.log("Optimise all windows, total charge {} discharge {}".format(record_charge_windows, record_discharge_windows))
@@ -6603,6 +6606,8 @@ class PredBat(hass.Hass):
                             tried_list=tried_list,
                         )
                     region_size = int(region_size / 2)
+
+        self.minutes_now = minutes_now_was
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -7487,6 +7492,7 @@ class PredBat(hass.Hass):
         """
         opts = ""
         opts += "mode({}) ".format(self.predbat_mode)
+        opts += "plan_turbo({}) ".format(self.plan_turbo)
         opts += "calculate_discharge_oncharge({}) ".format(self.calculate_discharge_oncharge)
         opts += "set_discharge_freeze_only({}) ".format(self.set_discharge_freeze_only)
         opts += "set_discharge_during_charge({}) ".format(self.set_discharge_during_charge)
@@ -7855,6 +7861,8 @@ class PredBat(hass.Hass):
                 self.pool = Pool(processes=int(threads))
             else:
                 self.log("Not using threading as threads is set to 0 in apps.yaml")
+        if self.plan_turbo:
+            self.log("Using turbo mode, checkpointing enabled on all threads")
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(

@@ -32,6 +32,8 @@ def wrapped_run_prediction_single(charge_limit, charge_window, discharge_window,
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    pred.__dict__["checkpoints"] = PRED_GLOBAL["dict"]["checkpoints"]
+    pred.__dict__["checkpoint_next"] = PRED_GLOBAL["dict"]["checkpoint_next"]
     return pred.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
 
 
@@ -39,6 +41,8 @@ def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    pred.__dict__["checkpoints"] = PRED_GLOBAL["dict"]["checkpoints"]
+    pred.__dict__["checkpoint_next"] = PRED_GLOBAL["dict"]["checkpoint_next"]
     return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
 
 
@@ -46,6 +50,8 @@ def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, char
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
+    pred.__dict__["checkpoints"] = PRED_GLOBAL["dict"]["checkpoints"]
+    pred.__dict__["checkpoint_next"] = PRED_GLOBAL["dict"]["checkpoint_next"]
     return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
 
 
@@ -89,9 +95,9 @@ class Prediction:
 
     def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
-        self.checkpoints = {}
-        self.checkpoint_next = {}
         if base:
+            self.checkpoints = {}
+            self.checkpoint_next = {}
             self.minutes_now = base.minutes_now
             self.log = base.log
             self.time_abs_str = base.time_abs_str
@@ -167,6 +173,7 @@ class Prediction:
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
+
 
     def thread_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
         """
@@ -386,6 +393,7 @@ class Prediction:
         next_state_hash = None
         current_state_hash = None
         checkpoint_mode = self.plan_turbo if (not save and not self.debug_enable) else False
+        checkpoint_count = 0
 
         # Simulate each forward minute
         while minute < self.forecast_minutes:
@@ -393,43 +401,10 @@ class Prediction:
             minute_absolute = minute + self.minutes_now
 
             # Create a checkpoint vector which represents the current simulation state
-            if checkpoint_mode and (minute_absolute % 30) == 0:
-                current_state = [
-                    minute,
-                    pv10,
-                    step,
-                    record,
-                    metric,
-                    import_kwh,
-                    import_kwh_battery,
-                    import_kwh_house,
-                    export_kwh,
-                    soc,
-                    carbon_g,
-                    battery_cycle,
-                    metric_keep,
-                    iboost_today_kwh,
-                    charge_has_run,
-                    charge_has_started,
-                    discharge_has_run,
-                    soc_min,
-                    soc_min_minute,
-                    car_soc.copy(),
-                ]
-                save_only_state = [
-                    final_car_soc.copy(),
-                    predict_soc.copy(),
-                    final_metric,
-                    final_import_kwh,
-                    final_import_kwh_battery,
-                    final_import_kwh_house,
-                    final_export_kwh,
-                    final_iboost_kwh,
-                    final_battery_cycle,
-                    final_metric_keep,
-                    final_carbon_g,
-                    final_soc,
-                ]
+            if checkpoint_mode and ((minute_absolute % 30) == 0):
+                current_state = [minute, pv10, step, record, metric, import_kwh, import_kwh_battery, import_kwh_house, export_kwh, soc, carbon_g, battery_cycle, metric_keep, iboost_today_kwh, 
+                                 charge_has_run, charge_has_started, discharge_has_run, soc_min, soc_min_minute, car_soc.copy()]
+                save_only_state = [final_car_soc.copy(), predict_soc.copy(), final_metric, final_import_kwh, final_import_kwh_battery, final_import_kwh_house, final_export_kwh, final_iboost_kwh, final_battery_cycle, final_metric_keep, final_carbon_g, final_soc]
 
                 if not current_state_hash:
                     current_state_hash = hash(str(current_state))
@@ -439,12 +414,13 @@ class Prediction:
 
                 next_charge_window_target = charge_limit[charge_window_n30] if charge_window_n30 >= 0 else 0
                 next_discharge_window_target = discharge_limits[discharge_window_n30] if discharge_window_n30 >= 0 else 0
-                next_discharge_window_start = discharge_window[discharge_window_n30]["start"] if discharge_window_n30 >= 0 else 0
+                next_discharge_window_start = discharge_window[discharge_window_n30]['start'] if discharge_window_n30 >= 0 else 0
 
                 next_direction = [charge_window_n30, discharge_window_n30, next_charge_window_target, next_discharge_window_target, next_discharge_window_start]
                 next_direction_hash = hash(str(next_direction))
 
                 self.checkpoints[current_state_hash] = current_state + save_only_state
+                checkpoint_count += 1
 
                 if previous_state_hash:
                     if previous_state_hash not in self.checkpoint_next:
@@ -457,39 +433,9 @@ class Prediction:
                 if current_state_hash in self.checkpoint_next and next_direction_hash in self.checkpoint_next[current_state_hash]:
                     next_state_hash = self.checkpoint_next[current_state_hash][next_direction_hash]
                     next_state = self.checkpoints[next_state_hash]
-                    (
-                        minute,
-                        pv10,
-                        step,
-                        record,
-                        metric,
-                        import_kwh,
-                        import_kwh_battery,
-                        import_kwh_house,
-                        export_kwh,
-                        soc,
-                        carbon_g,
-                        battery_cycle,
-                        metric_keep,
-                        iboost_today_kwh,
-                        charge_has_run,
-                        charge_has_started,
-                        discharge_has_run,
-                        soc_min,
-                        soc_min_minute,
-                        car_soc,
-                        final_car_soc,
-                        predict_soc,
-                        final_metric,
-                        final_import_kwh,
-                        final_import_kwh_battery,
-                        final_import_kwh_house,
-                        final_export_kwh,
-                        final_iboost_kwh,
-                        final_battery_cycle,
-                        final_metric_keep,
-                        final_carbon_g,
-                        final_soc,
+                    (minute, pv10, step, record, metric, import_kwh, import_kwh_battery, import_kwh_house, export_kwh, soc, carbon_g, battery_cycle, metric_keep, iboost_today_kwh, 
+                        charge_has_run, charge_has_started, discharge_has_run, soc_min, soc_min_minute, car_soc,
+                        final_car_soc, predict_soc, final_metric, final_import_kwh, final_import_kwh_battery, final_import_kwh_house, final_export_kwh, final_iboost_kwh, final_battery_cycle, final_metric_keep, final_carbon_g, final_soc
                     ) = next_state
                     car_soc = car_soc.copy()
                     predict_soc = predict_soc.copy()
