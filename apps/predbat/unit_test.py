@@ -164,12 +164,39 @@ def plot(name, prediction):
     plt.savefig("{}.png".format(name))
     plt.show()
 
+
 # def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
 
-def compute_metric_test(my_predbat, name, end_record=None, soc=0, soc10=0, cost=0, cost10=0, final_iboost=0, final_iboost10=0, battery_cycle=0, metric_keep=0, final_carbon_g=0, import_kwh_battery=0, import_kwh_house=0, export_kwh=0, assert_metric=0,
-                        battery_value_scaling = 1.0, rate_export_min = 1.0, iboost_value_scaling = 1.0, inverter_loss = 1.0, battery_loss = 1.0, metric_battery_cycle = 0.0, pv_metric10_weight = 0.0, battery_loss_discharge=1.0,
-                        metric_self_sufficiency = 0.0, carbon_metric = 0.0, rate_min = 1.0
-                        ):
+
+def compute_metric_test(
+    my_predbat,
+    name,
+    end_record=None,
+    soc=0,
+    soc10=0,
+    cost=0,
+    cost10=0,
+    final_iboost=0,
+    final_iboost10=0,
+    battery_cycle=0,
+    metric_keep=0,
+    final_carbon_g=0,
+    import_kwh_battery=0,
+    import_kwh_house=0,
+    export_kwh=0,
+    assert_metric=0,
+    battery_value_scaling=1.0,
+    rate_export_min=1.0,
+    iboost_value_scaling=1.0,
+    inverter_loss=1.0,
+    battery_loss=1.0,
+    metric_battery_cycle=0.0,
+    pv_metric10_weight=0.0,
+    battery_loss_discharge=1.0,
+    metric_self_sufficiency=0.0,
+    carbon_metric=0.0,
+    rate_min=1.0,
+):
     """
     Test the compute metric function
     """
@@ -216,6 +243,7 @@ def compute_metric_test(my_predbat, name, end_record=None, soc=0, soc10=0, cost=
         return True
     return False
 
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
@@ -223,13 +251,14 @@ def run_compute_metric_tests(my_predbat):
     failed = False
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)
-    failed |= compute_metric_test(my_predbat, "cost_bat", cost=10.0, soc=10, rate_min = 5, assert_metric=10 - 5*10)
-    failed |= compute_metric_test(my_predbat, "cost_iboost", cost=10.0, final_iboost=50, iboost_value_scaling=0.8, assert_metric=10 - 50*0.8)
+    failed |= compute_metric_test(my_predbat, "cost_bat", cost=10.0, soc=10, rate_min=5, assert_metric=10 - 5 * 10)
+    failed |= compute_metric_test(my_predbat, "cost_iboost", cost=10.0, final_iboost=50, iboost_value_scaling=0.8, assert_metric=10 - 50 * 0.8)
     failed |= compute_metric_test(my_predbat, "cost_keep", cost=10.0, metric_keep=5, assert_metric=10 + 5)
-    failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight = 0.5, assert_metric=10 + 10*0.5)
-    failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g = 100, carbon_metric=2.0, assert_metric=10 + 100/1000*2.0)
-    failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25*0.1)
+    failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight=0.5, assert_metric=10 + 10 * 0.5)
+    failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g=100, carbon_metric=2.0, assert_metric=10 + 100 / 1000 * 2.0)
+    failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
     return failed
+
 
 def simple_scenario(
     name,
@@ -282,7 +311,7 @@ def simple_scenario(
     assert_final_soc = round(assert_final_soc, 2)
 
     battery_rate = 1.0 if with_battery else 0.0
-    
+
     if not prediction:
         my_predbat.battery_loss = battery_loss
         my_predbat.battery_loss_discharge = battery_loss
@@ -1708,7 +1737,7 @@ def run_model_tests(my_predbat):
         assert_final_iboost=0,
         assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
         checkpoint=True,
-        save=None
+        save=None,
     )
 
     if failed:
