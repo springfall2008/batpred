@@ -935,6 +935,12 @@ CONFIG_ITEMS = [
         "default": False,
         "enable": "expert_mode",
     },
+    {
+        "name": "plan_turbo",
+        "friendly_name": "Turbo charge plan calculations",
+        "type": "switch",
+        "default": True,
+    },
 ]
 
 """
