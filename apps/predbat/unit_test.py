@@ -141,6 +141,7 @@ def reset_inverter(my_predbat):
     my_predbat.minutes_now = 12 * 60
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
+    my_predbat.plan_turbo = True
 
 
 def plot(name, prediction):
@@ -163,39 +164,12 @@ def plot(name, prediction):
     plt.savefig("{}.png".format(name))
     plt.show()
 
-
 # def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
 
-
-def compute_metric_test(
-    my_predbat,
-    name,
-    end_record=None,
-    soc=0,
-    soc10=0,
-    cost=0,
-    cost10=0,
-    final_iboost=0,
-    final_iboost10=0,
-    battery_cycle=0,
-    metric_keep=0,
-    final_carbon_g=0,
-    import_kwh_battery=0,
-    import_kwh_house=0,
-    export_kwh=0,
-    assert_metric=0,
-    battery_value_scaling=1.0,
-    rate_export_min=1.0,
-    iboost_value_scaling=1.0,
-    inverter_loss=1.0,
-    battery_loss=1.0,
-    metric_battery_cycle=0.0,
-    pv_metric10_weight=0.0,
-    battery_loss_discharge=1.0,
-    metric_self_sufficiency=0.0,
-    carbon_metric=0.0,
-    rate_min=1.0,
-):
+def compute_metric_test(my_predbat, name, end_record=None, soc=0, soc10=0, cost=0, cost10=0, final_iboost=0, final_iboost10=0, battery_cycle=0, metric_keep=0, final_carbon_g=0, import_kwh_battery=0, import_kwh_house=0, export_kwh=0, assert_metric=0,
+                        battery_value_scaling = 1.0, rate_export_min = 1.0, iboost_value_scaling = 1.0, inverter_loss = 1.0, battery_loss = 1.0, metric_battery_cycle = 0.0, pv_metric10_weight = 0.0, battery_loss_discharge=1.0,
+                        metric_self_sufficiency = 0.0, carbon_metric = 0.0, rate_min = 1.0
+                        ):
     """
     Test the compute metric function
     """
@@ -242,7 +216,6 @@ def compute_metric_test(
         return True
     return False
 
-
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
@@ -250,14 +223,13 @@ def run_compute_metric_tests(my_predbat):
     failed = False
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)
-    failed |= compute_metric_test(my_predbat, "cost_bat", cost=10.0, soc=10, rate_min=5, assert_metric=10 - 5 * 10)
-    failed |= compute_metric_test(my_predbat, "cost_iboost", cost=10.0, final_iboost=50, iboost_value_scaling=0.8, assert_metric=10 - 50 * 0.8)
+    failed |= compute_metric_test(my_predbat, "cost_bat", cost=10.0, soc=10, rate_min = 5, assert_metric=10 - 5*10)
+    failed |= compute_metric_test(my_predbat, "cost_iboost", cost=10.0, final_iboost=50, iboost_value_scaling=0.8, assert_metric=10 - 50*0.8)
     failed |= compute_metric_test(my_predbat, "cost_keep", cost=10.0, metric_keep=5, assert_metric=10 + 5)
-    failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight=0.5, assert_metric=10 + 10 * 0.5)
-    failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g=100, carbon_metric=2.0, assert_metric=10 + 100 / 1000 * 2.0)
-    failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
+    failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight = 0.5, assert_metric=10 + 10*0.5)
+    failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g = 100, carbon_metric=2.0, assert_metric=10 + 100/1000*2.0)
+    failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25*0.1)
     return failed
-
 
 def simple_scenario(
     name,
@@ -296,6 +268,9 @@ def simple_scenario(
     assert_keep=0.0,
     save="best",
     quiet=False,
+    checkpoint=False,
+    prediction=None,
+    get_prediction=False,
 ):
     """
     No PV, No Load
@@ -303,70 +278,73 @@ def simple_scenario(
     if not quiet:
         print("Run scenario {}".format(name))
 
-    battery_rate = 1.0 if with_battery else 0.0
-    my_predbat.battery_loss = battery_loss
-    my_predbat.battery_loss_discharge = battery_loss
-    my_predbat.battery_rate_max_scaling = battery_rate
-    my_predbat.battery_rate_max_scaling_discharge = battery_rate
-    my_predbat.soc_max = battery_size
-    my_predbat.soc_kw = battery_soc
-    my_predbat.inverter_hybrid = hybrid
-    my_predbat.export_limit = export_limit / 60.0
-    my_predbat.inverter_limit = inverter_limit / 60.0
-    my_predbat.reserve = reserve
-    my_predbat.inverter_loss = inverter_loss
-    my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
-    my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
-    my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
-    my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
-    my_predbat.car_charging_from_battery = car_charging_from_battery
-
-    my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_charging
-    my_predbat.iboost_gas = iboost_gas
-    my_predbat.iboost_solar = iboost_solar
-    my_predbat.iboost_min_power = 0.0
-    my_predbat.iboost_max_power = export_limit / 60.0
-    my_predbat.iboost_max_energy = iboost_max_energy
-    my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
-    my_predbat.iboost_gas_scale = gas_scale
-    my_predbat.iboost_charging = iboost_charging
-    my_predbat.best_soc_keep = keep
-    my_predbat.car_charging_soc[0] = 0
-    my_predbat.car_charging_limit[0] = 100.0
-
-    if end_record:
-        my_predbat.end_record = end_record
-    else:
-        my_predbat.end_record = my_predbat.forecast_minutes
-
-    my_predbat.carbon_intensity = {n: carbon for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
-    my_predbat.carbon_enable = carbon
-
     assert_final_metric = round(assert_final_metric / 100.0, 2)
     assert_final_soc = round(assert_final_soc, 2)
-    pv_step = {}
-    load_step = {}
-    pv10_step = {}
-    load10_step = {}
 
-    for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv_step[minute] = pv_amount / (60 / 5) if not pv10 else 0
-        load_step[minute] = load_amount / (60 / 5) if not pv10 else 0
+    battery_rate = 1.0 if with_battery else 0.0
+    
+    if not prediction:
+        my_predbat.battery_loss = battery_loss
+        my_predbat.battery_loss_discharge = battery_loss
+        my_predbat.battery_rate_max_scaling = battery_rate
+        my_predbat.battery_rate_max_scaling_discharge = battery_rate
+        my_predbat.soc_max = battery_size
+        my_predbat.soc_kw = battery_soc
+        my_predbat.inverter_hybrid = hybrid
+        my_predbat.export_limit = export_limit / 60.0
+        my_predbat.inverter_limit = inverter_limit / 60.0
+        my_predbat.reserve = reserve
+        my_predbat.inverter_loss = inverter_loss
+        my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
+        my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
+        my_predbat.battery_rate_max_charge_scaled = battery_rate_max_charge / 60.0
+        my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
+        my_predbat.car_charging_from_battery = car_charging_from_battery
 
-    for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
-        load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
+        my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_charging
+        my_predbat.iboost_gas = iboost_gas
+        my_predbat.iboost_solar = iboost_solar
+        my_predbat.iboost_min_power = 0.0
+        my_predbat.iboost_max_power = export_limit / 60.0
+        my_predbat.iboost_max_energy = iboost_max_energy
+        my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
+        my_predbat.iboost_gas_scale = gas_scale
+        my_predbat.iboost_charging = iboost_charging
+        my_predbat.best_soc_keep = keep
+        my_predbat.car_charging_soc[0] = 0
+        my_predbat.car_charging_limit[0] = 100.0
 
-    if charge_car:
-        my_predbat.num_cars = 1
-        my_predbat.car_charging_slots[0] = [
-            {"start": my_predbat.minutes_now, "end": my_predbat.forecast_minutes + my_predbat.minutes_now, "kwh": charge_car * my_predbat.forecast_minutes / 60.0}
-        ]
-    else:
-        my_predbat.num_cars = 0
-        my_predbat.car_charging_slots[0] = []
+        if end_record:
+            my_predbat.end_record = end_record
+        else:
+            my_predbat.end_record = my_predbat.forecast_minutes
 
-    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+        my_predbat.carbon_intensity = {n: carbon for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
+        my_predbat.carbon_enable = carbon
+
+        pv_step = {}
+        load_step = {}
+        pv10_step = {}
+        load10_step = {}
+
+        for minute in range(0, my_predbat.forecast_minutes, 5):
+            pv_step[minute] = pv_amount / (60 / 5) if not pv10 else 0
+            load_step[minute] = load_amount / (60 / 5) if not pv10 else 0
+
+        for minute in range(0, my_predbat.forecast_minutes, 5):
+            pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
+            load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
+
+        if charge_car:
+            my_predbat.num_cars = 1
+            my_predbat.car_charging_slots[0] = [
+                {"start": my_predbat.minutes_now, "end": my_predbat.forecast_minutes + my_predbat.minutes_now, "kwh": charge_car * my_predbat.forecast_minutes / 60.0}
+            ]
+        else:
+            my_predbat.num_cars = 0
+            my_predbat.car_charging_slots[0] = []
+
+        prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
 
     charge_limit_best = []
     if charge > 0:
@@ -378,34 +356,41 @@ def simple_scenario(
     if discharge < 100:
         discharge_limit_best = [discharge]
         discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.forecast_minutes + my_predbat.minutes_now, "average": 0}]
-    if save == "none":
-        (
-            metric,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            final_soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-        ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
+
+    if checkpoint:
+        rrange = [False, True]
     else:
-        (
-            metric,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-            soc_min,
-            final_soc,
-            soc_min_minute,
-            battery_cycle,
-            metric_keep,
-            final_iboost,
-            final_carbon_g,
-        ) = prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        rrange = [False]
+
+    for rpt in rrange:
+        if save == "none":
+            (
+                metric,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                final_soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+            ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
+        else:
+            (
+                metric,
+                import_kwh_battery,
+                import_kwh_house,
+                export_kwh,
+                soc_min,
+                final_soc,
+                soc_min_minute,
+                battery_cycle,
+                metric_keep,
+                final_iboost,
+                final_carbon_g,
+            ) = prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
     metric = round(metric / 100.0, 2)
     final_soc = round(final_soc, 2)
     final_iboost = round(final_iboost, 2)
@@ -430,6 +415,10 @@ def simple_scenario(
     if failed:
         prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), save="test")
         plot(name, prediction)
+
+    if get_prediction:
+        return failed, prediction
+
     return failed
 
 
@@ -714,9 +703,26 @@ def run_perf_test(my_predbat):
     export_rate = 5.0
     reset_rates(my_predbat, import_rate, export_rate)
     failed = False
+    my_predbat.debug_enable = False
+
+    failed, prediction = simple_scenario(
+        "load_bat_dc_pv2",
+        my_predbat,
+        4,
+        4,
+        assert_final_metric=import_rate * 24 * 3.2,
+        assert_final_soc=50 + 24,
+        with_battery=True,
+        battery_soc=50.0,
+        inverter_loss=0.8,
+        hybrid=True,
+        quiet=True,
+        save="none",
+        get_prediction=True,
+    )
 
     start_time = time.time()
-    for count in range(0, 50):
+    for count in range(0, 500):
         failed |= simple_scenario(
             "load_bat_dc_pv2",
             my_predbat,
@@ -730,13 +736,14 @@ def run_perf_test(my_predbat):
             hybrid=True,
             quiet=True,
             save="none",
+            prediction=prediction,
         )
     end_time = time.time()
     if failed:
         print("Performance test failed")
 
     run_time = end_time - start_time
-    print("Performance test took {} seconds for 200 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 50.0), 2)))
+    print("Performance test took {} seconds for 500 iterations = {} iterations per second".format(run_time, round(1 / (run_time / 500.0), 2)))
     return failed
 
 
@@ -746,6 +753,7 @@ def run_model_tests(my_predbat):
     import_rate = 10.0
     export_rate = 5.0
     reset_rates(my_predbat, import_rate, export_rate)
+    my_predbat.debug_enable = False
 
     failed = False
     failed |= simple_scenario("zero", my_predbat, 0, 0, 0, 0, with_battery=False)
@@ -1684,6 +1692,23 @@ def run_model_tests(my_predbat):
         keep=1.0,
         assert_final_iboost=0,
         assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
+    )
+    failed |= simple_scenario(
+        "checkpoint1",
+        my_predbat,
+        0.5,
+        0,
+        assert_final_metric=-export_rate * 10 * 0.5 + import_rate * 14 * 0.5,
+        assert_final_soc=0,
+        battery_soc=10,
+        with_battery=True,
+        discharge=0,
+        battery_size=10,
+        keep=1.0,
+        assert_final_iboost=0,
+        assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
+        checkpoint=True,
+        save=None
     )
 
     if failed:

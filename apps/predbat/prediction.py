@@ -89,6 +89,8 @@ class Prediction:
 
     def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None):
         global PRED_GLOBAL
+        self.checkpoints = {}
+        self.checkpoint_next = {}
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -107,6 +109,7 @@ class Prediction:
             self.cost_today_sofar = base.cost_today_sofar
             self.carbon_today_sofar = base.carbon_today_sofar
             self.debug_enable = base.debug_enable
+            self.plan_turbo = base.plan_turbo
             self.num_cars = base.num_cars
             self.car_charging_soc = base.car_charging_soc
             self.car_charging_soc_next = base.car_charging_soc_next
@@ -164,6 +167,7 @@ class Prediction:
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
+
 
     def thread_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
         """
@@ -242,10 +246,13 @@ class Prediction:
         Returns a dictionary defining for each minute that is in the charge window will contain the window number
         """
         charge_window_optimised = {}
+        charge_window_optimised30 = {}
         for window_n in range(len(charge_windows)):
             for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
+                minute30 = int(minute / 30) * 30
                 charge_window_optimised[minute] = window_n
-        return charge_window_optimised
+                charge_window_optimised30[minute30] = window_n
+        return charge_window_optimised, charge_window_optimised30
 
     def in_car_slot(self, minute):
         """
@@ -295,6 +302,7 @@ class Prediction:
         predict_battery_power = {}
         predict_battery_cycle = {}
         predict_soc_time = {}
+        predict_soc = {}
         predict_car_soc_time = [{} for car_n in range(self.num_cars)]
         predict_pv_power = {}
         predict_state = {}
@@ -357,8 +365,8 @@ class Prediction:
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
         charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
-        charge_window_optimised = self.find_charge_window_optimised(charge_window)
-        discharge_window_optimised = self.find_charge_window_optimised(discharge_window)
+        charge_window_optimised, charge_window_optimised30 = self.find_charge_window_optimised(charge_window)
+        discharge_window_optimised, discharge_window_optimised30 = self.find_charge_window_optimised(discharge_window)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -372,22 +380,74 @@ class Prediction:
         inverter_loss = self.inverter_loss
         inverter_hybrid = self.inverter_hybrid
 
+        previous_state_hash = None
+        previous_direction_hash = None
+        current_state = None
+        next_direction = None
+        next_state_hash = None
+        current_state_hash = None
+        checkpoint_mode = self.plan_turbo if (not save and not self.debug_enable) else False
+
         # Simulate each forward minute
         while minute < self.forecast_minutes:
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
+
+            # Create a checkpoint vector which represents the current simulation state
+            if checkpoint_mode and (minute_absolute % 30) == 0:
+                current_state = [minute, pv10, step, record, metric, import_kwh, import_kwh_battery, import_kwh_house, export_kwh, soc, carbon_g, battery_cycle, metric_keep, iboost_today_kwh, 
+                                 charge_has_run, charge_has_started, discharge_has_run, soc_min, soc_min_minute, car_soc.copy()]
+                save_only_state = [final_car_soc.copy(), predict_soc.copy(), final_metric, final_import_kwh, final_import_kwh_battery, final_import_kwh_house, final_export_kwh, final_iboost_kwh, final_battery_cycle, final_metric_keep, final_carbon_g, final_soc]
+
+                if not current_state_hash:
+                    current_state_hash = hash(str(current_state))
+
+                charge_window_n30 = charge_window_optimised30.get(minute_absolute, -1)
+                discharge_window_n30 = discharge_window_optimised30.get(minute_absolute, -1)
+
+                next_charge_window_target = charge_limit[charge_window_n30] if charge_window_n30 >= 0 else 0
+                next_discharge_window_target = discharge_limits[discharge_window_n30] if discharge_window_n30 >= 0 else 0
+                next_discharge_window_start = discharge_window[discharge_window_n30]['start'] if discharge_window_n30 >= 0 else 0
+
+                next_direction = [charge_window_n30, discharge_window_n30, next_charge_window_target, next_discharge_window_target, next_discharge_window_start]
+                next_direction_hash = hash(str(next_direction))
+
+                self.checkpoints[current_state_hash] = current_state + save_only_state
+
+                if previous_state_hash:
+                    if previous_state_hash not in self.checkpoint_next:
+                        self.checkpoint_next[previous_state_hash] = {}
+                    self.checkpoint_next[previous_state_hash][previous_direction_hash] = current_state_hash
+
+                previous_state_hash = current_state_hash
+                previous_direction_hash = next_direction_hash
+
+                if current_state_hash in self.checkpoint_next and next_direction_hash in self.checkpoint_next[current_state_hash]:
+                    next_state_hash = self.checkpoint_next[current_state_hash][next_direction_hash]
+                    next_state = self.checkpoints[next_state_hash]
+                    (minute, pv10, step, record, metric, import_kwh, import_kwh_battery, import_kwh_house, export_kwh, soc, carbon_g, battery_cycle, metric_keep, iboost_today_kwh, 
+                        charge_has_run, charge_has_started, discharge_has_run, soc_min, soc_min_minute, car_soc,
+                        final_car_soc, predict_soc, final_metric, final_import_kwh, final_import_kwh_battery, final_import_kwh_house, final_export_kwh, final_iboost_kwh, final_battery_cycle, final_metric_keep, final_carbon_g, final_soc
+                    ) = next_state
+                    car_soc = car_soc.copy()
+                    predict_soc = predict_soc.copy()
+                    current_state_hash = next_state_hash
+                    continue
+                else:
+                    current_state_hash = None
+
             prev_soc = soc
             reserve_expected = self.reserve
+
+            # Find charge & discharge windows
+            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
+            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
                 keep_minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
             else:
                 keep_minute_scaling = 0.5
-
-            # Find charge & discharge windows
-            charge_window_n = charge_window_optimised.get(minute_absolute, -1)
-            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
 
             # Find charge limit
             charge_limit_n = 0
@@ -429,7 +489,7 @@ class Prediction:
                 record_time[stamp] = 0 if record else self.soc_max
 
             # Save Soc prediction data as minutes for later use
-            self.predict_soc[minute] = round(soc, 3)
+            predict_soc[minute] = round(soc, 3)
             if save and (save in ["best", "test"]):
                 self.predict_soc_best[minute] = round(soc, 3)
                 self.predict_metric_best[minute] = round(metric, 3)
@@ -864,6 +924,7 @@ class Prediction:
         self.predict_soc_time = predict_soc_time
         self.first_charge = first_charge
         self.first_charge_soc = round(first_charge_soc, 4)
+        self.predict_soc = predict_soc
         self.predict_state = predict_state
         self.predict_battery_power = predict_battery_power
         self.predict_battery_power = predict_battery_power

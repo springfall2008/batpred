@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.2.4"
+THIS_VERSION = "v8.3.0"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -5050,6 +5050,7 @@ class PredBat(hass.Hass):
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.debug_enable = False
+        self.plan_turbo = False
         self.import_today = {}
         self.import_today_now = 0
         self.export_today = {}
@@ -9348,6 +9349,8 @@ class PredBat(hass.Hass):
         """
 
         self.debug_enable = self.get_arg("debug_enable")
+        self.plan_turbo = self.get_arg("plan_turbo")
+
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
