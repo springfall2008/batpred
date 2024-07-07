@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.2.4"
+THIS_VERSION = "v8.3.0"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -3093,6 +3093,92 @@ class PredBat(hass.Hass):
 
         return rates
 
+    def plan_iboost_smart(self):
+        """
+        Smart iboost planning
+        """
+        plan = []
+        iboost_today = self.iboost_today
+        iboost_max = self.iboost_max_energy
+        iboost_power = self.iboost_max_power * 60
+
+        low_rates = []
+        start_minute = int(self.minutes_now / 30) * 30
+        for minute in range(start_minute, start_minute + self.forecast_minutes, 30):
+            import_rate = self.rate_import.get(minute, self.rate_min)
+            export_rate = self.rate_export.get(minute, 0)
+            low_rates.append({"start": minute, "end": minute + 30, "average": import_rate, "export": export_rate})
+
+        # Get prices
+        if self.iboost_smart:
+            price_sorted = self.sort_window_by_price(low_rates, reverse_time=True)
+            price_sorted.reverse()
+        else:
+            price_sorted = [n for n in range(len(low_rates))]
+
+        total_days = int((self.forecast_minutes + self.minutes_now + 24 * 60 - 1) / (24 * 60))
+        iboost_soc = [0 for n in range(total_days)]
+        iboost_soc[0] = iboost_today
+
+        for window_n in price_sorted:
+            window = low_rates[window_n]
+            price = window["average"]
+            export_price = window["export"]
+
+            length = 0
+            kwh = 0
+
+            for day in range(0, total_days):
+                day_start_minutes = day * 24 * 60
+                day_end_minutes = day_start_minutes + 24 * 60
+
+                start = max(window["start"], self.minutes_now, day_start_minutes)
+                end = min(window["end"], day_end_minutes)
+
+                if start < end:
+                    rate_okay = True
+
+                    # Boost on import/export rate
+                    if self.iboost_rate:
+                        if price > self.iboost_rate_threshold:
+                            rate_okay = False
+                        if export_price > self.iboost_rate_threshold_export:
+                            rate_okay = False
+
+                    # Boost on gas rate vs import price
+                    if self.iboost_gas and self.rate_gas:
+                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                        if price > gas_rate:
+                            rate_okay = False
+
+                    # Boost on gas rate vs export price
+                    if self.iboost_gas_export and self.rate_gas:
+                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                        if export_price > gas_rate:
+                            rate_okay = False
+
+                    if not rate_okay:
+                        continue
+
+                    # Work out charging amounts
+                    length = end - start
+                    hours = length / 60
+                    kwh = iboost_power * hours
+                    kwh = min(kwh, iboost_max - iboost_soc[day])
+                    if kwh > 0:
+                        new_slot = {}
+                        new_slot["start"] = start
+                        new_slot["end"] = end
+                        new_slot["kwh"] = self.dp3(kwh)
+                        new_slot["average"] = window["average"]
+                        new_slot["cost"] = self.dp2(new_slot["average"] * kwh)
+                        plan.append(new_slot)
+                        iboost_soc[day] = self.dp3(iboost_soc[day] + kwh)
+
+        # Return sorted back in time order
+        plan = self.sort_window_by_time(plan)
+        return plan
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -5147,6 +5233,16 @@ class PredBat(hass.Hass):
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
+        self.iboost_enable = False
+        self.iboost_gas = False
+        self.iboost_gas_export = False
+        self.iboost_rate = False
+        self.iboost_smart = False
+        self.iboost_discharge = False
+        self.iboost_smart_threshold = 0
+        self.iboost_rate_threshold = 9999
+        self.iboost_rate_threshold_export = 9999
+        self.iboost_plan = []
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
@@ -9065,6 +9161,22 @@ class PredBat(hass.Hass):
         # Publish the car plan
         self.publish_car_plan()
 
+        # Work out iboost plan
+        if self.iboost_enable and ((not self.iboost_solar and not self.iboost_charging) or self.iboost_smart):
+            self.iboost_plan = self.plan_iboost_smart()
+            self.log(
+                "IBoost iboost_solar {} iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
+                    self.iboost_solar,
+                    self.iboost_rate,
+                    self.iboost_rate_threshold,
+                    self.iboost_rate_threshold_export,
+                    self.iboost_gas,
+                    self.iboost_gas_export,
+                    self.iboost_smart,
+                    self.iboost_plan,
+                )
+            )
+
         # Work out cost today
         if self.import_today:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today)
@@ -9534,16 +9646,25 @@ class PredBat(hass.Hass):
         # Enable load filtering
         self.load_filter_modal = self.get_arg("load_filter_modal")
 
-        # iBoost solar diverter model
-        self.iboost_enable = self.get_arg("iboost_enable")
+        # Calculate savings
         self.calculate_savings = True
+
+        # Carbon
         self.carbon_enable = self.get_arg("carbon_enable")
         self.carbon_metric = self.get_arg("carbon_metric")
-        self.iboost_solar = self.get_arg("iboost_solar")
+
+        # iBoost solar diverter model
+        self.iboost_enable = self.get_arg("iboost_enable")
         self.iboost_gas = self.get_arg("iboost_gas")
+        self.iboost_gas_export = self.get_arg("iboost_gas_export")
+        self.iboost_smart = self.get_arg("iboost_smart")
+        self.iboost_discharge = self.get_arg("iboost_discharge")
+        self.iboost_rate = self.get_arg("iboost_rate")
+        self.iboost_solar = self.get_arg("iboost_solar")
+        self.iboost_rate_threshold = self.get_arg("iboost_rate_threshold")
+        self.iboost_rate_threshold_export = self.get_arg("iboost_rate_threshold_export")
         self.iboost_charging = self.get_arg("iboost_charging")
         self.iboost_gas_scale = self.get_arg("iboost_gas_scale")
-
         self.iboost_max_energy = self.get_arg("iboost_max_energy")
         self.iboost_max_power = self.get_arg("iboost_max_power") / MINUTE_WATT
         self.iboost_min_power = self.get_arg("iboost_min_power") / MINUTE_WATT
@@ -9553,6 +9674,7 @@ class PredBat(hass.Hass):
         self.iboost_next = self.iboost_today
         self.iboost_running = False
         self.iboost_energy_today = {}
+        self.iboost_plan = []
 
         # Car options
         self.car_charging_hold = self.get_arg("car_charging_hold")
