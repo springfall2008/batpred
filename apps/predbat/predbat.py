@@ -3116,7 +3116,7 @@ class PredBat(hass.Hass):
         else:
             price_sorted = [n for n in range(len(low_rates))]
 
-        total_days = int((self.forecast_minutes + self.minutes_now + 24 * 60 - 1) / (24 * 60))
+        total_days = int((self.forecast_minutes + self.minutes_now + 24*60 - 1) / (24 * 60))
         iboost_soc = [0 for n in range(total_days)]
         iboost_soc[0] = iboost_today
 
@@ -3129,8 +3129,8 @@ class PredBat(hass.Hass):
             kwh = 0
 
             for day in range(0, total_days):
-                day_start_minutes = day * 24 * 60
-                day_end_minutes = day_start_minutes + 24 * 60
+                day_start_minutes = day * 24*60
+                day_end_minutes = day_start_minutes + 24*60
 
                 start = max(window["start"], self.minutes_now, day_start_minutes)
                 end = min(window["end"], day_end_minutes)
@@ -3178,6 +3178,7 @@ class PredBat(hass.Hass):
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
         return plan
+
 
     def plan_car_charging(self, car_n, low_rates):
         """
@@ -9162,13 +9163,10 @@ class PredBat(hass.Hass):
         self.publish_car_plan()
 
         # Work out iboost plan
-        if self.iboost_enable and (self.iboost_rate or self.iboost_smart):
+        if self.iboost_enable and (not self.iboost_solar and not self.iboost_charging) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
-            self.log(
-                "IBoost iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
-                    self.iboost_rate, self.iboost_rate_threshold, self.iboost_rate_threshold_export, self.iboost_gas, self.iboost_gas_export, self.iboost_smart, self.iboost_plan
-                )
-            )
+            self.log("IBoost iboost_solar {} iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
+                     self.iboost_solar, self.iboost_rate, self.iboost_rate_threshold, self.iboost_rate_threshold_export, self.iboost_gas, self.iboost_gas_export, self.iboost_smart, self.iboost_plan))
 
         # Work out cost today
         if self.import_today:
