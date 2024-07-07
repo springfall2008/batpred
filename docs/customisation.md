@@ -433,7 +433,7 @@ When you turn on predbat_iBoost_enable the following additional Home Assistant e
 - **input_number.predbat_iboost_max_power** Sets the maximum power in watts that the solar diverter will consume - default 2400.
 
 - **input_number.predbat_iboost_min_power** Sets the minimum power in watts that the solar diverter will consume - default 500.
-  
+
 - **input_number.predbat_iboost_value_scaling** Sets how to account for the value of iBoost units of energy.
 The default value of 0.75 means that each kWh of energy diverted is accounted for a 0.75 x The lowest future import rate.
 
