@@ -87,6 +87,7 @@ def reset_rates(my_predbat, ir, xr):
     low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, 9999, False)
     return low_rates
 
+
 def reset_rates2(my_predbat, ir, xr):
     my_predbat.combine_charge_slots = True
     for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now):
@@ -94,7 +95,7 @@ def reset_rates2(my_predbat, ir, xr):
             my_predbat.rate_import[minute] = ir
             my_predbat.rate_export[minute] = xr
         else:
-            my_predbat.rate_import[minute] = ir * 2 
+            my_predbat.rate_import[minute] = ir * 2
             my_predbat.rate_export[minute] = xr * 2
     my_predbat.rate_export_min = xr
 
@@ -1788,14 +1789,14 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         1.0,
-        assert_final_metric=12*import_rate,
+        assert_final_metric=12 * import_rate,
         assert_final_soc=0,
         with_battery=False,
         iboost_rate=True,
         iboost_solar=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
-        assert_final_iboost=12*1 + 12*2,
+        assert_final_iboost=12 * 1 + 12 * 2,
         low_rates=low_rates,
         export_limit=2,
     )
