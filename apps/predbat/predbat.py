@@ -4298,7 +4298,7 @@ class PredBat(hass.Hass):
                     slot["state"]["limit"] = limit
                 elif limit < 100:
                     # TODO: figure out the split state logic, and how to reflect it here
-                    if limit > soc_percent_max_window:
+                    if limit > soc_percent_max:
                         slot["state"]["mode"] = "Hold discharge"
                     else:
                         slot["state"]["mode"] = "Discharge"
