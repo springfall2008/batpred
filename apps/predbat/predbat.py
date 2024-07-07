@@ -4168,6 +4168,7 @@ class PredBat(hass.Hass):
         output['config']['carbon_metric'] = self.carbon_metric
         output['config']['metric_self_sufficiency'] = self.metric_self_sufficiency
         output['config']['metric_battery_value_scaling'] = self.metric_battery_value_scaling
+        output['config']['currency'] = self.currency_symbols
 
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
@@ -4262,17 +4263,18 @@ class PredBat(hass.Hass):
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
 
-            slot['soc'] = {}
-            slot['soc']['percent'] = soc_percent
-            slot['soc']['percent_end'] = soc_percent_end
-            slot['soc']['percent_end_window'] = soc_percent_end_window
-            slot['soc']['percent_max'] = soc_percent_max
-            slot['soc']['percent_min'] = soc_percent_min
-            slot['soc']['percent_max_window'] = soc_percent_max_window
-            slot['soc']['percent_min_window'] = soc_percent_min_window
-            slot['soc']['change'] = self.dp2(soc_change)
-
             slot['state'] = {}
+
+            slot['state']['soc'] = {}
+            slot['state']['soc']['percent'] = soc_percent
+            slot['state']['soc']['percent_end'] = soc_percent_end
+            slot['state']['soc']['percent_end_window'] = soc_percent_end_window
+            slot['state']['soc']['percent_max'] = soc_percent_max
+            slot['state']['soc']['percent_min'] = soc_percent_min
+            slot['state']['soc']['percent_max_window'] = soc_percent_max_window
+            slot['state']['soc']['percent_min_window'] = soc_percent_min_window
+            slot['state']['soc']['change'] = self.dp2(soc_change)
+
 
             if minute in self.manual_idle_times:
                 slot['state']['override'] = True
@@ -4281,12 +4283,14 @@ class PredBat(hass.Hass):
 
             slot['pv'] = {}
             slot['pv']['forecast'] = pv_forecast
+            slot['pv']['forecast10'] = pv_forecast10
 
             if plan_debug and pv_forecast10 > 0.0:
                 slot['pv']['debug'] = str(pv_forecast10)
 
             slot['load'] = {}
             slot['load']['forecast'] = load_forecast
+            slot['load']['forecast10'] = load_forecast10
 
             if plan_debug and load_forecast10 > 0.0:
                 slot['load']['debug'] = str(load_forecast10)
@@ -4296,14 +4300,14 @@ class PredBat(hass.Hass):
                 limit_percent = int(self.charge_limit_percent_best[charge_window_n])
                 if limit > 0.0:
                     if self.set_charge_freeze and (limit == self.reserve):
-                        slot['state']['action'] = 'Freeze charge'
+                        slot['state']['mode'] = 'Freeze charge'
                         limit_percent = soc_percent
                     elif limit_percent == soc_percent_min_window:
-                        slot['state']['action'] = 'Hold charge'
+                        slot['state']['mode'] = 'Hold charge'
                     elif limit_percent < soc_percent_min_window:
-                        slot['state']['action'] = 'No charge'
+                        slot['state']['mode'] = 'No charge'
                     else:
-                        slot['state']['action'] = 'Charge'
+                        slot['state']['mode'] = 'Charge'
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         slot['state']['override'] = True
@@ -4316,20 +4320,20 @@ class PredBat(hass.Hass):
                     start = self.discharge_window_best[discharge_window_n]["start"]
                     if start > minute:
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
-                        slot['soc']['change'] = self.dp2(soc_change_this)
+                        slot['state']['soc']['change'] = self.dp2(soc_change_this)
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
                 if limit == 99:
                     # TODO: figure out the split state logic, and how to reflect it here
-                    slot['state']['action'] = 'Freeze discharge'
+                    slot['state']['mode'] = 'Freeze discharge'
                     slot['state']['limit'] = limit
                 elif limit < 100:
                     # TODO: figure out the split state logic, and how to reflect it here
                     if limit > soc_percent_max_window:
-                        slot['state']['action'] = 'Hold discharge'
+                        slot['state']['mode'] = 'Hold discharge'
                     else:
-                        slot['state']['action'] = 'Discharge'
+                        slot['state']['mode'] = 'Discharge'
                     slot['state']['limit'] = limit
 
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
@@ -4368,7 +4372,6 @@ class PredBat(hass.Hass):
             # Total cost at start of slot, add leading minus if negative
             slot['cost']['start'] = metric_start
             slot['cost']['change'] = self.dp2(metric_change)
-            slot['cost']['currency'] = self.currency_symbols
 
             # Car charging?
             slot['car'] = {}
@@ -4407,8 +4410,12 @@ class PredBat(hass.Hass):
 
             if start_span:
                 slot['span'] = 'start'
+            elif in_span:
+                slot['span'] = 'in_span'
             elif not in_span:
                 slot['span'] = 'not in_span'
+            else:
+                slot['span'] = 'unknown'
 
             output['slots'].append(slot)
 
