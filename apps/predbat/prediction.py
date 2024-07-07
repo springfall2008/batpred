@@ -127,14 +127,13 @@ class Prediction:
             self.carbon_enable = base.carbon_enable
             self.iboost_next = base.iboost_next
             self.iboost_max_energy = base.iboost_max_energy
-            self.iboost_gas = base.iboost_gas
-            self.iboost_gas_scale = base.iboost_gas_scale
             self.iboost_max_power = base.iboost_max_power
             self.iboost_min_power = base.iboost_min_power
             self.iboost_min_soc = base.iboost_min_soc
             self.iboost_solar = base.iboost_solar
             self.iboost_charging = base.iboost_charging
             self.iboost_running = base.iboost_running
+            self.iboost_plan = base.iboost_plan
             self.inverter_loss = base.inverter_loss
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
@@ -153,7 +152,6 @@ class Prediction:
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_min = base.best_soc_min
             self.car_charging_battery_size = base.car_charging_battery_size
-            self.rate_gas = base.rate_gas
             self.rate_import = base.rate_import
             self.rate_export = base.rate_export
             self.pv_forecast_minute_step = pv_forecast_minute_step
@@ -247,6 +245,26 @@ class Prediction:
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
+    def in_iboost_slot(self, minute):
+        """
+        Is the given minute inside a car slot
+        """
+        load_amount = 0
+
+        if self.iboost_plan:
+            for slot in self.iboost_plan:
+                start_minutes = slot["start"]
+                end_minutes = slot["end"]
+                kwh = slot["kwh"]
+                slot_minutes = end_minutes - start_minutes
+                slot_hours = slot_minutes / 60.0
+
+                # Return the load in that slot
+                if minute >= start_minutes and minute < end_minutes:
+                    load_amount = abs(kwh / slot_hours)
+                    break
+        return load_amount
+
     def in_car_slot(self, minute):
         """
         Is the given minute inside a car slot
@@ -280,7 +298,6 @@ class Prediction:
         else:
             pv_forecast_minute_step = self.pv_forecast_minute_step
             load_minutes_step = self.load_minutes_step
-        rate_gas = self.rate_gas
         rate_import = self.rate_import
         rate_export = self.rate_export
 
@@ -476,19 +493,18 @@ class Prediction:
             # IBoost solar diverter on load, don't do on discharge
             iboost_amount = 0
             if self.iboost_enable and (discharge_window_n < 0):
-                if iboost_today_kwh < self.iboost_max_energy:
-                    if self.iboost_gas:
-                        if rate_gas:
-                            # iBoost on cheap electric rates
-                            gas_rate = rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                            electric_rate = rate_import.get(minute_absolute, 0)
-                            if (electric_rate < gas_rate) and (charge_window_n >= 0 or not self.iboost_charging):
-                                iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-                                load_yesterday += iboost_amount
-                    elif self.iboost_charging:
-                        if charge_window_n >= 0:
-                            iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-                            load_yesterday += iboost_amount
+                # IBoost based on plan for given rates
+                if self.iboost_plan:
+                    iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
+                    iboost_amount = min(iboost_load, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
+
+                # IBoost based on Predbat charging
+                if self.iboost_charging and iboost_today_kwh < self.iboost_max_energy:
+                    if charge_window_n >= 0:
+                        iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
+                            
+                # Iboost load added
+                load_yesterday += iboost_amount
 
             # Count load
             load_kwh += load_yesterday
@@ -717,8 +733,9 @@ class Prediction:
                 if iboost_today_kwh < self.iboost_max_energy and (
                     self.iboost_solar and pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
                 ):
-                    iboost_amount = min(iboost_amount + pv_ac, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-                    pv_ac -= iboost_amount
+                    iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
+                    pv_ac -= iboost_pv_amount
+                    iboost_amount += iboost_pv_amount
 
                 # Cumulative energy
                 iboost_today_kwh += iboost_amount
