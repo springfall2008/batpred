@@ -8451,6 +8451,8 @@ class PredBat(hass.Hass):
 
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+            # JSON data
+            self.publish_json_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
         # Destroy pool
         if self.pool:
