@@ -449,10 +449,24 @@ Different boost modes can be selected:
 - **input_number.predbat_iboost_min_soc** sets the minimum home battery SoC percentage that must be in the battery before the solar diverter is turned on.
 The default is 0 meaning hot water heating can occur regardless of what SoC level the battery is at.
 
+### iBoost based on energy rates
+
+- **switch.predbat_iboost_rate** If set to on, the diverter will operate when energy rates are below a given threshold (can be combined with iboost_gas and iboost solar if so desired).
+
+- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled. 
+
+- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled. 
+
+- **switch.predbat_iboost_smart** Will pick the lowest import rate slots within a 24-hour period to achieve the desired energy as specified by **input_number.predbat_iboost_max_energy**.
+Only slots of at or below the rate threshold will be selected. Note this option has no impact when iboost_solar is enabled as it only works based on energy rates.
+
 ### iBoost on electric rates less than gas rates
 
-- **switch.predbat_iboost_gas** When enabled will control the diverter to only operate when electric rates are lower than gas rates.
-This is useful if you have the choice to heat your hot water by immersion heater or by gas boiler.
+- **switch.predbat_iboost_gas** When enabled will control the diverter to only operate when import electric rates are lower than gas rates.
+- **switch.predbat_iboost_gas_export** When enabled will control the diverter to only operate when export electric rates are lower than gas rates.
+
+These can be useful if you have the choice to heat your hot water by immersion heater or by gas boiler.
+
 Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas**.
 
 - **input_number.predbat_iboost_gas_scale** Sets the scaling of the gas rates (set in `apps.yaml`)used before comparing with electric rates, to account for gas boiler losses and efficiency.
@@ -461,15 +475,7 @@ It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% eff
 
 ### iBoost when your home batery is charging
 
-- **switch.predbat_iboost_charging** If set to on, the diverter will operate when the battery is charging (can be combined with iboost_gas or not).
-
-### iBoost based on import rates
-
-- **switch.predbat_iboost_rate** If set to on, the diverter will operate when import rates are below a given threshold (can be combined with iboost_gas).
-
-- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled. Will stop when **input_number.predbat_iboost_max_energy** is reached.
-
-- **switch.predbat_iboost_smart** Will pick the lowest import rate slots within a 24-hour period to achieve the desired energy as specified by **input_number.predbat_iboost_max_energy**. Only slots of at or below the rate threshold will be selected.
+- **switch.predbat_iboost_charging** If set to on, the diverter will operate when the battery is charging (can be combined with solar, iboost on rates and on gas options).
 
 ### iBoost output data
 
