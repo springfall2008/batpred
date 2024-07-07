@@ -3093,7 +3093,7 @@ class PredBat(hass.Hass):
 
         return rates
 
-    def plan_iboost_smart(self, low_rates):
+    def plan_iboost_smart(self):
         """
         Smart iboost planning
         """
@@ -3102,6 +3102,13 @@ class PredBat(hass.Hass):
         iboost_max = self.iboost_max_energy
         iboost_power = self.iboost_max_power * 60
 
+        low_rates = []
+        start_minute = int(self.minutes_now / 30) * 30
+        for minute in range(start_minute, start_minute + self.forecast_minutes, 30):
+            import_rate = self.rate_import.get(minute, self.rate_min)
+            export_rate = self.rate_export.get(minute, 0)
+            low_rates.append({"start": minute, "end": minute + 30, "average": import_rate, "export": export_rate})
+
         # Get prices
         if self.iboost_smart:
             price_sorted = self.sort_window_by_price(low_rates, reverse_time=True)
@@ -3109,38 +3116,48 @@ class PredBat(hass.Hass):
         else:
             price_sorted = [n for n in range(len(low_rates))]
 
-        total_days = int((self.forecast_minutes + self.minutes_now + 24 * 60 - 1) / (24 * 60))
+        total_days = int((self.forecast_minutes + self.minutes_now + 24*60 - 1) / (24 * 60))
         iboost_soc = [0 for n in range(total_days)]
         iboost_soc[0] = iboost_today
 
         for window_n in price_sorted:
             window = low_rates[window_n]
             price = window["average"]
+            export_price = window["export"]
 
             length = 0
             kwh = 0
 
             for day in range(0, total_days):
-                day_start_minutes = day * 24 * 60
-                day_end_minutes = day_start_minutes + 24 * 60
+                day_start_minutes = day * 24*60
+                day_end_minutes = day_start_minutes + 24*60
 
                 start = max(window["start"], self.minutes_now, day_start_minutes)
                 end = min(window["end"], day_end_minutes)
 
                 if start < end:
+                    rate_okay = True
+
+                    # Boost on import/export rate
                     if self.iboost_rate:
-                        price_threshold = self.iboost_rate_threshold
-                    else:
-                        price_threshold = -9999
+                        if price > self.iboost_rate_threshold:
+                            rate_okay = False
+                        if export_price > self.iboost_rate_threshold_export:
+                            rate_okay = False
 
-                    if self.iboost_gas:
-                        if self.rate_gas:
-                            # iBoost on cheap electric rates
-                            gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
-                            price_threshold = max(gas_rate, price_threshold)
+                    # Boost on gas rate vs import price
+                    if self.iboost_gas and self.rate_gas:
+                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                        if price > gas_rate:
+                            rate_okay = False
 
-                    # Skip past too high price
-                    if price > price_threshold:
+                    # Boost on gas rate vs export price
+                    if self.iboost_gas_export and self.rate_gas:
+                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                        if export_price > gas_rate:
+                            rate_okay = False
+
+                    if not rate_okay:
                         continue
 
                     # Work out charging amounts
@@ -3161,6 +3178,7 @@ class PredBat(hass.Hass):
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
         return plan
+
 
     def plan_car_charging(self, car_n, low_rates):
         """
@@ -5218,9 +5236,13 @@ class PredBat(hass.Hass):
         self.carbon_history = {}
         self.iboost_enable = False
         self.iboost_gas = False
+        self.iboost_gas_export = False
         self.iboost_rate = False
         self.iboost_smart = False
+        self.iboost_discharge = False
         self.iboost_smart_threshold = 0
+        self.iboost_rate_threshold = 9999
+        self.iboost_rate_threshold_export = 9999
         self.iboost_plan = []
 
         self.config_root = "./"
@@ -9141,13 +9163,10 @@ class PredBat(hass.Hass):
         self.publish_car_plan()
 
         # Work out iboost plan
-        if self.iboost_enable and (self.iboost_rate or self.iboost_gas or self.iboost_smart):
-            self.iboost_plan = self.plan_iboost_smart(self.low_rates)
-            self.log(
-                "IBoost iboost_rate {} rate threshold {} iboost_gas {} iboost_smart {} plan is: {}".format(
-                    self.iboost_rate, self.iboost_rate_threshold, self.iboost_gas, self.iboost_smart, self.iboost_plan
-                )
-            )
+        if self.iboost_enable and (self.iboost_rate or self.iboost_smart):
+            self.iboost_plan = self.plan_iboost_smart()
+            self.log("IBoost iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
+                     self.iboost_rate, self.iboost_rate_threshold, self.iboost_rate_threshold_export, self.iboost_gas, self.iboost_gas_export, self.iboost_smart, self.iboost_plan))
 
         # Work out cost today
         if self.import_today:
@@ -9628,10 +9647,13 @@ class PredBat(hass.Hass):
         # iBoost solar diverter model
         self.iboost_enable = self.get_arg("iboost_enable")
         self.iboost_gas = self.get_arg("iboost_gas")
+        self.iboost_gas_export = self.get_arg("iboost_gas_export")
         self.iboost_smart = self.get_arg("iboost_smart")
+        self.iboost_discharge = self.get_arg("iboost_discharge")
         self.iboost_rate = self.get_arg("iboost_rate")
         self.iboost_solar = self.get_arg("iboost_solar")
         self.iboost_rate_threshold = self.get_arg("iboost_rate_threshold")
+        self.iboost_rate_threshold_export = self.get_arg("iboost_rate_threshold_export")
         self.iboost_charging = self.get_arg("iboost_charging")
         self.iboost_gas_scale = self.get_arg("iboost_gas_scale")
         self.iboost_max_energy = self.get_arg("iboost_max_energy")
