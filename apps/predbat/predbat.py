@@ -251,7 +251,7 @@ class PredBat(hass.Hass):
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Error downloading GE data from url {}".format(url))
+            self.log("Warn: Error downloading GE data from URL {}".format(url))
             self.record_status("Warn: Error downloading GE data from cloud", debug=url, had_errors=True)
             return False
 
@@ -288,7 +288,7 @@ class PredBat(hass.Hass):
 
                 darray = data.get("data", None)
                 if darray is None:
-                    self.log("Warn: Error downloading GE data from url {}".format(url))
+                    self.log("Warn: Error downloading GE data from URL {}".format(url))
                     self.record_status("Warn: Error downloading GE data from cloud", debug=url)
                     return False
 
@@ -361,7 +361,7 @@ class PredBat(hass.Hass):
         try:
             pdata = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Unable to decode data from Github url: {}".format(url))
+            self.log("Warn: Unable to decode data from Github URL: {}".format(url))
             return []
 
         # Save to cache
@@ -671,19 +671,19 @@ class PredBat(hass.Hass):
             self.log("Download {}".format(url))
         r = requests.get(url)
         if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading futurerate data from url {}, code {}".format(url, r.status_code))
+            self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
         try:
             data = r.json()
         except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Error downloading futurerate data from url {}".format(url))
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
         if "data" in data:
             mdata = data["data"]
         else:
-            self.log("Warn: Error downloading futurerate data from url {}".format(url))
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
         return mdata
@@ -701,19 +701,19 @@ class PredBat(hass.Hass):
                 self.log("Download {}".format(url))
             r = requests.get(url)
             if r.status_code not in [200, 201]:
-                self.log("Warn: Error downloading Octopus data from url {}, code {}".format(url, r.status_code))
+                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError:
-                self.log("Warn: Error downloading Octopus data from url {}".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {}".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
-                self.log("Warn: Error downloading Octopus data from url {}".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {}".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             url = data.get("next", None)
@@ -753,16 +753,16 @@ class PredBat(hass.Hass):
         self.log("Fetching {}".format(url))
         r = requests.get(url, params=params)
         if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
+            self.log("Warn: Error downloading data from URL {}, code {}".format(url, r.status_code))
         else:
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError as e:
-                self.log("Warn: Error downloading data from url {}, error {} code {}".format(url, e, r.status_code))
+                self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, r.status_code))
                 if data:
-                    self.log("Warn: Error downloading data from url {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
+                    self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
                 else:
-                    self.log("Warn: Error downloading data from url {}, no cached data".format(url))
+                    self.log("Warn: Error downloading data from URL {}, no cached data".format(url))
 
         # Store data in cache
         if data:
@@ -786,6 +786,10 @@ class PredBat(hass.Hass):
             self.log("Warn: Solcast API key or host not set")
             return None
 
+        # Remove trailing '/' from host URL if necessary to prevent pathnames becoming e.g. https://api.solcast.com.au//rooftop_sites
+        if host[-1] == "/":
+            host = host[0:-1]
+        
         self.solcast_data = {}
         cache_file = cache_path + "/solcast.json"
         cache_file_p = cache_path_p + "/solcast.json"
@@ -810,7 +814,7 @@ class PredBat(hass.Hass):
             url = f"{host}/json/reply/GetUserUsageAllowance"
             data = self.cache_get_url(url, params, max_age=0)
             if not data:
-                self.log("Warn: Solcast, could not access usage data, check your cloud settings")
+                self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
             else:
                 self.solcast_api_limit += data.get("daily_limit", None)
                 self.solcast_api_used += data.get("daily_limit_consumed", None)
@@ -819,7 +823,7 @@ class PredBat(hass.Hass):
             url = f"{host}/rooftop_sites"
             data = self.cache_get_url(url, params, max_age=max_age)
             if not data:
-                self.log("Warn: Solcast sites could not be downloaded, check your cloud settings")
+                self.log("Warn: Solcast sites could not be downloaded, check your Solcast cloud settings")
                 continue
 
             sites = data.get("sites", [])
@@ -833,7 +837,7 @@ class PredBat(hass.Hass):
                     url = f"{host}/rooftop_sites/{resource_id}/forecasts"
                     data = self.cache_get_url(url, params, max_age=max_age)
                     if not data:
-                        self.log("Warn: Solcast forecast data for site {} could not be downloaded, check your cloud settings".format(site))
+                        self.log("Warn: Solcast forecast data for site {} could not be downloaded, check your Solcast cloud settings".format(site))
                         continue
                     forecasts = data.get("forecasts", [])
 
@@ -7615,11 +7619,11 @@ class PredBat(hass.Hass):
         pv_forecast_total_sensor = 0
 
         if "solcast_host" in self.args:
-            self.log("Using solcast cloud")
+            self.log("Obtaining solar forecast data from Solcast website")
             pv_forecast_data = self.download_solcast_data()
             divide_by = 30.0
         else:
-            self.log("Using solcast from inside HA")
+            self.log("Using Solcast integration from inside HA for solar forecast")
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -9094,7 +9098,7 @@ class PredBat(hass.Hass):
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
-            self.log("Downloading import rates directly from url {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
+            self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             self.rate_import = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
@@ -9234,7 +9238,7 @@ class PredBat(hass.Hass):
 
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
-            self.log("Downloading export rates directly from url {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
+            self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             self.rate_export = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
