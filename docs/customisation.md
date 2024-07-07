@@ -453,9 +453,9 @@ The default is 0 meaning hot water heating can occur regardless of what SoC leve
 
 - **switch.predbat_iboost_rate** If set to on, the diverter will operate when energy rates are below a given threshold (can be combined with iboost_gas and iboost solar if so desired).
 
-- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled. 
+- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled.
 
-- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled. 
+- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled.
 
 - **switch.predbat_iboost_smart** Will pick the lowest import rate slots within a 24-hour period to achieve the desired energy as specified by **input_number.predbat_iboost_max_energy**.
 Only slots of at or below the rate threshold will be selected. Note this option has no impact when iboost_solar is enabled as it only works based on energy rates.
