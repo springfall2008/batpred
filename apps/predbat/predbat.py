@@ -4169,6 +4169,11 @@ class PredBat(hass.Hass):
         output["config"]["metric_battery_value_scaling"] = self.metric_battery_value_scaling
         output["config"]["currency"] = self.currency_symbols
 
+        output["config"]["iboost_enable"] = self.iboost_enable
+        output["config"]["carbon_enable"] = self.carbon_enable
+        output["config"]["car_enable"] = self.num_cars > 0
+
+
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
 
@@ -4336,13 +4341,13 @@ class PredBat(hass.Hass):
             slot["cost"]["change"] = self.dp2(metric_change)
 
             # Car charging?
-            slot["car"] = {}
             if self.num_cars > 0:
+                slot["car"] = {}
                 slot["car"]["charging_kwh"] = self.car_charge_slot_kwh(minute_start, minute_end)
 
             # iBoost
-            slot["iboost"] = {}
             if self.iboost_enable:
+                slot["iboost"] = {}
                 iboost_slot_end = minute_relative_slot_end
                 iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
                 iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
@@ -4361,8 +4366,8 @@ class PredBat(hass.Hass):
                 slot["iboost"]["amount_end"] = iboost_amount_end
                 slot["iboost"]["amount_prev"] = iboost_amount_prev
 
-            slot["carbon"] = {}
             if self.carbon_enable:
+                slot["carbon"] = {}
                 # Work out carbon intensity and carbon use
                 slot["carbon"]["amount"] = self.predict_carbon_best.get(minute_relative_start, 0)
                 slot["carbon"]["amount_end"] = self.predict_carbon_best.get(minute_relative_slot_end, 0)
