@@ -4271,9 +4271,9 @@ class PredBat(hass.Hass):
                     if self.set_charge_freeze and (limit == self.reserve):
                         slot["state"]["mode"] = "Freeze charge"
                         limit_percent = soc_percent
-                    elif limit_percent == soc_percent_min_window:
+                    elif limit_percent == soc_percent_min:
                         slot["state"]["mode"] = "Hold charge"
-                    elif limit_percent < soc_percent_min_window:
+                    elif limit_percent < soc_percent_min:
                         slot["state"]["mode"] = "No charge"
                     else:
                         slot["state"]["mode"] = "Charge"
