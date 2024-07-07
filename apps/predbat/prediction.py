@@ -502,7 +502,7 @@ class Prediction:
                 if self.iboost_charging and iboost_today_kwh < self.iboost_max_energy:
                     if charge_window_n >= 0:
                         iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-
+                            
                 # Iboost load added
                 load_yesterday += iboost_amount
 

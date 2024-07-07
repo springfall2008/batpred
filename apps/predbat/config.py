@@ -839,7 +839,7 @@ CONFIG_ITEMS = [
         "max": 100,
         "step": 1,
         "unit": "p/kWh",
-        "icon": "mdi:currency",
+        "icon": "mdi:currency-usd",
         "enable": "iboost_enable",
         "default": 100,
     },
