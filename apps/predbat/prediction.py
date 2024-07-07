@@ -510,7 +510,7 @@ class Prediction:
                 if self.iboost_charging and iboost_today_kwh < self.iboost_max_energy:
                     if charge_window_n >= 0:
                         iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-                            
+
                 # Iboost load added
                 load_yesterday += iboost_amount
 
@@ -738,7 +738,6 @@ class Prediction:
 
             # iBoost model
             if self.iboost_enable:
-                
                 # iBoost solar
                 if self.iboost_solar:
                     rate_okay = True
@@ -766,9 +765,10 @@ class Prediction:
                         if export_rate > gas_rate:
                             rate_okay = False
 
-                    if rate_okay and iboost_today_kwh < self.iboost_max_energy and (
-                        pv_ac > (self.iboost_min_power * step) and 
-                        ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
+                    if (
+                        rate_okay
+                        and iboost_today_kwh < self.iboost_max_energy
+                        and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc))
                     ):
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
