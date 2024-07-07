@@ -4171,9 +4171,6 @@ class PredBat(hass.Hass):
 
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
-        rowspan = 0
-        in_span = False
-        start_span = False
 
         output["slots"] = []
 
@@ -4210,31 +4207,6 @@ class PredBat(hass.Hass):
                 if discharge_window_n >= 0:
                     break
 
-            start_span = False
-            if in_span:
-                rowspan = max(rowspan - 1, 0)
-                if rowspan == 0:
-                    in_span = False
-
-            if charge_window_n >= 0 and not in_span:
-                rowspan = int((self.charge_window_best[charge_window_n]["end"] - minute) / 30)
-                if rowspan > 1 and (discharge_window_n < 0):
-                    in_span = True
-                    start_span = True
-                    minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
-                else:
-                    rowspan = 0
-
-            if discharge_window_n >= 0 and not in_span:
-                rowspan = int((self.discharge_window_best[discharge_window_n]["end"] - minute) / 30)
-                start = self.discharge_window_best[discharge_window_n]["start"]
-                if start <= minute and rowspan > 1 and (charge_window_n < 0):
-                    in_span = True
-                    start_span = True
-                    minute_relative_end = self.discharge_window_best[discharge_window_n]["end"] - minute_now_align
-                else:
-                    rowspan = 0
-
             pv_forecast = 0
             load_forecast = 0
             pv_forecast10 = 0
@@ -4252,11 +4224,8 @@ class PredBat(hass.Hass):
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
-            soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_percent_max = max(soc_percent, soc_percent_end)
             soc_percent_min = min(soc_percent, soc_percent_end)
-            soc_percent_max_window = max(soc_percent, soc_percent_end_window)
-            soc_percent_min_window = min(soc_percent, soc_percent_end_window)
             soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
@@ -4267,11 +4236,8 @@ class PredBat(hass.Hass):
             slot["state"]["soc"] = {}
             slot["state"]["soc"]["percent"] = soc_percent
             slot["state"]["soc"]["percent_end"] = soc_percent_end
-            slot["state"]["soc"]["percent_end_window"] = soc_percent_end_window
             slot["state"]["soc"]["percent_max"] = soc_percent_max
             slot["state"]["soc"]["percent_min"] = soc_percent_min
-            slot["state"]["soc"]["percent_max_window"] = soc_percent_max_window
-            slot["state"]["soc"]["percent_min_window"] = soc_percent_min_window
             slot["state"]["soc"]["change"] = self.dp2(soc_change)
 
             if minute in self.manual_idle_times:
@@ -4402,15 +4368,6 @@ class PredBat(hass.Hass):
                 slot["carbon"]["amount_end"] = self.predict_carbon_best.get(minute_relative_slot_end, 0)
                 slot["carbon"]["change"] = self.dp2(carbon_amount_end - carbon_amount)
                 slot["carbon"]["intensity"] = self.dp0(self.carbon_intensity.get(minute_relative_start, 0))
-
-            if start_span:
-                slot["span"] = "start"
-            elif in_span:
-                slot["span"] = "in_span"
-            elif not in_span:
-                slot["span"] = "not in_span"
-            else:
-                slot["span"] = "unknown"
 
             output["slots"].append(slot)
 
