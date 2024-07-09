@@ -498,19 +498,47 @@ class Prediction:
             if not self.car_charging_from_battery and not car_freeze:
                 discharge_rate_now = self.battery_rate_max_discharge
 
-            # IBoost solar diverter on load, don't do on discharge
+            # Iboost
+            iboost_rate_okay = True
             iboost_amount = 0
-            if self.iboost_enable and (self.iboost_discharge or (discharge_window_n < 0)):
+
+            # IBoost energy rate control
+            if self.iboost_enable:
+                # Boost on energy rates
+                if self.iboost_rate:
+                    import_rate = rate_import.get(minute_absolute, 0)
+                    if import_rate > self.iboost_rate_threshold:
+                        iboost_rate_okay = False
+                    export_rate = rate_export.get(minute_absolute, 0)
+                    if export_rate > self.iboost_rate_threshold_export:
+                        iboost_rate_okay = False
+
+                # Boost on gas vs import rate
+                if self.iboost_gas and self.rate_gas:
+                    gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                    import_rate = rate_import.get(minute_absolute, 0)
+                    if import_rate > gas_rate:
+                        iboost_rate_okay = False
+
+                # Boost on gas vs export rate
+                if self.iboost_gas_export and self.rate_gas:
+                    gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                    export_rate = rate_export.get(minute_absolute, 0)
+                    if export_rate > gas_rate:
+                        iboost_rate_okay = False
+
+            # IBoost solar diverter on load, don't do on discharge
+            if self.iboost_enable:
                 # IBoost based on plan for given rates
-                if self.iboost_plan:
+                if self.iboost_plan and (self.iboost_discharge or (discharge_window_n < 0)):
                     iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
                     iboost_amount = min(iboost_load, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
 
                 # IBoost based on Predbat charging
-                if self.iboost_charging and iboost_today_kwh < self.iboost_max_energy:
+                if self.iboost_charging and iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy:
                     if charge_window_n >= 0:
                         iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
-
+ 
                 # Iboost load added
                 load_yesterday += iboost_amount
 
@@ -736,39 +764,13 @@ class Prediction:
                 soc = min(soc - battery_draw * self.battery_loss, self.soc_max)
             soc = round(soc, 6)
 
-            # iBoost model
+            # Iboost finally count
             if self.iboost_enable:
-                # iBoost solar
+                # iBoost Solar diversion model
                 if self.iboost_solar:
-                    rate_okay = True
-
-                    # Boost on energy rates
-                    if self.iboost_rate:
-                        import_rate = rate_import.get(minute_absolute, 0)
-                        if import_rate > self.iboost_rate_threshold:
-                            rate_okay = False
-                        export_rate = rate_export.get(minute_absolute, 0)
-                        if export_rate > self.iboost_rate_threshold_export:
-                            rate_okay = False
-
-                    # Boost on gas vs import rate
-                    if self.iboost_gas and self.rate_gas:
-                        gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                        import_rate = rate_import.get(minute_absolute, 0)
-                        if import_rate > gas_rate:
-                            rate_okay = False
-
-                    # Boost on gas vs export rate
-                    if self.iboost_gas_export and self.rate_gas:
-                        gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
-                        export_rate = rate_export.get(minute_absolute, 0)
-                        if export_rate > gas_rate:
-                            rate_okay = False
-
-                    if (
-                        rate_okay
-                        and iboost_today_kwh < self.iboost_max_energy
-                        and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc))
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (
+                        pv_ac > (self.iboost_min_power * step) and 
+                        ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)
                     ):
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
