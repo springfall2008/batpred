@@ -29,19 +29,214 @@ Once opened, select and copy all the contents of the predbat_dashboard.yaml file
 - Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
 
 - Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
-delete the template card configuration and paste the contents of the predbat_dashboard.yaml file copied earlier.
+delete the template card configuration and paste the contents of the predbat_dashboard.yaml file copied earlier, then 'Save'.
 
 This will give you a simple Predbat control and output dashboard that you can then resequence and customise as you wish.
 
-![image](images/predbat-data_out_dashboard_sample.png)
+![image](images/output_data_dashboard_sample.png)
 
 ### Creating a compact Predbat control dashboard
 
-You can also create a dashboard page using [dynamic-entities-card.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/dynamic-entities-card.yaml) for a
-dynamically created list of all Predbat entities which groups the entities by type and is collapsed by default to prevent screen clutter. Requires lovelace-collapsable-cards
-([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
-and lovelace-auto-entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
-to be installed via HACS as well as the stock vertical stack card. Credit @DJBenson for the code.
+You can also create a dashboard page that's dynamically generated to automatically include all the Predbat control and output entities,
+so when new entities are added in future Predbat releases, you don't have to edit the dashboard.
+
+Firstly you need to [install HACS](install.md#hacs-install) if it isn't already installed, and then install two HACS front end components:
+
+- Auto Entities ([https://github.com/thomasloven/lovelace-auto-entities](https://github.com/thomasloven/lovelace-auto-entities))
+automatically generates a list of entities that match a wildcard expression
+- Lovelace Collapsable Cards ([https://github.com/RossMcMillan92/lovelace-collapsable-cards](https://github.com/RossMcMillan92/lovelace-collapsable-cards))
+wraps the entity lists within a drop-down toggle
+
+Installation steps:
+
+- Click the HACS icon on the left-hand side panel
+- Click 'Frontend'
+- Click the three dots in the top right corner then 'Custom Repositories'
+- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Category of 'Lovelace', and click Add
+- Close the Custom repositories dialogue
+- Click 'Explore & Download Repositories'
+- Search for 'collapsable cards', click the name of it, check it's the right one, click 'Download', 'Download' again, then 'Reload'
+- Click 'Explore & Download Repositories' again, search for 'auto-entities', then 'Download', 'Download', 'Reload'
+
+Now create the dynamic dashboard:
+
+- Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
+
+- Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and paste the following YAML into the dashboard and click 'Save':
+
+```yaml
+type: vertical-stack
+title: Predbat 🦇
+cards:
+  - type: entities
+    entities:
+      - entity: predbat.status
+      - entity: update.predbat_version
+      - entity: select.predbat_update
+      - entity: select.predbat_mode
+      - entity: select.predbat_saverestore
+      - entity: switch.predbat_active
+  - type: custom:collapsable-cards
+    title: 🔀 Control
+    defaultOpen: false
+    cards:
+      - type: custom:collapsable-cards
+        title: 🔢 Input Variables
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: input_number.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🔀 Switches
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: switch.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🔢 Selectors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: select.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+  - type: custom:collapsable-cards
+    title: '#️⃣ Sensors'
+    defaultOpen: false
+    cards:
+      - type: custom:collapsable-cards
+        title: 💷 Cost Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*cost*
+                - entity_id: predbat.*rate*
+                - entity_id: predbat.*metric*
+              exclude:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 💷 Saving Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*saving*
+              exclude:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 🕛 Time/Duration Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+                - entity_id: predbat.*record*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: ⚡ Power Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: predbat.*soc*
+                - entity_id: predbat.*energy*
+                - entity_id: predbat.*load*
+                - entity_id: predbat.*battery*
+                - entity_id: predbat.*kw*
+                - entity_id: predbat.*power*
+                - entity_id: predbat.*charge*
+                - entity_id: predbat.*iboost*
+                - entity_id: predbat.*grid*
+                - entity_id: sensor.predbat_pv*
+              exclude:
+                - entity_id: predbat.*savings*
+                - entity_id: predbat.*start*
+                - entity_id: predbat.*end*
+                - entity_id: predbat.*duration*
+                - entity_id: predbat.*record*
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+      - type: custom:collapsable-cards
+        title: 1️⃣ Binary Sensors
+        defaultOpen: false
+        cards:
+          - type: custom:auto-entities
+            card:
+              type: entities
+            filter:
+              include:
+                - entity_id: binary_sensor.predbat*
+              exclude: []
+            unique: true
+            sort:
+              method: friendly_name
+              numeric: false
+```
+
+This will give you a compact dynamically created list of all Predbat entities which groups the entities by type and is collapsed by default to prevent screen clutter.
+
+![image](images/output_data_dynamic_dashboard.png)
+
+Credit @DJBenson for the code.
 
 ### Viewing the Predbat plan
 
