@@ -9162,7 +9162,7 @@ class PredBat(hass.Hass):
         self.publish_car_plan()
 
         # Work out iboost plan
-        if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
+        if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
             self.log(
                 "IBoost iboost_solar {} iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
