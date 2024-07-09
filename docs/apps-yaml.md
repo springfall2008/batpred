@@ -399,14 +399,18 @@ If you use the same Solcast account for other automations the total polls needs 
 If you have multiple PV arrays connected to hybrid inverters or you have AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
 
 If however you have a mixed PV array setup with some PV that does not feed into the inverters that Predbat is managing
-(e.g. hybrid GE inverters but a separate older FIT array that directly feeds AC into the house),
-then it's recommended that Solcast is only configured for the PV connected to the inverters that Predbat is managing.
+(e.g. hybrid GE inverters with an older firmware but a separate older FIT array that directly feeds AC into the house),
+then it's recommended that Solcast is only configured for the PV connected to the inverters that Predbat is managing.<BR>
+NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware are able to charge their batteries from excess AC that would be exported,
+so for these inverters you should configure Solcast with your total solar generation capability.
 
-Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (worst case) PV forecast, and the '90%' (best case) PV forecast.<BR>
-By default Predbat will use the central estimate and applies to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
+Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast,
+and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
+By default Predbat will use the central (PV50) estimate and applies to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
+You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
-this modulates the PV output predictions up and down accordingly as if there were passing clouds.
+this modulates the PV output predictions up and down over the 30 minute slot as if there were passing clouds.
 This can have an impact on planning, especially for things like freeze charging which could assume the PV will cover the house load but it might not due to clouds.
 
 - **pv_estimate** in `apps.yaml` can be used to configure Predbat to always use the 10% forecast by setting the configuration item to '10',
@@ -414,6 +418,8 @@ or '90' to always use the 90% PV estimate (not recommended!).<BR>
 Set to blank or delete / comment out the line to use the default central estimate.
 
 If **pv_estimate** is set to 10 then **input_number.predbat_pv_metric10_weight** in Home Assistant should be set to 1.0.
+
+See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
 ## Energy Rates
 

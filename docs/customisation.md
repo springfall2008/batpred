@@ -151,11 +151,15 @@ If your battery size is reported wrongly maybe try turning this on and see if it
 Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load.
 
 **input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
-This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
-scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
+The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
 **input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
+
+## Solar PV adjustment options
+
+See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-forecast) including explanation of PV10, PV50 and PV90 terminology.
 
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to use exactly use the Solcast forecast generation data. A value of 0.9 for example would remove 10% from the Solcast generation forecast.
@@ -364,8 +368,8 @@ The amount of modulation depends on the difference between the PV50% (default) a
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**
 
-Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same
-predicted total. The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
+Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same predicted total.
+The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
 
 You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**
 
