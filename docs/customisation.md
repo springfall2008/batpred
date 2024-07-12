@@ -490,7 +490,6 @@ It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% eff
 
 ### iBoost control
 
-
 ### iBoost output data
 
 You will see **input_number.predbat_iboost_today** entity which tracks the estimated kWh consumed by the solar diverter during the day, and resets at midnight every night.
