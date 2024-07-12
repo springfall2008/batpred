@@ -225,7 +225,7 @@ Predbat needs a solar forecast in order to predict solar generation and battery 
 If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
 
 If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
-You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels
+You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then its suggested you average the angle based on the number of panels
 e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity

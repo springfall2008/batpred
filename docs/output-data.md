@@ -562,7 +562,7 @@ trigger:
     entity_id:
       - predbat.status
     attribute: error
-    to: "True"
+    to: "true"
     for:
       minutes: 10
 action:
