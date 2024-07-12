@@ -1635,7 +1635,9 @@ def run_model_tests(my_predbat):
         hybrid=True,
         inverter_limit=2.0,
     )
-    failed |= simple_scenario("iboost_pv", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_enable=True, iboost_solar=True, assert_final_iboost=24)
+    failed |= simple_scenario(
+        "iboost_pv", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_enable=True, iboost_solar=True, assert_final_iboost=24
+    )
     failed |= simple_scenario(
         "iboost_gas1",
         my_predbat,
@@ -1839,7 +1841,7 @@ def run_model_tests(my_predbat):
         0,
         0,
         assert_final_metric=-export_rate * 24,
-        assert_final_soc=100-24,
+        assert_final_soc=100 - 24,
         battery_soc=100,
         with_battery=True,
         discharge=0,
@@ -1854,7 +1856,7 @@ def run_model_tests(my_predbat):
         0,
         0,
         assert_final_metric=0,
-        assert_final_soc=100-24,
+        assert_final_soc=100 - 24,
         battery_soc=100,
         with_battery=True,
         discharge=0,
@@ -1870,7 +1872,7 @@ def run_model_tests(my_predbat):
         0,
         0,
         assert_final_metric=0,
-        assert_final_soc=100-24,
+        assert_final_soc=100 - 24,
         battery_soc=100,
         with_battery=True,
         battery_size=100,
@@ -1885,7 +1887,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0,
-        assert_final_metric=24*import_rate,
+        assert_final_metric=24 * import_rate,
         assert_final_soc=100,
         battery_soc=100,
         with_battery=True,
