@@ -442,7 +442,9 @@ A value of 0 means all diverted energy should be ignored in planning (assumed to
 
 Different boost modes can be selected:
 
-### iBoost on excess solar
+### iBoost modes
+
+#### Solar
 
 - **switch.predbat_iboost_solar** When enabled assumes the diverter will use solar power to boost the hot water heating.
 Only excess solar will be used, this is solar that will be otherwise exported and not stored in your battery.
@@ -450,19 +452,30 @@ Only excess solar will be used, this is solar that will be otherwise exported an
 - **input_number.predbat_iboost_min_soc** sets the minimum home battery SoC percentage that must be in the battery before the solar diverter is turned on.
 The default is 0 meaning hot water heating can occur regardless of what SoC level the battery is at.
 
-### iBoost based on energy rates
+#### Battery
 
-- **switch.predbat_iboost_rate** If set to on, the diverter will operate when energy rates are below a given threshold (can be combined with iboost_gas and iboost solar if so desired).
+- **switch.predbat_iboost_charging** If set to on, the diverter will operate when the battery is charging (can be combined with solar)
 
-- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, only applies if **switch.predbat_iboost_rate** is enabled.
+#### Energy rates only
 
-- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on,
-only applies if **switch.predbat_iboost_rate** is enabled.
+If both of the above are off, but iBoost is enabled then boost will happen solely based on energy rates (see below).
 
 - **switch.predbat_iboost_smart** Will pick the lowest import rate slots within a 24-hour period to achieve the desired energy as specified by **input_number.predbat_iboost_max_energy**.
-Only slots of at or below the rate threshold will be selected. Note this option has no impact when iboost_solar is enabled as it only works based on energy rates.
 
-### iBoost on electric rates less than gas rates
+Only slots of at or below the rate threshold will be selected.
+
+Note this option only applies when iboost_solar and iboost battery are both off.
+
+- **switch.predbat_iboost_on_discharge** If set to on allows iBoost to run even if the battery is discharging to the grid, otherwise it won't run in these circumstances.
+
+- **switch.iboost_prevent_discharge** When set will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
+This switch will it will work in all modes is not recommended to be used when iBoost Solar is enabled as it will prevent your battery from discharging during excess solar periods
+which could cause additional imports due to passing clouds.
+
+### iBoost energy rate filtering
+
+- **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on, defaults to 100.
+- **input_number.predbat_iboost_rate_threshold_export** Sets the maximum export rate (in pence) that the diverter will trigger on, defaults to 100.
 
 - **switch.predbat_iboost_gas** When enabled will control the diverter to only operate when import electric rates are lower than gas rates.
 - **switch.predbat_iboost_gas_export** When enabled will control the diverter to only operate when export electric rates are lower than gas rates.
@@ -475,10 +488,8 @@ Note: Gas rates have to be configured in `apps.yaml` using **metric_octopus_gas*
 
 It should be set to the reciprocal of the boiler efficiency, i.e. for an 80% efficient gas boiler, set to 1.25.
 
-### iBoost battery options
+### iBoost control
 
-- **switch.predbat_iboost_charging** If set to on, the diverter will operate when the battery is charging (can be combined with solar, iboost on rates and on gas options).
-- **switch.predbat_iboost_discharge** If set to on allows iBoost to run even if the battery is discharging to the grid, otherwise it won't run.
 
 ### iBoost output data
 
