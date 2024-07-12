@@ -1328,14 +1328,21 @@ class Inverter:
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
 
-        if pause_charge and pause_discharge:
-            new_pause_mode = "PauseBoth"
-        elif pause_charge:
-            new_pause_mode = "PauseCharge"
-        elif pause_discharge:
-            new_pause_mode = "PauseDischarge"
+        # GE Cloud has different pause names
+        if old_pause_mode in ["Not Paused", "Pause Charge", "Pause Discharge", "Pause Charge & Discharge"]:
+            pause_cloud = True
         else:
-            new_pause_mode = "Disabled"
+            pause_cloud = False
+
+        # Not Paused, Pause Charge, Pause Discharge, Pause Charge & Discharge
+        if pause_charge and pause_discharge:
+            new_pause_mode = "Pause Charge & Discharge" if pause_cloud else "PauseBoth"
+        elif pause_charge:
+            new_pause_mode = "Pause Charge" if pause_cloud else "PauseCharge"
+        elif pause_discharge:
+            new_pause_mode = "Pause Discharge" if pause_cloud else "PauseDischarge"
+        else:
+            new_pause_mode = "Not Paused" if pause_cloud else "Disabled"
 
         if old_start_time and old_start_time != new_start_time:
             # Don't poll as inverters with no registers will fail

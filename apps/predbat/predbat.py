@@ -3139,11 +3139,10 @@ class PredBat(hass.Hass):
                     rate_okay = True
 
                     # Boost on import/export rate
-                    if self.iboost_rate:
-                        if price > self.iboost_rate_threshold:
-                            rate_okay = False
-                        if export_price > self.iboost_rate_threshold_export:
-                            rate_okay = False
+                    if price > self.iboost_rate_threshold:
+                        rate_okay = False
+                    if export_price > self.iboost_rate_threshold_export:
+                        rate_okay = False
 
                     # Boost on gas rate vs import price
                     if self.iboost_gas and self.rate_gas:
@@ -5236,9 +5235,9 @@ class PredBat(hass.Hass):
         self.iboost_enable = False
         self.iboost_gas = False
         self.iboost_gas_export = False
-        self.iboost_rate = False
         self.iboost_smart = False
-        self.iboost_discharge = False
+        self.iboost_on_discharge = False
+        self.iboost_prevent_discharge = False
         self.iboost_smart_threshold = 0
         self.iboost_rate_threshold = 9999
         self.iboost_rate_threshold_export = 9999
@@ -8228,7 +8227,7 @@ class PredBat(hass.Hass):
                 break
 
             resetDischarge = False
-            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery):
+            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge:
                 # These options mess with discharge rate, so we must reset it when they aren't changing it
                 resetDischarge = True
 
@@ -8511,12 +8510,25 @@ class PredBat(hass.Hass):
                                     status = "Hold for car"
                             break
 
+            # Ibost running?
+            boostHolding = False
+            if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running and status not in ["Discharging", "Charging"]:
+                inverter.adjust_discharge_rate(0)
+                inverter.adjust_pause_mode(pause_discharge=True)
+                resetDischarge = False
+                boostHolding = True
+                self.log("Disabling battery discharge while iBoost is running")
+                if status != "Idle":
+                    status += ", Hold for iBoost"
+                else:
+                    status = "Hold for iBoost"
+
             # Charging/Discharging off via service
             if not isCharging and (not isDischarging or disabled_discharge) and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
 
             # Pause charge off
-            if not isCharging and not isDischarging and not carHolding:
+            if not isCharging and not isDischarging and not carHolding and not boostHolding:
                 inverter.adjust_pause_mode()
 
             # Reset discharge rate?
@@ -9165,9 +9177,8 @@ class PredBat(hass.Hass):
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
             self.log(
-                "IBoost iboost_solar {} iboost_rate {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
+                "IBoost iboost_solar {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} plan is: {}".format(
                     self.iboost_solar,
-                    self.iboost_rate,
                     self.iboost_rate_threshold,
                     self.iboost_rate_threshold_export,
                     self.iboost_gas,
@@ -9658,8 +9669,8 @@ class PredBat(hass.Hass):
         self.iboost_gas = self.get_arg("iboost_gas")
         self.iboost_gas_export = self.get_arg("iboost_gas_export")
         self.iboost_smart = self.get_arg("iboost_smart")
-        self.iboost_discharge = self.get_arg("iboost_discharge")
-        self.iboost_rate = self.get_arg("iboost_rate")
+        self.iboost_on_discharge = self.get_arg("iboost_on_discharge")
+        self.iboost_prevent_discharge = self.get_arg("iboost_prevent_discharge")
         self.iboost_solar = self.get_arg("iboost_solar")
         self.iboost_rate_threshold = self.get_arg("iboost_rate_threshold")
         self.iboost_rate_threshold_export = self.get_arg("iboost_rate_threshold_export")

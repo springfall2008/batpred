@@ -835,13 +835,6 @@ CONFIG_ITEMS = [
         "enable": "iboost_enable",
     },
     {
-        "name": "iboost_rate",
-        "friendly_name": "iBoost on energy rates",
-        "type": "switch",
-        "enable": "iboost_enable",
-        "default": False,
-    },
-    {
         "name": "iboost_rate_threshold",
         "friendly_name": "iBoost max import boost price",
         "type": "input_number",
@@ -867,14 +860,21 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_smart",
-        "friendly_name": "iBoost when rates are lowest to hit target energy",
+        "friendly_name": "iBoost when import rates are lowest to hit target energy",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,
     },
     {
-        "name": "iboost_discharge",
+        "name": "iboost_on_discharge",
         "friendly_name": "iBoost is allowed when battery is force discharging",
+        "type": "switch",
+        "enable": "iboost_enable",
+        "default": False,
+    },
+    {
+        "name": "iboost_prevent_discharge",
+        "friendly_name": "When iBoost is active prevent battery discharge",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,

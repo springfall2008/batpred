@@ -124,7 +124,8 @@ class Prediction:
             self.car_charging_limit = base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
             self.iboost_enable = base.iboost_enable
-            self.iboost_discharge = base.iboost_discharge
+            self.iboost_on_discharge = base.iboost_on_discharge
+            self.iboost_prevent_discharge = base.iboost_prevent_discharge
             self.carbon_enable = base.carbon_enable
             self.iboost_next = base.iboost_next
             self.iboost_max_energy = base.iboost_max_energy
@@ -138,7 +139,6 @@ class Prediction:
             self.iboost_gas = base.iboost_gas
             self.iboost_gas_export = base.iboost_gas_export
             self.iboost_gas_scale = base.iboost_gas_scale
-            self.iboost_rate = base.iboost_rate
             self.iboost_rate_threshold = base.iboost_rate_threshold
             self.iboost_rate_threshold_export = base.iboost_rate_threshold_export
             self.rate_gas = base.rate_gas
@@ -494,10 +494,6 @@ class Prediction:
                         discharge_rate_now = self.battery_rate_min  # 0
                         car_freeze = True
 
-            # Reset modelled discharge rate if no car is charging
-            if not self.car_charging_from_battery and not car_freeze:
-                discharge_rate_now = self.battery_rate_max_discharge
-
             # Iboost
             iboost_rate_okay = True
             iboost_amount = 0
@@ -505,13 +501,12 @@ class Prediction:
             # IBoost energy rate control
             if self.iboost_enable:
                 # Boost on energy rates
-                if self.iboost_rate:
-                    import_rate = rate_import.get(minute_absolute, 0)
-                    if import_rate > self.iboost_rate_threshold:
-                        iboost_rate_okay = False
-                    export_rate = rate_export.get(minute_absolute, 0)
-                    if export_rate > self.iboost_rate_threshold_export:
-                        iboost_rate_okay = False
+                import_rate = rate_import.get(minute_absolute, 0)
+                if import_rate > self.iboost_rate_threshold:
+                    iboost_rate_okay = False
+                export_rate = rate_export.get(minute_absolute, 0)
+                if export_rate > self.iboost_rate_threshold_export:
+                    iboost_rate_okay = False
 
                 # Boost on gas vs import rate
                 if self.iboost_gas and self.rate_gas:
@@ -528,9 +523,10 @@ class Prediction:
                         iboost_rate_okay = False
 
             # IBoost solar diverter on load, don't do on discharge
+            iboost_freeze = False
             if self.iboost_enable:
                 # IBoost based on plan for given rates
-                if self.iboost_plan and (self.iboost_discharge or (discharge_window_n < 0)):
+                if self.iboost_plan and (self.iboost_on_discharge or (discharge_window_n < 0)):
                     iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
                     iboost_amount = min(iboost_load, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
 
@@ -539,6 +535,11 @@ class Prediction:
                     if charge_window_n >= 0:
                         iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
 
+                # Freeze discharge on iboost
+                if iboost_amount > 0 and self.iboost_prevent_discharge:
+                    iboost_freeze = True
+                    discharge_rate_now = self.battery_rate_min  # 0
+
                 # Iboost load added
                 load_yesterday += iboost_amount
 
@@ -546,6 +547,10 @@ class Prediction:
             load_kwh += load_yesterday
             if record:
                 final_load_kwh = load_kwh
+
+            # Reset modelled discharge rate if no car is charging
+            if not self.car_charging_from_battery and not car_freeze and not iboost_freeze:
+                discharge_rate_now = self.battery_rate_max_discharge
 
             # discharge freeze, reset charge rate by default
             if self.set_discharge_freeze:
@@ -558,7 +563,7 @@ class Prediction:
             if not self.set_discharge_during_charge:
                 if (charge_window_n >= 0) and ((soc >= charge_limit_n) or not self.set_reserve_enable):
                     discharge_rate_now = self.battery_rate_min  # 0
-                elif not car_freeze:
+                elif not car_freeze and not iboost_freeze:
                     # Reset discharge rate
                     discharge_rate_now = self.battery_rate_max_discharge
 
