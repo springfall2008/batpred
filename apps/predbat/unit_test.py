@@ -152,8 +152,9 @@ def reset_inverter(my_predbat):
     my_predbat.iboost_gas = False
     my_predbat.iboost_gas_export = False
     my_predbat.iboost_charging = False
-    my_predbat.iboost_rate = False
     my_predbat.iboost_smart = False
+    my_predbat.iboost_on_discharge = False
+    my_predbat.iboost_prevent_discharge = False
     my_predbat.minutes_now = 12 * 60
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
@@ -314,10 +315,12 @@ def simple_scenario(
     assert_keep=0.0,
     save="best",
     quiet=False,
-    iboost_rate=False,
     iboost_rate_threshold=9999,
     iboost_rate_threshold_export=9999,
     iboost_smart=False,
+    iboost_enable=False,
+    iboost_on_discharge=False,
+    iboost_prevent_discharge=False,
 ):
     """
     No PV, No Load
@@ -343,17 +346,18 @@ def simple_scenario(
     my_predbat.battery_rate_max_discharge_scaled = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
 
-    my_predbat.iboost_enable = iboost_solar or iboost_gas or iboost_gas_export or iboost_charging or iboost_rate
+    my_predbat.iboost_enable = iboost_enable
     my_predbat.iboost_gas = iboost_gas
     my_predbat.iboost_gas_export = iboost_gas_export
     my_predbat.iboost_solar = iboost_solar
     my_predbat.iboost_smart = iboost_smart
-    my_predbat.iboost_rate = iboost_rate
     my_predbat.iboost_rate_threshold = iboost_rate_threshold
     my_predbat.iboost_rate_threshold_export = iboost_rate_threshold_export
     my_predbat.iboost_min_power = 0.0
     my_predbat.iboost_max_power = export_limit / 60.0
     my_predbat.iboost_max_energy = iboost_max_energy
+    my_predbat.iboost_on_discharge = iboost_on_discharge
+    my_predbat.iboost_prevent_discharge = iboost_prevent_discharge
     my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
     my_predbat.iboost_gas_scale = gas_scale
     my_predbat.iboost_charging = iboost_charging
@@ -363,7 +367,6 @@ def simple_scenario(
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
         my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
-        print("Iboost plan {}".format(my_predbat.iboost_plan))
     else:
         my_predbat.iboost_plan = []
 
@@ -1632,7 +1635,9 @@ def run_model_tests(my_predbat):
         hybrid=True,
         inverter_limit=2.0,
     )
-    failed |= simple_scenario("iboost_pv", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_solar=True, assert_final_iboost=24)
+    failed |= simple_scenario(
+        "iboost_pv", my_predbat, 0, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False, iboost_enable=True, iboost_solar=True, assert_final_iboost=24
+    )
     failed |= simple_scenario(
         "iboost_gas1",
         my_predbat,
@@ -1641,6 +1646,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=0,
         assert_final_soc=0,
         with_battery=False,
+        iboost_enable=True,
         iboost_gas=True,
         rate_gas=5.0,
         gas_scale=0.8,
@@ -1655,6 +1661,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=import_rate * 200,
         assert_final_soc=0,
         with_battery=False,
+        iboost_enable=True,
         iboost_gas=True,
         rate_gas=10.0,
         gas_scale=1.2,
@@ -1670,6 +1677,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=0,
         assert_final_soc=0,
         with_battery=False,
+        iboost_enable=True,
         iboost_gas_export=True,
         rate_gas=4.0,
         gas_scale=1.2,
@@ -1685,6 +1693,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=import_rate * 200,
         assert_final_soc=0,
         with_battery=False,
+        iboost_enable=True,
         iboost_gas_export=True,
         rate_gas=5.0,
         gas_scale=1.2,
@@ -1700,7 +1709,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=0,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold=import_rate * 0.9,
         iboost_charging=False,
         export_limit=10,
@@ -1714,7 +1723,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=import_rate * 200,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
         export_limit=10,
@@ -1728,7 +1737,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=import_rate * 200,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold_export=export_rate,
         iboost_charging=False,
         export_limit=10,
@@ -1742,7 +1751,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=0,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold_export=export_rate - 1,
         iboost_charging=False,
         export_limit=10,
@@ -1758,6 +1767,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         charge=10,
         battery_size=10,
+        iboost_enable=True,
         iboost_charging=True,
         assert_final_iboost=12,
         charge_period_divide=2,
@@ -1773,6 +1783,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         charge=10,
         battery_size=10,
+        iboost_enable=True,
         iboost_charging=True,
         assert_final_iboost=100,
         end_record=12 * 60,
@@ -1787,7 +1798,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         charge=10,
         battery_size=10,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=True,
         assert_final_iboost=100,
@@ -1803,7 +1814,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         charge=10,
         battery_size=10,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold=import_rate - 1,
         iboost_charging=True,
         assert_final_iboost=0,
@@ -1820,8 +1831,72 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_size=10,
+        iboost_enable=True,
         iboost_charging=True,
         assert_final_iboost=0,
+    )
+    failed |= simple_scenario(
+        "iboost_discharge2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=100 - 24,
+        battery_soc=100,
+        with_battery=True,
+        discharge=0,
+        battery_size=100,
+        iboost_enable=True,
+        export_limit=1,
+        assert_final_iboost=0,
+    )
+    failed |= simple_scenario(
+        "iboost_discharge3",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=0,
+        assert_final_soc=100 - 24,
+        battery_soc=100,
+        with_battery=True,
+        discharge=0,
+        battery_size=100,
+        iboost_enable=True,
+        iboost_on_discharge=True,
+        export_limit=1,
+        assert_final_iboost=24,
+    )
+    failed |= simple_scenario(
+        "iboost_prevent_discharge1",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=0,
+        assert_final_soc=100 - 24,
+        battery_soc=100,
+        with_battery=True,
+        battery_size=100,
+        iboost_enable=True,
+        iboost_on_discharge=True,
+        iboost_prevent_discharge=False,
+        export_limit=1,
+        assert_final_iboost=24,
+    )
+    failed |= simple_scenario(
+        "iboost_prevent_discharge2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=24 * import_rate,
+        assert_final_soc=100,
+        battery_soc=100,
+        with_battery=True,
+        battery_size=100,
+        iboost_enable=True,
+        iboost_on_discharge=True,
+        iboost_prevent_discharge=True,
+        export_limit=1,
+        assert_final_iboost=24,
     )
     failed |= simple_scenario(
         "keep_discharge1",
@@ -1849,7 +1924,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=import_rate * 120,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
         assert_final_iboost=120,
@@ -1862,7 +1937,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=-export_rate * 12 * 2,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_solar=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
@@ -1877,7 +1952,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=-export_rate * 12 * 2,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_solar=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
@@ -1892,7 +1967,7 @@ def run_model_tests(my_predbat):
         assert_final_metric=-export_rate * 12 * 2 * 2,
         assert_final_soc=0,
         with_battery=False,
-        iboost_rate=True,
+        iboost_enable=True,
         iboost_solar=True,
         iboost_rate_threshold=import_rate,
         iboost_charging=False,
