@@ -8510,7 +8510,7 @@ class PredBat(hass.Hass):
                                     status = "Hold for car"
                             break
 
-            # Ibost running?
+            # Iboost running?
             boostHolding = False
             if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running and status not in ["Discharging", "Charging"]:
                 inverter.adjust_discharge_rate(0)
