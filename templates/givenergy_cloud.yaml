@@ -158,7 +158,7 @@ pred_bat:
   pause_end_time:
    - select.ge_inverter_{geserial}_pause_battery_end_time
    - select.ge_inverter_{geserial2}_pause_battery_end_time
-   
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
