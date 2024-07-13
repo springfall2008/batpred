@@ -2625,9 +2625,9 @@ class PredBat(hass.Hass):
                     },
                 )
                 self.dashboard_item(
-                    "binary_sensor." + self.prefix + "_iboost_active" + postfix,
+                    "binary_sensor." + self.prefix + "_iboost_active",
                     state=self.iboost_running,
-                    attributes={"friendly_name": "iBoost active", "icon": "mdi:water-boiler", "solar": self.iboost_running_solar, "full": self.iboost_running_full},
+                    attributes={"friendly_name": "iBoost active", "icon": "mdi:water-boiler", "solar" : self.iboost_running_solar, "full" : self.iboost_running_full},
                 )
                 self.find_spare_energy(self.predict_soc, predict_export, step, first_charge)
                 if self.carbon_enable:
