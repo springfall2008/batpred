@@ -500,7 +500,7 @@ You will see **input_number.predbat_iboost_today** entity which tracks the estim
 
 The **binary_sensor.predbat_iboost_active** entity will be enabled when the solar diverter should be active, can be used for automations to trigger the immersion heater boost.
 
-The attributes within this sensor include 'solar' which includes Solar diversion should be active and 'full' which indicates iboost should run at maximum rate (could be 
+The attributes within this sensor include 'solar' which includes Solar diversion should be active and 'full' which indicates iboost should run at maximum rate (could be
 during a charge cycle or grid import).
 
 Example template automation for controlling the solar diverter:
