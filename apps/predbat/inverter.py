@@ -1991,7 +1991,7 @@ class Inverter:
         """
         Call a button press service (Solis) and wait for the data to update
         """
-        for retry in range(6):
+        for retry in range(8):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
             time_pressed = datetime.strptime(self.base.get_state_wrapper(entity_id, refresh=True), TIME_FORMAT_SECONDS)
