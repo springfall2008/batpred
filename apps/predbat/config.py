@@ -965,7 +965,6 @@ CONFIG_ITEMS = [
         "enable": "iboost_enable",
         "default": True,
     },
-
     {
         "name": "holiday_days_left",
         "friendly_name": "Holiday days left",
