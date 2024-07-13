@@ -1817,14 +1817,22 @@ class PredBat(hass.Hass):
             difference_cap = min(difference_cap, 2.0)
 
         self.log(
-            "Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.\n Today's Actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored".format(
+            "Today's load divergence {} % in-day adjustment {} % damping {}x".format(
                 self.dp2(difference * 100.0),
                 self.dp2(difference_cap * 100.0),
                 self.metric_inday_adjust_damping,
+            )
+        )
+        self.log(
+            "Today's predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.".format(
                 self.dp2(load_total_pred_now),
                 self.dp2(car_total_pred),
                 self.dp2(import_ignored_load_pred),
                 self.dp2(total_forecast_value_pred_now),
+            )
+        )
+        self.log(
+            "Today's actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored.".format(
                 self.dp2(actual_total_now),
                 self.dp2(car_total_actual),
                 self.dp2(import_ignored_load_actual),
@@ -4688,7 +4696,7 @@ class PredBat(hass.Hass):
             },
         )
         self.log(
-            "Todays energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
+            "Today's energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
                 self.dp2(day_energy),
                 self.dp2(day_energy_export),
                 self.dp2(day_cost),
