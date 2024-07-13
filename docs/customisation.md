@@ -63,7 +63,7 @@ In **Control charge** mode Predbat will set the charge times and charge percenta
 disabled by Predbat.
 Predbat will set the inverter into Eco mode when required to enable the battery to support house load, but it will not plan any forced discharging of the battery for export purposes.
 
-This mode can be useful if you don't have an export rate, or if you want to preserve the battery for home demand.
+This mode can be useful if you don't have an export rate, you have a 'no export' limitation from your electricity supplier, or if you want to preserve the battery for home demand.
 
 ### Predbat Control charge & discharge mode
 

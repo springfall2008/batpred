@@ -278,7 +278,7 @@ To disable, set it to 1440.
 
 ## Inverter control configurations
 
-- **inverter_limit** - One per inverter. When set defines the maximum watts of AC output power for your inverter (e.g. 3600).
+- **inverter_limit** - One per inverter. When set defines the maximum AC output power in watts for your inverter or micro-inverters (e.g. 3600).
 This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
 If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR>
 For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.

@@ -6,15 +6,15 @@ It automatically runs every 5 minutes and will update its prediction for the hom
 Predbat will automatically decide when to charge and discharge your battery to achieve the best (lowest) cost spend within the parameters you have set.
 It uses the solar production forecast from Solcast combined with your historical energy usage to make this prediction.
 
-- The output is a prediction of the battery levels, charging slots, discharging slots, costs and import and export amounts.
+- The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on 30 minute slots.
 - Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
     - Both import and export rates are supported.
     - Intelligent Octopus is also supported and takes into account allocated charging slots.  
 - The solar forecast used is the central scenario from Solcast (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
-- The charging and discharging controls are automatically programmed into the inverter.
+- Predbat automatically programs your inverter with the appropriate charging and discharging controls. Both Hybrid inverters and AC Coupled inverters are supported by Predbat.
 - Automatic planning of export slots is also supported, when enabled Predbat can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
-- Predbat can be configured to manage the charging of your EV or use of a Solar Diverter and take into account of these loads on the house during these periods.
+- Predbat can be configured to manage the charging of your EV or to use a Solar Diverter, and take into account of these loads on the house during these periods.
 - Multiple inverter support is included but depends on all inverters running in lockstep.
 
 ## Terminology
@@ -26,14 +26,15 @@ It uses the solar production forecast from Solcast combined with your historical
 - **Load** - The energy your home is using to power your equipment e.g. oven, lights or electric car charging
 - **Grid** - Your electric supply outside the house
 - **Import** - Electricity drawn from the grid to be used in the home or to charge the battery
-- **Export** - Electricity from your home from the battery or solar which is sent to the grid.
+- **Export** - Electricity from your home from the battery or solar which is sent to the grid
 - **PV** - Solar power that is generated in your home
 - **Inverter** - The box that converts DC energy from solar or from your battery into AC power for your home and the grid.
 The inverter also converts AC power from the grid into DC to charge a battery.
-- **Hybrid inverter** - An inverter that can charge a battery from solar directly using DC power as well as charging it from AC power from the grid.
+- **Hybrid inverter** - An inverter that can charge a battery from solar directly using DC power as well as charging it from AC power from the grid
 - **AC Coupled** - A battery that comes with it's own inverter and is always charged or discharged with AC (using an internal inverter)
-- **Slot** - A period of time where Predbat performs an action e.g. charging. In Predbat everything is a multiple of 5 minutes.
-    - Charge slots are always in multiples of 30 minutes and align to a 30-minute boundary to match the way energy rates are allocated.
+- **Micro Inverters** - Small inverters that are fitted in-line with the DC solar panels and produce AC power on a per-panel basis. Typically used with an AC Coupled battery.
+- **Slot** - A period of time where Predbat performs an action e.g. charging. In Predbat everything is a multiple of 5 minutes
+    - Charge slots are always in multiples of 30 minutes and align to a 30-minute boundary to match the way energy rates are allocated
     - Discharge slots can be any multiple of 5 minutes and always finish on a 30-minute boundary.
 
 ### Predbat modes
