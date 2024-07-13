@@ -4173,7 +4173,6 @@ class PredBat(hass.Hass):
         output["config"]["carbon_enable"] = self.carbon_enable
         output["config"]["car_enable"] = self.num_cars > 0
 
-
         minute_now_align = int(self.minutes_now / 30) * 30
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
 
