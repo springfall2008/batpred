@@ -134,7 +134,6 @@ class Prediction:
             self.iboost_min_soc = base.iboost_min_soc
             self.iboost_solar = base.iboost_solar
             self.iboost_charging = base.iboost_charging
-            self.iboost_running = base.iboost_running
             self.iboost_plan = base.iboost_plan
             self.iboost_gas = base.iboost_gas
             self.iboost_gas_export = base.iboost_gas_export
@@ -167,6 +166,9 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
+            self.iboost_running = base.iboost_running
+            self.iboost_running_solar = base.iboost_running_solar
+            self.iboost_running_full = base.iboost_running_full
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
@@ -315,6 +317,9 @@ class Prediction:
         self.predict_metric_best = {}
         self.predict_iboost_best = {}
         self.predict_carbon_best = {}
+        self.iboost_running = False
+        self.iboost_running_solar = False
+        self.iboost_running_full = False
 
         predict_export = {}
         predict_battery_power = {}
@@ -539,6 +544,10 @@ class Prediction:
                 if iboost_amount > 0 and self.iboost_prevent_discharge:
                     iboost_freeze = True
                     discharge_rate_now = self.battery_rate_min  # 0
+
+                # Iboost running
+                if iboost_amount > 0 and minute == 0:
+                    self.iboost_running_full = True
 
                 # Iboost load added
                 load_yesterday += iboost_amount
@@ -781,6 +790,8 @@ class Prediction:
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
                         iboost_amount += iboost_pv_amount
+                        if iboost_pv_amount > 0 and minute == 0:
+                            self.iboost_running_solar = True
 
                 # Cumulative iBoost energy
                 iboost_today_kwh += iboost_amount
@@ -790,13 +801,11 @@ class Prediction:
                     iboost_today_kwh = 0
 
                 # Save iBoost next prediction
-                if minute == 0 and save in ["best", "test"]:
+                if minute == 0:
                     scaled_boost = (iboost_amount / step) * RUN_EVERY
                     self.iboost_next = round(self.iboost_today + scaled_boost, 3)
                     if iboost_amount > 0:
                         self.iboost_running = True
-                    else:
-                        self.iboost_running = False
 
             # Count battery cycles
             battery_cycle = battery_cycle + abs(battery_draw)

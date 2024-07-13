@@ -2102,6 +2102,8 @@ class PredBat(hass.Hass):
         self.car_charging_soc_next = pred.car_charging_soc_next
         self.iboost_next = pred.iboost_next
         self.iboost_running = pred.iboost_running
+        self.iboost_running_solar = pred.iboost_running_solar
+        self.iboost_running_full = pred.iboost_running_full
         if save or self.debug_enable:
             predict_soc_time = pred.predict_soc_time
             first_charge = pred.first_charge
@@ -2625,7 +2627,7 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_iboost_active" + postfix,
                     state=self.iboost_running,
-                    attributes={"friendly_name": "iBoost active", "icon": "mdi:water-boiler"},
+                    attributes={"friendly_name": "iBoost active", "icon": "mdi:water-boiler", "solar" : self.iboost_running_solar, "full" : self.iboost_running_full},
                 )
                 self.find_spare_energy(self.predict_soc, predict_export, step, first_charge)
                 if self.carbon_enable:
@@ -5257,6 +5259,9 @@ class PredBat(hass.Hass):
         self.iboost_rate_threshold_export = 9999
         self.iboost_plan = []
         self.iboost_energy_subtract = True
+        self.iboost_running = False
+        self.iboost_running_full = False
+        self.iboost_running_solar = False
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
@@ -8530,7 +8535,7 @@ class PredBat(hass.Hass):
 
             # Iboost running?
             boostHolding = False
-            if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running and status not in ["Discharging", "Charging"]:
+            if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Discharging", "Charging"]:
                 inverter.adjust_discharge_rate(0)
                 inverter.adjust_pause_mode(pause_discharge=True)
                 resetDischarge = False
@@ -9703,6 +9708,8 @@ class PredBat(hass.Hass):
         self.iboost_energy_subtract = self.get_arg("iboost_energy_subtract")
         self.iboost_next = self.iboost_today
         self.iboost_running = False
+        self.iboost_running_solar = False
+        self.iboost_running_full = False
         self.iboost_energy_today = {}
         self.iboost_plan = []
 
