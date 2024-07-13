@@ -1428,17 +1428,23 @@ class PredBat(hass.Hass):
                 load_yesterday_raw += self.get_from_incrementing(data, minute_previous + offset)
 
         load_yesterday = load_yesterday_raw
-        # Car charging hold
-        if self.car_charging_hold and self.car_charging_energy:
-            # Hold based on data
-            car_energy = 0
-            for offset in range(step):
-                if historical:
-                    car_energy += self.get_historical(self.car_charging_energy, minute_previous + offset)
-                else:
-                    car_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous + offset)
-            load_yesterday = max(0, load_yesterday - car_energy)
-        elif self.car_charging_hold and (load_yesterday >= (self.car_charging_threshold * step)):
+
+        # Subtract car charging energy and iboost energy (if enabled)
+        subtract_energy = 0
+        for offset in range(step):
+            if historical:
+                if self.car_charging_hold and self.car_charging_energy:
+                    subtract_energy += self.get_historical(self.car_charging_energy, minute_previous + offset)
+                if self.iboost_energy_subtract and self.iboost_energy_today:
+                    subtract_energy += self.get_historical(self.iboost_energy_today, minute_previous + offset)
+            else:
+                if self.car_charging_hold and self.car_charging_energy:
+                    subtract_energy += self.get_from_incrementing(self.car_charging_energy, minute_previous + offset)
+                if self.iboost_energy_subtract and self.iboost_energy_today:
+                    subtract_energy += self.get_from_incrementing(self.iboost_energy_today, minute_previous + offset)
+        load_yesterday = max(0, load_yesterday - subtract_energy)
+
+        if self.car_charging_hold and (not self.car_charging_energy) and (load_yesterday >= (self.car_charging_threshold * step)):
             # Car charging hold - ignore car charging in computation based on threshold
             load_yesterday = max(load_yesterday - (self.car_charging_rate[0] * step / 60.0), 0)
 
@@ -1811,7 +1817,7 @@ class PredBat(hass.Hass):
             difference_cap = min(difference_cap, 2.0)
 
         self.log(
-            "Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car excluded and {} kWh import ignored and {} forecast extra, Actual so far {} kWh with {} kWh car excluded and {} kWh import ignored".format(
+            "Today's load divergence {} % in-day adjustment {} % damping {}x, Predicted so far {} kWh with {} kWh car/iBoost excluded and {} kWh import ignored and {} forecast extra.\n Today's Actual load so far {} kWh with {} kWh Car/iBoost excluded and {} kWh import ignored".format(
                 self.dp2(difference * 100.0),
                 self.dp2(difference_cap * 100.0),
                 self.metric_inday_adjust_damping,
@@ -5242,6 +5248,7 @@ class PredBat(hass.Hass):
         self.iboost_rate_threshold = 9999
         self.iboost_rate_threshold_export = 9999
         self.iboost_plan = []
+        self.iboost_energy_subtract = True
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
@@ -7692,6 +7699,7 @@ class PredBat(hass.Hass):
         carbon_today_sofar = self.carbon_today_sofar
         soc_kw = self.soc_kw
         car_charging_hold = self.car_charging_hold
+        iboost_energy_subtract = self.iboost_energy_subtract
         load_minutes_now = self.load_minutes_now
         soc_max = self.soc_max
         rate_import = self.rate_import
@@ -7710,6 +7718,7 @@ class PredBat(hass.Hass):
         self.pv_today_now = 0
         self.soc_kw = soc_yesterday
         self.car_charging_hold = False
+        self.iboost_energy_subtract = False
         self.load_minutes_now = 0
         self.rate_import = past_rates
         self.rate_export = past_rates_export
@@ -7819,6 +7828,7 @@ class PredBat(hass.Hass):
         self.pv_today_now = pv_today_now
         self.soc_kw = soc_kw
         self.car_charging_hold = car_charging_hold
+        self.iboost_energy_subtract = iboost_energy_subtract
         self.load_minutes_now = load_minutes_now
         self.soc_max = soc_max
         self.rate_import = rate_import
@@ -8786,8 +8796,8 @@ class PredBat(hass.Hass):
         self.carbon_history = {}
 
         # iBoost load data
-        if self.iboost_enable and "iboost_energy_today" in self.args:
-            self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", 1, required_unit="kWh")
+        if "iboost_energy_today" in self.args:
+            self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh")
             if iboost_energy_age >= 1:
                 self.iboost_today = self.dp2(abs(self.iboost_energy_today[0] - self.iboost_energy_today[self.minutes_now]))
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
@@ -9682,6 +9692,7 @@ class PredBat(hass.Hass):
         self.iboost_min_soc = self.get_arg("iboost_min_soc")
         self.iboost_today = self.get_arg("iboost_today")
         self.iboost_value_scaling = self.get_arg("iboost_value_scaling")
+        self.iboost_energy_subtract = self.get_arg("iboost_energy_subtract")
         self.iboost_next = self.iboost_today
         self.iboost_running = False
         self.iboost_energy_today = {}
