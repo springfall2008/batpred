@@ -276,6 +276,11 @@ the lowest day's historical load will be discarded.
 - **load_filter_threshold** - Sets the number of minutes of zero load data to be considered a gap (that's filled with average data), the default is 30.
 To disable, set it to 1440.
 
+## iBoost energy
+
+- **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, can also be used to subtract from your historical load
+for more accurate predictions.
+
 ## Inverter control configurations
 
 - **inverter_limit** - One per inverter. When set defines the maximum AC output power in watts for your inverter or micro-inverters (e.g. 3600).

@@ -450,7 +450,6 @@ CONFIG_ITEMS = [
         "friendly_name": "Car charging hold",
         "type": "switch",
         "default": True,
-        "reset_inverter": True,
     },
     {
         "name": "car_charging_manual_soc",
@@ -958,6 +957,13 @@ CONFIG_ITEMS = [
         "enable": "iboost_enable",
         "icon": "mdi:multiplication",
         "default": 0.75,
+    },
+    {
+        "name": "iboost_energy_subtract",
+        "friendly_name": "Subtract iBoost energy from load predictions",
+        "type": "switch",
+        "enable": "iboost_enable",
+        "default": True,
     },
     {
         "name": "holiday_days_left",
