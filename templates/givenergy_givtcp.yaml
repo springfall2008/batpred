@@ -9,11 +9,15 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
-  # XXX: This is a configuration template, delete this line once you edit your configuration
-  template: True
-
   # Timezone to work in
   timezone: Europe/London
+
+  # XXX: Template configuration, delete this line once you have set up for your system
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL or IP address and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
 
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
@@ -24,14 +28,10 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
-  #ha_url: 'http://homeassistant.local:8123'
-  #ha_key: 'xxx'
-
-  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work or if you have more than one inverter you will need to list both
+  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names if it doesn't work
+  # If you have more than one inverter you will need to uncomment out all the geserial2 lines
   geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-  geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
+  # geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
@@ -71,17 +71,18 @@ pred_bat:
   #
   # Controls/status - must by 1 per inverter
   #
+  inverter: "GE"
   num_inverters: 1
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 60
   #
   # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
-  # Set one per inverter
+  # Set one per inverter, uncomment out the :6346 line if you have two inverters
   # If using Docker then change homeassistant.local to the Docker IP address
   givtcp_rest:
     - 'http://homeassistant.local:6345'
-    - 'http://homeassistant.local:6346'
+  #  - 'http://homeassistant.local:6346'
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
@@ -98,81 +99,81 @@ pred_bat:
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
   charge_rate:
     - number.givtcp_{geserial}_battery_charge_rate
-    - number.givtcp2_{geserial2}_battery_charge_rate
+  #  - number.givtcp2_{geserial2}_battery_charge_rate
   discharge_rate:
     - number.givtcp_{geserial}_battery_discharge_rate
-    - number.givtcp2_{geserial2}_battery_discharge_rate
+  #  - number.givtcp2_{geserial2}_battery_discharge_rate
   battery_power:
     - sensor.givtcp_{geserial}_battery_power
-    - sensor.givtcp2_{geserial2}_battery_power
+  #  - sensor.givtcp2_{geserial2}_battery_power
   pv_power:
     - number.givtcp_{geserial}_pv_power
-    - number.givtcp2_{geserial2}_pv_power
+  #  - number.givtcp2_{geserial2}_pv_power
   load_power:
     - number.givtcp_{geserial}_load_power
-    - number.givtcp2_{geserial2}_load_power
+  #  - number.givtcp2_{geserial2}_load_power
   soc_kw:
     - sensor.givtcp_{geserial}_soc_kwh
-    - sensor.givtcp2_{geserial2}_soc_kwh
+  #  - sensor.givtcp2_{geserial2}_soc_kwh
   soc_max:
     - sensor.givtcp_{geserial}_battery_capacity_kwh
-    - sensor.givtcp2_{geserial2}_battery_capacity_kwh
+  #  - sensor.givtcp2_{geserial2}_battery_capacity_kwh
   reserve:
     - number.givtcp_{geserial}_battery_power_reserve
-    - number.givtcp2_{geserial2}_battery_power_reserve
+  #  - number.givtcp2_{geserial2}_battery_power_reserve
   inverter_mode:
     - select.givtcp_{geserial}_mode
-    - select.givtcp2_{geserial2}_mode
+  #  - select.givtcp2_{geserial2}_mode
   inverter_time:
     - sensor.givtcp_{geserial}_invertor_time
-    - sensor.givtcp2_{geserial2}_invertor_time
+  #  - sensor.givtcp2_{geserial2}_invertor_time
   charge_start_time:
     - select.givtcp_{geserial}_charge_start_time_slot_1
-    - select.givtcp2_{geserial2}_charge_start_time_slot_1
+  #  - select.givtcp2_{geserial2}_charge_start_time_slot_1
   charge_end_time:
     - select.givtcp_{geserial}_charge_end_time_slot_1
-    - select.givtcp2_{geserial2}_charge_end_time_slot_1
+  #  - select.givtcp2_{geserial2}_charge_end_time_slot_1
   charge_limit:
     - number.givtcp_{geserial}_target_soc
-    - number.givtcp2_{geserial2}_target_soc
+  #  - number.givtcp2_{geserial2}_target_soc
   scheduled_charge_enable:
     - switch.givtcp_{geserial}_enable_charge_schedule
-    - switch.givtcp2_{geserial2}_enable_charge_schedule
+  #  - switch.givtcp2_{geserial2}_enable_charge_schedule
   scheduled_discharge_enable:
     - switch.givtcp_{geserial}_enable_discharge_schedule
-    - switch.givtcp2_{geserial2}_enable_discharge_schedule
+  #  - switch.givtcp2_{geserial2}_enable_discharge_schedule
   discharge_start_time:
     - select.givtcp_{geserial}_discharge_start_time_slot_1
-    - select.givtcp2_{geserial2}_discharge_start_time_slot_1
+  #  - select.givtcp2_{geserial2}_discharge_start_time_slot_1
   discharge_end_time:
     - select.givtcp_{geserial}_discharge_end_time_slot_1
-    - select.givtcp2_{geserial2}_discharge_end_time_slot_1
+  #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
   pause_mode:
-   - select.givtcp_{geserial}_battery_pause_mode
-   - select.givtcp_{geserial2}_battery_pause_mode
+    - select.givtcp_{geserial}_battery_pause_mode
+  # - select.givtcp_{geserial2}_battery_pause_mode
 
   # Not all firmwares support pause start/end time, delete these if not supported
   # to avoid spurious writes/warnings
   pause_start_time:
-   - select.givtcp_{geserial}_battery_pause_start_time_slot
-   - select.givtcp2_{geserial2}_battery_pause_start_time_slot
+    - select.givtcp_{geserial}_battery_pause_start_time_slot
+  #  - select.givtcp2_{geserial2}_battery_pause_start_time_slot
   pause_end_time:
-   - select.givtcp_{geserial}_battery_pause_end_time_slot
-   - select.givtcp2_{geserial2}_battery_pause_end_time_slot
+    - select.givtcp_{geserial}_battery_pause_end_time_slot
+  #  - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
     - 7500
-    - 7500
+  #  - 7500
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
-  # - 3600
-  # - 3600
+  #  - 3600
+  #  - 3600
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
@@ -337,15 +338,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
   #rates_import:
-  #  -  start: "00:30:00"
-  #     end: "04:30:00"
-  #     rate: 7.5
-  #  -  start: "04:30:00"
-  #     end: "00:30:00"
-  #     rate: 40.0
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
   #
   #rates_export:
-  #  -  rate: 4.2
+  #  - rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -363,7 +364,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2023-09-10'
+  #  - date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 112
@@ -408,12 +409,12 @@ pred_bat:
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
   export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not

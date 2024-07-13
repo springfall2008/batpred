@@ -4,27 +4,36 @@
 	"name": "Python 3",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"image": "mcr.microsoft.com/devcontainers/python:0-3.11",
-
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
-
 	// Configure tool-specific properties.
 	"customizations": {
 		// Configure properties specific to VS Code.
 		"vscode": {
-			"settings": {},
+			"settings": {
+				"files.eol": "\n",
+                "editor.tabSize": 4,
+				"[python]": {
+                    "diffEditor.ignoreTrimWhitespace": false,
+                    "editor.defaultFormatter": "ms-python.black-formatter",
+                    "editor.formatOnSave": true
+                }
+			},
 			"extensions": [
 				"ms-python.python",
+                "ms-python.black-formatter",
+                "ms-python.isort",
+                "ms-python.flake8",
+				"sourcery.sourcery",
+				"njpwerner.autodocstring",
 				"streetsidesoftware.code-spell-checker",
 				"bierner.markdown-preview-github-styles",
 				"DavidAnson.vscode-markdownlint"
 			]
 		}
 	},
-
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [9000],
-
 	// Use 'portsAttributes' to set default properties for specific forwarded ports.
 	// More info: https://containers.dev/implementors/json_reference/#port-attributes
 	// "portsAttributes": {
@@ -33,15 +42,12 @@
 	// 		"onAutoForward": "notify"
 	// 	}
 	// },
-
 	// Passthrough of SSH key to devcontainer
 	"mounts": [
 		"type=bind,source=/home/${localEnv:USER}/.ssh,target=/home/vscode/.ssh,readonly"
 	],
-
 	// Use 'postCreateCommand' to run commands after the container is created.
 	"postCreateCommand": "pip install --upgrade pip && pip3 install -r requirements.txt"
-
 	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
 	// "remoteUser": "root"
 }

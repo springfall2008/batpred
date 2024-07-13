@@ -1,8 +1,5 @@
-name: build
+name: build-docs
 on:
-  push:
-    branches:
-      - documentation
   release:
     types: [published]
 permissions:

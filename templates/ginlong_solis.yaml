@@ -6,7 +6,11 @@ pred_bat:
   prefix: predbat
 
   # XXX: This is a configuration template, delete this line once you edit your configuration
-  # template: True
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
 
   # Timezone to work in
   timezone: Europe/London
@@ -16,13 +20,13 @@ pred_bat:
   # however if you have two inverters only set one of them as they will both read the same.
   #
 
-
   inverter_type: "GS"
+  solax_modbus_new: True   # Set to True if you have integration version 2024.03.2 or beyond
+
   num_inverters: 1
   #
   # Controls/status - must by 1 per inverter
   #
-
 
   # Max inverter power from battery
   battery_rate_max:
@@ -37,7 +41,7 @@ pred_bat:
     - sensor.solis_house_load_today
   import_today:
     - sensor.solis_grid_import_today
-  export_today: 
+  export_today:
     - sensor.solis_grid_export_today
   pv_today:
     - sensor.solis_power_generation_today
@@ -109,22 +113,22 @@ pred_bat:
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:
-  # - 3600
-  # - 3600
+  #  - 3600
+  #  - 3600
   #
   # The maximum rate the inverter can charge and discharge the battery can be overwritten, this will change
   # the register programming and thus cap the max rates. The default is to use the maximum supported rates (recommended)
   #
   #inverter_limit_charge:
-  # - 2000
+  #  - 2000
   #inverter_limit_discharge:
-  # - 2600
+  #  - 2600
 
 
   # Some inverters don't turn off when the rate is set to 0, still charge or discharge at around 200w
   # The value can be set here in watts to model this (doesn't change operation)
   inverter_battery_rate_min:
-   - 100
+    - 100
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -155,7 +159,12 @@ pred_bat:
   # 1 means add 1 minute to AppDaemon time, -1 takes it away
   clock_skew: 0
 
-  # Set these to match solcast sensor names
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+
+  # Set these to match solcast sensor names if not using the cloud interface
   # The regular expression (re:) makes the solcast bit optional
   # If these don't match find your own names in Home Assistant
   pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
@@ -235,15 +244,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with 0
   # rates_import:
-  #   -  start: "23:30:00"
-  #      end: "05:30:00"
-  #      rate: 7.5
-  #   -  start: "05:30:00"
-  #      end: "23:30:00"
-  #      rate: 30.0
+  #   - start: "23:30:00"
+  #     end: "05:30:00"
+  #     rate: 7.5
+  #   - start: "05:30:00"
+  #     end: "23:30:00"
+  #     rate: 30.0
 
   # rates_export:
-  #   -  rate: 15.0
+  #   - rate: 15.0
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -261,7 +270,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2023-09-10'
+  #  - date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 5
@@ -311,12 +320,12 @@ pred_bat:
   # Creates an entity called 'binary_sensor.predbat_export_trigger_<name>' which will be turned On when the condition is valid
   # connect this to your automation to start whatever you want to trigger
   export_triggers:
-     - name: 'large'
-       minutes: 60
-       energy: 1.0
-     - name: 'small'
-       minutes: 15
-       energy: 0.25
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
 
   # If you have a sensor that gives the energy consumed by your solar diverter then add it here
   # this will make the predictions more accurate. It should be an incrementing sensor, it can reset at midnight or not

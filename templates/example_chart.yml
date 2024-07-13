@@ -1,7 +1,7 @@
 ###################################################################################################################
-There are multiple charts in this file, please copy each section into a different chart (starts with a comment)
+# There are multiple charts in this file, please copy each section into a different chart (starts with a comment)
 ####################################################################################################################
-
+---
 ###############################################
 # Battery prediction chart
 ###############################################
@@ -586,3 +586,246 @@ series:
       b[0]  })
     show:
       in_header: raw
+
+###############################################
+# Carbon chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Home cost prediction
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: day
+  offset: +0h
+now:
+  show: true
+series:
+  - entity: predbat.carbon_today
+    stroke_width: 1
+    curve: smooth
+    name: co2
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    extend_to: now
+    show:
+      in_header: raw
+  - entity: predbat.carbon_best
+    stroke_width: 2
+    curve: smooth
+    name: co2 best
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.carbon_now
+    stroke_width: 4
+    curve: smooth
+    name: Carbon Intensity history
+    show:
+      in_header: raw
+    extend_to: now
+  - entity: sensor.carbon_intensity_uk
+    unit: g/kWh
+    name: Carbon Intensity future
+    show:
+      legend_value: false
+    data_generator: |
+      return entity.attributes.forecast.map(obj => {
+        return [new Date(obj.from).getTime(), obj.intensity];
+      });
+    color_threshold:
+      - value: 25
+        color: darkgreen
+        opacity: 1
+      - value: 95
+        color: green
+      - value: 180
+        color: gold
+      - value: 279
+        color: red
+      - value: 330
+        color: darkred
+
+###############################################
+# Daily cost saving chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Daily Cost Savings
+  show_states: true
+  colorize_states: true
+graph_span: 7days
+span:
+  start: day
+  offset: '-6day'
+now:
+  show: true
+series:
+  - entity: predbat.savings_yesterday_predbat
+    stroke_width: 1
+    name: saving_predbat
+    type: column
+    group_by:
+      func: last
+      duration: 24hours
+  - entity: predbat.savings_yesterday_pvbat
+    stroke_width: 1
+    name: saving_pvbat
+    type: column
+    group_by:
+      func: last
+      duration: 1day
+  - entity: predbat.cost_yesterday
+    stroke_width: 1
+    type: column
+    name: actual
+    group_by:
+      func: last
+      duration: 1day
+
+###############################################
+# Total cost saving chart
+###############################################
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Total Cost Saving
+  show_states: true
+  colorize_states: true
+graph_span: 30days
+span:
+  start: day
+  offset: '-29days'
+now:
+  show: true
+series:
+  - entity: predbat.savings_total_predbat
+    stroke_width: 1
+    curve: smooth
+    name: Predbat saving
+    attribute: pounds
+    unit: £
+  - entity: predbat.savings_total_pvbat
+    stroke_width: 1
+    curve: smooth
+    name: PV/Battery saving
+    attribute: pounds
+    unit: £
+###############################################
+# PV Forecast vs actual chart
+###############################################
+type: custom:apexcharts-card
+header:
+  title: Solar forecast
+  show: true
+  show_states: true
+  colorize_states: true
+apex_config:
+  chart:
+    height: 300px
+  tooltip:
+    enabled: true
+    shared: true
+    followCursor: true
+graph_span: 24h
+span:
+  start: day
+yaxis:
+  - id: capacity
+    show: true
+    opposite: true
+    decimals: 0
+    max: 100
+    min: 0
+    apex_config:
+      tickAmount: 10
+  - id: kWh
+    show: true
+    min: 0
+    apex_config:
+      tickAmount: 10
+  - id: header_only
+    show: false
+series:
+  - entity: sensor.givtcp_sa2243g277_pv_power
+    name: Solar Power
+    type: line
+    stroke_width: 2
+    float_precision: 2
+    color: Orange
+    yaxis_id: kWh
+    unit: kW
+    transform: return x/1000;
+    extend_to: now
+    show:
+      legend_value: true
+      in_header: false
+    group_by:
+      func: avg
+      duration: 5m
+  - entity: sensor.predbat_pv_today
+    name: Forecast
+    color: grey
+    opacity: 0.3
+    stroke_width: 0
+    type: area
+    extend_to: false
+    yaxis_id: kWh
+    show:
+      legend_value: false
+      in_header: false
+    data_generator: |
+      return entity.attributes.detailedForecast.map((entry) => {
+            return [new Date(entry.period_start), entry.pv_estimate];
+          });
+  - entity: sensor.predbat_pv_today
+    name: Forecast 10%
+    color: grey
+    opacity: 0.3
+    stroke_width: 0
+    type: area
+    extend_to: false
+    yaxis_id: kWh
+    show:
+      legend_value: false
+      in_header: false
+    data_generator: |
+      return entity.attributes.detailedForecast.map((entry) => {
+            return [new Date(entry.period_start), entry.pv_estimate10];
+          });
+  - entity: sensor.givtcp_sa2243g277_pv_energy_today_kwh
+    yaxis_id: header_only
+    name: Today Actual
+    stroke_width: 2
+    color: Orange
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+  - entity: sensor.predbat_pv_today
+    yaxis_id: header_only
+    name: Today Forecast
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
+  - entity: sensor.predbat_pv_today
+    yaxis_id: header_only
+    attribute: remaining
+    name: Remaining
+    color: Grey
+    show:
+      legend_value: true
+      in_header: true
+      in_chart: false
