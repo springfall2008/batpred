@@ -28,10 +28,6 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # The size of the battery in kWh
-  soc_max:
-   - 28.8
-
   # To disable set it to 1440
   load_filter_threshold: 30
 
