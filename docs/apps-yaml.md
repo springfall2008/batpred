@@ -389,55 +389,55 @@ Note that **device_id** will be passed to the service automatically, it can be s
 
 Some Inverters are enabled with an MQTT API, in this case certain MQTT messages are send via the HA MQTT service.
 
-The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as <topic> below).
+The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as **topic** below).
 
 #### Set reserve
 
 Called when the reserve is changed
 
-topic: <topic>/set/reserve
+topic: **topic**/set/reserve
 payload: reserve
 
 #### Set target soc
 
 Called when the target (charge %) SOC is set.
 
-topic: <topic>/set/target_soc
+topic: **topic**/set/target_soc
 payload: soc
 
 #### Set charge rate
 
 Called to change the charge rate in Watts
 
-topic: <topic>/set/charge_rate
+topic: **topic**/set/charge_rate
 payload: charge_rate
 
 #### Set discharge rate
 
 Called to change the discharge rate in Watts
 
-topic: <topic>/set/discharge_rate
+topic: **topic**/set/discharge_rate
 payload: discharge_rate
 
 #### Set charge
 
 Called when a charge is started
 
-topic: <topic>/set/charge
+topic: **topic**/set/charge
 payload: charge_rate
 
 #### Set discharge
 
 Called when a forced export (discharge) is started
 
-topic: <topic>/set/discharge
+topic: **topic**/set/discharge
 payload: discharge_rate
 
 #### Set auto
 
 Called when a charge/discharge is cancelled and the inverter goes back to home demand mode.
 
-topic: <topic>/set/auto
+topic: **topic**/set/auto
 payload: true
 
 ## Solcast Solar Forecast
