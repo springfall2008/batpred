@@ -304,8 +304,6 @@ There are a few differnet ways to control the inverter:
 - Service API
 - MQTT API
 
-
-
 ### REST Interface inverter control
 
 - **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
