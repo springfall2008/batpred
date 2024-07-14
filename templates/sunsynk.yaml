@@ -28,14 +28,6 @@ pred_bat:
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
   threads: auto
 
-  # The size of the battery in kWh
-  soc_max:
-   - 28.8
-
-  # The maximum rate of the battery charge/discharge in watts
-  battery_rate_max:
-   - 8000
-
   # To disable set it to 1440
   load_filter_threshold: 30
 
@@ -48,7 +40,7 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.total_house_load_today
+    - sensor.total_house_load_today # Custom sensor as AC coupled
   import_today:
     - sensor.grid_import_daily
   export_today:
@@ -73,25 +65,50 @@ pred_bat:
   #
   num_inverters: 1
   inverter_type: SK
-
-  # Services to control charging/discharging
-  charge_start_service:
-    service: switch.turn_off
-    entity_id: "switch.sunsynk_inverter_use_timer"
-  charge_stop_service:
-    service: switch.turn_on
-    entity_id: "switch.sunsynk_inverter_use_timer"
-
-  discharge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_inverter_work_mode."
-    option: "Selling first"
-
-
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
+
+  # Services to control charging/discharging
+  charge_start_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode"
+    option: "Limited to Home"
+  charge_stop_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode"
+    option: "Limited to Home"
+  discharge_start_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode"
+    option: "Selling First"
+
+  timed_charge_current:
+    - number.sunsynk_battery_max_charge_current
+  timed_discharge_current:
+    - number.sunsynk_battery_max_discharge_current
+  battery_voltage:
+    - sensor.sunsynk_battery_voltage
+  charge_limit:
+    - number.sunsynk_set_soc_timezone1 # Needs an automation to set across all 6 timezones
+
+  # Custom sensors to get the BMS charge/discharge limit, based on inverter size (5kW, BMS reported limit, and inverter set limit)
+  # Does this need to be an input value?
+  charge_rate:
+     - sensor.max_battery_charge_rate # {{ [5000,[states('number.sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_bms_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+  discharge_rate:
+     - sensor.max_battery_discharge_rate # {{ [5000,[states('number.sunsynk_battery_max_discharge_current')|int, states('sensor.sunsynk_battery_discharge_bms_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+
+  # The maximum rate of the battery charge/discharge in watts
+  battery_rate_max:
+   - 8000
+
+  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
+  # If you have a second inverter for PV only please add the two values together
+  inverter_limit:
+    - 18000
+
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
@@ -104,58 +121,18 @@ pred_bat:
   #  - service: switch.turn_on
   #    entity_id: switch.givtcp_{geserial}_reboot_invertor
 
-  # If not using REST then instead set the Control here (one for each inverter)
-  # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
-  charge_rate:
-     - sensor.max_battery_charge_rate
-  discharge_rate:
-     - sensor.max_battery_discharge_rate
   battery_power:
-     - number.sunsynk_inverter_battery_power
+    - sensor.sunsynk_battery_output_power
   pv_power:
-    - sensor.sunsynk_pv
-    - sensor.solis_ac_output_total_power
+    - sensor.solaredge_ac_power
   load_power:
-    - sensor.calculated_house_load_w
+    - sensor.household_load # {{ states('sensor.sunsynk_grid_power')|float + states('sensor.solaredge_ac_power')|float + states('sensor.sunsynk_inverter_output_power')|float }}
   soc_kw:
-     - sensor.sunsynk_battery_soc_kw
-#  soc_max:
- #   - sensor.givtcp_{geserial}_battery_capacity_kwh
- #   - sensor.givtcp2_{geserial2}_battery_capacity_kwh
-#reserve:
-#    - number.givtcp_{geserial}_battery_power_reserve
-#    - number.givtcp2_{geserial2}_battery_power_reserve
- # inverter_mode:
-#    - select.givtcp_{geserial}_mode
-#    - select.givtcp2_{geserial2}_mode
- # inverter_time:
- #   - sensor.givtcp_{geserial}_invertor_time
- #   - sensor.givtcp2_{geserial2}_invertor_time
-#  charge_start_time:
- #   - select.givtcp_{geserial}_charge_start_time_slot_1
- #   - select.givtcp2_{geserial2}_charge_start_time_slot_1
- # charge_end_time:
- #   - select.givtcp_{geserial}_charge_end_time_slot_1
- #   - select.givtcp2_{geserial2}_charge_end_time_slot_1
-  charge_limit:
-    - number.sunsynk_inverter_capacity_point_6
- # scheduled_charge_enable:
-#    - switch.givtcp_{geserial}_enable_charge_schedule
-#    - switch.givtcp2_{geserial2}_enable_charge_schedule
-#  scheduled_discharge_enable:
-#    - switch.givtcp_{geserial}_enable_discharge_schedule
- #   - switch.givtcp2_geserial2}_enable_discharge_schedule
-#  discharge_start_time:
-#    - select.givtcp_{geserial}_discharge_start_time_slot_1
-#select.givtcp2_{geserial2}_discharge_start_time_slot_1
-#  discharge_end_time:
-#    - select.givtcp_{geserial}_discharge_end_time_slot_1
-  #  - select.givtcp2_{geserial2}_discharge_end_time_slot_1
-
-  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
-  # If you have a second inverter for PV only please add the two values together
-  inverter_limit:
-    - 18000
+    - sensor.sunsynk_battery_energy # {{ states('input_number.sunsynk_battery_size')|float * states('sensor.sunsynk_battery_soc')|float / 100 |float(0) }}
+  soc_max:
+    - input_number.sunsynk_battery_size # Set to 20.5kWh
+  battery_min_soc:
+    - sensor.sunsynk_battery_min_soc # Could just be hardcoded? My shutdown is set to 20% {{ states('sensor.sunsynk_battery_capacity_shutdown')|int * states('input_number.sunsynk_battery_size')|float / 100 }}
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
