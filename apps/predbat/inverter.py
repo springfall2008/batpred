@@ -1851,6 +1851,7 @@ class Inverter:
             else:
                 service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
                 self.call_service_template("charge_stop_service", service_data)
+                self.call_service_template("discharge_stop_service", service_data)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
