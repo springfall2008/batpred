@@ -149,6 +149,33 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 
 This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/1060>
 
+- A few custom template sensors are required, the code for those are listed inside the apps.yaml template for Sunsynk, copy them
+into your HA configuration.
+
+- An automation is required to update the charge limits across all timezone's:
+
+```yaml
+alias: PredBat - Copy Charge Limit
+description: ""
+trigger:
+  - platform: state
+    entity_id:
+      - number.sunsynk_set_soc_timezone1
+    to: null
+condition: []
+action:
+  - service: number.set_value
+    data_template:
+      entity_id:
+        - number.sunsynk_set_soc_timezone2
+        - number.sunsynk_set_soc_timezone3
+        - number.sunsynk_set_soc_timezone4
+        - number.sunsynk_set_soc_timezone5
+        - number.sunsynk_set_soc_timezone6
+      value: "{{ states('number.sunsynk_set_soc_timezone1')|int(20) }}"
+mode: single
+```
+
 ## I want to add an unsupported inverter to Predbat
 
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
