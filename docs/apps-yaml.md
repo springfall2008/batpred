@@ -297,7 +297,12 @@ will normally configure all timed charges or discharges to be at the inverter's 
 
 ## Controlling the Inverter
 
-There are two ways that Predbat can control GivTCP to control the inverter, either via REST API calls (preferred) or via the GivTCP inverter controls in Home Assistant.
+There are a few different ways to control the inverter:
+
+- Home Assistant entity controls (standard)
+- GivTCP REST Interface (GE Inverters only)
+- Service API
+- MQTT API
 
 ### REST Interface inverter control
 
@@ -320,32 +325,30 @@ Do not set Self Run to too low a value (i.e. retrieve too often) as this may ove
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
 This may improve reliability of the REST connection as it doesn't need to lookup the HA server IP address each time.
 
-### Home Assistant GivTCP inverter control
+### Home Assistant entity inverter control
 
-Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
-interact with many different inverters.
+Predbat can control inverters by updating Home Assistant entities
 
-The template `apps.yaml` for Giv Energy is pre-configured with regular expressions for the following configuration items
-that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
+The template `apps.yaml` for is pre-configured with regular expressions for many configuration items, but some of them may need updating to match your system.
 
-If you only have a single inverter then the givtcp2 lines can be commented out if so desired.
-
-The template `apps.yaml` is pre-configured with regular expressions for GivEnergy GivTCP controls, but will need to be changed for other inverters or
-if you have multiple inverters.
+If you only have a single inverter then the second inverter lines can be commented out if so desired or left in place (as they are ignored).
 
 The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode.
 
 - **charge_rate** - Battery charge rate entity in watts
 - **discharge_rate** - Battery discharge max rate entity in watts
 - **battery_power** - Current battery power in watts
+- **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
+- **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 2500)
 - **pv_power** - Current PV power in watts
 - **load_power** - Current load power in watts
 - **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
 - **soc_max** - Entity name for the maximum charge level for the battery
+- **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve setting in %
+- **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100)
 - **inverter_mode** - Givenergy inverter mode control
-- **pause_mode** - Givenergy pause mode register (if present)
-- **inverter_time** - Inverter timestamp
+- **inverter_time** - Inverter timestamp, used to track the last update of the inverter data
 - **charge_start_time** - Battery charge start time entity
 - **charge_end_time** - Battery charge end time entity
 - **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
@@ -353,12 +356,89 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **scheduled_discharge_enable** - Scheduled discharge enable config
 - **discharge_start_time** - scheduled discharge slot_1 start time
 - **discharge_end_time** - scheduled discharge slot_1 end time
+- **pause_mode** - Givenergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
+- **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
 See section below on [creating the battery charge power curve](#workarounds).
+
+### Service API
+
+Some inverters have the Service API enabled, this allows the configuration to call an arbitrary Home Assistant service to start/stop charging and discharging
+
+- **charge_start_service** - Should be set to a service that is called when charging starts
+- **charge_stop_service** - Should be set to a service that is called when charging stops and/or discharging stops
+- **discharge_stop_service** - Should be set to a service that is called when discharging stops
+
+Services that are not configuration will not be called.
+
+Example service is below:
+
+```yaml
+  charge_start_service:
+    service: switch.turn_off
+    entity_id: "switch.sunsynk_inverter_use_timer"
+```
+
+Note that **device_id** will be passed to the service automatically, it can be set in apps.yaml.
+
+### MQTT API
+
+Some Inverters are enabled with an MQTT API, in this case certain MQTT messages are send via the HA MQTT service.
+
+The **mqtt_topic** in apps.yaml set in the root of the MQTT topic (shown as **topic** below).
+
+#### Set reserve
+
+Called when the reserve is changed
+
+topic: **topic**/set/reserve
+payload: reserve
+
+#### Set target soc
+
+Called when the target (charge %) SOC is set.
+
+topic: **topic**/set/target_soc
+payload: soc
+
+#### Set charge rate
+
+Called to change the charge rate in Watts
+
+topic: **topic**/set/charge_rate
+payload: charge_rate
+
+#### Set discharge rate
+
+Called to change the discharge rate in Watts
+
+topic: **topic**/set/discharge_rate
+payload: discharge_rate
+
+#### Set charge
+
+Called when a charge is started
+
+topic: **topic**/set/charge
+payload: charge_rate
+
+#### Set discharge
+
+Called when a forced export (discharge) is started
+
+topic: **topic**/set/discharge
+payload: discharge_rate
+
+#### Set auto
+
+Called when a charge/discharge is cancelled and the inverter goes back to home demand mode.
+
+topic: **topic**/set/auto
+payload: true
 
 ## Solcast Solar Forecast
 
