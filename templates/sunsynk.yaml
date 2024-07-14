@@ -86,7 +86,7 @@ pred_bat:
   discharge_start_service:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode"
-    option: "Selling First"	
+    option: "Selling First"
 
   timed_charge_current:
     - number.sunsynk_battery_max_charge_current
@@ -96,7 +96,7 @@ pred_bat:
     - sensor.sunsynk_battery_voltage
   charge_limit:
     - number.sunsynk_set_soc_timezone1 # Needs an automation to set across all 6 timezones
-    
+
   # Custom sensors to get the BMS charge/discharge limit, based on inverter size (5kW, BMS reported limit, and inverter set limit)
   # Does this need to be an input value?
   charge_rate:
@@ -134,7 +134,7 @@ pred_bat:
   soc_kw:
     - sensor.sunsynk_battery_energy # {{ states('input_number.sunsynk_battery_size')|float * states('sensor.sunsynk_battery_soc')|float / 100 |float(0) }}
   soc_max:
-    - input_number.sunsynk_battery_size # Set to 20.5kWh 
+    - input_number.sunsynk_battery_size # Set to 20.5kWh
   battery_min_soc:
     - sensor.sunsynk_battery_min_soc # Could just be hardcoded? My shutdown is set to 20% {{ states('sensor.sunsynk_battery_capacity_shutdown')|int * states('input_number.sunsynk_battery_size')|float / 100 }}
 
