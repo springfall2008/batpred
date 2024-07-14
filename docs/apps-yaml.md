@@ -294,7 +294,7 @@ charge/discharge rate settings used when controlling the inverter.
 This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
-## Controlling the Inverter
+## Controlling the GivEnergy Inverter
 
 There are two ways that Predbat can control GivTCP to control the inverter, either via REST API calls (preferred) or via the GivTCP inverter controls in Home Assistant.
 
@@ -324,7 +324,7 @@ This may improve reliability of the REST connection as it doesn't need to lookup
 Predbat can control GivEnergy inverters with GivTCP and REST mode, but if this is commented out then regular Home Assistant controls are used and can
 interact with many different inverters.
 
-The template `apps.yaml` for Giv Energy is pre-configured with regular expressions for the following configuration items
+The template `apps.yaml` for GivEnergy is pre-configured with regular expressions for the following configuration items
 that should auto-discover the GivTCP controls for two inverters (givtcp and givtcp2), but may need changing if you have non-standard GivTCP entity names.
 
 If you only have a single inverter then the givtcp2 lines can be commented out if so desired.
