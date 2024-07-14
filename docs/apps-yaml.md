@@ -297,7 +297,7 @@ will normally configure all timed charges or discharges to be at the inverter's 
 
 ## Controlling the Inverter
 
-There are a few differnet ways to control the inverter:
+There are a few different ways to control the inverter:
 
 - Home Assistant entity controls (standard)
 - GivTCP REST Interface (GE Inverters only)
@@ -359,7 +359,7 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **pause_mode** - Givenergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
-- **inverter_battery_rate_min** - Defines the mimimum discharge/charge rate of the battery in watts (default is 0)
+- **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
@@ -367,7 +367,7 @@ See section below on [creating the battery charge power curve](#workarounds).
 
 ### Service API
 
-Some inverters have the Service API enabled, this allows the configuration to call an abitrary Home Assistant service to start/stop charging and discharging
+Some inverters have the Service API enabled, this allows the configuration to call an arbitrary Home Assistant service to start/stop charging and discharging
 
 - **charge_start_service** - Should be set to a service that is called when charging starts
 - **charge_stop_service** - Should be set to a service that is called when charging stops and/or discharging stops
