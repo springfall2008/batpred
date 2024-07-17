@@ -162,6 +162,7 @@ class Inverter:
         self.inv_has_service_api = INVERTER_DEF[self.inverter_type]["has_service_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
+        self.inv_charge_control_immediate = INVERTER_DEF[self.inverter_type]["charge_control_immediate"]
         self.inv_current_dp = INVERTER_DEF[self.inverter_type].get("current_dp", 1)
         self.inv_has_charge_enable_time = INVERTER_DEF[self.inverter_type]["has_charge_enable_time"]
         self.inv_has_discharge_enable_time = INVERTER_DEF[self.inverter_type]["has_discharge_enable_time"]
@@ -1090,7 +1091,6 @@ class Inverter:
                     self.write_and_poll_value(
                         "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
                     )
-
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1136,7 +1136,6 @@ class Inverter:
                         new_rate,
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
                     )
-
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
 
@@ -1697,7 +1696,8 @@ class Inverter:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), False)
                 # If there's no charge enable switch then we can enable using start and end time
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
-                    self.enable_charge_discharge_with_time_current("charge", False)
+                    if self.inv_charge_control_immediate:
+                        self.enable_charge_discharge_with_time_current("charge", False)
                 else:
                     self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
 
@@ -1975,7 +1975,8 @@ class Inverter:
             elif "scheduled_charge_enable" in self.base.args:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
-                    self.enable_charge_discharge_with_time_current("charge", True)
+                    if self.inv_charge_control_immediate:
+                        self.enable_charge_discharge_with_time_current("charge", True)
             else:
                 self.log("Warn: Inverter {} unable write charge window enable as neither REST or scheduled_charge_enable are set".format(self.id))
 
