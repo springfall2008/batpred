@@ -4235,7 +4235,22 @@ class PredBat(hass.Hass):
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
             metric_change = metric_end - metric_start
 
+            soc_sym = ""
+            if abs(soc_change) < 0.05:
+                soc_sym = "(hold)"
+            elif soc_change >= 0:
+                soc_sym = "(increasing)"
+            else:
+                soc_sym = "(decreasing)"
+
             slot["state"] = {}
+
+            slot['state']['mode'] = soc_sym
+            if minute in self.manual_idle_times:
+                slot['state']['mode'] += " Idle"
+                slot['state']['override'] = True
+            split = False
+
 
             slot["state"]["soc"] = {}
             slot["state"]["soc"]["percent"] = soc_percent
@@ -4289,25 +4304,44 @@ class PredBat(hass.Hass):
                     if start > minute:
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         slot["state"]["soc"]["change"] = self.dp2(soc_change_this)
+                        if soc_change_this >= 0:
+                            slot['state']['mode'] = " (increasing)"
+                        elif soc_change_this < 0:
+                            slot['state']['mode'] = " (decreasing)"
+                        else:
+                            slot['state']['mode'] = " (hold)"
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
                 if limit == 99:
-                    # TODO: figure out the split state logic, and how to reflect it here
-                    slot["state"]["mode"] = "Freeze discharge"
+                    if state == soc_sym:
+                        state = ""
+                    if state:
+                        split = True
+                        slot["state"]["mode"] += " - "
+                    slot["state"]["mode"] += "Freeze discharge"
                     slot["state"]["limit"] = limit
+
                 elif limit < 100:
-                    # TODO: figure out the split state logic, and how to reflect it here
+                    if state == soc_sym:
+                        state = ""
+                    if state:
+                        slot["state"]["mode"] += " - "
+                        split = True
                     if limit > soc_percent_max:
-                        slot["state"]["mode"] = "Hold discharge"
+                        slot["state"]["mode"] += "Hold discharge"
                     else:
-                        slot["state"]["mode"] = "Discharge"
+                        slot["state"]["mode"] += "Discharge"
                     slot["state"]["limit"] = limit
 
                 if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
                     slot["state"]["override"] = True
+                    slot["state"]["mode"] += "Manual discharge"
                 elif self.discharge_window_best[discharge_window_n]["start"] in self.manual_freeze_discharge_times:
                     slot["state"]["override"] = True
+                    slot["state"]["mode"] += "Freeze discharge"
+
+            slot["state"]["split"] = split
 
             slot["rate"] = {}
             slot["rate"]["start"] = rate_start.strftime("%a %H:%M")
