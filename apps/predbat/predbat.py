@@ -8632,7 +8632,7 @@ class PredBat(hass.Hass):
 
             # If we should set reserve during charging
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
-                if self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and (self.minutes_now >= inverter.charge_start_time_minutes):
+                if isCharging:
                     # Compute limit to account for freeze setting
                     if self.charge_limit_best[0] == self.reserve:
                         if self.set_charge_freeze:
