@@ -407,5 +407,5 @@ once installed and configured you should update Predbat to the latest version by
 
 **Expert only**
 
-You can go to Github and download predbat.py from the releases tab and then manually copy this file
-over the existing version in `/config/appdaemon/apps/batpred/` manually.
+You can go to Github and download *.py from the releases tab and then manually copy these files
+over the existing versions in your install location.
