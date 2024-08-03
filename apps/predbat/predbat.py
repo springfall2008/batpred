@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.1"
+THIS_VERSION = "v8.3.2"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -9327,7 +9327,7 @@ class PredBat(hass.Hass):
                     self.log("Note: Inverter does not support reserve - disabling reserve functions")
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
-                    self.set_discharge_during_charge = False
+                    self.set_discharge_during_charge = True
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
