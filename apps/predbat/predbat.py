@@ -4245,12 +4245,11 @@ class PredBat(hass.Hass):
 
             slot["state"] = {}
 
-            slot['state']['mode'] = soc_sym
+            slot["state"]["mode"] = soc_sym
             if minute in self.manual_idle_times:
-                slot['state']['mode'] += " Idle"
-                slot['state']['override'] = True
+                slot["state"]["mode"] += " Idle"
+                slot["state"]["override"] = True
             split = False
-
 
             slot["state"]["soc"] = {}
             slot["state"]["soc"]["percent"] = soc_percent
@@ -4305,11 +4304,11 @@ class PredBat(hass.Hass):
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
                         slot["state"]["soc"]["change"] = self.dp2(soc_change_this)
                         if soc_change_this >= 0:
-                            slot['state']['mode'] = " (increasing)"
+                            slot["state"]["mode"] = " (increasing)"
                         elif soc_change_this < 0:
-                            slot['state']['mode'] = " (decreasing)"
+                            slot["state"]["mode"] = " (decreasing)"
                         else:
-                            slot['state']['mode'] = " (hold)"
+                            slot["state"]["mode"] = " (hold)"
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
