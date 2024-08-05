@@ -1799,7 +1799,7 @@ class Inverter:
         service_name = ""
         if service_template:
             if isinstance(service_template, str):
-                service_name = service
+                service_name = service_template
                 service_data = data
             else:
                 for key in service_template:
