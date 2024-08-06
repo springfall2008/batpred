@@ -3050,7 +3050,7 @@ class PredBat(hass.Hass):
                     rate_increment = True
                 else:
                     rate = 0
-                    rate_increment = False
+                    rate_increment = True
 
                 # Resolve any sensor links
                 rate = self.resolve_arg("rate", rate, 0.0)
