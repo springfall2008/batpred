@@ -1796,10 +1796,10 @@ class Inverter:
         service_list = self.base.args.get(service, "")
         if not service_list:
             return
-        
+
         if not isinstance(service_list, list):
             service_list = [service_list]
-        
+
         for service_template in service_list:
             service_data = {}
             service_name = ""
