@@ -1108,7 +1108,7 @@ INVERTER_DEF = {
         "support_charge_freeze": False,
         "support_discharge_freeze": False,
         "has_idle_time": False,
-        "can_span_midnight": True,
+        "can_span_midnight": False,
     },
     "SE": {
         "name": "SolarEdge",
