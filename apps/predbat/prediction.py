@@ -166,9 +166,9 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
-            self.iboost_running = base.iboost_running
-            self.iboost_running_solar = base.iboost_running_solar
-            self.iboost_running_full = base.iboost_running_full
+            self.iboost_running = False
+            self.iboost_running_solar = False
+            self.iboost_running_full = False
 
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
