@@ -242,16 +242,16 @@ Messages will be sent these controls:
 
 Values that are updated:
 
-- <topic>/set/reserve  - payload=reserve
-- <topic>/set/charge_rate - payload=new_rate
-- <topic>/set/discharge_rate - payload=new_rate
-- <topic>/set/target_soc - payload=target_soc
+- **topic**/set/reserve  - payload=reserve
+- **topic**/set/charge_rate - payload=new_rate
+- **topic**/set/discharge_rate - payload=new_rate
+- **topic**/set/target_soc - payload=target_soc
 
 These three change between battery charge/discharge and auto (idle) mode:
 
-- <topic>/set/charge - payload=charge_rate
-- <topic>/set/discharge - payload=discharge_rate
-- <topic>/set/auto - payload=true
+- **topic**/set/charge - payload=charge_rate
+- **topic**/set/discharge - payload=discharge_rate
+- **topic**/set/auto - payload=true
 
 ### inv_has_service_api
 
