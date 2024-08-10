@@ -224,7 +224,7 @@ mode: single
 
 ```
 
-## Inverter control option 
+## Inverter control option
 
 The follow options are supported per inverter:
 
@@ -241,12 +241,14 @@ The mqtt/publish service is used with the topic as defined by **mqtt_topic** in 
 Messages will be sent these controls:
 
 Values that are updated:
+
 - <topic>/set/reserve  - payload=reserve
 - <topic>/set/charge_rate - payload=new_rate
 - <topic>/set/discharge_rate - payload=new_rate
 - <topic>/set/target_soc - payload=target_soc
 
 These three change between battery charge/discharge and auto (idle) mode:
+
 - <topic>/set/charge - payload=charge_rate
 - <topic>/set/discharge - payload=discharge_rate
 - <topic>/set/auto - payload=true
@@ -262,6 +264,7 @@ There are two ways to define a service, the basic mode:
 ```yaml
 charge_start_service: my_service_name_charge
 ```
+
 Will call my_service_name_charge for the charge start service.
 
 Or the custom method:
@@ -293,6 +296,7 @@ charge_start_service:
 Called to start a charge
 
 The default options passed in are:
+
 - device_id - as defined in apps.yaml by **device_id**
 - target_soc - The SOC to charge to
 - power - The charge power to use
@@ -302,6 +306,7 @@ The default options passed in are:
 Called to start a discharge
 
 The default options passed in are:
+
 - device_id - as defined in apps.yaml by **device_id**
 - target_soc - The SOC to discharge to
 - power - The discharge power to use
@@ -315,8 +320,8 @@ device_id - as defined in apps.yaml by **device_id**
 #### discharge_stop_service
 
 Called to stop a discharge
-- device_id - as defined in apps.yaml by **device_id**
 
+- device_id - as defined in apps.yaml by **device_id**
 
 ### output_charge_control
 
