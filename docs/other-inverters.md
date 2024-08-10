@@ -151,7 +151,7 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 - Create the automations below
 - Create the value templates below
 
-See: https://github.com/springfall2008/batpred/issues/1331
+See: <https://github.com/springfall2008/batpred/issues/1331>
 
 ### SunSynk automations
 
@@ -229,7 +229,7 @@ action:
 mode: single
 ```
 
-#### Update the charge limits across all timezone's:
+#### Update the charge limits across all timezone's
 
 ```yaml
 alias: PredBat - Copy Charge Limit
@@ -255,28 +255,31 @@ mode: single
 
 ### SunSynk Value templates
 
-Copy into your templates in HA 
+Copy into your templates in HA
 
 #### Sunsynk Battery Max Charge Rate
+
 ```yaml
 {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### Sunsynk Battery Max DisCharge Rate
+
 ```yaml
 {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int, states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### SunSynk Charge Rate Calc
+
 ```yaml
 {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### SynSynx Discharge Rate Calc
+
 ```yaml
 {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
-
 
 ## I want to add an unsupported inverter to Predbat
 
