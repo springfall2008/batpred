@@ -409,7 +409,7 @@ When True the inverter as the GivEnergy inverter modes (ECO, Timed Export etc).
 
 ### num_load_entities
 
-Sets the number of **load_power_<n>** settings in apps.yaml are present in addition to **load_power** (the default)
+Sets the number of **load_power_n** settings in apps.yaml are present in addition to **load_power** (the default)
 
 ### write_and_poll_sleep
 
