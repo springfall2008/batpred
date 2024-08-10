@@ -21,7 +21,7 @@ If you do something like have export>import then Predbat will try to export as m
 - Have you tuned **predbat_best_soc_keep settings**?
 - Do you have predicted car charging during the time period?
 - You can also tune **predbat_load_scaling** and **predbat_pv_scaling** to adjust predictions up and down a bit
-- Maybe your historical data includes car charging, you might want to filter this out using car_charging_hold (see below)
+- Maybe your historical data includes car charging, you might want to filter this out using [car_charging_hold in apps.yaml](apps-yaml.md#car-charging-filtering)
 
 ## Why didn't the slot actually get configured?
 
@@ -50,7 +50,7 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Check your solar production is well calibrated (you can compare solcast vs actually in the Home Assistant energy tab or on the GivEnergy portal)
 - Make sure your inverter max AC rate has been set correctly
 - If you have an EV that you charge then you will want some sort of car charging sensor or use the basic car charging hold feature or your load predictions maybe unreliable - see
-[Car charging planning](car-charge-planning.md)
+[Car charging](car-charging.md)
 - Do you have a solar diverter? If so maybe you want to try using the [iBoost model settings](customisation.md#iboost-model-solar-diverter-options).
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
@@ -181,10 +181,10 @@ logger:
 
 If you get this error in the Predbat log file:
 
-- Check that the Octopus integration is working and that **event.octopus_energy_electricity_<meter_number>_current_day_rates**
-and **sensor.octopus_electricity_energy_<meter_number>_current_rate** are both populated by the integration.
+- Check that the Octopus integration is working and that **event.octopus_energy_electricity_METER_NUMBER_current_day_rates**
+and **sensor.octopus_electricity_energy_METER_NUMBER_current_rate** are both populated by the integration.
 - Ensure that you have followed the [Octopus Integration Installation instructions](install.md#octopus-energy), including enabling the Octopus Integration events.
-- If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named **sensor.electricity_<meter_number>_current_rate**
+- If you been using an older version of the Octopus integration and have upgraded to version 9 or above, then you may find that your energy sensors are named **sensor.electricity_METER_NUMBER_current_rate**
 (i.e. no 'octopus_energy_' prefix) but the 'event' entities have the 'octopus_energy' prefix.<BR>
 If the 'event' and 'sensor' entities are not consistently named then Predbat will not be able to find the event entities if the sensor names don't match what's expected.<BR>
 To fix this, uninstall the Octopus integration, reboot Home Assistant,
@@ -196,7 +196,9 @@ If you get this warning message in the Predbat log file or you see that the 'PV 
 
 - Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast )
-- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log)
+- Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log).
+If you see an error 429 message in the log then this is as a result of  Solcast's rate limiting for Hobbyist accounts.
+The only fix is to re-run the 'Solcast update' automation and hope that Solcast isn't as busy when you re-run.
 - Verify the solar forecast has been populated in Home Assistant by going to Developer Tools / States, filtering on 'solcast',
 and checking that you can see the half-hourly solar forecasts in the Solcast entities
 - If you can see the solcast entities but there are no forecast PV figures, try running the 'Solcast update' automation you created, and check again the solcast entities

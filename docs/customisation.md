@@ -35,7 +35,7 @@ The mode that Predbat operates in will change the operation, this can be configu
 
 If the **switch.predbat_set_read_only** is set to True then this prevents Predbat from making modifications to the inverter settings (regardless of the configuration).
 Predbat will continue making and updating its prediction plan every 5 minutes, but no inverter changes will be made.
-This is useful if you want to over-ride what predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works prior to turning it on 'in anger'.
+This is useful if you want to over-ride what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works prior to turning it on 'in anger'.
 
 _NOTE: Changing the Predbat mode or the read only switch will cause Predbat to reset the inverter settings to default, this will disable
 both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
@@ -63,7 +63,7 @@ In **Control charge** mode Predbat will set the charge times and charge percenta
 disabled by Predbat.
 Predbat will set the inverter into Eco mode when required to enable the battery to support house load, but it will not plan any forced discharging of the battery for export purposes.
 
-This mode can be useful if you don't have an export rate, or if you want to preserve the battery for home demand.
+This mode can be useful if you don't have an export rate, you have a 'no export' limitation from your electricity supplier, or if you want to preserve the battery for home demand.
 
 ### Predbat Control charge & discharge mode
 
@@ -156,11 +156,15 @@ If your battery size is reported wrongly maybe try turning this on and see if it
 Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load.
 
 **input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
-This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central
-scenario unchanged. The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
+This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
+The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
 **input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving sessions.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
+
+## Solar PV adjustment options
+
+See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-forecast) including explanation of PV10, PV50 and PV90 terminology.
 
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to use exactly use the Solcast forecast generation data. A value of 0.9 for example would remove 10% from the Solcast generation forecast.
@@ -182,61 +186,24 @@ a single low usage day in your average calculation. By default is feature is ena
 
 ## Car Charging
 
-### Car charging hold options
+There are a number of configuration items in Home Assistant for Predbat to control your car charging.
 
-Car charging hold is a feature where you try to filter out previous car charging from your historical data so that
-future predictions are more accurate.
+These are described in detail in [Car Charging](car-charging.md) and are listed here just for completeness:
 
-When **switch.predbat_car_charging_hold** is enabled when for loads of above the power threshold **input_number.predbat_car_charging_threshold** are
-assumed to be car charging and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
-
-For more accurate results can you use an incrementing energy sensor set with **car_charging_energy** in the `apps.yaml` configuration file.
-In this case when **switch.predbat_car_charging_hold** is enabled historical data will be subtracted from the load data instead of using
-the fixed threshold method.
-
-**input_number.predbat_car_charging_energy_scale** Is used to scale the **car_charging_energy** sensor, the default units are kWh so
-if you had a sensor in watts you might use 0.001 instead.
-
-- **input_number.predbat_car_charging_rate** - Set to the car's charging rate in kW per hour (normally 7.5 for 7.5kWh),
-but will be pulled automatically from Octopus Energy integration if enabled for Octopus Intelligent.
-
-**input_number.predbat_car_charging_loss** gives the amount of energy lost when charging the car (load in the home vs energy added to the battery). A good setting is 0.08 which is 8%.
-
-### Car charging plan options
-
-Car charging planning - is only used if Intelligent Octopus isn't enabled and car_charging_planned is connected correctly.
-
-This feature allows Predbat to create a plan for when you car will charge, but you will have to create an automation
-to trigger your car to charge using **binary_sensor.predbat_car_charging_slot** if you want it to match the plan.
-
-- **select.predbat_car_charging_plan_time** - When using Predbat-led planning set this to the time you want the car to be charged by
-
-- **switch.predbat_car_charging_plan_smart** - When enabled (True) allows Predbat to allocate car charging slots to the cheapest times,
-when disabled (False) all low rate slots will be used in time order.
-
-- **input_number.predbat_car_charging_plan_max_price** - When non-zero sets a maximum price per kWh to pay when charging your car,
-when disabled (0) all slots will be considered.
-
-**switch.predbat_octopus_intelligent_charging** when true enables the Intelligent Octopus charging feature
-which will make Predbat create a car charging plan which is taken from the Intelligent Octopus plan
-you must have set the **octopus_intelligent_slot** sensor in apps.yaml to enable this feature.
-
-If Octopus Intelligent Charging is enabled the switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
-can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
-if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in.
-
-Control how your battery behaves during car charging:
-
-- **switch.predbat_car_charging_from_battery** - When True the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
-When False home battery discharge will be prevented when your car charges, all load from the car and home will be from the grid. This is achieved
-by setting the discharge rate to 0 during car charging and to the maximum otherwise, hence if you turn this switch Off you won't be able to change
-your discharge rate outside Predbat. The home battery can still charge from the grid/solar in either case. Only use this if Predbat knows your car
-charging plan, e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
-
-If your car does not have an SOC sensor and you are not using Octopus Intelligent you can set **switch.predbat_car_charging_manual_soc**
-to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars current state of charge (soc)
-in kWh. You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
-charging sessions but will not reset it automatically.
+- **switch.predbat_car_charging_hold** - remove historical car charging load from the house load
+- **input_number.predbat_car_charging_threshold** - power threshold above which Predbat assumes the car is being charged
+- **input_number.predbat_car_charging_energy_scale** - used to scale the **car_charging_energy** sensor in apps.yaml
+- **input_number.predbat_car_charging_rate** - car's charging rate in kW per hour
+- **input_number.predbat_car_charging_loss** - percentage energy lost when charging the car
+- **switch.predbat_octopus_intelligent_charging** - controls whether Octopus Intelligent (via the Octopus Energy integration) controls the car charging or Predbat plans the car charging
+- **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
+- **binary_sensor.predbat_car_charging_slot** - set to True by Predbat when the car should be charged (Predbat-led charging)
+- **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
+- **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low rate slots
+- **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
+- **switch.predbat_car_charging_from_battery** - prevent the car draining the home battery when charging
+- **switch.predbat_car_charging_manual_soc** - ignore the  **car_charging_soc** car SoC sensor set in apps.yaml
+- **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC (used if car SoC sensor is not available)
 
 ## Calculation options
 
@@ -406,8 +373,8 @@ The amount of modulation depends on the difference between the PV50% (default) a
 
 You can disable this feature (_expert mode only_) using **switch.predbat_metric_cloud_enable**
 
-Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same
-predicted total. The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
+Predbat tries to model changes in your household load by modulating the historical data on a 5 minute interval up and down while retaining the same predicted total.
+The amount of modulation depends on the standard deviation of your load predictions over the coming period (currently 4 hours).
 
 You can disable this feature (_expert mode only_) using **switch.metric_load_divergence_enable**
 

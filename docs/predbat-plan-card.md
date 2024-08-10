@@ -38,7 +38,7 @@ For every half hour period (slot) that Predbat has planned for (the *forecast_ho
 
 - The import rate in pence for that slot
 - The export rate in pence for that slot
-- What 'status' predbat will be in (e.g. Charging, Discharging)
+- What 'status' Predbat will be in (e.g. Charging, Discharging)
 - Any limit applied (e.g. charging to 70%)
 - Forecast Solar generation (from Solcast)
 - Forecast house load (from your historical load data)

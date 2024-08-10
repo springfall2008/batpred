@@ -275,7 +275,7 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-        # Battery can not be zero size
+        # Battery cannot be zero size
         if self.soc_max <= 0:
             self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
             raise ValueError
@@ -312,15 +312,15 @@ class Inverter:
             tdiff = self.inverter_time - now_utc
             tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
-                self.base.log("Invertor time {} AppDaemon time {} difference {} minutes".format(self.inverter_time, now_utc, tdiff))
+                self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 10:
                 self.base.log(
-                    "Warn: Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
+                    "Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     )
                 )
                 self.base.record_status(
-                    "Invertor time is {} AppDaemon time {} this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter or fixing AppDaemon time zone".format(
+                    "Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
                         self.inverter_time, now_utc, tdiff
                     ),
                     had_errors=True,
@@ -660,15 +660,15 @@ class Inverter:
                         self.log("Note: Found incomplete battery charging curve (no data points), maybe try again when you have more data.")
                 else:
                     self.log(
-                        "Note: Can not find battery charge curve (no final curve), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                        "Note: Cannot find battery charge curve (no final curve), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                     )
             else:
                 self.log(
-                    "Note: Can not find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
+                    "Note: Cannot find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                 )
         else:
             self.log(
-                "Note: Can not find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml"
+                "Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml"
             )
         return {}
 
@@ -794,12 +794,12 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SOC: {} kW {} % Current charge rate {} w Current discharge rate {} w Current power {} w Current voltage {}".format(
+                "Inverter {} SOC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current power {}W Current voltage {}V".format(
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
-                    self.charge_rate_now * MINUTE_WATT,
-                    self.discharge_rate_now * MINUTE_WATT,
+                    self.base.dp0(charge_rate_now * MINUTE_WATT),
+                    self.base.dp0(discharge_rate_now * MINUTE_WATT),
                     self.battery_power,
                     self.battery_voltage,
                 )
@@ -1084,7 +1084,7 @@ class Inverter:
             current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
 
         if abs(current_rate - new_rate) > 100:
-            self.base.log("Inverter {} current charge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
+            self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setChargeRate(new_rate)
             else:
@@ -1096,7 +1096,7 @@ class Inverter:
                     self.set_current_from_power("charge", new_rate)
 
             if notify and self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} charge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} charge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
@@ -1126,7 +1126,7 @@ class Inverter:
             current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
 
         if abs(current_rate - new_rate) > 100:
-            self.base.log("Inverter {} current discharge rate is {} and new target is {}".format(self.id, current_rate, new_rate))
+            self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setDischargeRate(new_rate)
             else:
@@ -1141,7 +1141,7 @@ class Inverter:
                     self.set_current_from_power("discharge", new_rate)
 
             if notify and self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} discharge rate changes to {} at {}".format(self.id, new_rate, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} discharge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
 
     def adjust_battery_target(self, soc, isCharging=False):
@@ -1171,7 +1171,7 @@ class Inverter:
             current_soc = int(float(self.base.get_arg("charge_limit", index=self.id, default=100.0)))
 
         if current_soc != soc:
-            self.base.log("Inverter {} Current charge limit is {} % and new target is {} %".format(self.id, current_soc, soc))
+            self.base.log("Inverter {} Current charge limit is {}% and new target is {}%".format(self.id, current_soc, soc))
             self.current_charge_limit = soc
             if self.rest_data:
                 self.rest_setChargeTarget(soc)
@@ -1179,10 +1179,10 @@ class Inverter:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id), soc)
 
             if self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {} % at {}".format(self.id, soc, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Target SOC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
             self.mqtt_message(topic="set/target_soc", payload=soc)
         else:
-            self.base.log("Inverter {} Current Target SOC is {} already at target".format(self.id, current_soc))
+            self.base.log("Inverter {} Current Target SOC is {}%, already at target".format(self.id, current_soc))
 
         # Inverters that need on/off controls rather than target SOC
         if not self.inv_has_target_soc:

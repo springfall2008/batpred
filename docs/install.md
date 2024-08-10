@@ -2,6 +2,9 @@
 
 These instructions will take you through the process of installing and configuring Predbat for first time use.
 
+If you have a working Predbat installation and are changing to use the Predbat add-on,
+the [AppDaemon to Predbat add-on upgrade process](#upgrading-from-appdaemon-to-predbat-add-on) is described below.
+
 It's recommended that you watch the [Predbat Video Guides](video-guides.md) before you start.
 
 We have tried to make the documentation as comprehensive as possible but a level of familiarity with the basics of
@@ -84,7 +87,7 @@ Ensure 'start on boot' is enabled and click 'start'.
 These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
 
 - **predbat.log** - Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
-- **apps/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
+- **apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
 You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
 
@@ -92,7 +95,7 @@ If you have used the Predbat add-on installation method you do not need to insta
 
 ## AppDaemon-Predbat combined install
 
-Another way to install Predbat now is with a combined AppDaemon/Predbat add-on.
+Another way to install Predbat is with a combined AppDaemon/Predbat add-on.
 This is a fork of AppDaemon which automatically includes an install of Predbat.
 
 Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
@@ -210,7 +213,7 @@ A manual install is suitable for those running Docker type systems where HACS do
 
 Note: **Not recommended if you are using HACS**
 
-- Copy the file apps/predbat/predbat.py to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
+- Copy all the .py files to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
 - Copy apps/predbat/apps.yaml to the `/config/appdaemon/apps/` directory in Home Assistant (or wherever you set appdaemon app_dir to)
 - Edit in Home Assistant the `/config/appdaemon/apps/apps.yaml` file to configure Predbat
 
@@ -221,25 +224,25 @@ Note: **Not recommended if you are using HACS**
 Predbat needs a solar forecast in order to predict solar generation and battery charging.
 If you do have solar panels its recommended to use the Solcast integration to retrieve your forecast solar generation.
 
-If you don't have one already register for a hobbyist account on [Solcast account](https://solcast.com/) and enter the details of your system.
-You can create 2 sites maximum under one account, if you have more aspects then its suggested you average the angle based on the number of panels
+If you don't have one already, register for a free [Solcast hobbyist account](https://solcast.com/) and enter the details of your system.
+You can create 2 sites maximum under one (free hobbyist) account, if you have more aspects then its suggested you average the angle based on the number of panels
 e.g. 7/10 *240 degrees + 3/10* 120 degrees.
 
 **Hybrid inverters only**: If your hybrid inverter capacity is smaller than your array peak capacity, tell Solcast that your AC capacity is equal to your DC capacity
-(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let predbat handle any necessary clipping instead.
-When supplied with the unclipped Solcast forecast data, predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
+(both equal to your array peak kW). Otherwise, Solcast will provide forecast data clipped at your inverter capacity. Let Predbat handle any necessary clipping instead.
+When supplied with the unclipped Solcast forecast data, Predbat can allow in its model for PV in excess of the inverter capacity going to battery charging
 (bypassing the hybrid inverter).
 
 You will need your API key for the next steps:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e6cce04f-2677-4722-b269-eb051be5c769)
 
-### Predbat direct method
+### Predbat direct Solcast method
 
-Predbat can talk to Solcast directly, first get your API key from the Solcast web site, then uncomment the solcast settings in apps.yaml and set the key correctly.
+Predbat can obtain the solar forecast directly from Solcast and the Solcast integration described below is not required.
 
-Keep in mind hobbyist accounts only have 10 polls per day so the refresh period needs to be less than this. If you use the same Solcast account for other automations
-the total polls needs to be kept under the limit or you will experience failures:
+First get your API key from the Solcast web site, then as described in the [Solcast apps.yaml documentation](apps-yaml.md#solcast-solar-forecast),
+uncomment the Solcast cloud interface settings in `apps.yaml` and set the API key correctly:
 
 ```yaml
 solcast_host: 'https://api.solcast.com.au/'
@@ -247,14 +250,20 @@ solcast_api_key: 'xxxx'
 solcast_poll_hours: 8
 ```
 
-### Solcast Home Assistant integration method
+NB: If you use Predbat to obtain your solcast solar forecast then you can't
+[include the Solar Forecast within the Home Assistant Energy dashboard](https://www.home-assistant.io/dashboards/energy/#solar-production-graph)
+as you can with the Solcast integration described below.<BR>
+The Solcast integration also contains a 'solar dampening' feature that may be useful to reduce the solar forecast that Predbat receives at certain times of day,
+e.g. if your panels are shaded by trees or buildings.
 
-Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities in Home Assistant.
+### Solcast Home Assistant integration method
 
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-If you don't have solar then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
+Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
+
+If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:
 
 ```yaml
   pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
@@ -265,8 +274,12 @@ If you don't have solar then use a file editor to comment out the following line
 
 Note that Predbat does not update Solcast integration for you so you will need to create your own Home Assistant automation that updates the solar
 forecast a few times a day (e.g. dawn, dusk, and just before your nightly charge slot). Keep in mind hobbyist accounts only have 10 polls per day
-so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under
-the limit or you will experience failures.
+so the refresh period needs to be less than this. If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
+
+Due to the popularity of the Solcast Hobbyist service, Solcast have introduced rate limiting for Hobbyist (free) accounts. If your update gets a 429 error then this is due to rate limiting.
+Solcast recommend that you poll for updated solar forecasts at random times, i.e. don't poll at precisely X o'clock and zero seconds.
+The Solcast integration will auto-retry if it gets a 429 error,
+but to minimise potential rate limiting the sample Solcast automation below contains non-precise poll times for just this reason.
 
 Example Solcast update automation script:
 
@@ -275,13 +288,13 @@ alias: Solcast update
 description: "Update Solcast solar forecast"
 trigger:
   - platform: time
-    at: "06:00:00"
+    at: "06:02:34"
   - platform: time
-    at: "12:00:00"
+    at: "12:07:47"
   - platform: time
-    at: "18:00:00"
+    at: "18:09:56"
   - platform: time
-    at: "23:00:00"
+    at: "23:11:18"
 condition: []
 action:
   - service: solcast_solar.update_forecasts
@@ -320,10 +333,10 @@ The entities are all prefixed *predbat* and can be seen (and changed) from the S
 It is recommended that you create a dashboard page with all the required entities to control Predbat
 and another page to display Predbat's charging and discharging plan for your battery.
 
-The [Output Data](output-data.md) section describes these points in more detail.
+The [Output Data](output-data.md) section describes these points in more detail including using the auto-generated `predbat_dashboard.yaml` dashboard file.
 
 The Home Assistant entity **predbat.status** contains details of what status Predbat is currently in (e.g. Idle, Charging, Error).
-Detailed progress messages and error logging is written to the Predbat logfile which you can view within Home Assistant using a file editor.
+Detailed progress messages and error logging is written to the [Predbat logfile](output-data.md#predbat-logfile) which you can view within Home Assistant using a [file editor](#editing-configuration-files-in-home-assistant).
 
 The [Predbat Configuration Guide](configuration-guide.md) gives an overview of the main Predbat configuration items and
 detail of 'standard Predbat configuration' settings for different electricity tariff types - e.g. a cheap overnight rate,
@@ -333,31 +346,40 @@ The detailed [Predbat Customisation Guide](customisation.md) details all the Pre
 
 ## Ready to light the touch-paper
 
-By now you should have successfully installed and configured Predbat in AppDaemon and the other components it is dependent upon (e.g. GivTCP, Solcast, Octopus Integration).
+By now you should have successfully installed and configured Predbat and the other components it is dependent upon
+(e.g. an inverter controller such as GivTCP, Solcast solar forecast, Octopus Energy integration, etc).
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/48cffa4a-5f05-4cbc-9356-68eb3d8fb730)
 
-You have checked the [Predbat AppDaemon log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
+You have checked the [Predbat log file](output-data.md#predbat-logfile) doesn't have any errors (there is a lot of output in the logfile, this is normal).
 
-You have configured predbat's control entities, created a couple of dashboard pages to control and monitor Predbat, and are ready to start Predbat running.
-
-In order to enable Predbat you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
+You have [configured Predbat's control entities](customisation.md), created some [dashboard pages to control and monitor Predbat](output-data.md#displaying-output-data),
+and are ready to start Predbat generating your plan.
 
 You may initially want to set **select.predbat_mode** to *Monitor* to see how Predbat operates, e.g. by studying the [Predbat Plan](predbat-plan-card.md).
 In *Monitor* mode Predbat will monitor (but not change) the current inverter settings and predict the battery SoC based on predicted Solar Generation and House Load.<BR>
 NB: In *Monitor* mode Predbat will *NOT* plan any battery charge or discharge activity of its own,
 it will report on the predicted battery charge level based on the current inverter charge & discharge settings, predicted house load and predicted solar generation.
 
-The recommended next step is to start Predbat planning your inverter charging and discharging activity but not (yet) make any changes to the inverter.
-This enables you to get a feel for the Predbat plan and [customise Predbat's settings](customisation.md) to meet your needs.
+In order to enable Predbat to start generating your plan you must delete the 'template: True' line in `apps.yaml` once you are happy with your configuration.
+
+Predbat will automatically run, analyse your house load, battery status, solar prediction, etc and produce a plan based upon the current battery settings.
+
+Check the [Predbat logfile](output-data.md#predbat-logfile) again for errors. Voluminous output is quite normal but any errors or warnings should be investigated.
+Read the [Predbat FAQ's](faq.md) for answers to common questions you may have.
+Also check the [Predbat status **predbat.status**](what-does-predbat-do.md#predbat-status) - major errors will also be flagged here.
+
+Once Predbat is running successfully the recommended next step is to start Predbat planning your inverter charging and discharging activity, but not (yet) make any changes to the inverter.
+This enables you to get a feel for the Predbat plan and further [customise Predbat's settings](customisation.md) to meet your needs.
 
 Set **select.predbat_mode** to the correct [mode of operation](customisation.md#predbat-mode) for your system - usually 'Control charge' or 'Control charge & discharge'.
 ALSO you should set **switch.predbat_set_read_only** to True to stop Predbat making any changes to your inverter.
 
+You can see the planned solar and grid charging and discharging activity in the [Predbat Plan](predbat-plan-card.md).
+Another set of views can be seen in the detailed [Apex Charts showing Predbat's predictions](creating-charts.md).
+
 Once you are happy with the plan Predbat is producing, and are ready to let Predbat start controlling your inverter charging and discharging,
 set the switch **switch.predbat_set_read_only** to False and Predbat will start controlling your inverter.
-
-You can see the planned charging and discharging activity in the [Predbat Plan](predbat-plan-card.md).
 
 ## Updating Predbat
 
@@ -368,26 +390,13 @@ If new Predbat releases introduce new features to apps.yaml you may therefore ne
 
 **Recommended**
 
-Predbat can now be updated using the Home Assistant update feature. We a new release is available you should see it in settings:
+Predbat can now be updated using the Home Assistant update feature. When a new release is available you should see it in the Home Assistant settings:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/516c77b8-7258-45e7-868f-eea40ee380ac)
 
 Click on the update and select install:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
-
-## HACS Update
-
-**Not Recommended**
-
-HACS checks for updates and new releases only once a day by default, you can however force it to check again, or download a specific version
-by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
-
-**NOTE:** If you update Predbat through HACS you may need to restart AppDaemon as it sometimes reads the config wrongly during the update.
-(If this happens you will get a template configuration error in the entity **predbat.status**).<BR>
-Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
-
-If you update Predbat via Home Assistant or via its build-in update then HACS will not know about this.
 
 ## Predbat built-in update
 
@@ -400,12 +409,86 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
-If you have used the [Combined AppDaemon and Predbat add-on installation method](#appdaemon-predbat-combined-install) then
-once installed and configured you should update Predbat to the latest version by using the **select.predbat_update** selector or by enabling the **switch.predbat_auto_update**.
+If you have used either the [Predbat add-on](#predbat-add-on-install) or [Combined AppDaemon and Predbat add-on](#appdaemon-predbat-combined-install) installation method then
+once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
+or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
+
+## HACS Update
+
+**Not Recommended**
+
+HACS checks for updates and new releases only once a day by default, you can however force it to check again, or download a specific version
+by using the 'Redownload' option from the top-right three dots menu for Predbat in the HACS Automation section.
+
+**NOTE:** If you update Predbat through HACS you may need to restart AppDaemon as it sometimes reads the config wrongly during the update.
+(If this happens you will get a template configuration error in the entity **predbat.status**).<BR>
+Go to Settings, Add-ons, AppDaemon, and click 'Restart'.
+
+If you update Predbat via Home Assistant or via Predbat's build-in update then HACS will not know about this and you'll continue to get messages in HACS about updating Predbat.
 
 ## Manual update of Predbat
 
 **Expert only**
 
-You can go to Github and download *.py from the releases tab and then manually copy these files
-over the existing versions in your install location.
+You can go to Github and download all the .py files from the releases tab and then manually copy these files
+over the existing version in `/config/appdaemon/apps/batpred/` manually.
+
+## Upgrading from AppDaemon to Predbat add-on
+
+These steps assume you already have a working Predbat system and want to upgrade to using the Predbat add-on instead of using either the AppDaemon or the AppDaemon-predbat add-on.
+
+Using the Predbat add-on is the strategic direction for Predbat and resolves some performance and data load issues that can occur with AppDaemon.
+The Predbat code that runs is exactly the same and the configuration is exactly the same, its just changing the 'container' that Predbat runs within.
+
+1. Before starting, watch the [installing Predbat add-on video](https://www.youtube.com/watch?v=PvGyENVJup8)
+
+2. Although the upgrade steps are low risk, take a full backup of Home Assistant before starting
+
+3. [Install the Predbat add-on](#predbat-add-on-install):
+    - Add the Predbat add-on to the list of Repositories in the add-on store
+    - Install the Predbat add-on
+    - But **do not** start it - *yet*
+
+4. [Install a file editor](#editing-configuration-files-in-home-assistant) if you don't have one already installed - either File Editor or Studio Code Server, it doesn't matter
+
+5. Shutdown your existing AppDaemon or AppDaemon-predbat add-on:
+    - Go to Settings/Add-ons
+    - Click on the existing AppDaemon/AppDaemon-predbat add-on
+    - Click STOP, and untick 'Start on boot'
+
+6. Briefly start the new Predbat add-on so that it creates the addon_config folder and the template `apps.yaml` file:
+    - Go to Settings/Add-ons
+    - Click on the Predbat add-on
+    - Click START, wait a minute for the add-on to initialise itself, then click STOP
+
+7. Open your file editor and open your existing `apps.yaml` file:
+    - If you are using the [combined AppDaemon/Predbat add-on installation method](#appdaemon-predbat-combined-install), it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
+    or
+
+    - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
+
+8. Select all the contents of the apps.yaml file and 'copy' (control-C, command-C, etc as appropriate)
+
+9. Now open the template `apps.yaml` file that's supplied with the Predbat add-on and has been created in the directory `/addon_configs/6adb4f0d_predbat`,
+select all the contents of the template apps.yaml file, and paste in the contents of your existing apps.yaml, overwriting the template with your specific configuration
+
+10. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat add-on to the Predbat add-on:
+    - Go to Settings/Add-ons
+    - Click on the existing AppDaemon/AppDaemon-predbat add-on
+    - Make sure it is not running and 'Start on boot' is not ticked
+    - Click the back arrow
+    - Click on the Predbat add-on
+    - Click START, and tick 'Start on boot'
+
+And that's it.
+
+You should check the Log tab to ensure it all starts properly, but it should do as you've copied over your existing configuration.
+
+Note that if you are using the [Predbat direct connection to Solcast](#predbat-direct-solcast-method) then the Predbat add-on will need to download your solar forecast
+so will use up one or two of your daily API calls (hobbyist accounts have a 10 API a day limit).
+If you are using the [Solcast integration](#solcast-home-assistant-integration-method) then this won't be required.
+
+You may find that the Predbat add-on installed with an older version of Predbat than you were previously using,
+which might require you to [update Predbat to the correct version](#predbat-built-in-update).
+
+11. When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
