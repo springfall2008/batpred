@@ -349,7 +349,7 @@ When True the inverter has a setting defined in apps.yaml called **scheduled_dis
 
 ### has_target_soc
 
-When True the inverter has a target soc setting in apps.yaml called **charge_limit**, when False charging must be turned on and off by Predbat rather 
+When True the inverter has a target soc setting in apps.yaml called **charge_limit**, when False charging must be turned on and off by Predbat rather
 than the inverter doing it based on the target %
 
 ### has_reserve_soc
@@ -358,7 +358,7 @@ When True the inverter has a reserve soc setting in apps.yaml called **reserve**
 
 ### has_timed_pause
 
-When True the inverter has a setting in apps.yaml called **pause_mode** and settings **pause_start_time** and **pause_end_time** which can be used to pause the inverter from 
+When True the inverter has a setting in apps.yaml called **pause_mode** and settings **pause_start_time** and **pause_end_time** which can be used to pause the inverter from
 charging and discharging the battery - this is for GivEnergy systems only right now.
 
 ### charge_time_format
