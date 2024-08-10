@@ -75,10 +75,7 @@ pred_bat:
   num_inverters: 1
   inverter_type:
    - 'GEE'
-   - 'GEE'
-   - 'GEE'
-    - 'GEE'
-   - 'GEE'
+   # - 'GEE'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
