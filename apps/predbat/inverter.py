@@ -1794,11 +1794,18 @@ class Inverter:
         """
         Call a service template with data
         """
-        service_template = self.base.args.get(service, "")
-        self.log("Inverter {} Call service template {} = {}".format(self.id, service, service_template))
-        service_data = {}
-        service_name = ""
-        if service_template:
+        service_list = self.base.args.get(service, "")
+        if not service_list:
+            return
+
+        if not isinstance(service_list, list):
+            service_list = [service_list]
+
+        for service_template in service_list:
+            service_data = {}
+            service_name = ""
+            self.log("Inverter {} Call service template {} = {}".format(self.id, service, service_template))
+
             if isinstance(service_template, str):
                 service_name = service_template
                 service_data = data
