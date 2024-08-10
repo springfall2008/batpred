@@ -223,3 +223,98 @@ mode: single
     option: "Maximize Self Consumption"
 
 ```
+
+## Inverter control option 
+
+The follow options are supported per inverter:
+
+### has_rest_api
+
+When True the REST API will be used to fetch data/control the inverter. This is currently only for GivEnergy inverters with GivTCP and **givtcp_rest** must be set in apps.yaml
+
+### has_mqtt_api
+
+When True the MQTT API to Home Assistant will be used to issue control messages for the inverter
+
+The mqtt/publish service is used with the topic as defined by **mqtt_topic** in apps.yaml
+
+Messages will be sent these controls:
+
+Values that are updated:
+- <topic>/set/reserve  - payload=reserve
+- <topic>/set/charge_rate - payload=new_rate
+- <topic>/set/discharge_rate - payload=new_rate
+- <topic>/set/target_soc - payload=target_soc
+
+These three change between battery charge/discharge and auto (idle) mode:
+- <topic>/set/charge - payload=charge_rate
+- <topic>/set/discharge - payload=discharge_rate
+- <topic>/set/auto - payload=true
+
+### inv_has_service_api
+
+When True a Home Assistant service will be used to issue control messages for the inverter
+
+For each service you wish to use it must be defined in apps.yaml.
+
+There are two ways to define a service, the basic mode:
+
+```yaml
+charge_start_service: my_service_name_charge
+```
+Will call my_service_name_charge for the charge start service.
+
+Or the custom method:
+
+```yaml
+charge_start_service:
+   - service: my_charge_start_service
+     device_id: {device_id}
+     power: {power}
+     soc: {target_soc}
+```
+
+Here you can define all the values passed to the service and use the default values from the template or define your own.
+
+You can also call more than one service e.g:
+
+```yaml
+charge_start_service:
+   - service: my_charge_start_service
+     device_id: {device_id}
+     power: {power}
+     soc: {target_soc}
+   - service: switch.turn_off
+     entity_id: switch.tsunami_charger
+```
+
+#### charge_start_service
+
+Called to start a charge
+
+The default options passed in are:
+- device_id - as defined in apps.yaml by **device_id**
+- target_soc - The SOC to charge to
+- power - The charge power to use
+
+#### discharge_start_service
+
+Called to start a discharge
+
+The default options passed in are:
+- device_id - as defined in apps.yaml by **device_id**
+- target_soc - The SOC to discharge to
+- power - The discharge power to use
+
+#### charge_stop_service
+
+Called to stop a charge or stop a discharge
+
+device_id - as defined in apps.yaml by **device_id**
+
+#### discharge_stop_service
+
+Called to stop a discharge
+- device_id - as defined in apps.yaml by **device_id**
+
+
