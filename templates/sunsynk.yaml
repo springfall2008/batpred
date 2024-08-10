@@ -9,11 +9,11 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
+  # Template configuration XXX: Delete this line once you have made your changes
+  template: True
+
   # Timezone to work in
   timezone: Europe/London
-
-  # XXX: Template configuration, delete this line once you have set up for your system
-  template: True
 
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
@@ -48,13 +48,13 @@ pred_bat:
   # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
   #
   load_today:
-    - sensor.total_house_load_today # Custom sensor as AC coupled
+    - sensor.sunsynk_load_power_daily_2 # load_power_daily_kWh
   import_today:
-    - sensor.grid_import_daily
+    - sensor.smart_meter_electricity_import_today # electric_import_daily_kWh
   export_today:
-    - sensor.grid_export_daily
+    - sensor.smart_meter_electricity_total_export_daily # electric_export_daily_kWh
   pv_today:
-    - sensor.total_solar_output_today
+    - sensor.sunsynk_total_pv_power_daily
 
   # Load forecast can be used to add to the historical load data (heat-pump)
   # To link to Predheat
@@ -62,12 +62,16 @@ pred_bat:
   #load_forecast:
   #  - predheat.heat_energy$external
   #
+<<<<<<< HEAD
   
   #
+=======
+>>>>>>> 484bf31 (Update sunsynk.yaml (#1357))
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
   inverter_type: SK
+<<<<<<< HEAD
 <<<<<<< HEAD
 
   # Services to control charging/discharging
@@ -86,10 +90,44 @@ pred_bat:
 =======
 >>>>>>> 30bba62 (Update sunsynk.yaml (#1305))
   #
+=======
+
+
+  # **** Start of Outputs to Sunsynk Inverter ****
+
+  charge_start_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode" # Inverter work mode
+    option: "Limited to Home"
+
+  charge_stop_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode" # Inverter work mode
+    option: "Limited to Home"
+
+  discharge_start_service:
+    service: select.select_option
+    entity_id: "select.sunsynk_work_mode"  # Inverter work mode
+    option: "Selling First"
+
+  timed_charge_current:
+    - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A
+
+  timed_discharge_current:
+    - number.sunsynk_battery_max_discharge_current # Inverter battery max discharge setting in A
+
+  charge_limit:
+    - number.sunsynk_set_soc_timezone1 # Inverter SOC time slot1
+
+  # **** End of Outputs to Sunsynk Inverter ****
+
+
+>>>>>>> 484bf31 (Update sunsynk.yaml (#1357))
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
   #
 
+<<<<<<< HEAD
 <<<<<<< HEAD
   charge_rate:
     - sensor.max_battery_charge_rate
@@ -111,30 +149,64 @@ pred_bat:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode"
     option: "Selling First"
+=======
+  # Custom sensors to get the BMS charge/discharge limit, based on inverter size (8000kW, BMS reported limit, and inverter set limit)
+  inverter_limit_charge:
+    - sensor.sunsynk_battery_max_charge_rate # template sensor must be configured in configuration.yaml
 
-  timed_charge_current:
-    - number.sunsynk_battery_max_charge_current
-  timed_discharge_current:
-    - number.sunsynk_battery_max_discharge_current
+  inverter_limit_discharge:
+    - sensor.sunsynk_battery_max_discharge_rate # # template sensor must be configured in configuration.yaml
+
+  # calculations to tell predbat the actual charge/discharge power of the inverter
+  charge_rate:
+    - sensor.sunsynk_charge_rate_calc # template sensor must be configured in configuration.yaml
+
+  discharge_rate:
+    - sensor.sunsynk_discharge_rate_calc # template sensor must be configured in configuration.yaml
+
+  battery_rate_max:
+    - 8000  # The maximum rate of the battery charge/discharge in watts **required to lift the 2600w default limit**
+>>>>>>> 484bf31 (Update sunsynk.yaml (#1357))
+
   battery_voltage:
     - sensor.sunsynk_battery_voltage
-  charge_limit:
-    - number.sunsynk_set_soc_timezone1 # Needs an automation to set across all 6 timezones
 
-  # Custom sensors to get the BMS charge/discharge limit, based on inverter size (5kW, BMS reported limit, and inverter set limit)
-  # Does this need to be an input value?
-  charge_rate:
-     - sensor.max_battery_charge_rate # {{ [5000,[states('number.sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_bms_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
-  discharge_rate:
-     - sensor.max_battery_discharge_rate # {{ [5000,[states('number.sunsynk_battery_max_discharge_current')|int, states('sensor.sunsynk_battery_discharge_bms_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+  battery_power:
+    - sensor.sunsynk_battery_output_power #in watts
 
-  # The maximum rate of the battery charge/discharge in watts
-  battery_rate_max:
-   - 8000
+  pv_power:
+    - sensor.sunsynk_total_solar #in watts
+
+  load_power:
+    - sensor.sunsynk_load_power #in watts
+
+  soc_kw:
+    - sensor.bcc_battery_soc_kwh #in kWh
+
+  soc_max:
+    - input_number.battery_capacity #in kWh
+
+  battery_min_soc:
+    - sensor.sunsynk_battery_capacity_shutdown #in %
+
+#  reserve:
+#    - sensor.sunsynk_battery_capacity_shutdown #in % (believe this is disabled for Sunsynk)
+
+  # Pause mode is not supported by all firmware's and will be ignored if not present
+#  pause_mode:
+#   - select.givtcp_{geserial}_battery_pause_mode
+
+  # Not all firmwares support pause start/end time, delete these if not supported
+  # to avoid spurious writes/warnings
+#  pause_start_time:
+#   - select.givtcp_{geserial}_battery_pause_start_time_slot
+#  pause_end_time:
+#   - select.givtcp_{geserial}_battery_pause_end_time_slot
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
+<<<<<<< HEAD
     - 18000
 
 
@@ -173,6 +245,9 @@ pred_bat:
   battery_min_soc:
     - sensor.sunsynk_battery_min_soc # Could just be hardcoded? My shutdown is set to 20% {{ states('sensor.sunsynk_battery_capacity_shutdown')|int * states('input_number.sunsynk_battery_size')|float / 100 }}
 >>>>>>> 30bba62 (Update sunsynk.yaml (#1305))
+=======
+    - 8000 # change to inverter size in W
+>>>>>>> 484bf31 (Update sunsynk.yaml (#1357))
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -187,7 +262,11 @@ pred_bat:
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
+<<<<<<< HEAD
   # inverter_reserve_max : 98
+=======
+#  inverter_reserve_max : 98
+>>>>>>> 484bf31 (Update sunsynk.yaml (#1357))
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -242,34 +321,34 @@ pred_bat:
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
-  car_charging_energy: 'sensor.myenergi_zappi_19556152_charge_added_session_2'
+#  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
   # Defines the number of cars modelled by the system, set to 0 for no car
-  num_cars: 1
+  num_cars: 0
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
   # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled
   # The list of possible values is in car_charging_planned_response
   # Auto matches Zappi and Wallbox, or change it for your own
   # One entry per car
-  car_charging_planned:
-    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+#  car_charging_planned:
+#    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
-  car_charging_planned_response:
-    - 'yes'
-    - 'on'
-    - 'true'
-    - 'connected'
-    - 'ev connected'
-    - 'charging'
-    - 'paused'
-    - 'waiting for car demand'
-    - 'waiting for ev'
-    - 'scheduled'
-    - 'enabled'
-    - 'latched'
-    - 'locked'
-    - 'plugged in'
+#  car_charging_planned_response:
+#    - 'yes'
+#    - 'on'
+#    - 'true'
+#    - 'connected'
+#    - 'ev connected'
+#    - 'charging'
+#    - 'paused'
+#    - 'waiting for car demand'
+#    - 'waiting for ev'
+#    - 'scheduled'
+#    - 'enabled'
+#    - 'latched'
+#    - 'locked'
+#    - 'plugged in'
 
   # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
   # The car charging now can be set to a sensor to indicate the car is charging and to plan
@@ -278,10 +357,10 @@ pred_bat:
   #  - off
 
   # Positive responses for car_charging_now
-  car_charging_now_response:
-    - 'yes'
-    - 'on'
-    - 'true'
+#  car_charging_now_response:
+#    - 'yes'
+#    - 'on'
+#    - 'true'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
@@ -295,17 +374,24 @@ pred_bat:
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
 
+  # One per car, when true only one car can charge at once, when False multiple cars can charge at once
+  #car_charging_exclusive:
+  #  - True
+
   # If you have Octopus intelligent, enable the intelligent slot information to add to pricing
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  #octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  #octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  #octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
+
+  # Carbon Intensity data from National grid
+  carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
@@ -423,9 +509,8 @@ pred_bat:
   # It's assumed to be in Kwh but scaling can be applied if need be
   #iboost_energy_today: 'sensor.xxxxx'
   #iboost_energy_scaling: 1.0
-
   # Gas rates for comparison
-  metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
 
   # Nordpool market energy rates
   #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
