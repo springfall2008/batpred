@@ -1746,7 +1746,7 @@ class Inverter:
 
             if new_switch != switch:
                 self.base.log(f"Setting Solis Energy Control Switch to {new_switch} {new_mode} from {switch} {old_mode} for {direction} {enable}")
-                self.write_and_poll_option(name=entity_id, entity=entity_id, new_value=new_mode)
+                self.write_and_poll_option(name=entity_id, entity_id=entity_id, new_value=new_mode)
             else:
                 self.base.log(f"Solis Energy Control Switch setting {switch} {new_mode} unchanged for {direction} {enable}")
 
