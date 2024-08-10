@@ -667,9 +667,7 @@ class Inverter:
                     "Note: Cannot find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                 )
         else:
-            self.log(
-                "Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml"
-            )
+            self.log("Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
