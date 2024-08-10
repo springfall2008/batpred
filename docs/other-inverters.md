@@ -266,7 +266,7 @@ Copy into your templates in HA
 #### Sunsynk Battery Max DisCharge Rate
 
 ```yaml
-{{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int, states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+{{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### SunSynk Charge Rate Calc
