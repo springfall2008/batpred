@@ -86,7 +86,6 @@ pred_bat:
 
   charge_limit:
     - number.sunsynk_set_soc_timezone1 # Inverter SOC time slot1
-  # added to test need to add atuomation to copy to sunsynk timeslots
 
   # **** End of Outputs to Sunsynk Inverter ****
 
@@ -128,13 +127,13 @@ pred_bat:
     - sensor.bcc_battery_soc_kwh #in kWh
 
   soc_max:
-    - input_number.battery_cappacity #in kWh
+    - input_number.battery_capacity #in kWh
 
   battery_min_soc:
     - sensor.sunsynk_battery_capacity_shutdown #in %
 
 #  reserve:
-#    - sensor.sunsynk_battery_capacity_shutdown #in % (belive this is disabled for Sunsynk)
+#    - sensor.sunsynk_battery_capacity_shutdown #in % (believe this is disabled for Sunsynk)
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
 #  pause_mode:
@@ -150,7 +149,7 @@ pred_bat:
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - 8000 # change to inveter size in W
+    - 8000 # change to inverter size in W
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
