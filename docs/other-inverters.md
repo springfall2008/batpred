@@ -224,7 +224,7 @@ mode: single
 
 ```
 
-## Inverter control option
+## Inverter control option 
 
 The follow options are supported per inverter:
 
@@ -241,14 +241,12 @@ The mqtt/publish service is used with the topic as defined by **mqtt_topic** in 
 Messages will be sent these controls:
 
 Values that are updated:
-
 - <topic>/set/reserve  - payload=reserve
 - <topic>/set/charge_rate - payload=new_rate
 - <topic>/set/discharge_rate - payload=new_rate
 - <topic>/set/target_soc - payload=target_soc
 
 These three change between battery charge/discharge and auto (idle) mode:
-
 - <topic>/set/charge - payload=charge_rate
 - <topic>/set/discharge - payload=discharge_rate
 - <topic>/set/auto - payload=true
@@ -264,7 +262,6 @@ There are two ways to define a service, the basic mode:
 ```yaml
 charge_start_service: my_service_name_charge
 ```
-
 Will call my_service_name_charge for the charge start service.
 
 Or the custom method:
@@ -296,7 +293,6 @@ charge_start_service:
 Called to start a charge
 
 The default options passed in are:
-
 - device_id - as defined in apps.yaml by **device_id**
 - target_soc - The SOC to charge to
 - power - The charge power to use
@@ -306,7 +302,6 @@ The default options passed in are:
 Called to start a discharge
 
 The default options passed in are:
-
 - device_id - as defined in apps.yaml by **device_id**
 - target_soc - The SOC to discharge to
 - power - The discharge power to use
@@ -320,5 +315,107 @@ device_id - as defined in apps.yaml by **device_id**
 #### discharge_stop_service
 
 Called to stop a discharge
-
 - device_id - as defined in apps.yaml by **device_id**
+
+
+### output_charge_control
+
+Set to power, current or none
+
+When power the inverter has a **charge_rate** and **discharge_rate** setting in watts defined in apps.yaml
+
+When current the inverter has  **timed_charge_current** and **timed_discharge_current** setting in amps defined in apps.yaml
+
+### charge_control_immediate
+
+When True the inverter **timed_charge_current** or **timed_discharge_current** is used to control charging or discharging as/when it starts and stops rather than using a timed method.
+
+### current_dp
+
+Sets the number of decimal places when setting the current in Amps, should be 0 or 1
+
+### has_charge_enable_time
+
+When True the inverter has a setting defined in apps.yaml called **scheduled_charge_enable** when can be used to enable/disable timed charging.
+
+### has_discharge_enable_time
+
+When True the inverter has a setting defined in apps.yaml called **scheduled_discharge_enable** when can be used to enable/disable timed discharging.
+
+### has_target_soc
+
+When True the inverter has a target soc setting in apps.yaml called **charge_limit**, when False charging must be turned on and off by Predbat rather than the inverter doing it based on the target %
+
+### has_reserve_soc
+
+When True the inverter has a reserve soc setting in apps.yaml called **reserve**
+
+### has_timed_pause
+
+When True the inverter has a setting in apps.yaml called **pause_mode** and settings **pause_start_time** and **pause_end_time** which can be used to pause the inverter from charging and discharging the battery - this is for GivEnergy systems only right now.
+
+### charge_time_format
+
+When set to "HH:MM:SS" the inverter has:
+
+**charge_start_time** **charge_end_time**
+**discharge_start_time** **discharge_end_time**
+
+Which are option selectors in the format HH:MM:SS (e.g. 12:23:00) where seconds are always 00.
+
+When set to "H M" the inverter has:
+
+**charge_start_hour** **charge_end_hour** **charge_start_minute** **charge_end_minute**
+**discharge_start_hour** **discharge_end_hour** **discharge_start_minute** **discharge_end_minute**
+
+Settings in apps.yaml which can be used to set the start and end times of charges and discharges
+
+### charge_time_entity_is_option
+
+When True **charge_start_time** **charge_end_time** **discharge_start_time** and **discharge_end_time** are all Options, when false they are number values.
+
+### clock_time_format
+
+Defines the time format of the inverter clock seting **inverter_time** in apps.yaml
+
+### soc_units
+
+Defines the units of the SOC setting (currently not used)
+
+### time_button_press
+
+When true the inverter has a button press which is needed to update the inverter registers from the Home Assistant values.
+
+The apps.yaml setting **charge_discharge_update_button** is the entity name of the button that must be pressed and polled until it updates after each inverter register change.
+
+### support_charge_freeze
+
+When True the inverter supports charge freeze modes
+
+### support_discharge_freeze
+
+When True the inverter supports charge disfreeze modes
+
+### has_ge_inverter_mode
+
+When True the inverter as the GivEnergy inverter modes (ECO, Timed Export etc).
+
+### num_load_entities
+
+Sets the number of **load_power_<n>** settings in apps.yaml are present in addition to **load_power** (the default)
+
+### write_and_poll_sleep
+
+Sets the number of seconds between polls of inverter settings
+
+### has_idle_time
+
+When True the inverter has an idle time register which must be set to the start and end times for ECO mode (GivEnergy EMC)
+
+### can_span_midnight
+
+When True start and end times for charge and discharge can span midnight e.g. 23:00:00 - 01:00:00 is a 2 hour slot.
+
+### charge_discharge_with_rate
+
+When True when charging discharge rate must be 0 and visa-versa. When false the rate does not have to change.
