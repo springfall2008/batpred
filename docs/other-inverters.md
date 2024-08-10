@@ -147,16 +147,93 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 
 ## Sunsynk
 
-This is experimental system, please discuss on the ticket: <https://github.com/springfall2008/batpred/issues/1060>
+- Copy the Sunsynk apps.yaml template and edit for your system.
+- Create the automations below
+- Create the value templates below
 
-- A few custom template sensors are required, the code for those are listed inside the apps.yaml template for Sunsynk, copy them
-into your HA configuration.
+See: <https://github.com/springfall2008/batpred/issues/1331>
 
-- An automation is required to update the charge limits across all timezone's:
+### SunSynk automations
+
+Copy into your HA automations
+
+#### Predbat Charge/Discharge Control
+
+```yaml
+alias: Predbat Charge / Discharge Control
+description: ""
+trigger:
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_charging
+    to: "on"
+    id: predbat_charge_on
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_charging
+    to: "off"
+    id: predbat_charge_off
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_discharging
+    to: "on"
+    id: predbat_discharge_on
+  - platform: state
+    entity_id:
+      - binary_sensor.predbat_discharging
+    to: "off"
+    id: predbat_discharge_off
+condition: []
+action:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_charge_on
+        sequence:
+          - service: switch.turn_on
+            metadata: {}
+            data: {}
+            target:
+              entity_id: switch.sunsynk_grid_charge_timezone1
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_charge_off
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id:
+                - switch.sunsynk_grid_charge_timezone1
+            data: {}
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_discharge_on
+        sequence:
+          - service: switch.turn_on
+            metadata: {}
+            data: {}
+            target:
+              entity_id: switch.sunsynk_solar_sell
+      - conditions:
+          - condition: trigger
+            id:
+              - predbat_discharge_off
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id:
+                - switch.sunsynk_solar_sell
+            data: {}
+mode: single
+```
+
+#### Update the charge limits across all timezone's
 
 ```yaml
 alias: PredBat - Copy Charge Limit
-description: ""
+description: Copy Battery SOC to all time slots
 trigger:
   - platform: state
     entity_id:
@@ -174,6 +251,60 @@ action:
         - number.sunsynk_set_soc_timezone6
       value: "{{ states('number.sunsynk_set_soc_timezone1')|int(20) }}"
 mode: single
+```
+
+### SunSynk Value templates
+
+Copy into your template/sensor area of configuration.yaml
+
+```yaml
+template:
+  sensor:
+    xxxxx
+```
+
+#### Sunsynk Battery Max Charge Rate
+
+```yaml
+- name: "sunsynk_max_battery_charge_rate"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+    {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+```
+
+#### Sunsynk Battery Max DisCharge Rate
+
+```yaml
+- name: "sunsynk_max_battery_discharge_rate"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+    {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
+```
+
+#### Sunsynk Charge Rate Calc
+
+```yaml
+- name: "sunsynk_charge_rate_calc"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+     {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+         * states('sensor.sunsynk_battery_voltage')|float]|min }}
+```
+
+#### Sunsynk Discharge Rate Calc
+
+```yaml
+- name: "sunsynk_discharge_rate_calc"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+     {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+         * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 ## I want to add an unsupported inverter to Predbat
