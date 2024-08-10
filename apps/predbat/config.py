@@ -1031,6 +1031,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "GEC": {
         "name": "GivEnergy Cloud",
@@ -1057,6 +1058,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "GEE": {
         "name": "GivEnergy EMC",
@@ -1083,6 +1085,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": True,
         "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
     },
     "GS": {
         "name": "Ginlong Solis",
@@ -1109,6 +1112,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
     },
     "SE": {
         "name": "SolarEdge",
@@ -1135,6 +1139,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "SX4": {
         "name": "Solax Gen4 (Modbus Power Control)",
@@ -1161,6 +1166,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "SF": {
         "name": "Sofar HYD",
@@ -1187,6 +1193,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "HU": {
         "name": "Huawei Solar",
@@ -1213,6 +1220,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
     "SK": {
         "name": "Sunsynk",
@@ -1240,6 +1248,7 @@ INVERTER_DEF = {
         "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
+        "charge_discharge_with_rate": False,
     },
 }
 

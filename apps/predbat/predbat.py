@@ -8313,6 +8313,9 @@ class PredBat(hass.Hass):
                             quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
+                        if inverter.inv_charge_discharge_with_rate:
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
 
                         # Do we disable discharge during charge?
                         pausedDischarge = False
@@ -8451,7 +8454,10 @@ class PredBat(hass.Hass):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
-                        inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
+                        if inverter.inv_charge_discharge_with_rate:
+                            inverter.adjust_charge_rate(0)
+                        else:
+                            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                         inverter.adjust_pause_mode()
                         resetDischarge = False
                         isDischarging = True
@@ -8470,6 +8476,8 @@ class PredBat(hass.Hass):
                         if self.set_discharge_freeze and (self.discharge_limits_best[0] == 99):
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            if inverter.inv_charge_discharge_with_rate:
+                                inverter.adjust_discharge_rate(0)
                             inverter.adjust_pause_mode(pause_charge=True)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
