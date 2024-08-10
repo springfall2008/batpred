@@ -381,7 +381,7 @@ When True **charge_start_time** **charge_end_time** **discharge_start_time** and
 
 ### clock_time_format
 
-Defines the time format of the inverter clock seting **inverter_time** in apps.yaml
+Defines the time format of the inverter clock setting **inverter_time** in apps.yaml
 
 ### soc_units
 
@@ -399,7 +399,7 @@ When True the inverter supports charge freeze modes
 
 ### support_discharge_freeze
 
-When True the inverter supports charge disfreeze modes
+When True the inverter supports discharge freeze modes
 
 ### has_ge_inverter_mode
 
