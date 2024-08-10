@@ -255,30 +255,56 @@ mode: single
 
 ### SunSynk Value templates
 
-Copy into your templates in HA
+Copy into your template/sensor area of configuration.yaml
+
+```yaml
+template:
+  sensor:
+    xxxxx
+```
 
 #### Sunsynk Battery Max Charge Rate
 
 ```yaml
-{{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+- name: "sunsynk_max_battery_charge_rate"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+    {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### Sunsynk Battery Max DisCharge Rate
 
 ```yaml
-{{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+- name: "sunsynk_max_battery_discharge_rate"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+    {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+        * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### Sunsynk Charge Rate Calc
 
 ```yaml
-{{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+- name: "sunsynk_charge_rate_calc"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+     {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min
+         * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 #### Sunsynk Discharge Rate Calc
 
 ```yaml
-{{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+- name: "sunsynk_discharge_rate_calc"
+  unit_of_measurement: "w"
+  state_class: measurement
+  state: >
+     {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min
+         * states('sensor.sunsynk_battery_voltage')|float]|min }}
 ```
 
 ## I want to add an unsupported inverter to Predbat
