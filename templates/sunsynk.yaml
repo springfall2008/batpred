@@ -1,6 +1,3 @@
-# ------------------------------------------------------------------
-# This is an example configuration, please modify it
-# ------------------------------------------------------------------
 ---
 pred_bat:
   module: predbat
@@ -9,11 +6,11 @@ pred_bat:
   # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
   prefix: predbat
 
-  # Template configuration XXX: Delete this line once you have made your changes
-  template: True
-
   # Timezone to work in
   timezone: Europe/London
+
+  # Template configuration - delete this next line once you edit modified it XXXX:
+  template: True
 
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
@@ -55,39 +52,11 @@ pred_bat:
   #load_forecast:
   #  - predheat.heat_energy$external
   #
-  #
   # Controls/status - must by 1 per inverter
   #
   num_inverters: 1
   inverter_type: SK
 
-  # **** Start of Outputs to Sunsynk Inverter ****
-
-  charge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode" # Inverter work mode
-    option: "Limited to Home"
-
-  charge_stop_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode" # Inverter work mode
-    option: "Limited to Home"
-
-  discharge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode"  # Inverter work mode
-    option: "Selling First"
-
-  timed_charge_current:
-    - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A
-
-  timed_discharge_current:
-    - number.sunsynk_battery_max_discharge_current # Inverter battery max discharge setting in A
-
-  charge_limit:
-    - number.sunsynk_set_soc_timezone1 # Inverter SOC time slot1
-
-  # **** End of Outputs to Sunsynk Inverter ****
 
   # **** Start of Outputs to Sunsynk Inverter ****
 
@@ -104,7 +73,7 @@ pred_bat:
   discharge_start_service:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode"  # Inverter work mode
-    option: "Selling First"
+    option: "Selling First"   
 
   timed_charge_current:
     - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A
@@ -114,8 +83,9 @@ pred_bat:
 
   charge_limit:
     - number.sunsynk_set_soc_timezone1 # Inverter SOC time slot1
+  # added to test need to add atuomation to copy to sunsynk timeslots
 
-  # **** End of Outputs to Sunsynk Inverter ****
+  # **** End of Outputs to Sunsynk Inverter **** 
 
 
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
@@ -124,40 +94,18 @@ pred_bat:
 
   # Custom sensors to get the BMS charge/discharge limit, based on inverter size (8000kW, BMS reported limit, and inverter set limit)
   inverter_limit_charge:
-    - sensor.sunsynk_battery_max_charge_rate # template sensor must be configured in configuration.yaml
-  charge_rate:
-    - sensor.max_battery_charge_rate
-  discharge_rate:
-    - sensor.max_battery_discharge_rate
-  battery_power:
-    - number.sunsynk_inverter_battery_power
-  # Services to control charging/discharging
-  charge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode"
-    option: "Limited to Home"
-  charge_stop_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode"
-    option: "Limited to Home"
-  discharge_start_service:
-    service: select.select_option
-    entity_id: "select.sunsynk_work_mode"
-    option: "Selling First"
-  # Custom sensors to get the BMS charge/discharge limit, based on inverter size (8000kW, BMS reported limit, and inverter set limit)
-  inverter_limit_charge:
-    - sensor.sunsynk_battery_max_charge_rate # template sensor must be configured in configuration.yaml
+    - sensor.sunsynk_battery_max_charge_rate # Needs template sensor see docs
 
   inverter_limit_discharge:
-    - sensor.sunsynk_battery_max_discharge_rate # # template sensor must be configured in configuration.yaml
+    - sensor.sunsynk_battery_max_discharge_rate # Needs template sensor see docs
 
   # calculations to tell predbat the actual charge/discharge power of the inverter
   charge_rate:
-    - sensor.sunsynk_charge_rate_calc # template sensor must be configured in configuration.yaml
+    - sensor.sunsynk_charge_rate_calc # Needs template sensor see docs
 
   discharge_rate:
-    - sensor.sunsynk_discharge_rate_calc # template sensor must be configured in configuration.yaml
-
+    - sensor.sunsynk_discharge_rate_calc # Needs template sensor see docs
+    
   battery_rate_max:
     - 8000  # The maximum rate of the battery charge/discharge in watts **required to lift the 2600w default limit**
 
@@ -177,98 +125,29 @@ pred_bat:
     - sensor.bcc_battery_soc_kwh #in kWh
 
   soc_max:
-    - input_number.battery_capacity #in kWh
+    - input_number.battery_cappacity #in kWh
 
   battery_min_soc:
     - sensor.sunsynk_battery_capacity_shutdown #in %
 
 #  reserve:
-#    - sensor.sunsynk_battery_capacity_shutdown #in % (believe this is disabled for Sunsynk)
+#    - sensor.sunsynk_battery_capacity_shutdown #in % (belive this is disabled for Sunsynk)
 
   # Pause mode is not supported by all firmware's and will be ignored if not present
-#  pause_mode:
-#   - select.givtcp_{geserial}_battery_pause_mode
+  #  pause_mode:
+  #   - select.givtcp_{geserial}_battery_pause_mode
 
   # Not all firmwares support pause start/end time, delete these if not supported
   # to avoid spurious writes/warnings
-#  pause_start_time:
-#   - select.givtcp_{geserial}_battery_pause_start_time_slot
-#  pause_end_time:
-#   - select.givtcp_{geserial}_battery_pause_end_time_slot
+  #  pause_start_time:
+  #   - select.givtcp_{geserial}_battery_pause_start_time_slot
+  #  pause_end_time:
+  #   - select.givtcp_{geserial}_battery_pause_end_time_slot
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - 18000
-
-
-  # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
-  #auto_restart:
-  #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-  #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
-
-  inverter_limit_discharge:
-    - sensor.sunsynk_battery_max_discharge_rate # # template sensor must be configured in configuration.yaml
-
-  # calculations to tell predbat the actual charge/discharge power of the inverter
-  charge_rate:
-    - sensor.sunsynk_charge_rate_calc # template sensor must be configured in configuration.yaml
-
-  discharge_rate:
-    - sensor.sunsynk_discharge_rate_calc # template sensor must be configured in configuration.yaml
-
-  battery_rate_max:
-    - 8000  # The maximum rate of the battery charge/discharge in watts **required to lift the 2600w default limit**
-
-  battery_voltage:
-    - sensor.sunsynk_battery_voltage
-
-  battery_power:
-    - sensor.sunsynk_battery_output_power #in watts
-
-  pv_power:
-    - sensor.sunsynk_total_solar #in watts
-
-  load_power:
-    - sensor.sunsynk_load_power #in watts
-
-  soc_kw:
-    - sensor.bcc_battery_soc_kwh #in kWh
-
-  soc_max:
-    - input_number.battery_capacity #in kWh
-
-  battery_min_soc:
-    - sensor.sunsynk_battery_capacity_shutdown #in %
-
-#  reserve:
-#    - sensor.sunsynk_battery_capacity_shutdown #in % (believe this is disabled for Sunsynk)
-
-  # Pause mode is not supported by all firmware's and will be ignored if not present
-#  pause_mode:
-#   - select.givtcp_{geserial}_battery_pause_mode
-
-  # Not all firmwares support pause start/end time, delete these if not supported
-  # to avoid spurious writes/warnings
-#  pause_start_time:
-#   - select.givtcp_{geserial}_battery_pause_start_time_slot
-#  pause_end_time:
-#   - select.givtcp_{geserial}_battery_pause_end_time_slot
-  pv_power:
-    - sensor.solaredge_ac_power
-  load_power:
-    - sensor.household_load # {{ states('sensor.sunsynk_grid_power')|float + states('sensor.solaredge_ac_power')|float + states('sensor.sunsynk_inverter_output_power')|float }}
-  soc_kw:
-    - sensor.sunsynk_battery_soc_kw
-  charge_limit:
-    - number.sunsynk_inverter_capacity_point_6
-
-  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
-  # If you have a second inverter for PV only please add the two values together
-  inverter_limit:
-    - 8000 # change to inverter size in W
+    - 8000 # change to inveter size in W
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -283,7 +162,7 @@ pred_bat:
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
-  # inverter_reserve_max : 98
+  #  inverter_reserve_max : 98
 
   # Some batteries tail off their charge rate at high soc%
   # enter the charging curve here as a % of the max charge rate for each soc percentage.
@@ -443,15 +322,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
   #rates_import:
-  #  - start: "00:30:00"
-  #    end: "04:30:00"
-  #    rate: 7.5
-  #  - start: "04:30:00"
-  #    end: "00:30:00"
-  #    rate: 40.0
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
   #
   #rates_export:
-  #  - rate: 4.2
+  #  -  rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -469,7 +348,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  #  - date: '2023-09-10'
+  # -  date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 112
@@ -484,6 +363,7 @@ pred_bat:
   # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
   days_previous:
     - 7
+    - 14
 
   # Days previous weight can be used to control the weighting of the previous load points, the values are multiplied by their
   # weights and then divided through by the total weight. E.g. if you used 1 and 0.5 then the first value would have 2/3rd of the weight and the second 1/3rd
