@@ -76,7 +76,7 @@ pred_bat:
   discharge_start_service:
     service: select.select_option
     entity_id: "select.sunsynk_work_mode"  # Inverter work mode
-    option: "Selling First"   
+    option: "Selling First"
 
   timed_charge_current:
     - number.sunsynk_battery_max_charge_current # Inverter battery max charge setting in A
@@ -88,7 +88,7 @@ pred_bat:
     - number.sunsynk_set_soc_timezone1 # Inverter SOC time slot1
   # added to test need to add atuomation to copy to sunsynk timeslots
 
-  # **** End of Outputs to Sunsynk Inverter **** 
+  # **** End of Outputs to Sunsynk Inverter ****
 
 
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
