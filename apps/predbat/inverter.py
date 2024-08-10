@@ -798,8 +798,8 @@ class Inverter:
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
-                    self.base.dp0(charge_rate_now * MINUTE_WATT),
-                    self.base.dp0(discharge_rate_now * MINUTE_WATT),
+                    self.base.dp0(self.charge_rate_now * MINUTE_WATT),
+                    self.base.dp0(self.discharge_rate_now * MINUTE_WATT),
                     self.battery_power,
                     self.battery_voltage,
                 )
