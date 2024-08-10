@@ -99,6 +99,7 @@ as otherwise the car SoC sensor will be ignored
 NOTE: Multiple cars can be planned with Predbat.
 
 ## Additional Car charging configurations
+
 If you have one charger and multiple cars configured in Predbat then set **car_charging_exclusive** in apps.yaml to True to indicate that only one
 car may charge at once (the first car reporting as plugged in will be considered as charging). If you set this to False then it is assumed each car
 can charge independently and hence two or more could charge at once

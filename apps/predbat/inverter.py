@@ -667,9 +667,7 @@ class Inverter:
                     "Note: Cannot find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
                 )
         else:
-            self.log(
-                "Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml"
-            )
+            self.log("Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
         return {}
 
     def create_entity(self, entity_name, value, uom=None, device_class="None"):
@@ -798,8 +796,8 @@ class Inverter:
                     self.id,
                     self.base.dp2(self.soc_kw),
                     self.soc_percent,
-                    self.base.dp0(charge_rate_now * MINUTE_WATT),
-                    self.base.dp0(discharge_rate_now * MINUTE_WATT),
+                    self.base.dp0(self.charge_rate_now * MINUTE_WATT),
+                    self.base.dp0(self.discharge_rate_now * MINUTE_WATT),
                     self.battery_power,
                     self.battery_voltage,
                 )

@@ -10887,7 +10887,7 @@ class PredBat(hass.Hass):
                 self.log("Error: " + traceback.format_exc())
                 self.record_status("Error: Exception raised {}".format(e))
                 raise e
-                
+
             return
 
         # Run every N minutes aligned to the minute
