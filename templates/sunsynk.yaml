@@ -96,17 +96,17 @@ pred_bat:
 
   # Custom sensors to get the BMS charge/discharge limit, based on inverter size (8000kW, BMS reported limit, and inverter set limit)
   inverter_limit_charge:
-    - sensor.sunsynk_battery_max_charge_rate # {{ [8000,[states('input_number.sunsynk_battery_max_charge_current_limit')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+    - sensor.sunsynk_battery_max_charge_rate # template sensor must be configured in configuration.yaml
 
   inverter_limit_discharge:
-    - sensor.sunsynk_battery_max_discharge_rate # {{ [8000,[states('input_number.sunsynk_battery_max_discharge_current_limit')|int, states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+    - sensor.sunsynk_battery_max_discharge_rate # # template sensor must be configured in configuration.yaml
 
   # calculations to tell predbat the actual charge/discharge power of the inverter
   charge_rate:
-    - sensor.sunsynk_charge_rate_calc # {{ [8000,[states('input_number.test_sunsynk_battery_max_charge_current')|int,states('sensor.sunsynk_battery_charge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+    - sensor.sunsynk_charge_rate_calc # template sensor must be configured in configuration.yaml
 
   discharge_rate:
-    - sensor.sunsynk_discharge_rate_calc # {{ [8000,[states('input_number.test_sunsynk_battery_max_discharge_current')|int,states('sensor.sunsynk_battery_discharge_limit_current')|int]|min * states('sensor.sunsynk_battery_voltage')|float]|min }}
+    - sensor.sunsynk_discharge_rate_calc # template sensor must be configured in configuration.yaml
 
   battery_rate_max:
     - 8000  # The maximum rate of the battery charge/discharge in watts **required to lift the 2600w default limit**
