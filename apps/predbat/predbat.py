@@ -810,14 +810,17 @@ class PredBat(hass.Hass):
         for api_key in api_keys:
             params = {"format": "json", "api_key": api_key.strip()}
 
-            url = f"{host}/json/reply/GetUserUsageAllowance"
-            data = self.cache_get_url(url, params, max_age=0)
-            if not data:
-                self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            else:
-                self.solcast_api_limit += data.get("daily_limit", None)
-                self.solcast_api_used += data.get("daily_limit_consumed", None)
-                self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
+            # API Limit no longer works - 15/8/24
+            # wait for Solcast to provide new API
+            #
+            #url = f"{host}/json/reply/GetUserUsageAllowance"
+            #data = self.cache_get_url(url, params, max_age=0)
+            #if not data:
+            #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
+            #else:
+            #    self.solcast_api_limit += data.get("daily_limit", None)
+            #    self.solcast_api_used += data.get("daily_limit_consumed", None)
+            #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
 
             url = f"{host}/rooftop_sites"
             data = self.cache_get_url(url, params, max_age=max_age)
