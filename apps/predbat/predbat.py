@@ -813,11 +813,11 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            #url = f"{host}/json/reply/GetUserUsageAllowance"
-            #data = self.cache_get_url(url, params, max_age=0)
-            #if not data:
+            # url = f"{host}/json/reply/GetUserUsageAllowance"
+            # data = self.cache_get_url(url, params, max_age=0)
+            # if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            #else:
+            # else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
