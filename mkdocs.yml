@@ -9,7 +9,7 @@ nav:
     - 'Install details': install.md
     - energy-rates.md
     - apps-yaml.md
-    - car-charge-planning.md
+    - car-charging.md
     - configuration-guide.md
     - customisation.md
     - video-guides.md
