@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.4"
+THIS_VERSION = "v8.3.5"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -756,7 +756,7 @@ class PredBat(hass.Hass):
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError as e:
-                self.log("Warn: Error downloading data from URL {}, error {} code {}".format(url, e, r.status_code))
+                self.log("Warn: Error downloading data from URL {}, error {} code {} data was {}".format(url, e, r.status_code, r.text))
                 if data:
                     self.log("Warn: Error downloading data from URL {}, using cached data age {} minutes".format(url, self.dp1(age_minutes)))
                 else:
@@ -813,22 +813,28 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            # url = f"{host}/json/reply/GetUserUsageAllowance"
-            # data = self.cache_get_url(url, params, max_age=0)
-            # if not data:
+            #url = f"{host}/json/reply/GetUserUsageAllowance"
+            #data = self.cache_get_url(url, params, max_age=0)
+            #if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            # else:
+            #else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
 
-            url = f"{host}/rooftop_sites"
-            data = self.cache_get_url(url, params, max_age=max_age)
-            if not data:
-                self.log("Warn: Solcast sites could not be downloaded, check your Solcast cloud settings")
-                continue
 
-            sites = data.get("sites", [])
+            site_config = self.get_arg("solcast_sites", [])
+            if site_config:
+                sites = []
+                for site in site_config:
+                    sites.append({'resource_id': site})
+            else:
+                url = f"{host}/rooftop_sites"
+                data = self.cache_get_url(url, params, max_age=max_age)
+                if not data:
+                    self.log("Warn: Solcast sites could not be downloaded, try setting solcast_sites in apps.yaml instead")
+                    continue                
+                sites = data.get("sites", [])
 
             for site in sites:
                 resource_id = site.get("resource_id", None)
