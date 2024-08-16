@@ -474,7 +474,7 @@ Note that by default the solcast API will be used to download all sites (up to 2
 
 ```yaml
 solcast_sites:
-   - '0HSDCF123455'
+   - 'xxxx'
 ```
 
 If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list, i.e.:
