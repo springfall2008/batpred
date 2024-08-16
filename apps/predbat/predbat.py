@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.3"
+THIS_VERSION = "v8.3.4"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -813,11 +813,11 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            # url = f"{host}/json/reply/GetUserUsageAllowance"
-            # data = self.cache_get_url(url, params, max_age=0)
-            # if not data:
+            #url = f"{host}/json/reply/GetUserUsageAllowance"
+            #data = self.cache_get_url(url, params, max_age=0)
+            #if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            # else:
+            #else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
@@ -10855,15 +10855,13 @@ class PredBat(hass.Hass):
         try:
             self.reset()
             self.ha_interface = HAInterface(self)
+
+            # Printable config root
             self.config_root_p = self.config_root
-
-            # Get add-on info by making API call to HA supervisor
-            res = self.ha_interface.api_call("/addons/self/info")
-
-            if res:
-                # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+            slug = self.ha_interface.get_slug()
+            if slug:
                 # and use slug name to determine printable config_root pathname when writing debug info to the log file
-                self.config_root_p = "/addon_configs/" + res["data"]["slug"]
+                self.config_root_p = "/addon_configs/" + slug
 
             self.log("Config root is {} and printable config_root_p is now {}".format(self.config_root, self.config_root_p))
 

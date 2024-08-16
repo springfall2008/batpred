@@ -38,6 +38,8 @@ class HAInterface:
         self.base = base
         self.log = base.log
         self.state_data = {}
+        self.slug = None
+        
         if not self.ha_key:
             self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
         else:
@@ -47,9 +49,23 @@ class HAInterface:
                 self.ha_key = None
             else:
                 self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
+
+                res = self.api_call("/addons/self/info")
+                if res:
+                    # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
+                    self.config_root_p = "/addon_configs/" + res["data"]["slug"]
+                    self.slug = res["data"]["slug"]
+                    self.log("Info: Add-on slug is {}".format(self.slug))
+
                 self.base.create_task(self.socketLoop())
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
+
+    def get_slug(self):
+        """
+        Get the add-on slug.
+        """
+        return self.slug
 
     async def socketLoop(self):
         """
