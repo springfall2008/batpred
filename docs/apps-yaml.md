@@ -469,6 +469,14 @@ solcast_api_key: 'xxxx'
 solcast_poll_hours: 8
 ```
 
+Note that by default the solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
+**solcast_sites** as an array of site IDs:
+
+```yaml
+solcast_sites:
+   - 'xxxx'
+```
+
 If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list, i.e.:
 
 ```yaml

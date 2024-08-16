@@ -31,7 +31,7 @@ class HAInterface:
         """
         Initialize the interface to Home Assistant.
         """
-        self.ha_url = base.args.get("ha_url", "http://supervisor")
+        self.ha_url = base.args.get("ha_url", "http://supervisor/core")
         self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
         self.websocket_active = False
 
@@ -43,7 +43,7 @@ class HAInterface:
         if not self.ha_key:
             self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
         else:
-            check = self.api_call("/core/api/")
+            check = self.api_call("/api/")
             if not check:
                 self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
                 self.ha_key = None
@@ -53,7 +53,6 @@ class HAInterface:
                 res = self.api_call("/addons/self/info")
                 if res:
                     # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
-                    self.config_root_p = "/addon_configs/" + res["data"]["slug"]
                     self.slug = res["data"]["slug"]
                     self.log("Info: Add-on slug is {}".format(self.slug))
 
@@ -76,7 +75,7 @@ class HAInterface:
                 self.log("Info: Web socket stopping")
                 break
 
-            url = "{}/core/api/websocket".format(self.ha_url)
+            url = "{}/api/websocket".format(self.ha_url)
             self.log("Info: Start socket for url {}".format(url))
             async with ClientSession() as session:
                 try:
@@ -192,7 +191,7 @@ class HAInterface:
         """
         if not self.ha_key:
             return
-        item = self.api_call("/core/api/states/{}".format(entity_id))
+        item = self.api_call("/api/states/{}".format(entity_id))
         if item:
             self.update_state_item(item)
 
@@ -212,7 +211,7 @@ class HAInterface:
         """
         if not self.ha_key:
             return
-        res = self.api_call("/core/api/states")
+        res = self.api_call("/api/states")
         if res:
             self.state_data = {}
             for item in res:
@@ -232,7 +231,7 @@ class HAInterface:
 
         start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/core/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
 
     def set_state(self, entity_id, state, attributes={}):
@@ -248,7 +247,7 @@ class HAInterface:
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
-        self.api_call("/core/api/states/{}".format(entity_id), data, post=True)
+        self.api_call("/api/states/{}".format(entity_id), data, post=True)
         self.update_state(entity_id)
 
     def call_service(self, service, **kwargs):
@@ -261,7 +260,7 @@ class HAInterface:
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        self.api_call("/core/api/services/{}".format(service), data, post=True)
+        self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False):
         """
