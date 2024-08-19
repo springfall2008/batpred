@@ -759,7 +759,8 @@ if you have multiple batteries on an inverter that need scaling you should enter
 *TIP:* If you have a GivEnergy 2.6 or 5.2kWh battery then it will have an 80% depth of discharge but it will falsely report its capacity as being the 100% size,
 so set battery_scaling to 0.8 to report the correct usable capacity figure to Predbat.
 
-*TIP:* Likewise if you have a GivEnergy All in One, it will incorrectly report the 13.5kWh usable capacity as 15.9kWh, so set battery_scaling to 0.85 to correct this.
+*TIP:* Likewise, if you have one or multiple GivEnergy All in One (AIO)'s,
+it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, so set battery_scaling to 0.85 to correct this.
 
 If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
