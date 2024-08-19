@@ -112,10 +112,11 @@ All grid charging (regardless of inverter type) has to undergo an AC to DC conve
 
 **input_number.predbat_metric_battery_cycle** (_expert mode_) This sets a 'virtual cost' in pence per kWh on using your battery for charging and discharging.
 Higher numbers will reduce battery cycles at the expense of using higher energy costs.<BR>
-In theory if you think your battery will last say 6000 complete cycles and cost you £4000 and is 9.5kWh then each full charge and discharge cycle is 19kWh
-and so the cost per cycle is £4000 / 19 / 6000 = 3.5p.
+In theory if you have a 9.5kWh battery and think it will last say 6000 complete cycles and it cost you £4000, then each full charge and discharge cycle is 19kWh
+and so the cost per complete cycle is £4000 / 19 / 6000 = 3.5p.
 
-Taking the 3.5p example, Predbat will apply a "virtual cost" of 3.5p to every kWh of charge and of discharge of the battery.
+Taking the 3.5p per cycle example, if you set predbat_metric_battery_cycle to 1.75 (half of 3.5) then Predbat will apply the "virtual cost" of 1.75p
+to every kWh of charge and of discharge of the battery.
 This cost will be included in Predbat's cost optimisation plan when it decides whether to charge, discharge the battery or let the house run on grid import.<BR>
 _NB: For clarity and to re-emphasise, the "virtual cost" will be applied to BOTH the cost calculation for charging AND for discharging the battery._
 
