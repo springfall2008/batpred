@@ -757,7 +757,7 @@ yaxis:
   - id: header_only
     show: false
 series:
-  - entity: sensor.givtcp_sa2243g277_pv_power
+  - entity: sensor.INVERTER_CURRENT_PV_POWER_GENERATION_IN_WATTS
     name: Solar Power
     type: line
     stroke_width: 2
@@ -779,6 +779,7 @@ series:
     opacity: 0.3
     stroke_width: 0
     type: area
+    time_delta: +15min
     extend_to: false
     yaxis_id: kWh
     show:
@@ -794,6 +795,7 @@ series:
     opacity: 0.3
     stroke_width: 0
     type: area
+    time_delta: +15min
     extend_to: false
     yaxis_id: kWh
     show:
@@ -803,7 +805,7 @@ series:
       return entity.attributes.detailedForecast.map((entry) => {
             return [new Date(entry.period_start), entry.pv_estimate10];
           });
-  - entity: sensor.givtcp_sa2243g277_pv_energy_today_kwh
+  - entity: sensor.INVERTER_TOTAL_PV_GENERATION_TODAY_IN_KWH
     yaxis_id: header_only
     name: Today Actual
     stroke_width: 2
