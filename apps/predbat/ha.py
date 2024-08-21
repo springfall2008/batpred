@@ -39,7 +39,7 @@ class HAInterface:
         self.log = base.log
         self.state_data = {}
         self.slug = None
-
+        
         if not self.ha_key:
             self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
         else:
@@ -50,7 +50,7 @@ class HAInterface:
             else:
                 self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
 
-                res = self.api_call("/addons/self/info")
+                res = self.api_call("/addons/self/info", core=False)
                 if res:
                     # get add-on slug name which is the actual directory name under /addon_configs that /config is mounted to
                     self.slug = res["data"]["slug"]
@@ -262,7 +262,7 @@ class HAInterface:
             data[key] = kwargs[key]
         self.api_call("/api/services/{}".format(service), data, post=True)
 
-    def api_call(self, endpoint, data_in=None, post=False):
+    def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
         Make an API call to Home Assistant.
 
@@ -271,7 +271,11 @@ class HAInterface:
         :param post: True if this is a POST request, False for GET.
         :return: The response from the API.
         """
-        url = self.ha_url + endpoint
+        if core:
+            url = self.ha_url + endpoint
+        else:
+            url = self.ha_url.replace("/core", "") + endpoint
+
         headers = {
             "Authorization": "Bearer " + self.ha_key,
             "Content-Type": "application/json",
