@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.5"
+THIS_VERSION = "v8.3.6"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -805,7 +805,7 @@ class PredBat(hass.Hass):
             api_keys = [api_keys]
 
         period_data = {}
-        max_age = self.get_arg("solcast_poll_hours", 8) * 60
+        max_age = self.get_arg("solcast_poll_hours", 8.0) * 60
 
         for api_key in api_keys:
             params = {"format": "json", "api_key": api_key.strip()}
@@ -813,26 +813,27 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            # url = f"{host}/json/reply/GetUserUsageAllowance"
-            # data = self.cache_get_url(url, params, max_age=0)
-            # if not data:
+            #url = f"{host}/json/reply/GetUserUsageAllowance"
+            #data = self.cache_get_url(url, params, max_age=0)
+            #if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            # else:
+            #else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
+
 
             site_config = self.get_arg("solcast_sites", [])
             if site_config:
                 sites = []
                 for site in site_config:
-                    sites.append({"resource_id": site})
+                    sites.append({'resource_id': site})
             else:
                 url = f"{host}/rooftop_sites"
                 data = self.cache_get_url(url, params, max_age=max_age)
                 if not data:
                     self.log("Warn: Solcast sites could not be downloaded, try setting solcast_sites in apps.yaml instead")
-                    continue
+                    continue                
                 sites = data.get("sites", [])
 
             for site in sites:
@@ -10366,7 +10367,12 @@ class PredBat(hass.Hass):
         filepath = self.config_root + "/predbat_config.json"
         if os.path.exists(filepath):
             with open(filepath, "r") as file:
-                settings = json.load(file)
+                try:
+                    settings = json.load(file)
+                except json.JSONDecodeError:
+                    self.log("Warn: Failed to load Predbat settings from {}".format(filepath))
+                    return
+
                 for name in settings:
                     current = self.config_index.get(name, None)
                     if current:
