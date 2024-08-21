@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.5"
+THIS_VERSION = "v8.3.6"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -805,7 +805,7 @@ class PredBat(hass.Hass):
             api_keys = [api_keys]
 
         period_data = {}
-        max_age = self.get_arg("solcast_poll_hours", 8) * 60
+        max_age = self.get_arg("solcast_poll_hours", 8.0) * 60
 
         for api_key in api_keys:
             params = {"format": "json", "api_key": api_key.strip()}
@@ -10366,7 +10366,12 @@ class PredBat(hass.Hass):
         filepath = self.config_root + "/predbat_config.json"
         if os.path.exists(filepath):
             with open(filepath, "r") as file:
-                settings = json.load(file)
+                try:
+                    settings = json.load(file)
+                except json.JSONDecodeError:
+                    self.log("Warn: Failed to load Predbat settings from {}".format(filepath))
+                    return
+
                 for name in settings:
                     current = self.config_index.get(name, None)
                     if current:
