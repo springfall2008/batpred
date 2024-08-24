@@ -492,3 +492,15 @@ You may find that the Predbat add-on installed with an older version of Predbat 
 which might require you to [update Predbat to the correct version](#predbat-built-in-update).
 
 11. When you are happy running the Predbat add-on you can delete the AppDaemon or AppDaemon-predbat add-on.
+
+## Backing up Home Assistant and Predbat
+
+It's strongly recommended that you implement an automatic mechanism to backup your Home Assistant and Predbat system.
+
+There are several ways of backing up Home Assistant but one of the simplest is the [Home Assistant Google Drive Backup](https://github.com/sabeechen/hassio-google-drive-backup)
+which is an add-on that runs every night, automatically makes a backup of Home Assistant (including Predbat), and copies that backup to a Google Drive for safe keeping.
+
+If you create a new Google account specifically for your Home Assistant backups you will automatically get 15Gb of free Google Drive storage, enough for a couple of weeks of backups.
+
+As well as the full Home Assistant backup you manually copy the contents of Predbat's `apps.yaml` configuration file to somewhere safe so that if you accidentally mis-edit it,
+you can get Predbat working quickly again by copying it back again.

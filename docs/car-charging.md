@@ -7,15 +7,7 @@ You will firstly need to have installed the appropriate Home Assistant integrati
 
 ## Configure apps.yaml for your car charging
 
-Next configure the [Car charging settings in apps.yaml](apps-yaml.md#car-charging-integration):
-
-### Car Charging Hold options
-
-Car charging hold is a feature to filter out previous car charging from your historical house load data so that future predictions are more accurate.
-
-See [Car charging filtering](apps-yaml.md#car-charging-filtering).
-
-and [Planned car charging](apps-yaml.md#planned-car-charging) so Predbat knows when you plan to charge your car.
+Start by configuring the [Car charging settings in apps.yaml](apps-yaml.md#car-charging-integration).
 
 ## Car Charging Planning
 

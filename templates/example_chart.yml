@@ -757,7 +757,7 @@ yaxis:
   - id: header_only
     show: false
 series:
-  - entity: sensor.givtcp_sa2243g277_pv_power
+  - entity: predbat.pv_power
     name: Solar Power
     type: line
     stroke_width: 2
@@ -772,13 +772,14 @@ series:
       in_header: false
     group_by:
       func: avg
-      duration: 5m
+      duration: 15m
   - entity: sensor.predbat_pv_today
     name: Forecast
     color: grey
     opacity: 0.3
     stroke_width: 0
     type: area
+    time_delta: +15min
     extend_to: false
     yaxis_id: kWh
     show:
@@ -794,6 +795,7 @@ series:
     opacity: 0.3
     stroke_width: 0
     type: area
+    time_delta: +15min
     extend_to: false
     yaxis_id: kWh
     show:
@@ -803,7 +805,7 @@ series:
       return entity.attributes.detailedForecast.map((entry) => {
             return [new Date(entry.period_start), entry.pv_estimate10];
           });
-  - entity: sensor.givtcp_sa2243g277_pv_energy_today_kwh
+  - entity: predbat.pv_energy_h0
     yaxis_id: header_only
     name: Today Actual
     stroke_width: 2
