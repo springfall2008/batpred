@@ -4481,9 +4481,12 @@ class PredBat(hass.Hass):
                     )
                 else:
                     iboost_change = max(iboost_amount_end - iboost_amount, 0.0)
-                iboost_amount_str = str(self.dp2(iboost_change))
                 if iboost_change > 0:
                     iboost_color = "#FFFF00"
+                    iboost_amount_str = str(self.dp2(iboost_amount)) + " (+" + str(self.dp2(iboost_change)) + ")"
+                else:
+                    if iboost_amount > 0:
+                        iboost_amount_str = str(self.dp2(iboost_amount))
 
             if self.carbon_enable:
                 # Work out carbon intensity and carbon use
@@ -5286,6 +5289,7 @@ class PredBat(hass.Hass):
             if os.path.exists(root):
                 self.config_root = root
                 break
+        self.config_root_p = self.config_root
         self.log("Config root is {}".format(self.config_root))
 
     def optimise_charge_limit_price_threads(
@@ -5416,11 +5420,20 @@ class PredBat(hass.Hass):
 
                         try_discharge[window_n] = 100
                         if window_n in all_d:
-                            hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
-                            if not self.calculate_discharge_oncharge and hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
-                                continue
+                            if not self.calculate_discharge_oncharge:
+                                hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
+                                if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                    continue
                             if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
                                 continue
+                            if (
+                                not self.iboost_on_discharge
+                                and self.iboost_enable
+                                and self.iboost_plan
+                                and (self.hit_charge_window(self.iboost_plan, discharge_window[window_n]["start"], discharge_window[window_n]["end"]) >= 0)
+                            ):
+                                continue
+
                             if window_prices_discharge[window_n] < lowest_price_discharge:
                                 lowest_price_discharge = window_prices_discharge[window_n]
                             try_discharge[window_n] = 0
@@ -6612,8 +6625,16 @@ class PredBat(hass.Hass):
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                         if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                             continue
-                        if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
-                            continue
+                    if (
+                        not self.iboost_on_discharge
+                        and self.iboost_enable
+                        and self.iboost_plan
+                        and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                    ):
+                        continue
+                    if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                        continue
+
                     best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_discharge(
                         window_n,
                         record_discharge_windows,
@@ -6880,6 +6901,13 @@ class PredBat(hass.Hass):
                                 self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
                             ):
                                 continue
+                            if (
+                                not self.iboost_on_discharge
+                                and self.iboost_enable
+                                and self.iboost_plan
+                                and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                            ):
+                                continue
 
                             average = self.discharge_window_best[window_n]["average"]
                             if price < lowest_price_charge:
@@ -7001,6 +7029,13 @@ class PredBat(hass.Hass):
                             if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                 continue
                         if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                            continue
+                        if (
+                            not self.iboost_on_discharge
+                            and self.iboost_enable
+                            and self.iboost_plan
+                            and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                        ):
                             continue
 
                         average = self.discharge_window_best[window_n]["average"]
