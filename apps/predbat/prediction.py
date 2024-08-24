@@ -533,12 +533,12 @@ class Prediction:
                 # IBoost based on plan for given rates
                 if self.iboost_plan and (self.iboost_on_discharge or (discharge_window_n < 0)):
                     iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
-                    iboost_amount = min(iboost_load, self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
+                    iboost_amount = min(iboost_load, self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # IBoost based on Predbat charging
                 if self.iboost_charging and iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy:
                     if charge_window_n >= 0:
-                        iboost_amount = min(self.iboost_max_power * step, self.iboost_max_energy - iboost_today_kwh)
+                        iboost_amount = min(self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # Freeze discharge on iboost
                 if iboost_amount > 0 and self.iboost_prevent_discharge:
