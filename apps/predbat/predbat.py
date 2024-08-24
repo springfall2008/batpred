@@ -813,26 +813,27 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            # url = f"{host}/json/reply/GetUserUsageAllowance"
-            # data = self.cache_get_url(url, params, max_age=0)
-            # if not data:
+            #url = f"{host}/json/reply/GetUserUsageAllowance"
+            #data = self.cache_get_url(url, params, max_age=0)
+            #if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            # else:
+            #else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
+
 
             site_config = self.get_arg("solcast_sites", [])
             if site_config:
                 sites = []
                 for site in site_config:
-                    sites.append({"resource_id": site})
+                    sites.append({'resource_id': site})
             else:
                 url = f"{host}/rooftop_sites"
                 data = self.cache_get_url(url, params, max_age=max_age)
                 if not data:
                     self.log("Warn: Solcast sites could not be downloaded, try setting solcast_sites in apps.yaml instead")
-                    continue
+                    continue                
                 sites = data.get("sites", [])
 
             for site in sites:
@@ -2066,12 +2067,14 @@ class PredBat(hass.Hass):
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def filtered_today(self, time_data):
+    def filtered_today(self, time_data, resetmidnight=False):
         """
         Grab figure for today (midnight)
         """
         today = self.midnight_utc
         tomorrow = today + timedelta(days=1)
+        if resetmidnight:
+            tomorrow = tomorrow - timedelta(minutes=PREDICT_STEP)
         tomorrow_stamp = tomorrow.strftime(TIME_FORMAT)
         tomorrow_value = time_data.get(tomorrow_stamp, None)
         return tomorrow_value
@@ -2633,7 +2636,7 @@ class PredBat(hass.Hass):
                     state=self.dp2(final_iboost_kwh),
                     attributes={
                         "results": self.filtered_times(predict_iboost),
-                        "today": self.filtered_today(predict_iboost),
+                        "today": self.filtered_today(predict_iboost, resetmidnight=True),
                         "friendly_name": "Predicted iBoost energy best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
