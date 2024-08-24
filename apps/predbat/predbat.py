@@ -2066,12 +2066,14 @@ class PredBat(hass.Hass):
                 charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def filtered_today(self, time_data):
+    def filtered_today(self, time_data, resetmidnight=False):
         """
         Grab figure for today (midnight)
         """
         today = self.midnight_utc
         tomorrow = today + timedelta(days=1)
+        if resetmidnight:
+            tomorrow = tomorrow - timedelta(minutes=PREDICT_STEP)
         tomorrow_stamp = tomorrow.strftime(TIME_FORMAT)
         tomorrow_value = time_data.get(tomorrow_stamp, None)
         return tomorrow_value
@@ -2633,7 +2635,7 @@ class PredBat(hass.Hass):
                     state=self.dp2(final_iboost_kwh),
                     attributes={
                         "results": self.filtered_times(predict_iboost),
-                        "today": self.filtered_today(predict_iboost),
+                        "today": self.filtered_today(predict_iboost, resetmidnight=True),
                         "friendly_name": "Predicted iBoost energy best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
