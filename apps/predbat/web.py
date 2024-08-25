@@ -5,6 +5,7 @@ import asyncio
 import os
 from config import CONFIG_ITEMS
 
+
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -14,14 +15,14 @@ class WebInterface:
     async def start(self):
         # Start the web server on port 5052
         app = web.Application()
-        app.router.add_get('/', self.html_index)
-        app.router.add_get('/plan', self.html_plan)
-        app.router.add_get('/log', self.html_log)
-        app.router.add_get('/config', self.html_config)
-        app.router.add_post('/config', self.html_config_post)
+        app.router.add_get("/", self.html_index)
+        app.router.add_get("/plan", self.html_plan)
+        app.router.add_get("/log", self.html_log)
+        app.router.add_get("/config", self.html_config)
+        app.router.add_post("/config", self.html_config_post)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', 5052)
+        site = web.TCPSite(runner, "0.0.0.0", 5052)
         await site.start()
         print("Web interface started")
         while not self.abort:
@@ -29,7 +30,7 @@ class WebInterface:
         print("Web interface cleanup")
         await runner.cleanup()
         print("Web interface stopped")
-    
+
     async def stop(self):
         print("Web interface stop called")
         self.abort = True
@@ -39,7 +40,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = '<html><head><title>Predbat Plan</title>'
+        text = "<html><head><title>Predbat Plan</title>"
 
         text += """
 <style>
@@ -50,7 +51,7 @@ class WebInterface:
   height: 34px;
 }
 
-.switch input { 
+.switch input {
   opacity: 0;
   width: 0;
   height: 0;
@@ -106,7 +107,7 @@ input:checked + .slider:before {
 body {font-family: Arial, Helvetica, sans-serif;}
 * {box-sizing: border-box;}
 
-.form-inline {  
+.form-inline {
   display: flex;
   flex-flow: row wrap;
   align-items: center;
@@ -140,7 +141,7 @@ body {font-family: Arial, Helvetica, sans-serif;}
   .form-inline input {
     margin: 10px 0;
   }
-  
+
   .form-inline {
     flex-direction: column;
     align-items: stretch;
@@ -148,21 +149,21 @@ body {font-family: Arial, Helvetica, sans-serif;}
 }
 </style>
         """
-                
+
         if refresh:
             text += '<meta http-equiv="refresh" content="60" >'
-        text += '</head>\n'
+        text += "</head>\n"
         return text
-    
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
         """
         html_plan = self.base.html_plan
         text = self.get_header("Predbat Plan", refresh=True)
-        text += '<body>{}</body></html>\n'.format(html_plan)
-        return web.Response(content_type='text/html', text=text)
-    
+        text += "<body>{}</body></html>\n".format(html_plan)
+        return web.Response(content_type="text/html", text=text)
+
     async def html_log(self, request):
         """
         Return the Predbat log as an HTML page
@@ -170,7 +171,7 @@ body {font-family: Arial, Helvetica, sans-serif;}
         logfile = "predbat.log"
         logdata = ""
         if os.path.exists(logfile):
-            with open(logfile, 'r') as f:
+            with open(logfile, "r") as f:
                 logdata = f.read()
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=False)
@@ -189,8 +190,8 @@ body {font-family: Arial, Helvetica, sans-serif;}
             lineno += 1
         text += "</table>"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
+
     async def html_config_post(self, request):
         """
         Save the Predbat config from an HTML page
@@ -207,20 +208,20 @@ body {font-family: Arial, Helvetica, sans-serif;}
                         self.log("set {} from {} to {}".format(pitem, old_value, new_value))
                         service_data = {}
                         itemtype = item.get("type", "")
-                        service_data['domain'] = itemtype
-                        service_data['entity_id'] = pitem
-                        if itemtype == 'switch':
-                            service_data['service'] = 'turn_on' if new_value else 'turn_off'
-                        elif itemtype == 'input_number':
-                            service_data['service'] = 'set_value'
-                            service_data['data'] = {'value': new_value}
-                        elif itemtype == 'select':
-                            service_data['service'] = 'select_option'
-                            service_data['data'] = {'option': new_value}
+                        service_data["domain"] = itemtype
+                        service_data["entity_id"] = pitem
+                        if itemtype == "switch":
+                            service_data["service"] = "turn_on" if new_value else "turn_off"
+                        elif itemtype == "input_number":
+                            service_data["service"] = "set_value"
+                            service_data["data"] = {"value": new_value}
+                        elif itemtype == "select":
+                            service_data["service"] = "select_option"
+                            service_data["data"] = {"option": new_value}
                         else:
                             continue
                         self.log("Call service {}".format(service_data))
-                        #await self.base.trigger_callback(service_data)
+                        # await self.base.trigger_callback(service_data)
         return await self.html_config(request)
 
     async def html_config(self, request):
@@ -237,7 +238,6 @@ body {font-family: Arial, Helvetica, sans-serif;}
         text += "<table width=100%>\n"
         text += "<tr><td><b>Name</b></td><td><b>Entity</b></td><td><b>Type</b></td><td><b>Select</b></td><td><b>Current/Default</b></td></tr>\n"
 
-
         switch = """
             <label class="switch">
             <input type="checkbox" id="{}" {}>
@@ -249,7 +249,6 @@ body {font-family: Arial, Helvetica, sans-serif;}
             """
 
         for item in CONFIG_ITEMS:
-
             if self.base.user_config_item_enabled(item):
                 value = item.get("value", "")
                 if value is None:
@@ -270,9 +269,9 @@ body {font-family: Arial, Helvetica, sans-serif;}
                         options.append(value)
                     text += '<td><select name="{}" id="{}">'.format(entity, entity)
                     for option in options:
-                        selected = (option == value)
+                        selected = option == value
                         text += '<option value="{}" {}>{}</option>'.format(option, "selected" if selected else "", option)
-                    text += "</select></td>\n"           
+                    text += "</select></td>\n"
                 else:
                     text += "<td>{}</td>\n".format(value)
                 text += "<td>{} / {}</td></tr>\n".format(value, default)
@@ -281,22 +280,21 @@ body {font-family: Arial, Helvetica, sans-serif;}
         text += "</table>"
         text += "</form>"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
+
     async def html_index(self, request):
         """
         Return the Predbat index page as an HTML page
         """
         # If method get then decode the dictionary of parameters sent in
-        #if request.method == 'GET':
-            #self.log("Request {}".format(request.query))
-            #for key in request.query:
-            #    self.log("Key: {} Value: {}".format(key, request.query[key]))        
+        # if request.method == 'GET':
+        # self.log("Request {}".format(request.query))
+        # for key in request.query:
+        #    self.log("Key: {} Value: {}".format(key, request.query[key]))
         text = self.get_header("Predbat Index", refresh=False)
         text += "<body><h1>Predbat</h1>\n"
         text += "<table><tr><td><a href='/plan'>Plan</a></td></tr></table>\n"
         text += "<table><tr><td><a href='/config'>Config</a></td></tr></table>\n"
         text += "<table><tr><td><a href='/log'>Log</a></td></tr></table>\n"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
