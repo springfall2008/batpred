@@ -43,7 +43,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = "<!doctype html><html><head><title>Predbat Plan</title>"
+        text = "<!doctype html><html><head><title>Predbat Web Interface</title>"
 
         text += """
 <style>
@@ -173,14 +173,14 @@ class WebInterface:
                 if item.get("entity") == pitem:
                     old_value = item.get("value", "")
                     step = item.get("step", 1)
-                    if step == 1:
-                        old_value = int(old_value)
+                    itemtype = item.get("type", "")
                     if old_value is None:
                         old_value = item.get("default", "")
+                    if itemtype == "input_number" and step == 1:
+                        old_value = int(old_value)
                     if old_value != new_value:
                         self.log("set {} from {} to {}".format(pitem, old_value, new_value))
                         service_data = {}
-                        itemtype = item.get("type", "")
                         service_data["domain"] = itemtype
                         if itemtype == "switch":
                             service_data["service"] = "turn_on" if new_value else "turn_off"
