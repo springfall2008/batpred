@@ -251,6 +251,10 @@ class WebInterface:
         for arg in args:
             value = args[arg]
             text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
+        args = self.base.unmatched_args
+        for arg in args:
+            value = args[arg]
+            text += '<tr><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td></tr>\n'.format(arg, self.render_type(arg, value))
 
         text += "</table>"
         text += "</body></html>\n"

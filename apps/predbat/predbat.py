@@ -5081,6 +5081,7 @@ class PredBat(hass.Hass):
         """
         reset_prediction_globals()
         self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
+        self.unmatched_args = {}
         self.define_service_list()
         self.stop_thread = False
         self.solcast_api_limit = None
@@ -10763,6 +10764,7 @@ class PredBat(hass.Hass):
         states = self.get_state_wrapper()
         state_keys = states.keys()
         disabled = []
+        self.unmatched_args = {}
 
         if 0:
             predbat_keys = []
@@ -10784,6 +10786,7 @@ class PredBat(hass.Hass):
 
         # Remove unmatched keys
         for key in disabled:
+            self.unmatched_args[key] = self.args[key]
             del self.args[key]
 
     def sanity(self):
