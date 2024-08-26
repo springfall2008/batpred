@@ -43,7 +43,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = "<!doctype html><html><head><title>Predbat Plan</title>"
+        text = "<!doctype html><html><head><title>Predbat Web Interface</title>"
 
         text += """
 <style>
