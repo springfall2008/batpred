@@ -5,6 +5,7 @@ import asyncio
 import os
 from config import CONFIG_ITEMS
 
+
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -14,14 +15,14 @@ class WebInterface:
     async def start(self):
         # Start the web server on port 5052
         app = web.Application()
-        app.router.add_get('/', self.html_index)
-        app.router.add_get('/plan', self.html_plan)
-        app.router.add_get('/log', self.html_log)
-        app.router.add_get('/config', self.html_config)
-        app.router.add_post('/config', self.html_config_post)
+        app.router.add_get("/", self.html_index)
+        app.router.add_get("/plan", self.html_plan)
+        app.router.add_get("/log", self.html_log)
+        app.router.add_get("/config", self.html_config)
+        app.router.add_post("/config", self.html_config_post)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '0.0.0.0', 5052)
+        site = web.TCPSite(runner, "0.0.0.0", 5052)
         await site.start()
         print("Web interface started")
         while not self.abort:
@@ -29,7 +30,7 @@ class WebInterface:
         print("Web interface cleanup")
         await runner.cleanup()
         print("Web interface stopped")
-    
+
     async def stop(self):
         print("Web interface stop called")
         self.abort = True
@@ -39,7 +40,7 @@ class WebInterface:
         """
         Return the HTML header for a page
         """
-        text = '<!doctype html><html><head><title>Predbat Plan</title>'
+        text = "<!doctype html><html><head><title>Predbat Plan</title>"
 
         text += """
 <style>
@@ -73,21 +74,21 @@ class WebInterface:
         }
 </style>
         """
-                
+
         if refresh:
             text += '<meta http-equiv="refresh" content="60" >'
-        text += '</head>\n'
+        text += "</head>\n"
         return text
-    
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
         """
         html_plan = self.base.html_plan
         text = self.get_header("Predbat Plan", refresh=True)
-        text += '<body>{}</body></html>\n'.format(html_plan)
-        return web.Response(content_type='text/html', text=text)
-    
+        text += "<body>{}</body></html>\n".format(html_plan)
+        return web.Response(content_type="text/html", text=text)
+
     async def html_log(self, request):
         """
         Return the Predbat log as an HTML page
@@ -95,7 +96,7 @@ class WebInterface:
         logfile = "predbat.log"
         logdata = ""
         if os.path.exists(logfile):
-            with open(logfile, 'r') as f:
+            with open(logfile, "r") as f:
                 logdata = f.read()
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=False)
@@ -114,8 +115,8 @@ class WebInterface:
             lineno += 1
         text += "</table>"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
+
     async def html_config_post(self, request):
         """
         Save the Predbat config from an HTML page
@@ -144,16 +145,16 @@ class WebInterface:
                         self.log("set {} from {} to {}".format(pitem, old_value, new_value))
                         service_data = {}
                         itemtype = item.get("type", "")
-                        service_data['domain'] = itemtype
-                        if itemtype == 'switch':
-                            service_data['service'] = 'turn_on' if new_value else 'turn_off'
-                            service_data['service_data'] = {'entity_id': pitem}
-                        elif itemtype == 'input_number':
-                            service_data['service'] = 'set_value'
-                            service_data['service_data'] = {'entity_id': pitem, 'value': new_value}
-                        elif itemtype == 'select':
-                            service_data['service'] = 'select_option'
-                            service_data['service_data'] = {'entity_id': pitem, 'option': new_value}
+                        service_data["domain"] = itemtype
+                        if itemtype == "switch":
+                            service_data["service"] = "turn_on" if new_value else "turn_off"
+                            service_data["service_data"] = {"entity_id": pitem}
+                        elif itemtype == "input_number":
+                            service_data["service"] = "set_value"
+                            service_data["service_data"] = {"entity_id": pitem, "value": new_value}
+                        elif itemtype == "select":
+                            service_data["service"] = "select_option"
+                            service_data["service_data"] = {"entity_id": pitem, "option": new_value}
                         else:
                             continue
                         self.log("Call service {}".format(service_data))
@@ -175,7 +176,6 @@ class WebInterface:
         text += "<table>\n"
         text += "<tr><td><b>Name</b></td><td><b>Entity</b></td><td><b>Type</b></td><td><b>Select</b></td><td><b>Current/Default</b></td></tr>\n"
 
-
         switch = """
             <input type="checkbox" id="{}" name="{}" {}/>
             """
@@ -184,7 +184,6 @@ class WebInterface:
             """
 
         for item in CONFIG_ITEMS:
-
             if self.base.user_config_item_enabled(item):
                 value = item.get("value", "")
                 if value is None:
@@ -206,10 +205,10 @@ class WebInterface:
                         options.append(value)
                     text += '<td><select name="{}" id="{}" form="configform">'.format(useid, useid)
                     for option in options:
-                        selected = (option == value)
+                        selected = option == value
                         option_label = option if option else "None"
                         text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option)
-                    text += "</select></td>\n"           
+                    text += "</select></td>\n"
                 else:
                     text += "<td>{}</td>\n".format(value)
                 text += "<td>{} / {}</td>\n".format(value, default)
@@ -218,22 +217,21 @@ class WebInterface:
         text += "</table>"
         text += "</form>"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
+
     async def html_index(self, request):
         """
         Return the Predbat index page as an HTML page
         """
         # If method get then decode the dictionary of parameters sent in
-        #if request.method == 'GET':
-            #self.log("Request {}".format(request.query))
-            #for key in request.query:
-            #    self.log("Key: {} Value: {}".format(key, request.query[key]))        
+        # if request.method == 'GET':
+        # self.log("Request {}".format(request.query))
+        # for key in request.query:
+        #    self.log("Key: {} Value: {}".format(key, request.query[key]))
         text = self.get_header("Predbat Index", refresh=False)
         text += "<body><h1>Predbat</h1>\n"
         text += "<table><tr><td><a href='/plan'>Plan</a></td></tr></table>\n"
         text += "<table><tr><td><a href='/config'>Config</a></td></tr></table>\n"
         text += "<table><tr><td><a href='/log'>Log</a></td></tr></table>\n"
         text += "</body></html>\n"
-        return web.Response(content_type='text/html', text=text)
-    
+        return web.Response(content_type="text/html", text=text)
