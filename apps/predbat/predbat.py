@@ -122,7 +122,7 @@ class PredBat(hass.Hass):
             await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
-    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False):
         """
         Resolve argument templates and state instances
         """
@@ -130,7 +130,8 @@ class PredBat(hass.Hass):
             if index < len(value):
                 value = value[index]
             else:
-                self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
+                if not quiet:
+                    self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                 value = None
             index = None
 
@@ -146,8 +147,9 @@ class PredBat(hass.Hass):
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
-                        self.log("Warn: Return bad value {} from {} arg {}".format(got, item, arg))
-                        self.record_status("Warn: Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
+                        if not quiet:
+                            self.log("Warn: Return bad value {} from {} arg {}".format(got, item, arg))
+                            self.record_status("Warn: Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
                 return final
             else:
                 final = []
@@ -168,8 +170,9 @@ class PredBat(hass.Hass):
                     else:
                         value = value.format(**self.args)
                 except KeyError:
-                    self.log("Warn: can not resolve {} value {}".format(arg, value))
-                    self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
+                    if not quiet:
+                        self.log("Warn: can not resolve {} value {}".format(arg, value))
+                        self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name

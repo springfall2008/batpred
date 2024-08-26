@@ -215,7 +215,7 @@ class WebInterface:
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
             if "{" in value:
-                text = self.base.resolve_arg(arg, value, indirect=False)
+                text = self.base.resolve_arg(arg, value, indirect=False, quiet=True)
                 if text is None:
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
