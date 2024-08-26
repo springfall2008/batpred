@@ -114,6 +114,7 @@ Nordpool
 octoplus
 octopoints
 Ohme
+onchange
 oncharge
 pdata
 pdetails
