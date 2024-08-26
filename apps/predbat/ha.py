@@ -39,7 +39,7 @@ class HAInterface:
         self.log = base.log
         self.state_data = {}
         self.slug = None
-        
+
         if not self.ha_key:
             self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
         else:

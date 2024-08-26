@@ -814,27 +814,26 @@ class PredBat(hass.Hass):
             # API Limit no longer works - 15/8/24
             # wait for Solcast to provide new API
             #
-            #url = f"{host}/json/reply/GetUserUsageAllowance"
-            #data = self.cache_get_url(url, params, max_age=0)
-            #if not data:
+            # url = f"{host}/json/reply/GetUserUsageAllowance"
+            # data = self.cache_get_url(url, params, max_age=0)
+            # if not data:
             #    self.log("Warn: Solcast, could not access usage data, check your Solcast cloud settings")
-            #else:
+            # else:
             #    self.solcast_api_limit += data.get("daily_limit", None)
             #    self.solcast_api_used += data.get("daily_limit_consumed", None)
             #    self.log("Solcast API limit {} used {}".format(self.solcast_api_limit, self.solcast_api_used))
-
 
             site_config = self.get_arg("solcast_sites", [])
             if site_config:
                 sites = []
                 for site in site_config:
-                    sites.append({'resource_id': site})
+                    sites.append({"resource_id": site})
             else:
                 url = f"{host}/rooftop_sites"
                 data = self.cache_get_url(url, params, max_age=max_age)
                 if not data:
                     self.log("Warn: Solcast sites could not be downloaded, try setting solcast_sites in apps.yaml instead")
-                    continue                
+                    continue
                 sites = data.get("sites", [])
 
             for site in sites:
@@ -5430,7 +5429,12 @@ class PredBat(hass.Hass):
                                     continue
                             if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
                                 continue
-                            if not self.iboost_on_discharge and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, discharge_window[window_n]["start"], discharge_window[window_n]["end"]) >= 0):
+                            if (
+                                not self.iboost_on_discharge
+                                and self.iboost_enable
+                                and self.iboost_plan
+                                and (self.hit_charge_window(self.iboost_plan, discharge_window[window_n]["start"], discharge_window[window_n]["end"]) >= 0)
+                            ):
                                 continue
 
                             if window_prices_discharge[window_n] < lowest_price_discharge:
@@ -6624,7 +6628,12 @@ class PredBat(hass.Hass):
                         hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
                         if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                             continue
-                    if not self.iboost_on_discharge and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0):
+                    if (
+                        not self.iboost_on_discharge
+                        and self.iboost_enable
+                        and self.iboost_plan
+                        and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                    ):
                         continue
                     if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
                         continue
@@ -6886,12 +6895,21 @@ class PredBat(hass.Hass):
 
                         if self.calculate_best_discharge and (window_start not in self.manual_all_times):
                             if not self.calculate_discharge_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"])
+                                hit_charge = self.hit_charge_window(
+                                    self.charge_window_best, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                                )
                                 if hit_charge >= 0 and self.charge_limit_best[hit_charge] > 0.0:
                                     continue
-                            if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
+                            if not self.car_charging_from_battery and self.hit_car_window(
+                                self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]
+                            ):
                                 continue
-                            if not self.iboost_on_discharge and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0):
+                            if (
+                                not self.iboost_on_discharge
+                                and self.iboost_enable
+                                and self.iboost_plan
+                                and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                            ):
                                 continue
 
                             average = self.discharge_window_best[window_n]["average"]
@@ -7015,7 +7033,12 @@ class PredBat(hass.Hass):
                                 continue
                         if not self.car_charging_from_battery and self.hit_car_window(self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]):
                             continue
-                        if not self.iboost_on_discharge and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0):
+                        if (
+                            not self.iboost_on_discharge
+                            and self.iboost_enable
+                            and self.iboost_plan
+                            and (self.hit_charge_window(self.iboost_plan, self.discharge_window_best[window_n]["start"], self.discharge_window_best[window_n]["end"]) >= 0)
+                        ):
                             continue
 
                         average = self.discharge_window_best[window_n]["average"]
@@ -10887,7 +10910,7 @@ class PredBat(hass.Hass):
             self.web_interface = None
             self.web_interface_task = None
             self.log("Starting web interface")
-            self.web_interface = WebInterface(self)  
+            self.web_interface = WebInterface(self)
             self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Printable config root
