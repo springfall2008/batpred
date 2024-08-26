@@ -10882,14 +10882,13 @@ class PredBat(hass.Hass):
 
         try:
             self.reset()
+            self.log("Starting HA interface")
             self.ha_interface = HAInterface(self)
             self.web_interface = None
             self.web_interface_task = None
-
-            if self.get_arg("web", False):
-                self.log("Predbat: Web interface enabled")
-                self.web_interface = WebInterface(self)  
-                self.web_interface_task = self.create_task(self.web_interface.start())
+            self.log("Starting web interface")
+            self.web_interface = WebInterface(self)  
+            self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Printable config root
             self.config_root_p = self.config_root
