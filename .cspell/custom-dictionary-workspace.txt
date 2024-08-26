@@ -23,8 +23,8 @@ chargedischarge
 Chrg
 citem
 Codespaces
-configform
 collapsable
+configform
 crosscharge
 customisation
 Customise
@@ -48,8 +48,8 @@ dwindow
 Eddi
 elif
 emszzzz
-endt
 enctype
+endt
 feedin
 fentry
 Fingerbot
@@ -80,8 +80,8 @@ idetails
 inday
 invname
 isort
-ivtime
 itemtype
+ivtime
 kopt
 Krakenflex
 kwhb
@@ -118,13 +118,13 @@ oncharge
 pdata
 pdetails
 perc
+pitem
+postdata
 ppdetails
 Pred
 Predai
 Predbat
 Predheat
-postdata
-pitem
 pvbat
 pwindow
 pylint
