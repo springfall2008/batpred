@@ -32,9 +32,10 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.7"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
+THIS_VERSION = "v8.4.0"
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
+from web import WebInterface
 
 # Sanity check the install and re-download if corrupted
 if not check_install():
@@ -4554,6 +4555,7 @@ class PredBat(hass.Hass):
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+        self.html_plan = html
 
     def publish_rates(self, rates, export, gas=False):
         """
@@ -5075,6 +5077,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         reset_prediction_globals()
+        self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.define_service_list()
         self.stop_thread = False
         self.solcast_api_limit = None
@@ -10557,6 +10560,7 @@ class PredBat(hass.Hass):
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
+                print("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
     def define_service_list(self):
@@ -10901,7 +10905,13 @@ class PredBat(hass.Hass):
 
         try:
             self.reset()
+            self.log("Starting HA interface")
             self.ha_interface = HAInterface(self)
+            self.web_interface = None
+            self.web_interface_task = None
+            self.log("Starting web interface")
+            self.web_interface = WebInterface(self)
+            self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -10972,6 +10982,9 @@ class PredBat(hass.Hass):
         """
         self.log("Predbat terminating")
         self.stop_thread = True
+        if self.web_interface:
+            await self.web_interface.stop()
+
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
             if self.pool:
