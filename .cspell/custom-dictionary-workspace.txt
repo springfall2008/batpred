@@ -23,6 +23,7 @@ chargedischarge
 Chrg
 citem
 Codespaces
+configform
 collapsable
 crosscharge
 customisation
@@ -48,6 +49,7 @@ Eddi
 elif
 emszzzz
 endt
+enctype
 feedin
 fentry
 Fingerbot
@@ -79,12 +81,15 @@ inday
 invname
 isort
 ivtime
+itemtype
 kopt
 Krakenflex
 kwhb
 linebreak
 localfolder
 lockstep
+logdata
+loglines
 markdownlint
 matplotlib
 maximise
@@ -118,6 +123,8 @@ Pred
 Predai
 Predbat
 Predheat
+postdata
+pitem
 pvbat
 pwindow
 pylint
@@ -165,6 +172,7 @@ timezone
 Trefor
 treforsiphone
 unstaged
+useid
 venv
 Wallbox
 welink
