@@ -93,37 +93,18 @@ You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on)
 
 If you have used the Predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
 
-## AppDaemon-Predbat combined install
+Predbat web interface will work through the add-on, you can click on the Web UI button to open it once it is running.
 
-Another way to install Predbat is with a combined AppDaemon/Predbat add-on.
-This is a fork of AppDaemon which automatically includes an install of Predbat.
-
-Installing the combined AppDaemon-predbat add-on is thus simpler for new users as they do not need to install HACS, AppDaemon and Predbat as three separate installation steps.
-If you are already running AppDaemon then the original installation method for Predbat still exists, is still supported, and is described below
-in [Predbat Installation into AppDaemon](#predbat-installation-into-appdaemon).
-
-To install the combined AppDaemon-predbat add-on:
-
-- Go to Settings / Add-ons / Add-on Store (bottom right), click the three dots in the top right, then Repositories and type
-[https://github.com/springfall2008/appdaemon-predbat](https://github.com/springfall2008/appdaemon-predbat)', click ADD, then CLOSE.
-- In order to refresh the list of available add-on's, navigate back through Settings / Add-ons / Add-on Store, scroll down and select 'AppDaemon with Predbat'
-- Click INSTALL and wait for the add-on to be installed
-- Once it has finished installing, ensure that the 'Start on boot' option is turned on, then click 'START'
-
-**NOTE:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
-
-These are located under the Home Assistant directory `/addon_configs/46f69597_appdaemon-predbat` which contains:
-
-- **predbat.log** - Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
-- **apps/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
-
-You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on) to open the directory `/addon_configs/46f69597_appdaemon-predbat` and view these files.
-
-If you have used the AppDaemon-predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
+If you wish to use Docker with Predbat its recommended you read the Docker installation instructions inside the Predbat add-on rather than going down the AppDaemon route
+listed below.
 
 ## Predbat installation into AppDaemon
 
-This is the "classic" way of installing Predbat, to firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
+**Not Recommended**
+
+**NOTE:** The Predbat web interface will not work with AppDaemon.
+
+This is the old way of installing Predbat, to firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
 and finally install Predbat from HACS to run within AppDaemon.
 
 ### HACS install
@@ -207,7 +188,7 @@ As you are following the 'install Predbat through HACS' installation method thes
 - **appdaemon.log** - AppDaemon and Predbat's active logfile that reports detail of what Predbat is doing, and details of any errors
 - **apps/batpred/config/apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
-## Predbat manual install
+### Predbat manual install
 
 A manual install is suitable for those running Docker type systems where HACS does not function correctly and you had to manually install AppDaemon.
 
@@ -409,9 +390,11 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
-If you have used either the [Predbat add-on](#predbat-add-on-install) or [Combined AppDaemon and Predbat add-on](#appdaemon-predbat-combined-install) installation method then
-once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
+Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
+
+Please note that using the internal update mechanism of Predbat will not inform HACS that Predbat has been updated. If you used HACS to install Predbat you do not need
+to use it again unless your system is in need of repair.
 
 ## HACS Update
 
@@ -462,7 +445,7 @@ The Predbat code that runs is exactly the same and the configuration is exactly 
     - Click START, wait a minute for the add-on to initialise itself, then click STOP
 
 7. Open your file editor and open your existing `apps.yaml` file:
-    - If you are using the [combined AppDaemon/Predbat add-on installation method](#appdaemon-predbat-combined-install), it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
+    - If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
     or
 
     - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`

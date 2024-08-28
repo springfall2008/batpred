@@ -5,6 +5,16 @@ Each time Predbat runs it outputs a lot of information about the current perform
 This section of the documentation explains the different output and logging data that Predbat produces and gives an overview of how to display that information within Home Assistant.
 There can never be a single Predbat dashboard that suits every user, so instead Predbat gives a starter-set of displays that can be adapted to your individual needs.
 
+## Web interface
+
+Predbat has a Web interface active on port 5025 which can be opened by clicking on Web Interface from the Add-on or directly opening the port in your browser
+e.g. <http://homeassistant.local:5052/>
+
+The Web interface can allow you to view the current plan, adjust the configuration, check your apps.yaml and view the logfiles. You can change your view using
+the top menu bar.
+
+![image](https://github.com/user-attachments/assets/0879e48f-fdff-460d-8c11-42abcb13a345)
+
 ## Displaying output data
 
 Each Predbat configuration item is named *input_number.predbat_xxx*, *switch.predbat_yyy* or *select.predbat_zzz* depending on the control type.
