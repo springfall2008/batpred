@@ -7,8 +7,8 @@ There can never be a single Predbat dashboard that suits every user, so instead 
 
 ## Web interface
 
-Predbat has a Web interface active on port 5025 which can be opened by clicking on Web Interface from the Add-on or directly opening the port in your browser 
-e.g. http://homeassistant.local:5052/
+Predbat has a Web interface active on port 5025 which can be opened by clicking on Web Interface from the Add-on or directly opening the port in your browser
+e.g. <http://homeassistant.local:5052/>
 
 The Web interface can allow you to view the current plan, adjust the configuration, check your apps.yaml and view the logfiles. You can change your view using
 the top menu bar.
