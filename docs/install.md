@@ -443,7 +443,7 @@ The Predbat code that runs is exactly the same and the configuration is exactly 
     - Click START, wait a minute for the add-on to initialise itself, then click STOP
 
 7. Open your file editor and open your existing `apps.yaml` file:
-    - If you are using the [combined AppDaemon/Predbat add-on installation method](#appdaemon-predbat-combined-install), it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
+    - If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
     or
 
     - with the [HACS, Appdaemon add-on then Predbat installation method](#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`
