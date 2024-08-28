@@ -98,9 +98,11 @@ Predbat web interface will work through the add-on, you can click on the Web UI 
 If you wish to use Docker with Predbat its recommended you read the Docker installation instructions inside the Predbat add-on rather than going down the AppDaemon route
 listed below.
 
-## Predbat installation into AppDaemon (old)
+## Predbat installation into AppDaemon
 
-Note: The Predbat web interface will not work with AppDaemon.
+**Not Recommended**
+
+**NOTE:** The Predbat web interface will not work with AppDaemon.
 
 This is the old way of installing Predbat, to firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
 and finally install Predbat from HACS to run within AppDaemon.
