@@ -55,14 +55,13 @@ Please read: [Other Inverters](other-inverters.md) for non GivEnergy inverters
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML aware editors such as VSCode.
 
 Once you have completed your apps.yaml and started Predbat you may want to open the Predbat Web Interface and click on apps.yaml. Review any items shown
-in a red background as those do not match (its okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not 
+in a red background as those do not match (its okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SOC if you don't have a car).
 
 As an example these do not match and are shown in the web interface in red, I'm ignoring them as I only have one inverter and I'm using
 the Predbat internal Solcast rather than the external integration:
 
 ![image](https://github.com/user-attachments/assets/0eda352c-c6fc-459c-abda-5c0de0b2372b)
-
 
 ## Basics
 
