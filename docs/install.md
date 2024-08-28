@@ -388,9 +388,11 @@ Alternatively, if you turn on **switch.predbat_auto_update**, Predbat will autom
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/56bca491-1069-4abb-be29-a50b0a67a6b9)
 
-If you have used either the [Predbat add-on](#predbat-add-on-install) or [Combined AppDaemon and Predbat add-on](#appdaemon-predbat-combined-install) installation method then
-once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
+Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by enabling the **switch.predbat_auto_update** to auto-update Predbat.
+
+Please note that using the internal update mechanism of Predbat will not inform HACS that Predbat has been updated. If you used HACS to install Predbat you do not need
+to use it again unless your system is in need of repair.
 
 ## HACS Update
 
