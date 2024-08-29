@@ -39,7 +39,7 @@ class WebInterface:
         self.abort = True
         await asyncio.sleep(1)
 
-    def get_header(self, title, refresh=False):
+    def get_header(self, title, refresh=0):
         """
         Return the HTML header for a page
         """
@@ -109,7 +109,7 @@ class WebInterface:
         """
 
         if refresh:
-            text += '<meta http-equiv="refresh" content="60" >'
+            text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
         text += "</head>\n"
         return text
 
@@ -118,7 +118,7 @@ class WebInterface:
         Return the Predbat plan as an HTML page
         """
         html_plan = self.base.html_plan
-        text = self.get_header("Predbat Plan", refresh=True)
+        text = self.get_header("Predbat Plan", refresh=60)
         text += "<body>{}</body></html>\n".format(html_plan)
         return web.Response(content_type="text/html", text=text)
 
@@ -132,7 +132,7 @@ class WebInterface:
             with open(logfile, "r") as f:
                 logdata = f.read()
         loglines = logdata.split("\n")
-        text = self.get_header("Predbat Log", refresh=True)
+        text = self.get_header("Predbat Log", refresh=10)
         text += "<body bgcolor=#ffffff>"
         text += "<table width=100%>\n"
 
@@ -145,7 +145,7 @@ class WebInterface:
                 start_line = line[0:27]
                 rest_line = line[27:]
                 text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-            lineno -= 1
+            lineno -=1
             count_lines += 1
         text += "</table>"
         text += "</body></html>\n"
@@ -244,7 +244,7 @@ class WebInterface:
         """
         Render apps.yaml as an HTML page
         """
-        text = self.get_header("Predbat Config", refresh=True)
+        text = self.get_header("Predbat Config")
         text += "<body>\n"
         text += "<table>\n"
         text += "<tr><td><b>Name</b></td><td><b>Value</b></td><td>\n"
@@ -267,7 +267,7 @@ class WebInterface:
         Return the Predbat config as an HTML page
         """
 
-        text = self.get_header("Predbat Config", refresh=True)
+        text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
         text += '<form class="form-inline" action="/config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
@@ -330,7 +330,7 @@ class WebInterface:
         """
         Return the Predbat Menu page as an HTML page
         """
-        text = self.get_header("Predbat Menu", refresh=False)
+        text = self.get_header("Predbat Menu")
         text += "<body>\n"
         text += "<table><tr>\n"
         text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
@@ -346,7 +346,7 @@ class WebInterface:
         """
         Return the Predbat index page as an HTML page
         """
-        text = self.get_header("Predbat Index", refresh=False)
+        text = self.get_header("Predbat Index")
         text += '<div class="iframe-container">\n'
         text += '<iframe src="/menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
         text += '<iframe src="/plan" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
