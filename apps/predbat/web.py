@@ -145,7 +145,7 @@ class WebInterface:
                 start_line = line[0:27]
                 rest_line = line[27:]
                 text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-            lineno -=1
+            lineno -= 1
             count_lines += 1
         text += "</table>"
         text += "</body></html>\n"
