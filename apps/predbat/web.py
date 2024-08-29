@@ -137,14 +137,16 @@ class WebInterface:
         text += "<table width=100%>\n"
 
         total_lines = len(loglines)
-        start_line = max(0, total_lines - 1024)
-        lineno = start_line
-        while lineno < total_lines:
+        count_lines = 0
+        lineno = total_lines - 1
+        while count_lines < 1024:
             line = loglines[lineno]
-            start_line = line[0:27]
-            rest_line = line[27:]
-            text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-            lineno += 1
+            if line:
+                start_line = line[0:27]
+                rest_line = line[27:]
+                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+            lineno -=1
+            count_lines += 1
         text += "</table>"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)

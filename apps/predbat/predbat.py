@@ -32,10 +32,9 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.0"
+THIS_VERSION = "v8.4.1"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
-from web import WebInterface
 
 # Sanity check the install and re-download if corrupted
 if not check_install():
@@ -75,6 +74,7 @@ from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_pr
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
 from inverter import Inverter
 from ha import HAInterface
+from web import WebInterface
 
 """
 Used to mimic threads when they are disabled
