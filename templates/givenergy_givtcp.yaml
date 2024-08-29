@@ -71,7 +71,8 @@ pred_bat:
   #
   # Controls/status - must by 1 per inverter
   #
-  inverter: "GE"
+  inverter_type:
+    - "GE"
   num_inverters: 1
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
