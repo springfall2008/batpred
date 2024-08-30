@@ -765,7 +765,6 @@ series:
     color: Orange
     yaxis_id: kWh
     unit: kW
-    transform: return x/1000;
     extend_to: now
     show:
       legend_value: true
