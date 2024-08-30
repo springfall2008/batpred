@@ -54,6 +54,7 @@ feedin
 fentry
 Fingerbot
 firstparty
+foxess
 futurerate
 gekey
 geserial
@@ -78,6 +79,7 @@ iboost
 idag
 idetails
 inday
+invbatpower
 invname
 isort
 itemtype

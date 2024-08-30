@@ -35,6 +35,7 @@ You will need to install an integration to communicate with and control your inv
 | Huawei    | Huawei Modbus    | <https://github.com/wlcrs/huawei_solar> |
 | SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
 | SunSynk   | SunSynk Modbus   | <https://github.com/kellerza/sunsynk> |
+| Fox       | Fox Modbus       | <https://github.com/nathanmarlor/foxess_modbus> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
 Please see [Other Inverters](other-inverters.md) for details on the install details.
