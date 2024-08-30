@@ -55,6 +55,7 @@ fentry
 Fingerbot
 firstparty
 futurerate
+foxess
 gekey
 geserial
 geseriale
@@ -79,6 +80,7 @@ idag
 idetails
 inday
 invname
+invbatpower
 isort
 itemtype
 ivtime
