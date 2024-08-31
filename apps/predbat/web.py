@@ -3,9 +3,10 @@
 from aiohttp import web
 import asyncio
 import os
-from config import CONFIG_ITEMS
 import re
 
+from config import CONFIG_ITEMS
+from utils import calc_percent_limit
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -23,6 +24,7 @@ class WebInterface:
         app.router.add_get("/apps", self.html_apps)
         app.router.add_get("/config", self.html_config)
         app.router.add_post("/config", self.html_config_post)
+        app.router.add_get("/dash", self.html_dash)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -39,6 +41,57 @@ class WebInterface:
         self.abort = True
         await asyncio.sleep(1)
 
+    def get_attributes_html(self, entity):
+        text = ""
+        attributes = self.base.dashboard_values.get(entity, {}).get('attributes', {})
+        if not attributes:
+            return ""
+        text += "<table>"
+        for key in attributes:
+            if key in ["icon", "device_class", "state_class", "unit_of_measurement", "friendly_name"]:
+                continue
+            value = attributes[key]
+            if len(str(value)) > 30:
+                value = str(value)[:30] + "..."
+            text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
+        text += "</table>"
+        return text
+    
+    def get_status_html(self, level, status):
+
+        text = ""
+        if not self.base.dashboard_index:
+            text += "<h2>Loading please wait...</h2>"
+            return text
+
+        text += "<h2>Status</h2>\n"
+        text += "<table>\n"
+        text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
+        text += "</table>\n"
+        text += "<br>\n"
+
+        text += "<h2>Entities</h2>\n"
+        text += "<table>\n"
+        text += "<tr><th>Icon</th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+
+        for entity in self.base.dashboard_index:  
+            state = self.base.dashboard_values.get(entity, {}).get('state', None)
+            attributes = self.base.dashboard_values.get(entity, {}).get('attributes', {})
+            unit_of_measurement = attributes.get("unit_of_measurement", "")
+            icon = attributes.get("icon", "")
+            if icon:
+                icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:",""))
+            if unit_of_measurement is None:
+                unit_of_measurement = ""
+            friendly_name = attributes.get("friendly_name", "")
+            if not state:
+                state = "None"
+            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+        text += "</table>\n"
+
+        return text
+
     def get_header(self, title, refresh=0):
         """
         Return the HTML header for a page
@@ -46,6 +99,7 @@ class WebInterface:
         text = "<!doctype html><html><head><title>Predbat Web Interface</title>"
 
         text += """
+<link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 <style>
         body, html {
             margin: 0;
@@ -105,8 +159,8 @@ class WebInterface:
         .modified {
             background-color: #ffcccc;
         }
-</style>
         """
+        text += "</style>"
 
         if refresh:
             text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
@@ -145,7 +199,7 @@ class WebInterface:
                 start_line = line[0:27]
                 rest_line = line[27:]
                 text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-            lineno -= 1
+            lineno -=1
             count_lines += 1
         text += "</table>"
         text += "</body></html>\n"
@@ -240,6 +294,17 @@ class WebInterface:
             text = str(value)
         return text
 
+    async def html_dash(self, request):
+        """
+        Render apps.yaml as an HTML page
+        """
+        text = self.get_header("Predbat Dashboard")
+        text += "<body>\n"
+        soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
+        text += self.get_status_html(soc_perc, self.base.previous_status)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_apps(self, request):
         """
         Render apps.yaml as an HTML page
@@ -247,7 +312,7 @@ class WebInterface:
         text = self.get_header("Predbat Config")
         text += "<body>\n"
         text += "<table>\n"
-        text += "<tr><td><b>Name</b></td><td><b>Value</b></td><td>\n"
+        text += "<tr><th>Name</th><th>Value</th><td>\n"
 
         args = self.base.args
         for arg in args:
@@ -271,7 +336,7 @@ class WebInterface:
         text += "<body>\n"
         text += '<form class="form-inline" action="/config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
-        text += "<tr><td><b>Name</b></td><td><b>Entity</b></td><td><b>Type</b></td><td><b>Current</b></td><td><b>Default</b></td><td><b>Select</b></td></tr>\n"
+        text += "<tr><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
 
         input_number = """
             <input type="number" id="{}" name="{}" value="{}" min="{}" max="{}" step="{}" onchange="javascript: this.form.submit();">
@@ -334,6 +399,7 @@ class WebInterface:
         text += "<body>\n"
         text += "<table><tr>\n"
         text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
+        text += '<td><a href="/dash" target="main_frame">Dash</a></td>\n'
         text += '<td><a href="/plan" target="main_frame">Plan</a></td>\n'
         text += '<td><a href="/config" target="main_frame">Config</a></td>\n'
         text += '<td><a href="/apps" target="main_frame">apps.yaml</a></td>\n'
@@ -347,9 +413,10 @@ class WebInterface:
         Return the Predbat index page as an HTML page
         """
         text = self.get_header("Predbat Index")
+        text += "<body>\n"
         text += '<div class="iframe-container">\n'
         text += '<iframe src="/menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
-        text += '<iframe src="/plan" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
+        text += '<iframe src="/dash" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
