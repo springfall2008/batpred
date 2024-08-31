@@ -8,6 +8,7 @@ import re
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
 
+
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -43,7 +44,7 @@ class WebInterface:
 
     def get_attributes_html(self, entity):
         text = ""
-        attributes = self.base.dashboard_values.get(entity, {}).get('attributes', {})
+        attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
         if not attributes:
             return ""
         text += "<table>"
@@ -56,9 +57,8 @@ class WebInterface:
             text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
         text += "</table>"
         return text
-    
-    def get_status_html(self, level, status):
 
+    def get_status_html(self, level, status):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -75,19 +75,21 @@ class WebInterface:
         text += "<table>\n"
         text += "<tr><th>Icon</th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
 
-        for entity in self.base.dashboard_index:  
-            state = self.base.dashboard_values.get(entity, {}).get('state', None)
-            attributes = self.base.dashboard_values.get(entity, {}).get('attributes', {})
+        for entity in self.base.dashboard_index:
+            state = self.base.dashboard_values.get(entity, {}).get("state", None)
+            attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
             unit_of_measurement = attributes.get("unit_of_measurement", "")
             icon = attributes.get("icon", "")
             if icon:
-                icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:",""))
+                icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
             if unit_of_measurement is None:
                 unit_of_measurement = ""
             friendly_name = attributes.get("friendly_name", "")
             if not state:
                 state = "None"
-            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
+            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(
+                icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity)
+            )
         text += "</table>\n"
 
         return text
@@ -199,7 +201,7 @@ class WebInterface:
                 start_line = line[0:27]
                 rest_line = line[27:]
                 text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-            lineno -=1
+            lineno -= 1
             count_lines += 1
         text += "</table>"
         text += "</body></html>\n"
