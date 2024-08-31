@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.1"
+THIS_VERSION = "v8.4.2"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -2316,7 +2316,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2556,7 +2556,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2760,7 +2760,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports best 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2828,7 +2828,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports base 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -5100,6 +5100,7 @@ class PredBat(hass.Hass):
         self.manual_all_times = []
         self.config_index = {}
         self.dashboard_index = []
+        self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.previous_status = None
         self.had_errors = False
@@ -10344,6 +10345,9 @@ class PredBat(hass.Hass):
         self.set_state_wrapper(entity_id=entity, state=state, attributes=attributes)
         if entity not in self.dashboard_index:
             self.dashboard_index.append(entity)
+        self.dashboard_values[entity] = {}
+        self.dashboard_values[entity]["state"] = state
+        self.dashboard_values[entity]["attributes"] = attributes
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
