@@ -53,7 +53,7 @@ class WebInterface:
                 continue
             value = attributes[key]
             if len(str(value)) > 30:
-                value = str(value)[:30] + "..."
+                value = "(large data)"
             text += "<tr><td>{}</td><td>{}</td></tr>".format(key, value)
         text += "</table>"
         return text
@@ -187,22 +187,57 @@ class WebInterface:
         if os.path.exists(logfile):
             with open(logfile, "r") as f:
                 logdata = f.read()
+
+        # Decode method get arguments
+        args = request.query
+        errors = False
+        warnings = False
+        if "errors" in args:
+            errors = True
+        if "warnings" in args:
+            warnings = True
+
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=10)
         text += "<body bgcolor=#ffffff>"
+
+        if errors:
+            text += "<h2>Logfile (errors)</h2>\n"
+        elif warnings:
+            text += "<h2>Logfile (Warnings)</h2>\n"
+        else:
+            text += "<h2>Logfile (All)</h2>\n"
+
+        text += '- <a href="/log">All</a> '
+        text += '<a href="/log?warnings">Warnings</a> '
+        text += '<a href="/log?errors">Errors</a><br>\n'
+
         text += "<table width=100%>\n"
 
         total_lines = len(loglines)
         count_lines = 0
         lineno = total_lines - 1
-        while count_lines < 1024:
+        while count_lines < 1024 and lineno >= 0:
             line = loglines[lineno]
-            if line:
-                start_line = line[0:27]
-                rest_line = line[27:]
-                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+            line_lower = line.lower()
             lineno -= 1
-            count_lines += 1
+
+            start_line = line[0:27]
+            rest_line = line[27:]
+
+            if "error" in line_lower:
+                text += "<tr><td>{}</td><td nowrap><font color=#ff3333>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+                count_lines += 1
+                continue
+            elif (not errors) and ("warn" in line_lower):
+                text += "<tr><td>{}</td><td nowrap><font color=#ffA500>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+                count_lines += 1
+                continue
+
+            if line and (not errors) and (not warnings):
+                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+                count_lines += 1
+
         text += "</table>"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -405,7 +440,7 @@ class WebInterface:
         text += '<td><a href="/plan" target="main_frame">Plan</a></td>\n'
         text += '<td><a href="/config" target="main_frame">Config</a></td>\n'
         text += '<td><a href="/apps" target="main_frame">apps.yaml</a></td>\n'
-        text += '<td><a href="/log" target="main_frame">Log</a></td>\n'
+        text += '<td><a href="/log?warnings" target="main_frame">Log</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
         text += "</table></body></html>\n"
         return web.Response(content_type="text/html", text=text)
