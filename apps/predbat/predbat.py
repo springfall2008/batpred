@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.4"
+THIS_VERSION = "v8.4.5"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -5080,6 +5080,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         reset_prediction_globals()
+        self.soc_kwh_history = {}
         self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}
         self.define_service_list()
@@ -7722,6 +7723,9 @@ class PredBat(hass.Hass):
             soc_yesterday = float(self.get_state_wrapper(self.prefix + ".savings_total_soc", default=0.0))
         except (ValueError, TypeError):
             soc_yesterday = 0.0
+
+        # Store kwh history
+        self.soc_kwh_history = soc_kwh
 
         # Shift rates back
         past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)

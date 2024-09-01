@@ -4,10 +4,13 @@ from aiohttp import web
 import asyncio
 import os
 import re
+from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-
+from config import (
+    TIME_FORMAT
+)
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -23,6 +26,7 @@ class WebInterface:
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/menu", self.html_menu)
         app.router.add_get("/apps", self.html_apps)
+        app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
@@ -102,6 +106,7 @@ class WebInterface:
 
         text += """
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <style>
         body, html {
             margin: 0;
@@ -169,6 +174,87 @@ class WebInterface:
         text += "</head>\n"
         return text
 
+    def get_entity_results(self, entity):
+        results = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("results", {})
+        return results
+
+    def get_chart_series(self, name, results, chart_type="line"):
+        """
+        Return HTML for a chart series
+        """
+        text= ""
+        text += "   {\n"
+        text += "    name: '{}',\n".format(name)
+        text += "    type: '{}',\n".format(chart_type)
+        text += "    data: [\n"
+        first = True
+        for key in results:
+            if not first:
+                text += ","
+            first = False
+            text += "       {\n"
+            text += "       x: new Date('{}').getTime(),\n".format(key)
+            text += "       y: {},\n".format(results[key])
+            text += "       }\n"
+        text += "  ]\n"
+        text += "  }\n"
+        return text
+
+    def get_chart(self):
+        """
+        Return the HTML for a chart
+        """
+        soc_kw_h0 = {}
+        if self.base.soc_kwh_history:
+            hist = self.base.soc_kwh_history
+            for minute in range(0, self.base.minutes_now, 15):
+                minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
+                stamp = minute_timestamp.strftime(TIME_FORMAT)
+                soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
+
+        soc_kw_best = self.get_entity_results("predbat.soc_kw_best")
+        best_charge_limit_kw = self.get_entity_results("predbat.best_charge_limit_kw")
+        best_discharge_limit_kw = self.get_entity_results("predbat.best_discharge_limit_kw")
+        text = ""
+        if soc_kw_best:
+            text += "<script>\n"
+            text += "var options = {\n"
+            text += "  chart: {\n"
+            text += "    type: 'line',\n"
+            text += "    width: '80%'\n"
+            text += "  },\n"
+            text += "  span: {\n"
+            text += "    start: 'minute', offset: '-12h'\n"
+            text += "  },\n"
+            text += "  series: [\n"
+            text += self.get_chart_series("soc_best", soc_kw_best)
+            text += "  ,\n"
+            text += self.get_chart_series("soc_actual", soc_kw_h0)
+            text += "  ,\n"
+            text += self.get_chart_series("charge_limit", best_charge_limit_kw, chart_type="area")
+            text += "  ,\n"
+            text += self.get_chart_series("discharge_limit", best_discharge_limit_kw)
+            text += "  ],\n"
+            text += "  fill: {\n"
+            text += "     opacity: [1.0, 1.0, 0.5, 1.0]\n"
+            text += "  },\n"
+            text += "  stroke: {\n"
+            text += "     width: [1, 1, 4, 2],\n"
+            text += "     curve: ['smooth', 'smooth', 'stepline', 'stepline'],\n"
+            text += "  },\n"
+            text += "  xaxis: {\n"
+            text += "    type: 'datetime'\n"
+            text += "  },\n"
+            text += "  title: {\n"
+            text += "    text: 'Predbat Battery Chart'\n"
+            text += "  }\n"
+            text += "}\n"
+            text += "var chart = new ApexCharts(document.querySelector('#chart'), options);\n"
+            text += "chart.render();\n"
+            text += "</script>\n"
+        else:
+            text += "<h2>Loading...</h2>"
+        return text
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
@@ -342,6 +428,17 @@ class WebInterface:
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_charts(self, request):
+        """
+        Render apps.yaml as an HTML page
+        """
+        text = self.get_header("Predbat Config")
+        text += "<body>\n"
+        text += '<div id="chart"></div>'
+        text += self.get_chart()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_apps(self, request):
         """
         Render apps.yaml as an HTML page
@@ -440,6 +537,7 @@ class WebInterface:
         text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
         text += '<td><a href="./dash" target="main_frame">Dash</a></td>\n'
         text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
+        text += '<td><a href="./charts" target="main_frame">Charts</a></td>\n'
         text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
         text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
         text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
