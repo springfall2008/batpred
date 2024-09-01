@@ -208,9 +208,9 @@ class WebInterface:
         else:
             text += "<h2>Logfile (All)</h2>\n"
 
-        text += '- <a href="./log">All</a> '
-        text += '<a href="./log?warnings">Warnings</a> '
-        text += '<a href="./log?errors">Errors</a><br>\n'
+        text += '- <a href="/log">All</a> '
+        text += '<a href="/log?warnings">Warnings</a> '
+        text += '<a href="/log?errors">Errors</a><br>\n'
 
         text += "<table width=100%>\n"
 
@@ -354,6 +354,8 @@ class WebInterface:
         args = self.base.args
         for arg in args:
             value = args[arg]
+            if 'api_key' in arg:
+                value = '<span title = "{}"> (hidden)</span>'.format(value)
             text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
         args = self.base.unmatched_args
         for arg in args:
@@ -371,7 +373,7 @@ class WebInterface:
 
         text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
-        text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
+        text += '<form class="form-inline" action="/config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
 
@@ -436,11 +438,11 @@ class WebInterface:
         text += "<body>\n"
         text += "<table><tr>\n"
         text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
-        text += '<td><a href="./dash" target="main_frame">Dash</a></td>\n'
-        text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
-        text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
-        text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
-        text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
+        text += '<td><a href="/dash" target="main_frame">Dash</a></td>\n'
+        text += '<td><a href="/plan" target="main_frame">Plan</a></td>\n'
+        text += '<td><a href="/config" target="main_frame">Config</a></td>\n'
+        text += '<td><a href="/apps" target="main_frame">apps.yaml</a></td>\n'
+        text += '<td><a href="/log?warnings" target="main_frame">Log</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
         text += "</table></body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -452,8 +454,8 @@ class WebInterface:
         text = self.get_header("Predbat Index")
         text += "<body>\n"
         text += '<div class="iframe-container">\n'
-        text += '<iframe src="./menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
-        text += '<iframe src="./dash" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
+        text += '<iframe src="/menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
+        text += '<iframe src="/dash" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
