@@ -32,8 +32,8 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.3.7"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py"]
+THIS_VERSION = "v8.4.4"
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -74,6 +74,7 @@ from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_pr
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
 from inverter import Inverter
 from ha import HAInterface
+from web import WebInterface
 
 """
 Used to mimic threads when they are disabled
@@ -121,7 +122,7 @@ class PredBat(hass.Hass):
             await self.run_in_executor(self.call_service_wrapper_stub2, "notify/" + device, message)
         return True
 
-    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None):
+    def resolve_arg(self, arg, value, default=None, indirect=True, combine=False, attribute=None, index=None, extra_args=None, quiet=False):
         """
         Resolve argument templates and state instances
         """
@@ -129,7 +130,8 @@ class PredBat(hass.Hass):
             if index < len(value):
                 value = value[index]
             else:
-                self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
+                if not quiet:
+                    self.log("Warn: Out of range index {} within item {} value {}".format(index, arg, value))
                 value = None
             index = None
 
@@ -145,8 +147,9 @@ class PredBat(hass.Hass):
                     try:
                         final += float(got)
                     except (ValueError, TypeError):
-                        self.log("Warn: Return bad value {} from {} arg {}".format(got, item, arg))
-                        self.record_status("Warn: Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
+                        if not quiet:
+                            self.log("Warn: Return bad value {} from {} arg {}".format(got, item, arg))
+                            self.record_status("Warn: Return bad value {} from {} arg {}".format(got, item, arg), had_errors=True)
                 return final
             else:
                 final = []
@@ -167,8 +170,9 @@ class PredBat(hass.Hass):
                     else:
                         value = value.format(**self.args)
                 except KeyError:
-                    self.log("Warn: can not resolve {} value {}".format(arg, value))
-                    self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
+                    if not quiet:
+                        self.log("Warn: can not resolve {} value {}".format(arg, value))
+                        self.record_status("Warn: can not resolve {} value {}".format(arg, value), had_errors=True)
                     value = default
 
         # Resolve join list by name
@@ -2312,7 +2316,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2552,7 +2556,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2756,7 +2760,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports best 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -2824,7 +2828,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(export_kwh_time),
                         "today": self.filtered_today(export_kwh_time),
-                        "export_until_charge_kwh": export_to_first_charge,
+                        "export_until_charge_kwh": self.dp2(export_to_first_charge),
                         "friendly_name": "Predicted exports base 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
@@ -4554,6 +4558,7 @@ class PredBat(hass.Hass):
             html += "</tr>"
         html += "</table>"
         self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+        self.html_plan = html
 
     def publish_rates(self, rates, export, gas=False):
         """
@@ -5075,6 +5080,8 @@ class PredBat(hass.Hass):
         Init stub
         """
         reset_prediction_globals()
+        self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
+        self.unmatched_args = {}
         self.define_service_list()
         self.stop_thread = False
         self.solcast_api_limit = None
@@ -5093,6 +5100,7 @@ class PredBat(hass.Hass):
         self.manual_all_times = []
         self.config_index = {}
         self.dashboard_index = []
+        self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
         self.previous_status = None
         self.had_errors = False
@@ -10337,6 +10345,9 @@ class PredBat(hass.Hass):
         self.set_state_wrapper(entity_id=entity, state=state, attributes=attributes)
         if entity not in self.dashboard_index:
             self.dashboard_index.append(entity)
+        self.dashboard_values[entity] = {}
+        self.dashboard_values[entity]["state"] = state
+        self.dashboard_values[entity]["attributes"] = attributes
 
     async def async_update_save_restore_list(self):
         return await self.run_in_executor(self.update_save_restore_list)
@@ -10557,6 +10568,7 @@ class PredBat(hass.Hass):
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
+                print("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
     def define_service_list(self):
@@ -10756,6 +10768,7 @@ class PredBat(hass.Hass):
         states = self.get_state_wrapper()
         state_keys = states.keys()
         disabled = []
+        self.unmatched_args = {}
 
         if 0:
             predbat_keys = []
@@ -10777,6 +10790,7 @@ class PredBat(hass.Hass):
 
         # Remove unmatched keys
         for key in disabled:
+            self.unmatched_args[key] = self.args[key]
             del self.args[key]
 
     def sanity(self):
@@ -10901,7 +10915,13 @@ class PredBat(hass.Hass):
 
         try:
             self.reset()
+            self.log("Starting HA interface")
             self.ha_interface = HAInterface(self)
+            self.web_interface = None
+            self.web_interface_task = None
+            self.log("Starting web interface")
+            self.web_interface = WebInterface(self)
+            self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Printable config root
             self.config_root_p = self.config_root
@@ -10972,6 +10992,9 @@ class PredBat(hass.Hass):
         """
         self.log("Predbat terminating")
         self.stop_thread = True
+        if self.web_interface:
+            await self.web_interface.stop()
+
         await asyncio.sleep(0)
         if hasattr(self, "pool"):
             if self.pool:

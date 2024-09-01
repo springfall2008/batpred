@@ -24,6 +24,7 @@ Chrg
 citem
 Codespaces
 collapsable
+configform
 crosscharge
 customisation
 Customise
@@ -47,11 +48,13 @@ dwindow
 Eddi
 elif
 emszzzz
+enctype
 endt
 feedin
 fentry
 Fingerbot
 firstparty
+foxess
 futurerate
 gekey
 geserial
@@ -76,8 +79,10 @@ iboost
 idag
 idetails
 inday
+invbatpower
 invname
 isort
+itemtype
 ivtime
 kopt
 Krakenflex
@@ -85,6 +90,8 @@ kwhb
 linebreak
 localfolder
 lockstep
+logdata
+loglines
 markdownlint
 matplotlib
 maximise
@@ -109,10 +116,13 @@ Nordpool
 octoplus
 octopoints
 Ohme
+onchange
 oncharge
 pdata
 pdetails
 perc
+pitem
+postdata
 ppdetails
 Pred
 Predai
@@ -165,6 +175,7 @@ timezone
 Trefor
 treforsiphone
 unstaged
+useid
 venv
 Wallbox
 welink

@@ -13,6 +13,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Givenergy with GE Cloud | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | Givenergy with GE Cloud EMC | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
+   | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 Please also ensure you have set up enhanced logging in AppDaemon as described here.
@@ -144,6 +145,15 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
     - Set geserial to your first inverter serial and geserial2 to the second (look in HA for entity names)
     - Set geseriale to the EMS inverter serial number (look in HA for entity names)
 - Turn off slots 2, 3 and 4 for charge, export and discharge as Predbat will only use 1 slot (set the start and end times to 00:00)
+
+## Fox
+
+**Experimental**
+
+- I've managed to get Batpred working on my Fox ESS inverter, connected via an Elfin EW11 modbus and using Nathan's Fox ESS Modbus tool.
+See: <https://github.com/springfall2008/batpred/issues/1401>
+
+Template is in the templates area, give it a try
 
 ## Sunsynk
 
