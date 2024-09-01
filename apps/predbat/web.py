@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import TIME_FORMAT
-
+from config import (
+    TIME_FORMAT
+)
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -181,7 +182,7 @@ class WebInterface:
         """
         Return HTML for a chart series
         """
-        text = ""
+        text= ""
         text += "   {\n"
         text += "    name: '{}',\n".format(name)
         text += "    type: '{}',\n".format(chart_type)
@@ -191,10 +192,10 @@ class WebInterface:
             if not first:
                 text += ","
             first = False
-            text += "       {\n"
-            text += "       x: new Date('{}').getTime(),\n".format(key)
-            text += "       y: {},\n".format(results[key])
-            text += "       }\n"
+            text += "{"
+            text += "x: new Date('{}').getTime(),".format(key)
+            text += "y: {}".format(results[key])
+            text += "}"
         text += "  ]\n"
         text += "  }\n"
         return text
@@ -206,7 +207,7 @@ class WebInterface:
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.base.minutes_now, 15):
+            for minute in range(0, self.base.minutes_now + 15, 15):
                 minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
@@ -254,7 +255,6 @@ class WebInterface:
         else:
             text += "<h2>Loading...</h2>"
         return text
-
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
