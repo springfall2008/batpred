@@ -8,9 +8,8 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import (
-    TIME_FORMAT
-)
+from config import TIME_FORMAT
+
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -182,7 +181,7 @@ class WebInterface:
         """
         Return HTML for a chart series
         """
-        text= ""
+        text = ""
         text += "   {\n"
         text += "    name: '{}',\n".format(name)
         text += "    type: '{}',\n".format(chart_type)
@@ -255,6 +254,7 @@ class WebInterface:
         else:
             text += "<h2>Loading...</h2>"
         return text
+
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
