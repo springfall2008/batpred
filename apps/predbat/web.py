@@ -288,7 +288,7 @@ class WebInterface:
                             continue
                         self.log("Call service {}".format(service_data))
                         await self.base.trigger_callback(service_data)
-        raise web.HTTPFound("/config")
+        raise web.HTTPFound("./config")
 
     def render_type(self, arg, value):
         """
