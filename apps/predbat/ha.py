@@ -119,7 +119,11 @@ class HAInterface:
                                                 old_state = event_data.get("old_state", {})
                                                 new_state = event_data.get("new_state", {})
                                                 if new_state:
-                                                    self.update_state_item(new_state)
+                                                    entity_id = new_state.get("entity_id", None)
+                                                    if entity_id:
+                                                        self.update_state_item(new_state, entity_id)
+                                                    else:
+                                                        self.log("Warn: Web Socket state_changed event has no entity_id {}".format(new_state))
                                                     # Only trigger on value change or you get too many updates
                                                     if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
                                                         await self.base.trigger_watch_list(
@@ -193,13 +197,12 @@ class HAInterface:
             return
         item = self.api_call("/api/states/{}".format(entity_id))
         if item:
-            self.update_state_item(item)
+            self.update_state_item(item, entity_id)
 
-    def update_state_item(self, item):
+    def update_state_item(self, item, entity_id):
         """
         Update state table for item
         """
-        entity_id = item["entity_id"]
         attributes = item["attributes"]
         last_changed = item["last_changed"]
         state = item["state"]
@@ -215,7 +218,11 @@ class HAInterface:
         if res:
             self.state_data = {}
             for item in res:
-                self.update_state_item(item)
+                entity_id = item.get("entity_id", None)
+                if entity_id:
+                    self.update_state_item(item, entity_id)
+                else:
+                    self.log("Warn: Failed to update state data from HA, item has no entity_id {}".format(item))
         else:
             self.log("Warn: Failed to update state data from HA")
 
