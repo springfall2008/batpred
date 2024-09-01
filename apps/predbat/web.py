@@ -354,7 +354,7 @@ class WebInterface:
         args = self.base.args
         for arg in args:
             value = args[arg]
-            if 'api_key' in arg:
+            if "api_key" in arg:
                 value = '<span title = "{}"> (hidden)</span>'.format(value)
             text += "<tr><td>{}</td><td>{}</td></tr>\n".format(arg, self.render_type(arg, value))
         args = self.base.unmatched_args
