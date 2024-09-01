@@ -94,7 +94,7 @@ You can use your file editor (i.e. 'File editor' or 'Studio Code Server' add-on)
 
 If you have used the Predbat add-on installation method you do not need to install HACS or AppDaemon so you can skip directly to [Solcast install](#solcast-install) below.
 
-Predbat web interface will work through the add-on, you can click on the Web UI button to open it once it is running.
+The Predbat web interface will work through the Predbat add-on, you can click on the 'Web UI' button to open it once Predbat is running.
 
 If you wish to use Docker with Predbat its recommended you read the Docker installation instructions inside the Predbat add-on rather than going down the AppDaemon route
 listed below.
@@ -103,7 +103,7 @@ listed below.
 
 **Not Recommended**
 
-**NOTE:** The Predbat web interface will not work with AppDaemon.
+**NOTE:** The Predbat web interface will not work with the AppDaemon installation method.
 
 This is the old way of installing Predbat, to firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
 and finally install Predbat from HACS to run within AppDaemon.
