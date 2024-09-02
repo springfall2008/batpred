@@ -8,14 +8,16 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import TIME_FORMAT
-
+from config import (
+    TIME_FORMAT
+)
 
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
         self.base = base
         self.log = base.log
+        self.default_page = "./dash"
 
     async def start(self):
         # Start the web server on port 5052
@@ -181,7 +183,7 @@ class WebInterface:
         """
         Return HTML for a chart series
         """
-        text = ""
+        text= ""
         text += "   {\n"
         text += "    name: '{}',\n".format(name)
         text += "    type: '{}',\n".format(chart_type)
@@ -206,7 +208,7 @@ class WebInterface:
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.base.minutes_now + 15, 15):
+            for minute in range(0, self.base.minutes_now, 15):
                 minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
@@ -244,6 +246,9 @@ class WebInterface:
             text += "  xaxis: {\n"
             text += "    type: 'datetime'\n"
             text += "  },\n"
+            text += "  yaxis: {\n"
+            text += "    title: {text: 'kWh'}\n"
+            text += "  },\n"
             text += "  title: {\n"
             text += "    text: 'Predbat Battery Chart'\n"
             text += "  }\n"
@@ -254,11 +259,11 @@ class WebInterface:
         else:
             text += "<h2>Loading...</h2>"
         return text
-
     async def html_plan(self, request):
         """
         Return the Predbat plan as an HTML page
         """
+        self.default_page = "./plan"
         html_plan = self.base.html_plan
         text = self.get_header("Predbat Plan", refresh=60)
         text += "<body>{}</body></html>\n".format(html_plan)
@@ -270,6 +275,7 @@ class WebInterface:
         """
         logfile = "predbat.log"
         logdata = ""
+        self.default_page = "./log"
         if os.path.exists(logfile):
             with open(logfile, "r") as f:
                 logdata = f.read()
@@ -280,8 +286,10 @@ class WebInterface:
         warnings = False
         if "errors" in args:
             errors = True
+            self.default_page = "./log?errors"
         if "warnings" in args:
             warnings = True
+            self.default_page = "./log?warnings"
 
         loglines = logdata.split("\n")
         text = self.get_header("Predbat Log", refresh=10)
@@ -421,6 +429,7 @@ class WebInterface:
         """
         Render apps.yaml as an HTML page
         """
+        self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard")
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
@@ -432,6 +441,7 @@ class WebInterface:
         """
         Render apps.yaml as an HTML page
         """
+        self.default_page = "./charts"
         text = self.get_header("Predbat Config")
         text += "<body>\n"
         text += '<div id="chart"></div>'
@@ -443,6 +453,7 @@ class WebInterface:
         """
         Render apps.yaml as an HTML page
         """
+        self.default_page = "./apps"
         text = self.get_header("Predbat Config")
         text += "<body>\n"
         text += "<table>\n"
@@ -468,6 +479,7 @@ class WebInterface:
         Return the Predbat config as an HTML page
         """
 
+        self.default_page = "./config"
         text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
         text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
@@ -553,7 +565,7 @@ class WebInterface:
         text += "<body>\n"
         text += '<div class="iframe-container">\n'
         text += '<iframe src="./menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
-        text += '<iframe src="./dash" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'
+        text += '<iframe src="{}" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'.format(self.default_page)
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
