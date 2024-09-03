@@ -4172,7 +4172,274 @@ class PredBat(hass.Hass):
         html += "</tr>"
         return html
 
+    def get_json_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
+        output = {}
+
+        plan_debug = self.get_arg("plan_debug")
+        """
+        Publish the current plan in JSON format
+        """
+        output["plan_starts"] = self.now_utc.strftime("%Y-%m-%d %H:%M")
+        output["last_updated"] = self.now_utc_real.strftime("%H:%M:%S")
+        output["version"] = THIS_VERSION
+        output["config"] = {}
+        output["config"]["best_soc_min"] = self.best_soc_min
+        output["config"]["best_soc_max"] = self.best_soc_max
+        output["config"]["best_soc_keep"] = self.best_soc_keep
+        output["config"]["carbon_metric"] = self.carbon_metric
+        output["config"]["metric_self_sufficiency"] = self.metric_self_sufficiency
+        output["config"]["metric_battery_value_scaling"] = self.metric_battery_value_scaling
+        output["config"]["currency"] = self.currency_symbols
+
+        output["config"]["iboost_enable"] = self.iboost_enable
+        output["config"]["carbon_enable"] = self.carbon_enable
+        output["config"]["car_enable"] = self.num_cars > 0
+
+        minute_now_align = int(self.minutes_now / 30) * 30
+        end_plan = min(end_record, self.forecast_minutes) + minute_now_align
+
+        output["slots"] = []
+
+        for minute in range(minute_now_align, end_plan, 30):
+            slot = {}
+            minute_relative = minute - self.minutes_now
+            minute_relative_start = max(minute_relative, 0)
+            minute_start = minute_relative_start + self.minutes_now
+            minute_relative_end = minute_relative + 30
+            minute_end = minute_relative_end + self.minutes_now
+            minute_relative_slot_end = minute_relative_end
+            minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
+            rate_start = minute_timestamp
+            rate_value_import = self.dp2(self.rate_import.get(minute, 0))
+            rate_value_export = self.dp2(self.rate_export.get(minute, 0))
+            charge_window_n = -1
+            discharge_window_n = -1
+
+            import_cost_threshold = self.rate_import_cost_threshold
+            export_cost_threshold = self.rate_export_cost_threshold
+
+            if self.rate_best_cost_threshold_charge:
+                import_cost_threshold = self.rate_best_cost_threshold_charge
+            if self.rate_best_cost_threshold_discharge:
+                export_cost_threshold = self.rate_best_cost_threshold_discharge
+
+            for try_minute in range(minute_start, minute_end, PREDICT_STEP):
+                charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
+                if charge_window_n >= 0:
+                    break
+
+            for try_minute in range(minute_start, minute_end, PREDICT_STEP):
+                discharge_window_n = self.in_charge_window(self.discharge_window_best, try_minute)
+                if discharge_window_n >= 0:
+                    break
+
+            pv_forecast = 0
+            load_forecast = 0
+            pv_forecast10 = 0
+            load_forecast10 = 0
+            for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
+                pv_forecast += pv_forecast_minute_step.get(offset, 0.0)
+                load_forecast += load_minutes_step.get(offset, 0.0)
+                pv_forecast10 += pv_forecast_minute_step10.get(offset, 0.0)
+                load_forecast10 += load_minutes_step10.get(offset, 0.0)
+
+            pv_forecast = self.dp2(pv_forecast)
+            load_forecast = self.dp2(load_forecast)
+            pv_forecast10 = self.dp2(pv_forecast10)
+            load_forecast10 = self.dp2(load_forecast10)
+
+            soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
+            soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
+            soc_percent_max = max(soc_percent, soc_percent_end)
+            soc_percent_min = min(soc_percent, soc_percent_end)
+            soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+            metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
+            metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
+            metric_change = metric_end - metric_start
+
+            soc_sym = ""
+            if abs(soc_change) < 0.05:
+                soc_sym = "(hold)"
+            elif soc_change >= 0:
+                soc_sym = "(increasing)"
+            else:
+                soc_sym = "(decreasing)"
+
+            slot["state"] = {}
+
+            slot["state"]["mode"] = soc_sym
+            if minute in self.manual_idle_times:
+                slot["state"]["mode"] += " Idle"
+                slot["state"]["override"] = True
+            split = False
+
+            slot["state"]["soc"] = {}
+            slot["state"]["soc"]["percent"] = soc_percent
+            slot["state"]["soc"]["percent_end"] = soc_percent_end
+            slot["state"]["soc"]["percent_max"] = soc_percent_max
+            slot["state"]["soc"]["percent_min"] = soc_percent_min
+            slot["state"]["soc"]["change"] = self.dp2(soc_change)
+
+            if minute in self.manual_idle_times:
+                slot["state"]["override"] = True
+
+            split = False
+
+            slot["pv"] = {}
+            slot["pv"]["forecast"] = pv_forecast
+            slot["pv"]["forecast10"] = pv_forecast10
+
+            if plan_debug and pv_forecast10 > 0.0:
+                slot["pv"]["debug"] = str(pv_forecast10)
+
+            slot["load"] = {}
+            slot["load"]["forecast"] = load_forecast
+            slot["load"]["forecast10"] = load_forecast10
+
+            if plan_debug and load_forecast10 > 0.0:
+                slot["load"]["debug"] = str(load_forecast10)
+
+            if charge_window_n >= 0:
+                limit = self.charge_limit_best[charge_window_n]
+                limit_percent = int(self.charge_limit_percent_best[charge_window_n])
+                if limit > 0.0:
+                    if self.set_charge_freeze and (limit == self.reserve):
+                        slot["state"]["mode"] = "Freeze charge"
+                        limit_percent = soc_percent
+                    elif limit_percent == soc_percent_min:
+                        slot["state"]["mode"] = "Hold charge"
+                    elif limit_percent < soc_percent_min:
+                        slot["state"]["mode"] = "No charge"
+                    else:
+                        slot["state"]["mode"] = "Charge"
+
+                    if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
+                        slot["state"]["override"] = True
+                    elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
+                        slot["state"]["override"] = True
+
+                    slot["state"]["limit"] = limit_percent
+            else:
+                if discharge_window_n >= 0:
+                    start = self.discharge_window_best[discharge_window_n]["start"]
+                    if start > minute:
+                        soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+                        slot["state"]["soc"]["change"] = self.dp2(soc_change_this)
+                        if soc_change_this >= 0:
+                            slot["state"]["mode"] = " (increasing)"
+                        elif soc_change_this < 0:
+                            slot["state"]["mode"] = " (decreasing)"
+                        else:
+                            slot["state"]["mode"] = " (hold)"
+
+            if discharge_window_n >= 0:
+                limit = self.discharge_limits_best[discharge_window_n]
+                if limit == 99:
+                    if slot['state'] == soc_sym:
+                        slot['state'] = ""
+                    if slot['state']:
+                        split = True
+                        slot["state"]["mode"] += " - "
+                    slot["state"]["mode"] += "Freeze discharge"
+                    slot["state"]["limit"] = limit
+
+                elif limit < 100:
+                    if slot['state'] == soc_sym:
+                        slot['state'] = ""
+                    if slot['state']:
+                        slot["state"]["mode"] += " - "
+                        split = True
+                    if limit > soc_percent_max:
+                        slot["state"]["mode"] += "Hold discharge"
+                    else:
+                        slot["state"]["mode"] += "Discharge"
+                    slot["state"]["limit"] = limit
+
+                if self.discharge_window_best[discharge_window_n]["start"] in self.manual_discharge_times:
+                    slot["state"]["override"] = True
+                    slot["state"]["mode"] += "Manual discharge"
+                elif self.discharge_window_best[discharge_window_n]["start"] in self.manual_freeze_discharge_times:
+                    slot["state"]["override"] = True
+                    slot["state"]["mode"] += "Freeze discharge"
+
+            slot["state"]["split"] = split
+
+            slot["rate"] = {}
+            slot["rate"]["start"] = rate_start.strftime("%a %H:%M")
+
+            # Import and export rates -> to JSON
+            slot["rate"]["import"] = {}
+            slot["rate"]["import"]["value"] = rate_value_import
+            slot["rate"]["import"]["adjust_type"] = self.rate_import_replicated.get(minute, None)
+
+            if plan_debug:
+                slot["rate"]["import"]["debug"] = "%02.02f" % (rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+
+            if charge_window_n >= 0:
+                slot["rate"]["import"]["charge"] = True
+
+            slot["rate"]["export"] = {}
+            slot["rate"]["export"]["value"] = rate_value_export
+            slot["rate"]["export"]["adjust_type"] = self.rate_export_replicated.get(minute, None)
+
+            if plan_debug:
+                slot["rate"]["export"]["debug"] = "%02.02f" % (rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
+
+            if discharge_window_n >= 0:
+                slot["rate"]["export"]["discharge"] = True
+
+            slot["cost"] = {}
+
+            # Total cost at start of slot, add leading minus if negative
+            slot["cost"]["start"] = metric_start
+            slot["cost"]["change"] = self.dp2(metric_change)
+
+            # Car charging?
+            if self.num_cars > 0:
+                slot["car"] = {}
+                slot["car"]["charging_kwh"] = self.car_charge_slot_kwh(minute_start, minute_end)
+
+            # iBoost
+            if self.iboost_enable:
+                slot["iboost"] = {}
+                iboost_slot_end = minute_relative_slot_end
+                iboost_amount = self.predict_iboost_best.get(minute_relative_start, 0)
+                iboost_amount_end = self.predict_iboost_best.get(minute_relative_slot_end, 0)
+                iboost_amount_prev = self.predict_iboost_best.get(minute_relative_slot_end - PREDICT_STEP, 0)
+                if iboost_amount_prev > iboost_amount_end:
+                    # Reset condition, scale to full slot size as last 5 minutes is missing in data
+                    iboost_change = (
+                        (iboost_amount_prev - iboost_amount)
+                        * (minute_relative_slot_end - minute_relative_start)
+                        / (minute_relative_slot_end - PREDICT_STEP - minute_relative_start)
+                    )
+                else:
+                    iboost_change = max(iboost_amount_end - iboost_amount, 0.0)
+                slot["iboost"]["change"] = iboost_change
+                slot["iboost"]["amount"] = iboost_amount
+                slot["iboost"]["amount_end"] = iboost_amount_end
+                slot["iboost"]["amount_prev"] = iboost_amount_prev
+
+            if self.carbon_enable:
+                slot["carbon"] = {}
+                # Work out carbon intensity and carbon use
+                slot["carbon"]["amount"] = self.predict_carbon_best.get(minute_relative_start, 0)
+                slot["carbon"]["amount_end"] = self.predict_carbon_best.get(minute_relative_slot_end, 0)
+                slot["carbon"]["change"] = self.dp2(carbon_amount_end - carbon_amount)
+                slot["carbon"]["intensity"] = self.dp0(self.carbon_intensity.get(minute_relative_start, 0))
+
+            output["slots"].append(slot)
+
+        # output['raw'] = {}
+        # output['raw']['pv_forecast_minute_step'] = pv_forecast_minute_step
+        # output['raw']['pv_forecast_minute_step10'] = pv_forecast_minute_step10
+        # output['raw']['load_minutes_step'] = load_minutes_step
+        # output['raw']['load_minutes_step10'] = load_minutes_step10
+
+        return output
+
     def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
+        json_output = self.get_json_plan(pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record)
         """
         Publish the current plan in HTML format
         """
@@ -4557,7 +4824,7 @@ class PredBat(hass.Hass):
                 html += "<td bgcolor=" + carbon_color + "> " + str(carbon_str) + " </td>"
             html += "</tr>"
         html += "</table>"
-        self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+        self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "json": json.dumps(json_output), "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
         self.html_plan = html
 
     def publish_rates(self, rates, export, gas=False):
