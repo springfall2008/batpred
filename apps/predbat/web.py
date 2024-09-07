@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import TIME_FORMAT
-
+from config import (
+    TIME_FORMAT
+)
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -62,6 +63,11 @@ class WebInterface:
         text += "</table>"
         return text
 
+    def icon2html(self, icon):
+        if icon:
+            icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
+        return icon
+
     def get_status_html(self, level, status):
         text = ""
         if not self.base.dashboard_index:
@@ -77,15 +83,13 @@ class WebInterface:
 
         text += "<h2>Entities</h2>\n"
         text += "<table>\n"
-        text += "<tr><th>Icon</th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
+        text += "<tr><th></th><th>Name</th><th>Entity</th><th>State</th><th>Attributes</th></tr>\n"
 
         for entity in self.base.dashboard_index:
             state = self.base.dashboard_values.get(entity, {}).get("state", None)
             attributes = self.base.dashboard_values.get(entity, {}).get("attributes", {})
             unit_of_measurement = attributes.get("unit_of_measurement", "")
-            icon = attributes.get("icon", "")
-            if icon:
-                icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
+            icon = self.icon2html(attributes.get("icon", ""))
             if unit_of_measurement is None:
                 unit_of_measurement = ""
             friendly_name = attributes.get("friendly_name", "")
@@ -182,7 +186,7 @@ class WebInterface:
         """
         Return HTML for a chart series
         """
-        text = ""
+        text= ""
         text += "   {\n"
         text += "    name: '{}',\n".format(name)
         text += "    type: '{}',\n".format(chart_type)
@@ -204,6 +208,7 @@ class WebInterface:
         """
         Return the HTML for a chart
         """
+        now_str = self.base.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
@@ -211,6 +216,7 @@ class WebInterface:
                 minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
+        soc_kw_h0[now_str] = self.base.soc_kw
 
         soc_kw_best = self.get_entity_results("predbat.soc_kw_best")
         best_charge_limit_kw = self.get_entity_results("predbat.best_charge_limit_kw")
@@ -250,6 +256,14 @@ class WebInterface:
             text += "  },\n"
             text += "  title: {\n"
             text += "    text: 'Predbat Battery Chart'\n"
+            text += "  },\n"
+            text += "  annotations: {\n"
+            text += "   xaxis: [\n"
+            text += "    {\n"
+            text += "       x: new Date('{}').getTime(),\n".format(now_str)
+            text += "       borderColor: '#775DD0'\n"
+            text += "    }\n"
+            text += "   ]\n"
             text += "  }\n"
             text += "}\n"
             text += "var chart = new ApexCharts(document.querySelector('#chart'), options);\n"
@@ -484,7 +498,7 @@ class WebInterface:
         text += "<body>\n"
         text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
-        text += "<tr><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
+        text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
 
         input_number = """
             <input type="number" id="{}" name="{}" value="{}" min="{}" max="{}" step="{}" onchange="javascript: this.form.submit();">
@@ -502,15 +516,17 @@ class WebInterface:
                 itemtype = item.get("type", "")
                 default = item.get("default", "")
                 useid = entity.replace(".", "__")
+                unit = item.get("unit", "")
+                icon = self.icon2html(item.get("icon", ""))
 
                 if itemtype == "input_number" and item.get("step", 1) == 1:
                     value = int(value)
 
-                text += "<tr><td>{}</td><td>{}</td><td>{}</td>".format(friendly, entity, itemtype)
+                text += "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>".format(icon, friendly, entity, itemtype)
                 if value == default:
-                    text += '<td class="default">{}</td><td>{}</td>\n'.format(value, default)
+                    text += '<td class="default">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
                 else:
-                    text += '<td class="modified">{}</td><td>{}</td>\n'.format(value, default)
+                    text += '<td class="modified">{} {}</td><td>{} {}</td>\n'.format(value, unit, default, unit)
 
                 if itemtype == "switch":
                     text += '<td><select name="{}" id="{}" onchange="javascript: this.form.submit();">'.format(useid, useid)
