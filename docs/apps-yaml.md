@@ -231,6 +231,10 @@ geserial: 're:sensor.givtcp_(.+)_soc_kwh'
 geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
+*TIP:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.
+geserial should be configured to point to the gateway AIO and all the geserial2 lines should be commented out in apps.yaml.
+GivTCP version 3 is required for multiple AIO's.
+
 ## Historical data
 
 Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.

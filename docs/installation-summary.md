@@ -4,12 +4,11 @@ Please see the sections below for how to achieve each step. This is just a check
 
 1. Before you start, its recommended that you watch the [step by step installation](video-guides.md#basic-installation) videos,
 see the [video guides](video-guides.md) section for those and other videos
-2. Make sure the right inverter control module is installed and running - [GivTCP or Solax install](install.md#inverter-control-integration-install-givtcpsolax-modbus)
+2. Make sure the right inverter control module is installed and running - [GivTCP or Solax install](install.md#inverter-control-integration-install)
 3. Install a file editor (either the File editor or Studio Code Server add-on) to enable you to edit configuration files if you haven't already - [Editing configuration files](install.md#editing-configuration-files-in-home-assistant)
 4. Install Predbat, either:
     - a) Install the Predbat add-on - [Predbat add-on install](install.md#predbat-add-on-install), or
-    - b) Install the AppDaemon-Predbat combined add-on - [AppDaemon-Predbat combined install](install.md#appdaemon-predbat-combined-install), or
-    - c) Complete the separate installation steps:
+    - b) Complete the separate installation steps:
         - i) Install HACS if you haven't already - [HACS install](install.md#hacs-install)
         - ii) Install AppDaemon if you haven't already - [AppDaemon install](install.md#appdaemon-install)
         - iii) Install Predbat using HACS - [Predbat install](install.md#install-predbat-through-hacs)

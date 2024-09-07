@@ -43,6 +43,8 @@ Please see [Other Inverters](other-inverters.md) for details on the install deta
 - Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
 - You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
 
+NB: If you have multiple GivEnergy AIO's, GivTCP version 3 is required.
+
 ## Editing Configuration Files in Home Assistant
 
 The basic configuration for Predbat is stored in a configuration file called `apps.yaml`.
