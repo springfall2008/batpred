@@ -8,9 +8,8 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import (
-    TIME_FORMAT
-)
+from config import TIME_FORMAT
+
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -186,7 +185,7 @@ class WebInterface:
         """
         Return HTML for a chart series
         """
-        text= ""
+        text = ""
         text += "   {\n"
         text += "    name: '{}',\n".format(name)
         text += "    type: '{}',\n".format(chart_type)
@@ -203,7 +202,7 @@ class WebInterface:
         text += "  ]\n"
         text += "  }\n"
         return text
-    
+
     def render_chart(self, series_data, yaxis_name, chart_name, now_str):
         """
         Render a chart
@@ -244,11 +243,11 @@ var options = {
 
         text += "  ],\n"
         text += "  fill: {\n"
-        text += "     opacity: [{}]\n".format(','.join(opacity))
+        text += "     opacity: [{}]\n".format(",".join(opacity))
         text += "  },\n"
         text += "  stroke: {\n"
-        text += "     width: [{}],\n".format(','.join(stroke_width))
-        text += "     curve: [{}],\n".format(','.join(stroke_curve))
+        text += "     width: [{}],\n".format(",".join(stroke_width))
+        text += "     curve: [{}],\n".format(",".join(stroke_curve))
         text += "  },\n"
         text += "  xaxis: {\n"
         text += "    type: 'datetime'\n"
@@ -492,9 +491,9 @@ var options = {
             series_data = [
                 {"name": "Soc Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
                 {"name": "Soc Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Charge Limit", "data": best_charge_limit_kw, "opacity": "0.2", "stroke_width": "4", "stroke_curve": "stepline", "chart_type" : "area"},
+                {"name": "Charge Limit", "data": best_charge_limit_kw, "opacity": "0.2", "stroke_width": "4", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Discharge Limit", "data": best_discharge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "3", "stroke_curve": "stepline", "color" : "black", "chart_type" : "area"}
+                {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "3", "stroke_curve": "stepline", "color": "black", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, "kWh", "Best Battery", now_str)
         elif chart == "Power":
@@ -503,7 +502,7 @@ var options = {
                 {"name": "pv", "data": pv_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
                 {"name": "grid", "data": grid_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
                 {"name": "load", "data": load_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "iboost", "data": iboost_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"}
+                {"name": "iboost", "data": iboost_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, "W", "Best Power", now_str)
         elif chart == "Cost":
@@ -514,14 +513,14 @@ var options = {
                 {"name": "Base", "data": metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
                 {"name": "Best", "data": best_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
                 {"name": "Base10", "data": base10_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"}
+                {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type" : "area"},
-                {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type" : "area"}
+                {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         else:
