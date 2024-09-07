@@ -301,9 +301,12 @@ names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
 You will need to use a file editor (either the File editor or Studio Code Server add-on) to edit the `apps.yaml` file in Home Assistant
 to configure Predbat - see [Configuring apps.yaml](apps-yaml.md#Basics).
 
-When Predbat starts up initially it will perform a sanity check of the AppDaemon configuration itself and confirm the right files are present.
+When Predbat starts up initially it will perform a sanity check of itself and the configuration and confirm the right files are present.
 You will see this check in the log, should it fail a warning will be issued and **predbat.status** will also reflect the warning.
 While the above warning might not prevent Predbat from starting up, you should fix the issue ASAP as it may cause future problems.
+
+**Note:** if you are running the Predbat through the Predbat add-on or via Docker you will get a logfile warning message
+"Warn: unable to find /addon_configs/6adb4f0d_predbat/appdaemon.yaml skipping checks as Predbat maybe running outside of AppDaemon" - this is normal and can be ignored.
 
 ## Predbat Output and Configuration Controls
 
