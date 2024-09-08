@@ -7316,6 +7316,13 @@ class PredBat(hass.Hass):
         total_day90 = {}
         days = 0
 
+        days = min(days, 7)
+        for day in range(days):
+            total_day[day] = 0
+            total_day10[day] = 0
+            total_day90[day] = 0
+            forecast_day[day] = []
+
         midnight_today = self.midnight_utc
         now = self.now_utc
 
@@ -7737,7 +7744,8 @@ class PredBat(hass.Hass):
         rate_low = min(past_rates.values())
         combine_charge = self.combine_charge_slots
         self.combine_charge_slots = True
-        charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
+        if min(past_rates.values()) != max(past_rates.values()):
+            charge_window_best, lowest, highest = self.rate_scan_window(past_rates, 5, rate_low, False, return_raw=True)
         self.combine_charge_slots = combine_charge
         charge_limit_best = [self.soc_max for c in range(len(charge_window_best))]
         self.log("Yesterday basic charge window best: {} charge limit best: {}".format(charge_window_best, charge_limit_best))
