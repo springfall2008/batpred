@@ -33,7 +33,7 @@ pred_bat:
   # GESerial - Your first inverter
   # GESerial2 - Your second inverter
   # GESerialE - Your EMS
-  
+
   geserial: 'cexxxx'
   geserial2: 'ceyyyy'
   geseriale: 'emszzzz'
