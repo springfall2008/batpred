@@ -216,7 +216,7 @@ class WebInterface:
 var options = {
   chart: {
     type: 'line',
-    width: '80%'
+    width: '100%'
   },
   span: {
     start: 'minute', offset: '-12h'
