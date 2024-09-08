@@ -1,5 +1,6 @@
 # ------------------------------------------------------------------
 # This is an example configuration, please modify it
+# NOTE: Use this configuration only with GECloud HA Integration and Givenergy EMS
 # ------------------------------------------------------------------
 ---
 pred_bat:
@@ -29,7 +30,10 @@ pred_bat:
   threads: auto
 
   # Set to the GivEnergy serial number and the EMS serial number
-  # If you have more than one inverter you will need to uncomment the geserial2 lines
+  # GESerial - Your first inverter
+  # GESerial2 - Your second inverter
+  # GESerialE - Your EMS
+
   geserial: 'cexxxx'
   geserial2: 'ceyyyy'
   geseriale: 'emszzzz'
@@ -72,10 +76,10 @@ pred_bat:
 
   # Controls/status - must by 1 per inverter
   #
-  num_inverters: 1
+  num_inverters: 2
   inverter_type:
    - 'GEE'
-   # - 'GEE'
+   - 'GEE'
   #
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 0
@@ -84,50 +88,57 @@ pred_bat:
   # - you can delete this section if using REST
   charge_rate:
     - number.ge_inverter_{geserial}_battery_charge_power
-  #  - number.ge_inverter_{geserial2}_battery_charge_power
+    - number.ge_inverter_{geserial2}_battery_charge_power
   discharge_rate:
     - number.ge_inverter_{geserial}_battery_discharge_power
-  #  - number.ge_inverter_{geserial2}_battery_discharge_power
+    - number.ge_inverter_{geserial2}_battery_discharge_power
   battery_power:
     - sensor.ge_inverter_{geserial}_battery_power
-  #  - sensor.ge_inverter_{geserial2}_battery_power
+    - sensor.ge_inverter_{geserial2}_battery_power
   pv_power:
     - sensor.ge_inverter_{geserial}_solar_power
-  #  - sensor.ge_inverter_{geserial2}_solar_power
+    - sensor.ge_inverter_{geserial2}_solar_power
   load_power:
     - sensor.ge_inverter_{geserial}_consumption_power
-  #  - sensor.ge_inverter_{geserial2}_consumption_power
+    - sensor.ge_inverter_{geserial2}_consumption_power
   soc_percent:
     - sensor.ge_inverter_{geserial}_battery_soc
-  #  - sensor.ge_inverter_{geserial2}_battery_soc
+    - sensor.ge_inverter_{geserial2}_battery_soc
   soc_max:
     - sensor.ge_inverter_{geserial}_battery_size
-  #  - sensor.ge_inverter_{geserial2}_battery_size
+    - sensor.ge_inverter_{geserial2}_battery_size
   reserve:
     - number.ge_inverter_{geserial}_battery_reserve_limit
-  #  - number.ge_inverter_{geserial2}_battery_reserve_limit
-  inverter_time:
-    - sensor.ge_inverter_{geseriale}_inverter_time
+    - number.ge_inverter_{geserial2}_battery_reserve_limit
+  #inverter_time:
+  #  - sensor.ge_inverter_{geseriale}_inverter_time
   charge_start_time:
+    - select.ge_inverter_{geseriale}_charge_start_time_slot_1
     - select.ge_inverter_{geseriale}_charge_start_time_slot_1
   charge_end_time:
     - select.ge_inverter_{geseriale}_charge_end_time_slot_1
+    - select.ge_inverter_{geseriale}_charge_end_time_slot_1
   idle_start_time:
+    - select.ge_inverter_{geseriale}_discharge_start_time_slot_1
     - select.ge_inverter_{geseriale}_discharge_start_time_slot_1
   idle_end_time:
     - select.ge_inverter_{geseriale}_discharge_end_time_slot_1
+    - select.ge_inverter_{geseriale}_discharge_end_time_slot_1
   charge_limit:
+    - number.ge_inverter_{geseriale}_charge_soc_limit_1
     - number.ge_inverter_{geseriale}_charge_soc_limit_1
   discharge_start_time:
     - select.ge_inverter_{geseriale}_export_start_time_slot_1
+    - select.ge_inverter_{geseriale}_export_start_time_slot_1
   discharge_end_time:
+    - select.ge_inverter_{geseriale}_export_end_time_slot_1
     - select.ge_inverter_{geseriale}_export_end_time_slot_1
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
-    - 3600
-  #  - 3600
+    - 3000
+    - 3000
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
@@ -139,7 +150,7 @@ pred_bat:
   # The value can be set here in watts to model this (doesn't change operation)
   inverter_battery_rate_min:
     - 200
-  #  - 200
+    - 200
 
   # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
   # Comment out if your inverter allows 100%
