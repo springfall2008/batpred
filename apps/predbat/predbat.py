@@ -8451,7 +8451,7 @@ class PredBat(hass.Hass):
                                     )
                                     inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            if not self.inverter_set_charge_before:
+                            if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
                                 self.log(
                                     "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
                                         self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
@@ -8473,7 +8473,7 @@ class PredBat(hass.Hass):
                     self.log("No charge window required for 24-hours, disabling before the start")
                     inverter.disable_charge_window()
                 else:
-                    if not self.inverter_set_charge_before:
+                    if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
                         self.log("No change to charge window yet, disabled while waiting for schedule.")
                         inverter.disable_charge_window()
                     else:
@@ -8483,7 +8483,11 @@ class PredBat(hass.Hass):
                 self.log("No charge windows found, disabling before the start")
                 inverter.disable_charge_window()
             elif self.set_charge_window:
-                self.log("No change to charge window yet, waiting for schedule.")
+                if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
+                    self.log("No change to charge window yet, disabled while waiting for schedule.")
+                    inverter.disable_charge_window()
+                else:
+                    self.log("No change to charge window yet, waiting for schedule.")
 
             # Set discharge modes/window?
             if self.set_discharge_window and self.discharge_window_best:
