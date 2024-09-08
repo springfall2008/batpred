@@ -213,10 +213,17 @@ class WebInterface:
         text = ""
         text += """
 <script>
+window.onresize = function(){ location.reload(); };
+var width = window.innerWidth;
+if (width < 600) {
+    width = '600px';
+} else {
+    width = '100%';
+}
 var options = {
   chart: {
     type: 'line',
-    width: '100%'
+    width: `${width}`
   },
   span: {
     start: 'minute', offset: '-12h'
