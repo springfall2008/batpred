@@ -8255,6 +8255,10 @@ class PredBat(hass.Hass):
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
+            # Web history
+            if self.web_interface:
+                self.web_interface.history_update()
+
         # Destroy pool
         if self.pool:
             try:

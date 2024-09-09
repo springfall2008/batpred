@@ -17,6 +17,14 @@ class WebInterface:
         self.base = base
         self.log = base.log
         self.default_page = "./dash"
+        self.pv_power_hist = {}
+
+    def history_update(self):
+        """
+        Update the history data
+        """
+        self.log("Web interface history update")
+        self.pv_power_hist = self.base.get_history_wrapper("predbat.pv_power", 2)
 
     async def start(self):
         # Start the web server on port 5052
@@ -269,7 +277,8 @@ var options = {
         text += "    }\n"
         text += "  },"
         text += "  yaxis: {\n"
-        text += "    title: {{ text: '{}' }}\n".format(yaxis_name)
+        text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
+        text += "    decimalsInFloat: 2\n"
         text += "  },\n"
         text += "  title: {\n"
         text += "    text: '{}'\n".format(chart_name)
@@ -514,6 +523,9 @@ var options = {
         rates_export = self.get_entity_results("predbat.rates_export")
         rates_gas = self.get_entity_results("predbat.rates_gas")
         record = self.get_entity_results("predbat.record")
+        load_energy_actual = self.get_entity_results("predbat.load_energy_actual")
+        load_energy_predicted = self.get_entity_results("predbat.load_energy_predicted")
+        load_energy_adjusted = self.get_entity_results("predbat.load_energy_adjusted")
 
         text = ""
 
@@ -567,6 +579,13 @@ var options = {
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
+        elif chart == "InDay":
+            series_data = [
+                {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+            ]
+            text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -586,6 +605,7 @@ var options = {
         text += '<a href="./charts?chart=Power">Power</a> '
         text += '<a href="./charts?chart=Cost">Cost</a> '
         text += '<a href="./charts?chart=Rates">Rates</a> '
+        text += '<a href="./charts?chart=InDay">InDay</a> '
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
