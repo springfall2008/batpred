@@ -9,7 +9,7 @@ There can never be a single Predbat dashboard that suits every user, so instead 
 
 **NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
-Predbat has a Web interface active can be opened via the Predbat Add on by clicking on 'Web UI'. The web interface can be added to your sidebar by turning on the 'Show in Sidebar' toggle. 
+Predbat has a Web interface active can be opened via the Predbat Add on by clicking on 'Web UI'. The web interface can be added to your sidebar by turning on the 'Show in Sidebar' toggle.
 
 If you are not using the Predbat Add on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or Native on your Linux/MAC).
 
