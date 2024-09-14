@@ -1634,6 +1634,7 @@ class PredBat(hass.Hass):
         if not extra:
             extra = ""
 
+        self.current_status = message + extra
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
 
@@ -1868,7 +1869,7 @@ class PredBat(hass.Hass):
                 load_adjusted += load
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                load_adjusted_stamp[stamp] = load_adjusted
+                load_adjusted_stamp[stamp] = self.dp3(load_adjusted)
 
         self.dashboard_item(
             self.prefix + ".load_inday_adjustment",
@@ -5104,6 +5105,7 @@ class PredBat(hass.Hass):
         self.dashboard_index = []
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
+        self.current_status = None
         self.previous_status = None
         self.had_errors = False
         self.expert_mode = False
@@ -7327,6 +7329,9 @@ class PredBat(hass.Hass):
         now = self.now_utc
 
         power_scale = 60 / period  # Scale kwh to power
+        power_now = 0
+        power_now10 = 0
+        power_now90 = 0
 
         for entry in pv_forecast_data:
             if "period_start" not in entry:
@@ -7362,6 +7367,11 @@ class PredBat(hass.Hass):
                     total_left_today10 += pv_estimate10
                     total_left_today90 += pv_estimate90
 
+                if this_point <= now and (this_point + timedelta(minutes=30)) > now:
+                    power_now = pv_estimate * power_scale
+                    power_now10 = pv_estimate10 * power_scale
+                    power_now90 = pv_estimate90 * power_scale
+
                 fentry = {
                     "period_start": entry["period_start"],
                     "pv_estimate": self.dp2(pv_estimate * power_scale),
@@ -7387,7 +7397,7 @@ class PredBat(hass.Hass):
                     "sensor." + self.prefix + "_pv_today",
                     state=self.dp2(total_day[day]),
                     attributes={
-                        "friendly_name": "PV today",
+                        "friendly_name": "PV Today",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:solar-power",
@@ -7401,6 +7411,19 @@ class PredBat(hass.Hass):
                         "detailedForecast": forecast_day[day],
                         "api_limit": self.solcast_api_limit,
                         "api_used": self.solcast_api_used,
+                    },
+                )
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_forecast_h0",
+                    state=self.dp2(power_now),
+                    attributes={
+                        "friendly_name": "PV Forecast Now",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "W",
+                        "icon": "mdi:solar-power",
+                        "device_class": "power",
+                        "now10": self.dp2(power_now10),
+                        "now90": self.dp2(power_now90),
                     },
                 )
             else:
@@ -8254,6 +8277,10 @@ class PredBat(hass.Hass):
 
             # HTML data
             self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+
+            # Web history
+            if self.web_interface:
+                self.web_interface.history_update()
 
         # Destroy pool
         if self.pool:
