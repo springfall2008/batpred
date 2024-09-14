@@ -20,7 +20,7 @@ class WebInterface:
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
 
-    def history_attribute(self, history, state_key='state', last_updated_key='last_updated', scale=1.0):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
         if history:
             history = history[0]
@@ -217,13 +217,13 @@ class WebInterface:
         text += "</head>\n"
         return text
 
-    def get_entity_detailedForecast(self, entity, subitem='pv_estimate'):
+    def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
         results = {}
         detailedForecast = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("detailedForecast", {})
         if detailedForecast:
             for item in detailedForecast:
                 sub = item.get(subitem, None)
-                start = item.get('period_start', None)
+                start = item.get("period_start", None)
                 if sub and start:
                     results[start] = sub
         return results
@@ -544,7 +544,7 @@ var options = {
         last_time = None
         for key in data:
             # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
-            if '.' in key:
+            if "." in key:
                 timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
             else:
                 timekey = datetime.strptime(key, TIME_FORMAT)
@@ -656,8 +656,8 @@ var options = {
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
         elif chart == "PV" or chart == "PV7":
-            pv_power = self.prune_today(self.pv_power_hist, prune = chart == "PV")
-            pv_forecast = self.prune_today(self.pv_forecast_hist, prune = chart == "PV")
+            pv_power = self.prune_today(self.pv_power_hist, prune=chart == "PV")
+            pv_forecast = self.prune_today(self.pv_forecast_hist, prune=chart == "PV")
             pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate"), prune=False)
             pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate10"), prune=False)
             pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)

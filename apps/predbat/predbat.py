@@ -7423,7 +7423,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:solar-power",
                         "device_class": "power",
                         "now10": self.dp2(power_now10),
-                        "now90": self.dp2(power_now90)
+                        "now90": self.dp2(power_now90),
                     },
                 )
             else:
