@@ -19,12 +19,43 @@ class WebInterface:
         self.default_page = "./dash"
         self.pv_power_hist = {}
 
+    def history_attribute(self, history, state_key='state', last_updated_key='last_updated', scale=1.0):
+        results = {}
+        if history:
+            history = history[0]
+
+        if not history:
+            return results
+
+        # Process history
+        for item in history:
+            # Ignore data without correct keys
+            if state_key not in item:
+                continue
+            if last_updated_key not in item:
+                continue
+
+            # Unavailable or bad values
+            if item[state_key] == "unavailable" or item[state_key] == "unknown":
+                continue
+
+            # Get the numerical key and the timestamp and ignore if in error
+            try:
+                state = float(item[state_key]) * scale
+                last_updated_time = item[last_updated_key]
+            except (ValueError, TypeError):
+                continue
+
+            results[last_updated_time] = state
+        self.log("History attribute: {}".format(results))
+        return results
+
     def history_update(self):
         """
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.base.get_history_wrapper("predbat.pv_power", 2)
+        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 1))
 
     async def start(self):
         # Start the web server on port 5052
@@ -184,6 +215,17 @@ class WebInterface:
             text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
         text += "</head>\n"
         return text
+
+    def get_entity_detailedForecast(self, entity, subitem='pv_estimate'):
+        results = {}
+        detailedForecast = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("detailedForecast", {})
+        if detailedForecast:
+            for item in detailedForecast:
+                sub = item.get(subitem, None)
+                start = item.get('period_start', None)
+                if sub and start:
+                    results[start] = sub
+        return results
 
     def get_entity_results(self, entity):
         results = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("results", {})
@@ -483,7 +525,7 @@ var options = {
         text = self.get_header("Predbat Dashboard")
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.previous_status)
+        text += self.get_status_html(soc_perc, self.base.current_status)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -523,9 +565,6 @@ var options = {
         rates_export = self.get_entity_results("predbat.rates_export")
         rates_gas = self.get_entity_results("predbat.rates_gas")
         record = self.get_entity_results("predbat.record")
-        load_energy_actual = self.get_entity_results("predbat.load_energy_actual")
-        load_energy_predicted = self.get_entity_results("predbat.load_energy_predicted")
-        load_energy_adjusted = self.get_entity_results("predbat.load_energy_adjusted")
 
         text = ""
 
@@ -580,12 +619,28 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
+            load_energy_actual = self.get_entity_results("predbat.load_energy_actual")
+            load_energy_predicted = self.get_entity_results("predbat.load_energy_predicted")
+            load_energy_adjusted = self.get_entity_results("predbat.load_energy_adjusted")
+
             series_data = [
                 {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Predicted", "data": load_energy_predicted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
                 {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
+        elif chart == "PV":
+            pv_power = self.pv_power_hist
+            pv_today_forecast = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate")
+            pv_today_forecast10 = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate10")
+            pv_today_forecast90 = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90")
+            series_data = [
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#f5c43d"},
+                {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
+                {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
+                {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
+            ]
+            text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -606,6 +661,7 @@ var options = {
         text += '<a href="./charts?chart=Cost">Cost</a> '
         text += '<a href="./charts?chart=Rates">Rates</a> '
         text += '<a href="./charts?chart=InDay">InDay</a> '
+        text += '<a href="./charts?chart=PV">PV</a> '
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)

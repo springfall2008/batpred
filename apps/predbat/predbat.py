@@ -1634,6 +1634,7 @@ class PredBat(hass.Hass):
         if not extra:
             extra = ""
 
+        self.current_status = message + extra
         if notify and self.previous_status != message and self.set_status_notify:
             self.call_notify("Predbat status change to: " + message + extra)
 
@@ -5104,6 +5105,7 @@ class PredBat(hass.Hass):
         self.dashboard_index = []
         self.dashboard_values = {}
         self.prefix = self.args.get("prefix", "predbat")
+        self.current_status = None
         self.previous_status = None
         self.had_errors = False
         self.expert_mode = False
