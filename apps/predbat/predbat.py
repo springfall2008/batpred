@@ -1869,7 +1869,7 @@ class PredBat(hass.Hass):
                 load_adjusted += load
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                load_adjusted_stamp[stamp] = load_adjusted
+                load_adjusted_stamp[stamp] = self.dp3(load_adjusted)
 
         self.dashboard_item(
             self.prefix + ".load_inday_adjustment",
@@ -7423,7 +7423,7 @@ class PredBat(hass.Hass):
                         "icon": "mdi:solar-power",
                         "device_class": "power",
                         "now10": self.dp2(power_now10),
-                        "now90": self.dp2(power_now90),
+                        "now90": self.dp2(power_now90)
                     },
                 )
             else:
