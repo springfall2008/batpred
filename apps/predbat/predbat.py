@@ -7329,6 +7329,9 @@ class PredBat(hass.Hass):
         now = self.now_utc
 
         power_scale = 60 / period  # Scale kwh to power
+        power_now = 0
+        power_now10 = 0
+        power_now90 = 0
 
         for entry in pv_forecast_data:
             if "period_start" not in entry:
@@ -7364,6 +7367,11 @@ class PredBat(hass.Hass):
                     total_left_today10 += pv_estimate10
                     total_left_today90 += pv_estimate90
 
+                if this_point <= now and (this_point + timedelta(minutes=30)) > now:
+                    power_now = pv_estimate * power_scale
+                    power_now10 = pv_estimate10 * power_scale
+                    power_now90 = pv_estimate90 * power_scale
+
                 fentry = {
                     "period_start": entry["period_start"],
                     "pv_estimate": self.dp2(pv_estimate * power_scale),
@@ -7389,7 +7397,7 @@ class PredBat(hass.Hass):
                     "sensor." + self.prefix + "_pv_today",
                     state=self.dp2(total_day[day]),
                     attributes={
-                        "friendly_name": "PV today",
+                        "friendly_name": "PV Today",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:solar-power",
@@ -7403,6 +7411,19 @@ class PredBat(hass.Hass):
                         "detailedForecast": forecast_day[day],
                         "api_limit": self.solcast_api_limit,
                         "api_used": self.solcast_api_used,
+                    },
+                )
+                self.dashboard_item(
+                    "sensor." + self.prefix + "_pv_forecast_h0",
+                    state=self.dp2(power_now),
+                    attributes={
+                        "friendly_name": "PV Forecast Now",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "W",
+                        "icon": "mdi:solar-power",
+                        "device_class": "power",
+                        "now10": self.dp2(power_now10),
+                        "now90": self.dp2(power_now90)
                     },
                 )
             else:

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
-from config import TIME_FORMAT
+from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 
 
 class WebInterface:
@@ -18,8 +18,9 @@ class WebInterface:
         self.log = base.log
         self.default_page = "./dash"
         self.pv_power_hist = {}
+        self.pv_forecast_hist = {}
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
+    def history_attribute(self, history, state_key='state', last_updated_key='last_updated', scale=1.0):
         results = {}
         if history:
             history = history[0]
@@ -47,7 +48,6 @@ class WebInterface:
                 continue
 
             results[last_updated_time] = state
-        self.log("History attribute: {}".format(results))
         return results
 
     def history_update(self):
@@ -55,7 +55,8 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 1))
+        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7))
+        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7))
 
     async def start(self):
         # Start the web server on port 5052
@@ -216,13 +217,13 @@ class WebInterface:
         text += "</head>\n"
         return text
 
-    def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
+    def get_entity_detailedForecast(self, entity, subitem='pv_estimate'):
         results = {}
         detailedForecast = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("detailedForecast", {})
         if detailedForecast:
             for item in detailedForecast:
                 sub = item.get(subitem, None)
-                start = item.get("period_start", None)
+                start = item.get('period_start', None)
                 if sub and start:
                     results[start] = sub
         return results
@@ -324,6 +325,12 @@ var options = {
         text += "  },\n"
         text += "  title: {\n"
         text += "    text: '{}'\n".format(chart_name)
+        text += "  },\n"
+        text += "  legend: {\n"
+        text += "    position: 'top',\n"
+        text += "    formatter: function(seriesName, opts) {\n"
+        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1),' {} <br> ', seriesName]\n".format(yaxis_name)
+        text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
         text += "   xaxis: [\n"
@@ -529,6 +536,25 @@ var options = {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def prune_today(self, data, prune=True, group=15):
+        """
+        Remove data from before today
+        """
+        results = {}
+        last_time = None
+        for key in data:
+            # Convert key in format '2024-09-07T15:40:09.799567+00:00' into a datetime
+            if '.' in key:
+                timekey = datetime.strptime(key, TIME_FORMAT_SECONDS)
+            else:
+                timekey = datetime.strptime(key, TIME_FORMAT)
+            if last_time and (timekey - last_time).seconds < group * 60:
+                continue
+            if not prune or (timekey > self.base.midnight_utc):
+                results[key] = data[key]
+                last_time = timekey
+        return results
+
     def get_chart(self, chart):
         """
         Return the HTML for a chart
@@ -537,7 +563,7 @@ var options = {
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
             hist = self.base.soc_kwh_history
-            for minute in range(0, self.base.minutes_now, 15):
+            for minute in range(0, self.base.minutes_now, 30):
                 minute_timestamp = self.base.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
@@ -572,12 +598,12 @@ var options = {
             text += "<br><h2>Loading...</h2>"
         elif chart == "Battery":
             series_data = [
-                {"name": "Base", "data": soc_kw, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#3291a8"},
-                {"name": "Base10", "data": soc_kw_base10, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#e8972c"},
-                {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#eb2323"},
-                {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#cd23eb"},
-                {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#3291a8"},
-                {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "stepline", "color": "#15eb8b"},
+                {"name": "Base", "data": soc_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Base10", "data": soc_kw_base10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#e8972c"},
+                {"name": "Best", "data": soc_kw_best, "opacity": "1.0", "stroke_width": "4", "stroke_curve": "smooth", "color": "#eb2323"},
+                {"name": "Best10", "data": soc_kw_best10, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#cd23eb"},
+                {"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth", "color": "#3291a8"},
+                {"name": "Charge Limit Base", "data": charge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb8b"},
                 {
                     "name": "Charge Limit Best",
                     "data": best_charge_limit_kw,
@@ -587,35 +613,35 @@ var options = {
                     "chart_type": "area",
                     "color": "#e3e019",
                 },
-                {"name": "Best Discharge Limit", "data": best_discharge_limit_kw, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#15eb1c"},
-                {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "3", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
+                {"name": "Best Discharge Limit", "data": best_discharge_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
+                {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, "kWh", "Battery SOC Prediction", now_str)
         elif chart == "Power":
             series_data = [
-                {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "pv", "data": pv_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "grid", "data": grid_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "load", "data": load_power_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "iboost", "data": iboost_best, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
+                {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "pv", "data": pv_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "grid", "data": grid_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "load", "data": load_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "iboost", "data": iboost_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
-            text += self.render_chart(series_data, "W", "Best Power", now_str)
+            text += self.render_chart(series_data, "kW", "Best Power", now_str)
         elif chart == "Cost":
             series_data = [
-                {"name": "Actual", "data": cost_today, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area"},
-                {"name": "Actual Import", "data": cost_today_import, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Actual Export", "data": cost_today_export, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Base", "data": metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Best", "data": best_metric, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area"},
-                {"name": "Base10", "data": base10_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
-                {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth"},
+                {"name": "Actual", "data": cost_today, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area"},
+                {"name": "Actual Import", "data": cost_today_import, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Actual Export", "data": cost_today_export, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Base", "data": metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Best", "data": best_metric, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area"},
+                {"name": "Base10", "data": base10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
+                {"name": "Best10", "data": best10_metric, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
             series_data = [
-                {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "1", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
+                {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
@@ -629,16 +655,18 @@ var options = {
                 {"name": "Adjusted", "data": load_energy_adjusted, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
             ]
             text += self.render_chart(series_data, "kWh", "In Day Adjustment", now_str)
-        elif chart == "PV":
-            pv_power = self.pv_power_hist
-            pv_today_forecast = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate")
-            pv_today_forecast10 = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate10")
-            pv_today_forecast90 = self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90")
+        elif chart == "PV" or chart == "PV7":
+            pv_power = self.prune_today(self.pv_power_hist, prune = chart == "PV")
+            pv_forecast = self.prune_today(self.pv_forecast_hist, prune = chart == "PV")
+            pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate"), prune=False)
+            pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate10"), prune=False)
+            pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)
             series_data = [
-                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "1", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
-                {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
-                {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "1", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
+                {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
+                {"name": "Forecast History", "data": pv_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7"},
+                {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
+                {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
+                {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
         else:
@@ -662,6 +690,7 @@ var options = {
         text += '<a href="./charts?chart=Rates">Rates</a> '
         text += '<a href="./charts?chart=InDay">InDay</a> '
         text += '<a href="./charts?chart=PV">PV</a> '
+        text += '<a href="./charts?chart=PV7">PV7</a> '
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
