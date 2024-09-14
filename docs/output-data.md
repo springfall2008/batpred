@@ -7,15 +7,16 @@ There can never be a single Predbat dashboard that suits every user, so instead 
 
 ## Web interface
 
-Predbat has a Web interface active on port 5052 which can be opened by clicking on Web Interface from the Predbat Add-on or directly opening the port in your browser
-e.g. <http://homeassistant.local:5052/>
+**NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
 
-The Web interface can allow you to view the current plan, adjust the configuration, check your apps.yaml and view the logfiles. You can change your view using
+Predbat has a Web interface active can be opened via the Predbat Add on by clicking on 'Web UI'. The web interface can be added to your sidebar by turning on the 'Show in Sidebar' toggle. 
+
+If you are not using the Predbat Add on then you may be able to access the Web Interface directly on port 5052 (e.g. with a Docker Container or Native on your Linux/MAC).
+
+The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles. You can change your view using
 the top menu bar.
 
-![image](https://github.com/user-attachments/assets/0879e48f-fdff-460d-8c11-42abcb13a345)
-
-**NOTE:** The Predbat web interface will not work with the AppDaemon or the Predbat-appdaemon installation methods.
+![image](https://github.com/user-attachments/assets/fdad3d4a-91f3-4e66-bb02-2ac649cb8854)
 
 ## Displaying output data
 
