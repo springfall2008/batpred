@@ -19,7 +19,7 @@ class WebInterface:
         self.default_page = "./dash"
         self.pv_power_hist = {}
 
-    def history_attribute(self, history, state_key='state', last_updated_key='last_updated', scale=1.0):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
         if history:
             history = history[0]
@@ -216,13 +216,13 @@ class WebInterface:
         text += "</head>\n"
         return text
 
-    def get_entity_detailedForecast(self, entity, subitem='pv_estimate'):
+    def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
         results = {}
         detailedForecast = self.base.dashboard_values.get(entity, {}).get("attributes", {}).get("detailedForecast", {})
         if detailedForecast:
             for item in detailedForecast:
                 sub = item.get(subitem, None)
-                start = item.get('period_start', None)
+                start = item.get("period_start", None)
                 if sub and start:
                     results[start] = sub
         return results
