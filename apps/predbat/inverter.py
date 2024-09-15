@@ -978,7 +978,7 @@ class Inverter:
         if INVERTER_TEST:
             self.self_test(minutes_now)
 
-    def mimic_target_soc(self, current_charge_limit):
+    def mimic_target_soc(self, current_charge_limit, discharge=False):
         """
         Function to turn on/off charging based on the current SOC and the set charge limit
 
@@ -988,27 +988,47 @@ class Inverter:
         Returns:
             None
         """
-        charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-        if current_charge_limit == 0:
-            self.alt_charge_discharge_enable("eco", True)  # ECO Mode
-        elif self.soc_percent > float(current_charge_limit):
-            # If current SOC is above Target SOC, turn Grid Charging off
-            self.alt_charge_discharge_enable("charge", False)
-            self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
-        elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
-            self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
-            if self.inv_output_charge_control == "current":
-                self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
-                self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
+        if discharge:
+            discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
+            if current_charge_limit == 100:
+                self.alt_charge_discharge_enable("eco", True)  # ECO Mode
+            elif self.soc_percent < float(current_charge_limit):
+                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Discharge disabled.")
+                self.alt_charge_discharge_enable("discharge", False)
+            elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+                if self.inv_output_charge_control == "current":
+                    self.alt_charge_discharge_enable("discharge", True)
+                    self.set_current_from_power("discharge", (0))  # Set charge current to zero (i.e hold SOC)
+                else:
+                    self.alt_charge_discharge_enable("discharge", False)
+            else:
+                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Discharge enabled.")
+                self.alt_charge_discharge_enable("discharge", True)
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("discharge", discharge_power)
+                    self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
-            # If we drop below the target, turn grid charging back on and make sure the charge current is correct
-            self.alt_charge_discharge_enable("charge", True)
-            if self.inv_output_charge_control == "current":
-                self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
-                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
-            self.base.log(
-                f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
-            )
+            charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+            if current_charge_limit == 0:
+                self.alt_charge_discharge_enable("eco", True)  # ECO Mode
+            elif self.soc_percent > float(current_charge_limit):
+                # If current SOC is above Target SOC, turn Grid Charging off
+                self.alt_charge_discharge_enable("charge", False)
+                self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
+            elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
+                self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
+                    self.base.log(f"Current SOC {self.soc_percent}% is same as Target SOC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
+            else:
+                # If we drop below the target, turn grid charging back on and make sure the charge current is correct
+                self.alt_charge_discharge_enable("charge", True)
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                    self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
+                self.base.log(
+                    f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
+                )
 
     def adjust_reserve(self, reserve):
         """
@@ -1142,7 +1162,7 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} discharge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
 
-    def adjust_battery_target(self, soc, isCharging=False):
+    def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
         """
         Adjust the battery charging target SOC % in GivTCP
 
@@ -1186,6 +1206,8 @@ class Inverter:
         if not self.inv_has_target_soc:
             if isCharging:
                 self.mimic_target_soc(soc)
+            elif isDischarging:
+                self.mimic_target_soc(soc, discharge=True)
             else:
                 self.mimic_target_soc(0)
 
