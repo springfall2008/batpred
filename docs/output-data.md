@@ -515,7 +515,7 @@ action:
     data:
       title: GivTCP communication issue
       message: |
-        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        {{now().strftime('%-d %b %H:%M')}} ISSUE:
         {{ alert_text }} for the past 15 minutes.
       data:
         visibility: public
@@ -537,7 +537,7 @@ You will need to enable a binary sensor for each add-on to be able to use these 
 - Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'
 - Click the 'Running' sensor, then the cogwheel, and Enable the sensor
 
-Repeat these steps for the 'Mosquitto' add-on and either 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' depending on which AppDaemon install option you followed.
+Repeat these steps for the 'Mosquitto' add-on and either 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' depending on which Predbat install option you followed.
 
 As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
@@ -547,8 +547,10 @@ To restart the GivTCP add-on, add the following at the end of the action section
 ```yaml
   - service: hassio.addon_restart
     data:
-      addon: a6a2857d_givtcp
+      addon: 533ea71a_givtcp
 ```
+
+NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
 
 ### Predbat error monitor
 
@@ -560,14 +562,8 @@ The script will need to be customised for your mobile details.
 alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trigger:
-  - platform: state
-    entity_id:
-      - predbat.status
-    to: "ERROR: Exception raised"
-    for:
-      minutes: 10
   - platform: template
-    value_template: "{{ 'ERROR' in states('predbat.status') }}"
+    value_template: "{{ 'Error' in states('predbat.status') }}"
     for:
       minutes: 10
   - platform: state
@@ -582,7 +578,7 @@ action:
     data:
       title: Predbat status issue
       message: |
-        {{ now().timestamp() | timestamp_custom('%-d %b %H:%M') }} ISSUE:
+        {{now().strftime('%-d %b %H:%M')}} ISSUE:
         Predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
       data:

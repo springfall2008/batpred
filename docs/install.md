@@ -13,7 +13,6 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 - [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
 - [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
-- [Installing GivTCP and Mosquitto Add-on's from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54)
 - [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=jzpm89956Pw)
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)

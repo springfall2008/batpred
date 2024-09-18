@@ -23,7 +23,48 @@ you copy but don't replace the standard template then Predbat will not function 
 
 ## GivEnergy with GivTCP
 
-Please see the main installation instructions, you will need to install GivTCP first and then use the supplied template
+Its recommended that you firstly watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
+Although the video covers GivTCP v2 and v3 has been recently released, the install and setup process is very similar.
+
+The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.
+
+1. Install Mosquitto Broker add-on:
+
+- Go to Settings / Add-ons / Add-on Store (bottom right)
+- Scroll down the add-on store list, to find 'Mosquitto broker', click on the add-on, then click 'INSTALL'
+- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
+- Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
+Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
+- With GivTCP v3 you no longer need to create a dedicated Home Assistant user for MQTT so this part of the video can be skipped over
+
+2. Install the GivTCP add-on:
+
+- Go to Settings / Add-ons / Add-on Store
+- Click the three dots in the top right corner, then Repositories
+- You'll need to add the GivTCP repository as an additional custom repository so paste/type
+'[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' the 'Close'<BR>
+NB: this URL is for GivTCP v3, not v2 as covered in the video.
+- Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository
+- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addon's; the production version, the latest beta and the latest dev versions.
+Click on the 'GivTCP' add-on, then click 'INSTALL'
+- Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
+
+3. Configure GivTCP:
+
+- The configuration process for GivTCP in v3 has changed from that shown in the video,
+the Configuration tab is now no longer used and all configuration is now done via the add-on's Web interface
+- On the GivTCP add-on, click 'START' to start the add-on
+- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/) and click 'Go to Config Page' to configure GivTCP
+- GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
+- Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will poll your inverters for updated information - its
+recommended that you don't set this to a value less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
+and won't communicate with the GivEnergy portal and app
+- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant
+you won't need to create a dedicated MQTT user or enter the details on the MQTT page
+- You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these are done by Predbat
+- (Optional) you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
+- Finally click 'Save and Restart' and GivTCP should start communicating with your inverters and you should have a set of 'givtcp_xxx' entities automatically created in Home Assistant
+- Check the GivTCP Log tab for errors; it should end with 'Publishing Home Assistant Discovery messages'
 
 ## Solis Inverters
 
