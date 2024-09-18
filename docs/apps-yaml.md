@@ -240,7 +240,7 @@ GivTCP version 3 is required for multiple AIO's.
 Predbat can either get historical data (house load, import, export and PV generation) directly from GivTCP or it can obtain it from the GivEnergy cloud.
 Unless you have a specific reason to not use the GivTCP data (e.g. you've lost your GivTCP data), its recommended to use GivTCP.
 
-### Data from Home assistant
+### Data from Home Assistant
 
 The following configuration entries in `apps.yaml` are pre-configured to automatically use the appropriate sensors.
 
@@ -811,25 +811,28 @@ AIO firmware versions refuse to be set to 100.  Comment the line out or set to 1
 
 ## Automatic restarts
 
-If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. In this case you can tell Predbat
-how to restart the add-on using a service.
+If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. 
+In this case you can tell Predbat how to restart the add-on using a service.
 
 Right now only communication loss with GE inverters is detectable but in future other systems will be supported.
 
 When enabled if communication is lost then the service configured will be triggered and can cause a restart which may restart the connection.
-This maybe useful with GivTCP if you have time sync errors or lost of REST service every now and again.
+This maybe useful with GivTCP if you have time sync errors or lose the REST service every now and again.
 
 The auto_restart itself is a list of commands to run to trigger a restart.
 
 - The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
-- The **service** command is used to call a service, and can contain arguments of **addon** and/or **entity_id**
+- The **service** command is used to call a service, and can contain arguments of **addon** and/or **entity_id**. The configuration below is for GivTCP v3.
 
 ```yaml
 auto_restart:
   - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
   - service: hassio/addon_restart
-    addon: a6a2857d_givtcp
+    addon: 533ea71a_givtcp
 ```
+
+*NB:* If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
+as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2 and v3.
 
 ## Battery charge/discharge curves
 

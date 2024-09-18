@@ -86,11 +86,12 @@ pred_bat:
   #  - 'http://homeassistant.local:6346'
 
   # When enabled automatic restart will restart the add-on if communication fails
-  # Example below is auto-restart for GivTCP add-on itself
+  # Example below is an auto-restart for the GivTCP v3 add-on
+  #
   #auto_restart:
   #  - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
   #  - service: hassio/addon_restart
-  #    addon: a6a2857d_givtcp
+  #    addon: 533ea71a_givtcp
 
   #  Example on how to restart the inverter via GivTCP
   #  - service: switch.turn_on
