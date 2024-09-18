@@ -24,6 +24,7 @@ from config import TIME_FORMAT_HA, TIMEOUT
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
+
 class HAInterface:
     """
     Direct interface to Home Assistant
@@ -246,7 +247,7 @@ class HAInterface:
         """
         if not self.db_enable:
             return self.get_history(sensor, now, days=days)
-        
+
         start = now - timedelta(days=days)
         table_name = sensor.replace(".", "__")
         # Check if table exists
@@ -258,7 +259,7 @@ class HAInterface:
             return self.get_history(sensor, now, days=days)
 
         # Get the history for the sensor, sorted by datetime
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} WHERE datetime >= ? ORDER BY datetime".format(table_name), (start.strftime(TIME_FORMAT_DB), ))
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} WHERE datetime >= ? ORDER BY datetime".format(table_name), (start.strftime(TIME_FORMAT_DB),))
         res = self.db_cursor.fetchall()
         history = []
         for item in res:
@@ -273,7 +274,7 @@ class HAInterface:
             except json.JSONDecodeError:
                 pass
 
-            history.append({"last_updated": item[0] + 'Z', "state": state, "attributes": attributes})
+            history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
         return [history]
 
     def get_history(self, sensor, now, days=30):
@@ -290,7 +291,7 @@ class HAInterface:
         end = now
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
-    
+
     def set_state_db(self, entity_id, state, attributes):
         """
         Records the state of a predbat entity into the SQLLite database
@@ -298,7 +299,7 @@ class HAInterface:
         """
         if not self.db_enable:
             return
-        
+
         # Convert time to GMT+0
         now_utc = self.base.now_utc_real
         now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
@@ -311,7 +312,7 @@ class HAInterface:
 
         attributes_record = {}
         for key in attributes:
-            if key not in ['friendly_name', 'icon', 'unit_of_measurement', 'results', 'html', 'state_class', 'options', 'detailedForecast']:
+            if key not in ["friendly_name", "icon", "unit_of_measurement", "results", "html", "state_class", "options", "detailedForecast"]:
                 attributes_record[key] = attributes[key]
         attributes_record_json = json.dumps(attributes_record)
 
@@ -332,7 +333,9 @@ class HAInterface:
                 self.db_cursor.execute("DELETE FROM {} WHERE datetime = ?".format(table_name), (now_utc_txt,))
 
         # Insert the new state record
-        self.db_cursor.execute("INSERT INTO {} VALUES (?, ?, ?, ?)".format(table_name), (now_utc.strftime(TIME_FORMAT_DB), json.dumps(state), attributes_record_json, json.dumps(system)))
+        self.db_cursor.execute(
+            "INSERT INTO {} VALUES (?, ?, ?, ?)".format(table_name), (now_utc.strftime(TIME_FORMAT_DB), json.dumps(state), attributes_record_json, json.dumps(system))
+        )
         self.db.commit()
 
     def cleanup_db(self):
