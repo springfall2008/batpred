@@ -55,8 +55,8 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7))
-        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7))
+        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7, db=True))
+        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7, db=True))
 
     async def start(self):
         # Start the web server on port 5052
@@ -666,7 +666,7 @@ var options = {
             pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Forecast History", "data": pv_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7"},
+                {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
                 {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
                 {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
                 {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},

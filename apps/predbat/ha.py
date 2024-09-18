@@ -19,8 +19,10 @@ from aiohttp import web, ClientSession, WSMsgType
 import json
 import requests
 import traceback
+import sqlite3
 from config import TIME_FORMAT_HA, TIMEOUT
 
+TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
 class HAInterface:
     """
@@ -33,6 +35,10 @@ class HAInterface:
         """
         self.ha_url = base.args.get("ha_url", "http://supervisor/core")
         self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
+        self.db_enable = base.args.get("db_enable", False)
+        self.db_days = base.args.get("db_days", 30)
+        self.db = None
+        self.db_cursor = None
         self.websocket_active = False
 
         self.base = base
@@ -59,6 +65,14 @@ class HAInterface:
                 self.base.create_task(self.socketLoop())
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
+
+                if self.db_enable:
+                    # Open the SQL Lite database called predbat.db
+                    self.log("Info: Opening database")
+                    self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
+                    self.db_cursor = self.db.cursor()
+                    self.log("Info: Clean data older than {} days".format(self.db_days))
+                    self.cleanup_db()
 
     def get_slug(self):
         """
@@ -226,6 +240,31 @@ class HAInterface:
         else:
             self.log("Warn: Failed to update state data from HA")
 
+    def get_history_db(self, sensor, now, days=30):
+        """
+        Get the history for a sensor from the SQLLite database.
+        """
+        if not self.db_enable:
+            return self.get_history(sensor, now, days=days)
+        
+        start = now - timedelta(days=days)
+        table_name = sensor.replace(".", "__")
+        # Check if table exists
+        # If not then return empty history
+        self.db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        res = self.db_cursor.fetchone()
+        if not res:
+            self.log("Warn: Table {} does not exist, trying HA data".format(table_name))
+            return self.get_history(sensor, now, days=days)
+
+        # Get the history for the sensor, sorted by datetime
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} WHERE datetime >= ? ORDER BY datetime".format(table_name), (start.strftime(TIME_FORMAT_DB), ))
+        res = self.db_cursor.fetchall()
+        history = []
+        for item in res:
+            history.append({"last_updated": item[0] + 'Z', "state": item[1], "attributes": json.loads(item[2])})
+        return [history]
+
     def get_history(self, sensor, now, days=30):
         """
         Get the history for a sensor from Home Assistant.
@@ -240,6 +279,71 @@ class HAInterface:
         end = now
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
+    
+    def set_state_db(self, entity_id, state, attributes):
+        """
+        Records the state of a predbat entity into the SQLLite database
+        There is one table per Entity created with history recorded
+        """
+        if not self.db_enable:
+            return
+        
+        # Convert time to GMT+0
+        now_utc = self.base.now_utc_real
+        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
+        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
+
+        if isinstance(state, float):
+            state_type = "float"
+        elif isinstance(state, int):
+            state_type = "int"
+        else:
+            state = str(state)
+            state_type = "str"
+
+        # Create a table for the entity if it does not exist
+        table_name = entity_id.replace(".", "__")
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS {} (datetime TEXT PRIMARY KEY, state TEXT, type TEXT, attributes TEXT)".format(table_name))
+
+        attributes_record = {}
+        for key in attributes:
+            if key not in ['friendly_name', 'icon', 'unit_of_measurement', 'results', 'html', 'state_class', 'options', 'detailedForecast']:
+                attributes_record[key] = attributes[key]
+        attributes_record_json = json.dumps(attributes_record)
+
+        # Record the state of the entity
+        # If the entity value and attributes are unchanged then don't record the new state
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} ORDER BY datetime DESC LIMIT 1".format(table_name))
+        last_record = self.db_cursor.fetchone()
+        if last_record:
+            last_datetime = datetime.strptime(last_record[0], TIME_FORMAT_DB)
+            last_state = last_record[1]
+            last_attributes = last_record[2]
+            if last_state == str(state) and last_attributes == attributes_record_json:
+                return
+
+            # Avoid duplicate datetime records
+            if last_datetime == now_utc:
+                # Delete previous record with this datetime
+                self.db_cursor.execute("DELETE FROM {} WHERE datetime = ?".format(table_name), (now_utc_txt,))
+
+        # Insert the new state record
+        self.db_cursor.execute("INSERT INTO {} VALUES (?, ?, ?, ?)".format(table_name), (now_utc.strftime(TIME_FORMAT_DB), state, state_type, attributes_record_json))
+        self.db.commit()
+
+    def cleanup_db(self):
+        """
+        This searches all tables for data older than N days and deletes it
+        """
+        if not self.db_enable:
+            return
+
+        self.db_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = self.db_cursor.fetchall()
+        for table in tables:
+            table_name = table[0]
+            self.db_cursor.execute("DELETE FROM {} WHERE datetime < ?".format(table_name), (self.base.now_utc_real - timedelta(days=self.db_days),))
+            self.db.commit()
 
     def set_state(self, entity_id, state, attributes={}):
         """
@@ -254,8 +358,10 @@ class HAInterface:
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
+            data["unrecorded_attributes"] = ["results"]
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
         self.update_state(entity_id)
+        self.set_state_db(entity_id, state, attributes)
 
     def call_service(self, service, **kwargs):
         """

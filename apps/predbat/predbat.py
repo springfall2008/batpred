@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.8"
+THIS_VERSION = "v8.4.9"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -957,11 +957,14 @@ class PredBat(hass.Hass):
         """
         return self.ha_interface.call_service(service, **kwargs)
 
-    def get_history_wrapper(self, entity_id, days=30):
+    def get_history_wrapper(self, entity_id, days=30, db=False):
         """
         Wrapper function to get history from HA
         """
-        history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
+        if db:
+            history = self.ha_interface.get_history_db(entity_id, days=days, now=self.now)
+        else:
+            history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
 
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
