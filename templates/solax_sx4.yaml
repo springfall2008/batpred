@@ -113,6 +113,20 @@ pred_bat:
   energy_control_switch:
     - select.solaxmodbus_remotecontrol_power_control
 
+  # Service for start/stop
+  charge_start_service:
+    service: select.select_option
+    entity_id: select.solax_manual_mode_select
+    option: "Force Charge"
+  charge_stop_service:
+    service: select.select_option
+    entity_id: select.solax_manual_mode_select
+    option: "Stop Charge and Discharge"
+  discharge_start_service:
+    service: select.select_option
+    entity_id: select.solax_manual_mode_select
+    option: "Force Discharge"
+
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
   inverter_limit: 5000
