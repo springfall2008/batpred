@@ -813,7 +813,7 @@ AIO firmware versions refuse to be set to 100.  Comment the line out or set to 1
 
 ## Automatic restarts
 
-If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly. 
+If the add-on that is providing the inverter control stops functioning it can prevent Predbat from functioning correctly.
 In this case you can tell Predbat how to restart the add-on using a service.
 
 Right now only communication loss with GE inverters is detectable but in future other systems will be supported.
