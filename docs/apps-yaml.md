@@ -570,7 +570,9 @@ The Home Assistant controls (switches, input numbers, selectors, etc) related to
 with brief mention of pertinent controls included here alongside the apps.yaml configuration items where relevant for context.
 
 - **num_cars** should be set in apps.yaml to the number of cars you want Predbat to plan for.
-Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can safely be commented out or deleted as they won't be required).
+Set to 0 if you don't have an EV (and the remaining car sensors in apps.yaml can safely be commented out or deleted as they won't be required).<BR>
+NB: num_cars must be set correctly regardless of whether you are using Octopus Intelligent Go to control your EV charging or Predbat to control the charging;
+or else Predbat could start discharging your battery when the EV is charging.
 
 - **car_charging_exclusive** should be set to True for each car in apps.yaml if you have multiple cars configured in Predbat, but only one car charger.
 This indicates that only one car may charge at once (the first car reporting as plugged in will be considered as charging).
@@ -831,7 +833,7 @@ auto_restart:
     addon: 533ea71a_givtcp
 ```
 
-*NB:* If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
+NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
 as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2 and v3.
 
 ## Battery charge/discharge curves
