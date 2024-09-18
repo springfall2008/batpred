@@ -1,10 +1,10 @@
-# Other Inverters
+# Inverter Setup
 
-PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other models:
+PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
-   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/giv_tcp) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
+   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
    | Solis Hybrid inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | Solax Gen4 inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | Sofar inverters | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
@@ -16,7 +16,10 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
-Please also ensure you have set up enhanced logging in AppDaemon as described here.
+
+NB: By default the apps.yaml template for GivTCP is installed with Predbat.
+If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
+you copy but don't replace the standard template then Predbat will not function correctly.
 
 ## GivEnergy with GivTCP
 

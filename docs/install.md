@@ -2,7 +2,7 @@
 
 These instructions will take you through the process of installing and configuring Predbat for first time use.
 
-If you have a working Predbat installation and are changing to use the Predbat add-on,
+If you have a working Predbat installation using AppDaemon and are changing to use the Predbat add-on,
 the [AppDaemon to Predbat add-on upgrade process](#upgrading-from-appdaemon-to-predbat-add-on) is described below.
 
 It's recommended that you watch the [Predbat Video Guides](video-guides.md) before you start.
@@ -20,13 +20,13 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
-## Inverter Control Integration install
+## Inverter Control install
 
 You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
 
 | Brand     | Integration     | Github Link                                                                      |
 | :-------- | :-----------     | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp>    |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/ha-addons>    |
 | GivEnergy | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | GivEnergy EMS | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
@@ -38,12 +38,13 @@ You will need to install an integration to communicate with and control your inv
 | Fox       | Fox Modbus       | <https://github.com/nathanmarlor/foxess_modbus> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
-Please see [Other Inverters](other-inverters.md) for details on the install details.
 
-- Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
-- You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
+Please see [Inverter Setup](inverter-setup.md) for details on installing and configuring the appropriate inverter control software
+so that Home Assistant is able to 'see' and manage your inverter.
 
-NB: If you have multiple GivEnergy AIO's, GivTCP version 3 is required.
+You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
+
+NB: If you have multiple GivEnergy AIO's or a 3-phase inverter, GivTCP version 3 is required.
 
 ## Editing Configuration Files in Home Assistant
 
