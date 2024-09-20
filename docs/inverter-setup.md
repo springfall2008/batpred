@@ -54,17 +54,33 @@ Click on the 'GivTCP' add-on, then click 'INSTALL'
 - The configuration process for GivTCP in v3 has changed from that shown in the video,
 the Configuration tab is now no longer used and all configuration is now done via the add-on's Web interface
 - On the GivTCP add-on, click 'START' to start the add-on
-- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/) and click 'Go to Config Page' to configure GivTCP
+- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
 - Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will poll your inverters for updated information - its
 recommended that you don't set this to a value less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
-- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant
+- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
 you won't need to create a dedicated MQTT user or enter the details on the MQTT page
-- You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these are done by Predbat
+- You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
 - (Optional) you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
-- Finally click 'Save and Restart' and GivTCP should start communicating with your inverters and you should have a set of 'givtcp_xxx' entities automatically created in Home Assistant
-- Check the GivTCP Log tab for errors; it should end with 'Publishing Home Assistant Discovery messages'
+- Finally click 'Save and Restart' and GivTCP should start communicating with your inverters
+and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
+- Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'
+
+4. Specific Predbat configuration requirements for certain GivEnergy equipment
+
+The rest of the [Predbat installation instructions](install.md) should now be followed,
+but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
+These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
+
+- If you have multiple AIO's then all control of the AIO's is done through the Gateway
+so you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to the Gateway serial number
+- If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
+as the battery size is incorrectly reported to GivTCP
+- If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
+If you have a Gen 1 or a firmware version that allows reserve being set to 100 then you can change the default from 98 to 100
+- If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup',
+[consider setting input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
 ## Solis Inverters
 

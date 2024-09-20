@@ -232,7 +232,7 @@ geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
 *TIP:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.
-geserial should be configured to point to the gateway AIO and all the geserial2 lines should be commented out in apps.yaml.
+geserial should be configured to be your AIO gateway serial number and all the geserial2 lines should be commented out in apps.yaml.
 GivTCP version 3 is required for multiple AIO's.
 
 ## Historical data
