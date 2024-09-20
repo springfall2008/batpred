@@ -24,6 +24,7 @@ from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
+
 class HAInterface:
     """
     Direct interface to Home Assistant
@@ -225,13 +226,13 @@ class HAInterface:
     def update_state(self, entity_id):
         """
         Update state for entity_id
-        """        
+        """
         self.db_mirror_list[entity_id.lower()] = True
 
         if self.db_primary and self.db_enable:
             self.update_state_db(entity_id)
             return
-    
+
         if not self.ha_key:
             return
 
@@ -257,7 +258,7 @@ class HAInterface:
                 attributes = json.loads(res[2])
             except json.JSONDecodeError:
                 pass
-            return {"last_updated": res[0] + 'Z', "state": state, "attributes": attributes}
+            return {"last_updated": res[0] + "Z", "state": state, "attributes": attributes}
         else:
             return None
 
@@ -304,7 +305,7 @@ class HAInterface:
         """
         Update the state data from Home Assistant.
         """
-        
+
         if self.db_primary and self.db_enable:
             self.update_states_db()
             return
@@ -332,7 +333,7 @@ class HAInterface:
             return None
 
         self.db_mirror_list[sensor.lower()] = True
-        
+
         start = now - timedelta(days=days)
         table_name = sensor.replace(".", "__")
         # Check if table exists
@@ -344,7 +345,7 @@ class HAInterface:
             return self.get_history(sensor, now, days=days)
 
         # Get the history for the sensor, sorted by datetime
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} WHERE datetime >= ? ORDER BY datetime".format(table_name), (start.strftime(TIME_FORMAT_DB), ))
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM {} WHERE datetime >= ? ORDER BY datetime".format(table_name), (start.strftime(TIME_FORMAT_DB),))
         res = self.db_cursor.fetchall()
         history = []
         for item in res:
@@ -355,7 +356,7 @@ class HAInterface:
             except json.JSONDecodeError:
                 pass
 
-            history.append({"last_updated": item[0] + 'Z', "state": state, "attributes": attributes})
+            history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
         return [history]
 
     def get_history(self, sensor, now, days=30):
@@ -377,7 +378,7 @@ class HAInterface:
         end = now
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
-    
+
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
         """
         Records the state of a predbat entity into the SQLLite database
@@ -385,7 +386,7 @@ class HAInterface:
         """
         if not self.db_enable:
             return
-        
+
         state = str(state)
 
         # Use of last_changed allows the state to be recorded at a different time
@@ -417,7 +418,7 @@ class HAInterface:
         # If the entity value and attributes are unchanged then don't record the new state
         self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM {} ORDER BY datetime DESC LIMIT 1".format(table_name))
         last_record = self.db_cursor.fetchone()
-        keep = 'D'
+        keep = "D"
         if last_record:
             last_datetime = datetime.strptime(last_record[0], TIME_FORMAT_DB)
             last_state = last_record[1]
@@ -431,15 +432,24 @@ class HAInterface:
             last_datetime_datestr = last_datetime.strftime("%Y-%m-%d")
             now_datetime_datestr = now_utc.strftime("%Y-%m-%d")
             if last_datetime_datestr == now_datetime_datestr:
-                if last_datetime.hour == now_utc.hour:                        
-                    keep = 'I'
+                if last_datetime.hour == now_utc.hour:
+                    keep = "I"
                 else:
-                    keep = 'H'
+                    keep = "H"
 
         # Insert the new state record
         try:
             self.db_cursor.execute("DELETE FROM {} WHERE datetime = ?".format(table_name), (now_utc_txt,))
-            self.db_cursor.execute("INSERT INTO {} (datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?)".format(table_name), (now_utc_txt, state, attributes_record_json, system_json, keep,))
+            self.db_cursor.execute(
+                "INSERT INTO {} (datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?)".format(table_name),
+                (
+                    now_utc_txt,
+                    state,
+                    attributes_record_json,
+                    system_json,
+                    keep,
+                ),
+            )
             self.db.commit()
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
@@ -458,7 +468,13 @@ class HAInterface:
         tables = self.db_cursor.fetchall()
         for table in tables:
             table_name = table[0]
-            self.db_cursor.execute("DELETE FROM {} WHERE datetime < ? AND keep != ?".format(table_name), (self.base.now_utc_real - timedelta(days=self.db_days), "D",))
+            self.db_cursor.execute(
+                "DELETE FROM {} WHERE datetime < ? AND keep != ?".format(table_name),
+                (
+                    self.base.now_utc_real - timedelta(days=self.db_days),
+                    "D",
+                ),
+            )
             self.db.commit()
 
     def set_state(self, entity_id, state, attributes={}):
