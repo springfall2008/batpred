@@ -266,15 +266,24 @@ class WebInterface:
 <script>
 window.onresize = function(){ location.reload(); };
 var width = window.innerWidth;
+var height = window.innerHeight;
 if (width < 600) {
-    width = '600px';
-} else {
-    width = '100%';
+    width = 600
+}
+width = width - 50;
+height = height - 50;
+
+if (height * 1.68 > width) {
+   height = width / 1.68;
+}
+else {
+   width = height * 1.68;
 }
 var options = {
   chart: {
     type: 'line',
-    width: `${width}`
+    width: width,
+    height: height
   },
   span: {
     start: 'minute', offset: '-12h'
@@ -666,7 +675,7 @@ var options = {
             pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Forecast History", "data": pv_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7"},
+                {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
                 {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
                 {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
                 {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
