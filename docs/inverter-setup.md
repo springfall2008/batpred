@@ -56,13 +56,14 @@ the Configuration tab is now no longer used and all configuration is now done vi
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
-- Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will poll your inverters for updated information - its
-recommended that you don't set this to a value less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
+- Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
 - GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
 you won't need to create a dedicated MQTT user or enter the details on the MQTT page
 - You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
-- (Optional) you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
+- (Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
+- On the 'Misc' page check that 'Print Raw' is set to on for added monitoring
 - Finally click 'Save and Restart' and GivTCP should start communicating with your inverters
 and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
 - Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'

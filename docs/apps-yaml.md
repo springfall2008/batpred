@@ -48,13 +48,13 @@ You can find template configurations in the following location: <https://github.
 The GivEnergy GivTCP template will be installed by default but if you are using another inverter please copy the correct template into the directory
 where your `apps.yaml` is stored, replacing the existing apps.yaml file, and modify it from there.
 
-Please read: [Other Inverters](other-inverters.md) for non GivEnergy inverters
+Please read [Inverter Setup](inverter-setup.md) for inverter control software and details of setting apps.yaml for non-GivEnergy inverters
 
 ## Checking your apps.yaml
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML aware editors such as VSCode.
 
-Once you have completed your apps.yaml and started Predbat you may want to open the Predbat Web Interface and click on apps.yaml. Review any items shown
+Once you have completed your apps.yaml and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
 in a red background as those do not match (its okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SOC if you don't have a car).
 
@@ -210,8 +210,7 @@ forecast_hours: 48
 ## Inverter information
 
 The template `apps.yaml` comes pre-configured with regular expressions that should auto-discover the GivTCP Home Assistant entity names.
-If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities.
-For other inverter brands, see [Other Inverters](other-inverters.md)
+If you have more than one inverter or entity names are non-standard then you will need to edit apps.yaml for your inverter entities
 
 ### num_inverters
 
@@ -316,39 +315,18 @@ charge/discharge rate settings used when controlling the inverter.
 This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
-## Controlling the GivEnergy Inverter
+## Controlling the Inverter
 
-There are a few different ways to control the inverter:
+There are a few different ways to control your inverter:
 
 - Home Assistant entity controls (standard)
-- GivTCP REST Interface (GE Inverters only)
+- GivTCP REST Interface (GivEnergy Inverters only)
 - Service API
 - MQTT API
 
-### REST Interface inverter control
-
-- **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you haven't a second inverter, delete the second line).<BR>
-When enabled the Home Assistant GivTCP Inverter Controls below are not used
-and instead communication from Predbat to GivTCP is directly via REST and thus bypasses some issues with MQTT.
-If using Docker then change homeassistant.local to the Docker IP address.
-
-To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
-
-If you get a bunch of inverter information back then it's working!
-
-*TIP:* It's recommended you enable 'Output Raw Register Values' in GivTCP (via Settings / Add-on's / GivTCP / configuration tab) for added monitoring,
-and set the Self Run Loop Timer which controls how often GivTCP retrieves data from your inverters to a value between 20 and 60 seconds.
-Do not set Self Run to too low a value (i.e. retrieve too often) as this may overload the inverter:
-
-![image](images/GivTCP-recommended-settings.png)
-
-*TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
-This may improve reliability of the REST connection as it doesn't need to lookup the HA server IP address each time.
-
 ### Home Assistant entity inverter control
 
-Predbat can control inverters by updating Home Assistant entities
+Predbat can control inverters by updating Home Assistant entities.
 
 The template `apps.yaml` for is pre-configured with regular expressions for many configuration items, but some of them may need updating to match your system.
 
@@ -385,6 +363,25 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
 See section below on [creating the battery charge power curve](#workarounds).
+
+### REST Interface inverter control
+
+For GivEnergy inverters Predbat can control the inverter directly via REST instead of via the Home Assistant GivTCP inverter controls detailed above.
+
+When configured in apps.yaml, control communication from Predbat to GivTCP is via REST which bypasses some issues with MQTT.
+
+- **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you haven't a second inverter, delete the second line.<BR>
+If you are using Docker then change 'homeassistant.local' to the Docker IP address.
+
+*TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
+This may improve reliability of the REST connection as it doesn't need to lookup the HA server IP address each time.
+
+To check your REST is working open up the readData API point in a Web browser e.g: [http://homeassistant.local:6345/readData](http://homeassistant.local:6345/readData)
+
+If you get a bunch of inverter information back then it's working!
+
+Note that Predbat will still retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 
 ### Service API
 
