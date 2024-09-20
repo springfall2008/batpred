@@ -835,29 +835,41 @@ as the slug-id (Home Assistant add-on identifier) is different between GivTCP v2
 
 ## Battery charge/discharge curves
 
-- **battery_charge_power_curve** - Some batteries tail off their charge rate at high SoC% and this optional configuration item enables you to model this in Predbat.
+Some batteries tail off their charge rate at high SoC% or their discharge rate at low SoC%, and these optional configuration items enables you to model this tail-off in Predbat.
+Note that the charge/discharge curves *only* affect the accuracy of the charging/discharging model Predbat applies in the forward battery plan,
+Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve.
+
+If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in apps.yaml,
+or Predbat can calculate the curves based upon historical inverter charging/discharging data in Home Assistant.
+
+If the battery has not recently been fully charged or fully discharged then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
+
+- **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail off in charging at high SoC%.
+
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
 
 The default is 1.0 (full power) charge all the way to 100%.
 
 Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
-low power charging mode (**switch.predbat_set_charge_low_power**).
+[low power charging mode](customisation.md#inverter-control-options) (**switch.predbat_set_charge_low_power**).
 
-Predbat can now automatically calculate the charging curve for you if you have enough suitable historical data in Home Assistant. The charging curve will be calculated
-when the battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml).
+If the battery_charge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+or an edit being made to apps.yaml), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
 
-You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
+You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 The logfile will also include a recommendation for how to set your **battery_rate_max_scaling** setting in HA.
 
-The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
+The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg)
 explains how the curve works and shows how Predbat automatically creates it.
 
 Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
-history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually save the data.
+history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in apps.yaml.
 
 NB: In order for Predbat to have calculate your charging curve it needs to have access to historical Home Assistant data for battery_charge_rate, battery_power and soc_kw.
+These must be configured in apps.yaml to point to Home Assistant entities that have appropriate history data for your inverter/battery.
 
-If you are using the recommended default [REST mode to control your inverter](#inverter-control-configurations) then you will need to uncomment out the following entries in `apps.yaml`:
+If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
+then you will need to uncomment out the following entries in `apps.yaml`:
 
 ```yaml
 charge_rate:
@@ -867,8 +879,6 @@ battery_power:
 soc_kw:
   - sensor.givtcp_{geserial}_soc_kwh
 ```
-
- Once the battery charge curve has been created these entries can be commented out again in `apps.yaml`.
 
 Example charging curve from a GivEnergy 9.5kWh battery with latest firmware and Gen 1 inverter:
 
@@ -886,22 +896,23 @@ battery_charge_power_curve:
   100 : 0.24
 ```
 
-- **battery_discharge_power_curve** - Some batteries tail off their discharge rate at low SoC% and this optional configuration item enables you to model this in Predbat.
+- **battery_discharge_power_curve** - This optional configuration item enables you to model in Predbat a tail off in discharging at low SoC%.
 
 Enter the discharging curve as a series of steps of % of max discharge rate for each SoC percentage.
 
 The default is 1.0 (full power) discharge all the way to 0%.
 
-When the battery_discharge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting AppDaemon or an edit being made to apps.yaml),
-Predbat will generate the curve for you from historical battery discharging information.
+If the battery_discharge_power_curve option is *not* set in apps.yaml and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon add-on,
+or an edit being made to apps.yaml), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
 
-You should look at the [AppDaemon/Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
+You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
 
 Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
 
 In the same way as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for battery_discharge_rate, battery_power and soc_kw.
+These must be configured in apps.yaml to point to Home Assistant entities that have appropriate history data for your inverter/battery.
 
-If you are using REST mode to control your inverter then the following entries in `apps.yaml` will need to be uncommented :
+If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
 
 ```yaml
 discharge_rate:
