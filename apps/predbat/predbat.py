@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.8"
+THIS_VERSION = "v8.4.9"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -671,7 +671,14 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-        r = requests.get(url)
+        
+        try:
+            r = requests.get(url)
+        except:
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
@@ -11096,6 +11103,9 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
+        
+        # Database tick
+        self.ha_interface.db_tick()
 
     def run_time_loop(self, cb_args):
         """
