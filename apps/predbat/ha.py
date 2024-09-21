@@ -19,7 +19,10 @@ from aiohttp import web, ClientSession, WSMsgType
 import json
 import requests
 import traceback
-from config import TIME_FORMAT_HA, TIMEOUT
+import sqlite3
+from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
+
+TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
 
 class HAInterface:
@@ -33,6 +36,14 @@ class HAInterface:
         """
         self.ha_url = base.args.get("ha_url", "http://supervisor/core")
         self.ha_key = base.args.get("ha_key", os.environ.get("SUPERVISOR_TOKEN", None))
+        self.db_enable = base.args.get("db_enable", False)
+        self.db_days = base.args.get("db_days", 30)
+        self.db_mirror_ha = base.args.get("db_mirror_ha", False)
+        self.db_primary = base.args.get("db_primary", False)
+        self.db_mirror_list = {}
+        self.db = None
+        self.db_cursor = None
+        self.db_mirror_updates = []
         self.websocket_active = False
 
         self.base = base
@@ -41,7 +52,10 @@ class HAInterface:
         self.slug = None
 
         if not self.ha_key:
-            self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
+            if not (self.db_enable and self.db_primary):
+                self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
+            else:
+                self.log("Info: Using SQL Lite database as primary data source")
         else:
             check = self.api_call("/api/")
             if not check:
@@ -59,6 +73,14 @@ class HAInterface:
                 self.base.create_task(self.socketLoop())
                 self.websocket_active = True
                 self.log("Info: Web Socket task started")
+
+                if self.db_enable:
+                    # Open the SQL Lite database called predbat.db
+                    self.log("Info: Opening database")
+                    self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
+                    self.db_cursor = self.db.cursor()
+                    self.log("Info: Clean data older than {} days".format(self.db_days))
+                    self.cleanup_db()
 
     def get_slug(self):
         """
@@ -170,7 +192,10 @@ class HAInterface:
         """
         Get state from cached HA data (or from AppDaemon if used)
         """
-        if not self.ha_key:
+        if entity_id:
+            self.db_mirror_list[entity_id.lower()] = True
+
+        if not self.ha_key and not (self.db_enable and self.db_primary):
             return self.base.get_state(entity_id=entity_id, default=default, attribute=attribute)
 
         if not entity_id:
@@ -189,31 +214,107 @@ class HAInterface:
         else:
             return default
 
+    def update_state_db(self, entity_id):
+        """
+        Update state for entity_id from the SQLLite database
+        """
+        self.db_mirror_list[entity_id.lower()] = True
+        item = self.get_state_db(entity_id)
+        if item:
+            self.update_state_item(item, entity_id, nodb=True)
+
     def update_state(self, entity_id):
         """
         Update state for entity_id
         """
+        self.db_mirror_list[entity_id.lower()] = True
+
+        if self.db_primary and self.db_enable:
+            self.update_state_db(entity_id)
+            return
+
         if not self.ha_key:
             return
+
         item = self.api_call("/api/states/{}".format(entity_id))
         if item:
             self.update_state_item(item, entity_id)
 
-    def update_state_item(self, item, entity_id):
+    def get_state_db(self, entity_id):
+        """
+        Get entity current state from the SQLLite database
+        """
+        if not self.db_enable:
+            return None
+
+        entity_id = entity_id.lower()
+        entity_index = self.get_entity_index_db(entity_id)
+        if not entity_index:
+            return None
+
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
+        res = self.db_cursor.fetchone()
+        if res:
+            state = res[1]
+            attributes = {}
+            try:
+                attributes = json.loads(res[2])
+            except json.JSONDecodeError:
+                pass
+            return {"last_updated": res[0] + "Z", "state": state, "attributes": attributes}
+        else:
+            return None
+
+    def update_state_item(self, item, entity_id, nodb=False):
         """
         Update state table for item
         """
+        entity_id = entity_id.lower()
         attributes = item["attributes"]
         last_changed = item["last_changed"]
         state = item["state"]
-        self.state_data[entity_id.lower()] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+        self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+        if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
+            self.db_mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
+
+    def db_tick(self):
+        """
+        Update the database with any new data
+        """
+        if not self.db_enable:
+            return
+
+        if self.db_mirror_updates:
+            mirror_list = self.db_mirror_updates[:]
+            self.db_mirror_updates = []
+            for item in mirror_list:
+                self.set_state_db(item["entity_id"], item["state"], item["attributes"], timestamp=item["timestamp"])
+
+    def update_states_db(self):
+        """
+        Update the state data from the SQL Lite database
+        """
+        if not self.db_enable:
+            return
+
+        self.db_cursor.execute("SELECT entity_name FROM entities")
+        tables = self.db_cursor.fetchall()
+        for table in tables:
+            entity_name = table[0]
+            self.update_state_db(entity_name)
 
     def update_states(self):
         """
         Update the state data from Home Assistant.
         """
+
+        if self.db_primary and self.db_enable:
+            self.update_states_db()
+            return
+
         if not self.ha_key:
             return
+
         res = self.api_call("/api/states")
         if res:
             self.state_data = {}
@@ -226,13 +327,55 @@ class HAInterface:
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history(self, sensor, now, days=30):
+    def get_history_db(self, sensor, now, days=30):
+        """
+        Get the history for a sensor from the SQLLite database.
+        """
+        if not self.db_enable:
+            return None
+
+        self.db_mirror_list[sensor.lower()] = True
+
+        start = now - timedelta(days=days)
+
+        entity_index = self.get_entity_index_db(sensor)
+        if not entity_index:
+            self.log("Warn: Entity {} does not exist".format(sensor))
+            return None
+
+        # Get the history for the sensor, sorted by datetime
+        self.db_cursor.execute(
+            "SELECT datetime, state, attributes FROM states WHERE entity_index = ? AND datetime >= ? ORDER BY datetime",
+            (
+                entity_index,
+                start.strftime(TIME_FORMAT_DB),
+            ),
+        )
+        res = self.db_cursor.fetchall()
+        history = []
+        for item in res:
+            state = item[1]
+            attributes = {}
+            try:
+                attributes = json.loads(item[2])
+            except json.JSONDecodeError:
+                pass
+
+            history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
+        return [history]
+
+    def get_history(self, sensor, now, days=30, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
 
         :param sensor: The sensor to get the history for.
         :return: The history for the sensor.
         """
+        self.db_mirror_list[sensor.lower()] = True
+
+        if (self.db_primary or force_db) and self.db_enable:
+            return self.get_history_db(sensor, now, days=days)
+
         if not self.ha_key:
             return self.base.get_history_ad(sensor, days=days)
 
@@ -241,19 +384,149 @@ class HAInterface:
         res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
         return res
 
+    def get_entity_index_db(self, entity_id):
+        """
+        Get the entity index from the SQLLite database
+        """
+        if not self.db_enable:
+            return None
+
+        self.db_cursor.execute("SELECT entity_index FROM entities WHERE entity_name=?", (entity_id,))
+        res = self.db_cursor.fetchone()
+        if res:
+            return res[0]
+        else:
+            return None
+
+    def set_state_db(self, entity_id, state, attributes, timestamp=None):
+        """
+        Records the state of a predbat entity into the SQLLite database
+        There is one table per Entity created with history recorded
+        """
+        if not self.db_enable:
+            return
+
+        state = str(state)
+
+        # Put the entity_id into entities table if its not in already
+        self.db_cursor.execute("INSERT OR IGNORE INTO entities (entity_name) VALUES (?)", (entity_id,))
+        self.db.commit()
+        entity_index = self.get_entity_index_db(entity_id)
+
+        # Use of last_changed allows the state to be recorded at a different time
+        if timestamp:
+            now_utc = timestamp
+        else:
+            now_utc = self.base.now_utc_real
+
+        # Convert time to GMT+0
+        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
+        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
+
+        system = {}
+
+        attributes_record = {}
+        for key in attributes:
+            value = attributes[key]
+            # Ignore large fields which will increase the database size
+            if len(str(value)) < 128:
+                attributes_record[key] = attributes[key]
+        attributes_record_json = json.dumps(attributes_record)
+        system_json = json.dumps(system)
+
+        # Record the state of the entity
+        # If the entity value and attributes are unchanged then don't record the new state
+        self.db_cursor.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
+        last_record = self.db_cursor.fetchone()
+        keep = "D"
+        if last_record:
+            last_datetime = datetime.strptime(last_record[0], TIME_FORMAT_DB)
+            last_state = last_record[1]
+            last_attributes = last_record[2]
+            last_system = last_record[3]
+            last_keep = last_record[4]
+            if last_state == state and last_attributes == attributes_record_json and last_system == system_json:
+                return
+
+            # Compute keep value
+            last_datetime_datestr = last_datetime.strftime("%Y-%m-%d")
+            now_datetime_datestr = now_utc.strftime("%Y-%m-%d")
+            if last_datetime_datestr == now_datetime_datestr:
+                if last_datetime.hour == now_utc.hour:
+                    keep = "I"
+                else:
+                    keep = "H"
+
+        # Insert the new state record
+        try:
+            self.db_cursor.execute(
+                "DELETE FROM states WHERE entity_index = ? AND datetime = ?".format(entity_id),
+                (
+                    entity_index,
+                    now_utc_txt,
+                ),
+            )
+            self.db_cursor.execute(
+                "INSERT INTO states (datetime, entity_index, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    now_utc_txt,
+                    entity_index,
+                    state,
+                    attributes_record_json,
+                    system_json,
+                    keep,
+                ),
+            )
+            self.db.commit()
+        except sqlite3.IntegrityError:
+            self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
+
+        # Keep local copy up to date
+        self.update_state_item(item={"last_changed": now_utc_txt, "state": state, "attributes": attributes}, entity_id=entity_id, nodb=True)
+
+    def cleanup_db(self):
+        """
+        This searches all tables for data older than N days and deletes it
+        """
+        if not self.db_enable:
+            return
+
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
+        self.db_cursor.execute(
+            "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
+        )
+        self.db_cursor.execute(
+            "DELETE FROM states WHERE datetime < ? AND keep != ?",
+            (
+                self.base.now_utc_real - timedelta(days=self.db_days),
+                "D",
+            ),
+        )
+        self.db.commit()
+
     def set_state(self, entity_id, state, attributes={}):
         """
         Set the state of an entity in Home Assistant.
         """
+        self.db_mirror_list[entity_id] = True
+
+        if self.db_primary and self.db_enable:
+            self.set_state_db(entity_id, state, attributes)
+            return
+
         if not self.ha_key:
             if attributes:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
             else:
                 return self.base.set_state(entity_id, state=state)
 
+        if self.db_mirror_ha:
+            self.set_state_db(entity_id, state, attributes)
+
         data = {"state": state}
         if attributes:
             data["attributes"] = attributes
+            data["unrecorded_attributes"] = ["results"]
         self.api_call("/api/states/{}".format(entity_id), data, post=True)
         self.update_state(entity_id)
 

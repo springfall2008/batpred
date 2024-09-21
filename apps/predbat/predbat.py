@@ -11104,6 +11104,9 @@ class PredBat(hass.Hass):
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
 
+        # Database tick
+        self.ha_interface.db_tick()
+
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
