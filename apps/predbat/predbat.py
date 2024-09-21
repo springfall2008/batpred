@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-
+        
         try:
             r = requests.get(url)
         except:
@@ -4187,8 +4187,8 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {}</td>".format(
-            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} status: {}</td>".format(
+            self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status
         )
         config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
         html += "</tr><tr>"
@@ -5382,6 +5382,7 @@ class PredBat(hass.Hass):
         for loop_price in all_prices:
             pred_table = []
             freeze_options = [True, False] if self.calculate_freeze_region else [False]
+            self.log("Loop price {} region {}".format(loop_price, region_txt))
             for freeze in freeze_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
@@ -5426,7 +5427,7 @@ class PredBat(hass.Hass):
                             if window_n in all_n:
                                 if window_prices[window_n] > highest_price_charge:
                                     highest_price_charge = window_prices[window_n]
-                                try_charge_limit[window_n] = self.reserve if self.calculate_freeze_region else self.soc_max
+                                try_charge_limit[window_n] = self.soc_max
                             else:
                                 try_charge_limit[window_n] = 0
 
@@ -5457,7 +5458,7 @@ class PredBat(hass.Hass):
 
                                 if window_prices_discharge[window_n] < lowest_price_discharge:
                                     lowest_price_discharge = window_prices_discharge[window_n]
-                                try_discharge[window_n] = 99 if freeze else 0
+                                try_discharge[window_n] = 99.0 if freeze else 0
 
                         # Skip this one as it's the same as selected already
                         try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
@@ -6778,7 +6779,7 @@ class PredBat(hass.Hass):
                         )
                     region_size = int(region_size / 2)
 
-            # Keep the freeze but not the full discharge as that will be re-introduced later
+            # Keep the freeze but not the full discharge as that will be re-introduced later        
             if self.calculate_freeze_region:
                 for window_n in range(len(ignore_discharge_limits)):
                     if ignore_discharge_limits[window_n] == 99.0:
@@ -11112,7 +11113,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
+        
         # Database tick
         self.ha_interface.db_tick()
 
