@@ -1,6 +1,8 @@
 # Custom Dictionary Words
 adata
 adbase
+AIO
+AIO's
 aiohttp
 Anson
 apexcharts
@@ -144,6 +146,7 @@ rstart
 rtype
 saverestore
 searr
+Selfrun
 Selfuse
 socb
 socs

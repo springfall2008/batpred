@@ -74,4 +74,4 @@ On GivEnergy systems the battery state of charge (SoC) level has to be calibrate
 so that the voltage levels associated with empty and full SoC can be determined.
 Predbat will pause executing the plan until the calibration automatically finishes - see [Calibration FAQ](faq.md#warn-inverter-is-in-calibration-mode).
 
-- **Error** - There is a configuration error or other problem, you should check the [Predbat AppDaemon log file](output-data.md#predbat-logfile) for more details.
+- **Error** - There is a configuration error or other problem, you should check the [Predbat log file](output-data.md#predbat-logfile) for more details.

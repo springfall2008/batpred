@@ -2,7 +2,7 @@
 
 These instructions will take you through the process of installing and configuring Predbat for first time use.
 
-If you have a working Predbat installation and are changing to use the Predbat add-on,
+If you have a working Predbat installation using AppDaemon and are changing to use the Predbat add-on,
 the [AppDaemon to Predbat add-on upgrade process](#upgrading-from-appdaemon-to-predbat-add-on) is described below.
 
 It's recommended that you watch the [Predbat Video Guides](video-guides.md) before you start.
@@ -13,20 +13,19 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 - [What is Home Assistant from Smart Home Junkie](https://www.youtube.com/watch?v=Frd-C7ZeZAo)
 - [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA)
-- [Installing GivTCP and Mosquitto Add-on's from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54)
 - [Installing HACS from Speak to the Geek](https://www.youtube.com/watch?v=jzpm89956Pw)
 - [Setting up the Energy dashboard for GivEnergy inverters from Speak to the Geek](https://www.youtube.com/watch?v=YPPpwTKIz7M)
 - [Power Flow Card Plus from Speak to the Geek](https://www.youtube.com/watch?v=C4Zh35E9wJE)
 
 If you get stuck, please read the [FAQ's](faq.md) and if necessary raise a [Github ticket](https://github.com/springfall2008/batpred/issues) for support.
 
-## Inverter Control Integration install
+## Inverter Control install
 
 You will need to install an integration to communicate with and control your inverter. The specific integration you need will depend on the brand of inverter you have:
 
 | Brand     | Integration     | Github Link                                                                      |
 | :-------- | :-----------     | :------------------------------------------------------------------------------- |
-| GivEnergy | GivTCP           | <https://github.com/britkat1980/giv_tcp>    |
+| GivEnergy | GivTCP           | <https://github.com/britkat1980/ha-addons>    |
 | GivEnergy | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | GivEnergy EMS | GivEnergy Cloud  | <https://github.com/springfall2008/ge_cloud> |
 | Solis     | SolaX ModBus     | <https://github.com/wills106/homeassistant-solax-modbus> |
@@ -38,10 +37,13 @@ You will need to install an integration to communicate with and control your inv
 | Fox       | Fox Modbus       | <https://github.com/nathanmarlor/foxess_modbus> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
-Please see [Other Inverters](other-inverters.md) for details on the install details.
 
-- Follow the installation and configuration instructions appropriate for your inverter so that Home Assistant is able to 'see' and manage your inverter.
-- You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
+Please see [Inverter Setup](inverter-setup.md) for details on installing and configuring the appropriate inverter control software
+so that Home Assistant is able to 'see' and manage your inverter.
+
+You will need at least 24 hours history in Home Assistant for Predbat to work correctly, the default is 7 days (but you configure this back to 1 day if you need to).
+
+NB: If you have multiple GivEnergy AIO's or a 3-phase inverter, GivTCP version 3 is required.
 
 ## Editing Configuration Files in Home Assistant
 
@@ -301,9 +303,12 @@ names for Predbat to work correctly - see the [FAQ's](faq.md) if they are not.
 You will need to use a file editor (either the File editor or Studio Code Server add-on) to edit the `apps.yaml` file in Home Assistant
 to configure Predbat - see [Configuring apps.yaml](apps-yaml.md#Basics).
 
-When Predbat starts up initially it will perform a sanity check of the AppDaemon configuration itself and confirm the right files are present.
+When Predbat starts up initially it will perform a sanity check of itself and the configuration and confirm the right files are present.
 You will see this check in the log, should it fail a warning will be issued and **predbat.status** will also reflect the warning.
 While the above warning might not prevent Predbat from starting up, you should fix the issue ASAP as it may cause future problems.
+
+**Note:** if you are running the Predbat through the Predbat add-on or via Docker you will get a logfile warning message
+"Warn: unable to find /addon_configs/6adb4f0d_predbat/appdaemon.yaml skipping checks as Predbat maybe running outside of AppDaemon" - this is normal and can be ignored.
 
 ## Predbat Output and Configuration Controls
 

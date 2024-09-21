@@ -1,6 +1,6 @@
 # Configuration guide
 
-First get the basics set up, ensure you have the [inverter controls configured](install.md#inverter-control-integration-install-givtcpsolax-modbus),
+First get the basics set up, ensure you have the [inverter controls configured](install.md#inverter-control-install),
 you have [configured apps.yaml](apps-yaml.md) to your setup, and the [solar forecast](install.md#solcast-install) is in place.
 Make sure your [energy rates](energy-rates.md) are configured correctly for import and export.
 

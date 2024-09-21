@@ -7,6 +7,7 @@ nav:
   - 'Installing & configuring Predbat':
     - 'Install summary': installation-summary.md
     - 'Install details': install.md
+    - inverter-setup.md
     - energy-rates.md
     - apps-yaml.md
     - car-charging.md
@@ -20,7 +21,6 @@ nav:
     - predbat-plan-card.md
     - creating-charts.md
   - 'Predbat development':
-    - other-inverters.md
     - todo-list.md
     - developing.md
 markdown_extensions:

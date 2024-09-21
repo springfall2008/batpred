@@ -1,10 +1,10 @@
-# Other Inverters
+# Inverter Setup
 
-PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other models:
+PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
 
    | Name                          | Integration     | Template |
    | :---------------------------- | :------------- | :------------ |
-   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/giv_tcp) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
+   | GivEnergy with GivTCP | [GivTCP](https://github.com/britkat1980/ha-addons) | [givenergy_givtcp.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_givtcp.yaml) |
    | Solis Hybrid inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | Solax Gen4 inverters | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) in Modbus Power Control Mode |  [solax_sx4.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_sx4.yaml) |
    | Sofar inverters | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) |  [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
@@ -16,11 +16,72 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
-Please also ensure you have set up enhanced logging in AppDaemon as described here.
+
+NB: By default the apps.yaml template for GivTCP is installed with Predbat.
+If you are using a different inverter then you will need to copy the appropriate apps.yaml template from the above list and use it to **replace the GivTCP apps.yaml** - if
+you copy but don't replace the standard template then Predbat will not function correctly.
 
 ## GivEnergy with GivTCP
 
-Please see the main installation instructions, you will need to install GivTCP first and then use the supplied template
+Its recommended that you firstly watch the [Installing GivTCP and Mosquitto Add-on's video from Speak to the Geek](https://www.youtube.com/watch?v=ygD9KyciX54).
+Although the video covers GivTCP v2 and v3 has been recently released, the install and setup process is very similar.
+
+The below instructions assume you are installing GivTCP v3, with changes highlighted against GivTCP v2 as covered in the video.
+
+1. Install Mosquitto Broker add-on:
+
+- Go to Settings / Add-ons / Add-on Store (bottom right)
+- Scroll down the add-on store list, to find 'Mosquitto broker', click on the add-on, then click 'INSTALL'
+- Once the Mosquitto broker has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on, and click 'START' to start the add-on
+- Next, configure Mosquitto broker by going to Settings / Devices and Services / Integrations.
+Mosquitto broker should appear as a Discovered integration so click the blue 'CONFIGURE' button, then SUBMIT to complete configuring Mosquitto broker
+- With GivTCP v3 you no longer need to create a dedicated Home Assistant user for MQTT so this part of the video can be skipped over
+
+2. Install the GivTCP add-on:
+
+- Go to Settings / Add-ons / Add-on Store
+- Click the three dots in the top right corner, then Repositories
+- You'll need to add the GivTCP repository as an additional custom repository so paste/type
+'[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' the 'Close'<BR>
+NB: this URL is for GivTCP v3, not v2 as covered in the video.
+- Click the back button and then re-navigate to Settings / Add-ons / Add-on Store so Home Assistant picks up the GivTCP add-on from the custom repository
+- Scroll down the add-on store list, to find 'GivTCP-V3', you should see the three addon's; the production version, the latest beta and the latest dev versions.
+Click on the 'GivTCP' add-on, then click 'INSTALL'
+- Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
+
+3. Configure GivTCP:
+
+- The configuration process for GivTCP in v3 has changed from that shown in the video,
+the Configuration tab is now no longer used and all configuration is now done via the add-on's Web interface
+- On the GivTCP add-on, click 'START' to start the add-on
+- Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
+- GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
+- Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
+recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
+and won't communicate with the GivEnergy portal and app
+- GivTCP now auto-populates the MQTT page so as long as you're using Mosquitto broker within Home Assistant;
+you won't need to create a dedicated MQTT user or enter the details on the MQTT page
+- You don't need to configure the Influx page. Tariff and Palm pages can also be skipped as these functions are done by Predbat
+- (Optional) On the Web page, you can turn the Dashboard on to see a simple power flow diagram for your inverters (similar to the GivEnergy mobile app)
+- On the 'Misc' page check that 'Print Raw' is set to on for added monitoring
+- Finally click 'Save and Restart' and GivTCP should start communicating with your inverters
+and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
+- Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'
+
+4. Specific Predbat configuration requirements for certain GivEnergy equipment
+
+The rest of the [Predbat installation instructions](install.md) should now be followed,
+but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
+These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
+
+- If you have multiple AIO's then all control of the AIO's is done through the Gateway
+so you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to the Gateway serial number
+- If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
+as the battery size is incorrectly reported to GivTCP
+- If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
+If you have a Gen 1 or a firmware version that allows reserve being set to 100 then you can change the default from 98 to 100
+- If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup',
+[consider setting input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
 ## Solis Inverters
 
