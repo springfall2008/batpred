@@ -671,7 +671,14 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-        r = requests.get(url)
+        
+        try:
+            r = requests.get(url)
+        except:
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
+            return {}
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
@@ -957,14 +964,11 @@ class PredBat(hass.Hass):
         """
         return self.ha_interface.call_service(service, **kwargs)
 
-    def get_history_wrapper(self, entity_id, days=30, db=False):
+    def get_history_wrapper(self, entity_id, days=30):
         """
         Wrapper function to get history from HA
         """
-        if db:
-            history = self.ha_interface.get_history_db(entity_id, days=days, now=self.now)
-        else:
-            history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
+        history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
 
         if history is None:
             self.log("Error: Failure to fetch history for {}".format(entity_id))
@@ -11099,6 +11103,9 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
+        
+        # Database tick
+        self.ha_interface.db_tick()
 
     def run_time_loop(self, cb_args):
         """

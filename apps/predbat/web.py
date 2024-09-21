@@ -55,8 +55,8 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7, db=True))
-        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7, db=True))
+        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7))
+        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7))
 
     async def start(self):
         # Start the web server on port 5052
@@ -266,15 +266,24 @@ class WebInterface:
 <script>
 window.onresize = function(){ location.reload(); };
 var width = window.innerWidth;
+var height = window.innerHeight;
 if (width < 600) {
-    width = '600px';
-} else {
-    width = '100%';
+    width = 600
+}
+width = width - 50;
+height = height - 50;
+
+if (height * 1.68 > width) {
+   height = width / 1.68;
+}
+else {
+   width = height * 1.68;
 }
 var options = {
   chart: {
     type: 'line',
-    width: `${width}`
+    width: width,
+    height: height
   },
   span: {
     start: 'minute', offset: '-12h'
