@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-
+        
         try:
             r = requests.get(url)
         except:
@@ -5382,7 +5382,6 @@ class PredBat(hass.Hass):
         for loop_price in all_prices:
             pred_table = []
             freeze_options = [True, False] if self.calculate_freeze_region else [False]
-            self.log("Loop price {} region {}".format(loop_price, region_txt))
             for freeze in freeze_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
@@ -6779,7 +6778,7 @@ class PredBat(hass.Hass):
                         )
                     region_size = int(region_size / 2)
 
-            # Keep the freeze but not the full discharge as that will be re-introduced later
+            # Keep the freeze but not the full discharge as that will be re-introduced later        
             if self.calculate_freeze_region:
                 for window_n in range(len(ignore_discharge_limits)):
                     if ignore_discharge_limits[window_n] == 99.0:
@@ -11113,7 +11112,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
+        
         # Database tick
         self.ha_interface.db_tick()
 
