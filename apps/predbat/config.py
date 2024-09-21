@@ -515,6 +515,13 @@ CONFIG_ITEMS = [
         "default": True,
     },
     {
+        "name": "calculate_freeze_region",
+        "friendly_name": "Calculation freeze in regions",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
+    },
+    {
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
         "type": "switch",
