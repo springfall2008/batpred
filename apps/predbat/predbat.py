@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-        
+
         try:
             r = requests.get(url)
         except:
@@ -11103,7 +11103,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-            
+
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
