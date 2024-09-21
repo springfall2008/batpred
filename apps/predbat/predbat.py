@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-
+        
         try:
             r = requests.get(url)
         except:
@@ -5381,104 +5381,106 @@ class PredBat(hass.Hass):
 
         for loop_price in all_prices:
             pred_table = []
-            for modulo in [2, 3, 4, 6, 8, 16, 32]:
-                for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
-                    all_n = []
-                    all_d = []
-                    divide_count_d = 0
-                    highest_price_charge = price_set[-1]
-                    lowest_price_discharge = price_set[0]
-                    for price in price_set:
-                        links = price_links[price]
-                        if loop_price >= price:
-                            for key in links:
-                                window_n = window_index[key]["id"]
-                                typ = window_index[key]["type"]
-                                if typ == "c":
-                                    window_prices[window_n] = price
-                                    all_n.append(window_n)
-                        elif discharge_enable:
-                            # For prices above threshold try discharge
-                            for key in links:
-                                typ = window_index[key]["type"]
-                                window_n = window_index[key]["id"]
-                                if typ == "d":
-                                    window_prices_discharge[window_n] = price
-                                    if (int(divide_count_d / divide) % modulo) == 0:
-                                        all_d.append(window_n)
-                                    divide_count_d += 1
+            freeze_options = [True, False] if self.calculate_freeze_region else [False]
+            for freeze in freeze_options:
+                for modulo in [2, 3, 4, 6, 8, 16, 32]:
+                    for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
+                        all_n = []
+                        all_d = []
+                        divide_count_d = 0
+                        highest_price_charge = price_set[-1]
+                        lowest_price_discharge = price_set[0]
+                        for price in price_set:
+                            links = price_links[price]
+                            if loop_price >= price:
+                                for key in links:
+                                    window_n = window_index[key]["id"]
+                                    typ = window_index[key]["type"]
+                                    if typ == "c":
+                                        window_prices[window_n] = price
+                                        all_n.append(window_n)
+                            elif discharge_enable:
+                                # For prices above threshold try discharge
+                                for key in links:
+                                    typ = window_index[key]["type"]
+                                    window_n = window_index[key]["id"]
+                                    if typ == "d":
+                                        window_prices_discharge[window_n] = price
+                                        if (int(divide_count_d / divide) % modulo) == 0:
+                                            all_d.append(window_n)
+                                        divide_count_d += 1
 
-                    # Sort for print out
-                    all_n.sort()
-                    all_d.sort()
+                        # Sort for print out
+                        all_n.sort()
+                        all_d.sort()
 
-                    # This price band setting for charge
-                    try_charge_limit = best_limits.copy()
-                    for window_n in range(record_charge_windows):
-                        if window_n >= len(try_charge_limit):
-                            continue
+                        # This price band setting for charge
+                        try_charge_limit = best_limits.copy()
+                        for window_n in range(record_charge_windows):
+                            if window_n >= len(try_charge_limit):
+                                continue
 
-                        if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
-                            continue
+                            if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                                continue
 
-                        if window_n in all_n:
-                            if window_prices[window_n] > highest_price_charge:
-                                highest_price_charge = window_prices[window_n]
-                            try_charge_limit[window_n] = self.soc_max
-                        else:
-                            try_charge_limit[window_n] = 0
+                            if window_n in all_n:
+                                if window_prices[window_n] > highest_price_charge:
+                                    highest_price_charge = window_prices[window_n]
+                                try_charge_limit[window_n] = self.reserve if self.calculate_freeze_region else self.soc_max
+                            else:
+                                try_charge_limit[window_n] = 0
 
-                    # Try discharge on/off
-                    try_discharge = best_discharge.copy()
-                    for window_n in range(record_discharge_windows):
-                        if window_n >= len(discharge_limits):
-                            continue
+                        # Try discharge on/off
+                        try_discharge = best_discharge.copy()
+                        for window_n in range(record_discharge_windows):
+                            if window_n >= len(discharge_limits):
+                                continue
 
-                        if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
-                            continue
+                            if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                continue
 
-                        try_discharge[window_n] = 100
-                        if window_n in all_d:
-                            if not self.calculate_discharge_oncharge:
-                                hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
-                                if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                            try_discharge[window_n] = 100
+                            if window_n in all_d:
+                                if not self.calculate_discharge_oncharge:
+                                    hit_charge = self.hit_charge_window(self.charge_window_best, discharge_window[window_n]["start"], discharge_window[window_n]["end"])
+                                    if hit_charge >= 0 and try_charge_limit[hit_charge] > 0.0:
+                                        continue
+                                if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
                                     continue
-                            if not self.car_charging_from_battery and self.hit_car_window(discharge_window[window_n]["start"], discharge_window[window_n]["end"]):
-                                continue
-                            if (
-                                not self.iboost_on_discharge
-                                and self.iboost_enable
-                                and self.iboost_plan
-                                and (self.hit_charge_window(self.iboost_plan, discharge_window[window_n]["start"], discharge_window[window_n]["end"]) >= 0)
-                            ):
-                                continue
+                                if (
+                                    not self.iboost_on_discharge
+                                    and self.iboost_enable
+                                    and self.iboost_plan
+                                    and (self.hit_charge_window(self.iboost_plan, discharge_window[window_n]["start"], discharge_window[window_n]["end"]) >= 0)
+                                ):
+                                    continue
 
-                            if window_prices_discharge[window_n] < lowest_price_discharge:
-                                lowest_price_discharge = window_prices_discharge[window_n]
-                            try_discharge[window_n] = 0
+                                if window_prices_discharge[window_n] < lowest_price_discharge:
+                                    lowest_price_discharge = window_prices_discharge[window_n]
+                                try_discharge[window_n] = 99 if freeze else 0
 
-                    # Skip this one as it's the same as selected already
-                    try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
-                    if try_hash in tried_list:
-                        if self.debug_enable and 0:
-                            self.log(
-                                "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
-                                    divide, all_n, all_d, discharge_enable, try_hash
+                        # Skip this one as it's the same as selected already
+                        try_hash = str(try_charge_limit) + "_d_" + str(try_discharge)
+                        if try_hash in tried_list:
+                            if self.debug_enable and 0:
+                                self.log(
+                                    "Skip this optimisation with divide {} windows {} discharge windows {} discharge_enable {} as it's the same as previous ones hash {}".format(
+                                        divide, all_n, all_d, discharge_enable, try_hash
+                                    )
                                 )
-                            )
-                        continue
+                            continue
 
-                    tried_list[try_hash] = True
+                        tried_list[try_hash] = True
 
-                    pred_handle = self.launch_run_prediction_single(try_charge_limit, charge_window, discharge_window, try_discharge, False, end_record=end_record, step=step)
-                    pred_item = {}
-                    pred_item["handle"] = pred_handle
-                    pred_item["charge_limit"] = try_charge_limit.copy()
-                    pred_item["discharge_limit"] = try_discharge.copy()
-                    pred_item["highest_price_charge"] = highest_price_charge
-                    pred_item["lowest_price_discharge"] = lowest_price_discharge
-                    pred_item["loop_price"] = loop_price
-                    pred_table.append(pred_item)
+                        pred_handle = self.launch_run_prediction_single(try_charge_limit, charge_window, discharge_window, try_discharge, False, end_record=end_record, step=step)
+                        pred_item = {}
+                        pred_item["handle"] = pred_handle
+                        pred_item["charge_limit"] = try_charge_limit.copy()
+                        pred_item["discharge_limit"] = try_discharge.copy()
+                        pred_item["highest_price_charge"] = highest_price_charge
+                        pred_item["lowest_price_discharge"] = lowest_price_discharge
+                        pred_item["loop_price"] = loop_price
+                        pred_table.append(pred_item)
 
             for pred in pred_table:
                 handle = pred["handle"]
@@ -6775,6 +6777,12 @@ class PredBat(hass.Hass):
                             tried_list=tried_list,
                         )
                     region_size = int(region_size / 2)
+
+            # Keep the freeze but not the full discharge as that will be re-introduced later        
+            if self.calculate_freeze_region:
+                for window_n in range(len(ignore_discharge_limits)):
+                    if ignore_discharge_limits[window_n] == 99.0:
+                        self.discharge_limits_best[window_n] = 99.0
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -9781,6 +9789,7 @@ class PredBat(hass.Hass):
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
 
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
+        self.calculate_freeze_region = self.get_arg("calculate_freeze_region")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
@@ -11103,7 +11112,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
+        
         # Database tick
         self.ha_interface.db_tick()
 
