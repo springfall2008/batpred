@@ -990,7 +990,7 @@ class Inverter:
         """
         charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
         discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
-        
+
         if discharge:
             if current_charge_limit == 100:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
