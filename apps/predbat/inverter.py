@@ -988,10 +988,14 @@ class Inverter:
         Returns:
             None
         """
+        charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+        discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
+
         if discharge:
-            discharge_power = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
             if current_charge_limit == 100:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("discharge", discharge_power)
             elif self.soc_percent < float(current_charge_limit):
                 self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Discharge disabled.")
                 self.alt_charge_discharge_enable("discharge", False)
@@ -1008,9 +1012,10 @@ class Inverter:
                     self.set_current_from_power("discharge", discharge_power)
                     self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
-            charge_power = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
             if current_charge_limit == 0:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
@@ -1597,6 +1602,9 @@ class Inverter:
         # Eco mode, turn it on before we change the discharge window
         if not force_discharge:
             self.adjust_inverter_mode(force_discharge)
+            if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
+                if self.inv_charge_control_immediate:
+                    self.enable_charge_discharge_with_time_current("discharge", False)
 
         # Turn off scheduled discharge
         if not force_discharge and old_discharge_enable:
@@ -1672,6 +1680,9 @@ class Inverter:
         # Force discharge, turn it on after we change the window
         if force_discharge:
             self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
+            if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
+                if self.inv_charge_control_immediate:
+                    self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
         if changed_start_end:

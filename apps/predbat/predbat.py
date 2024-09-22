@@ -6745,7 +6745,6 @@ class PredBat(hass.Hass):
                 min_region_size = int(2 * 60)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    hit_end = False
                     for region in range(0, self.end_record + self.minutes_now, min_region_size):
                         region_end = min(region + region_size, self.end_record + self.minutes_now)
 
@@ -8383,7 +8382,7 @@ class PredBat(hass.Hass):
                 break
 
             resetDischarge = False
-            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge:
+            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge or inverter.inv_charge_discharge_with_rate:
                 # These options mess with discharge rate, so we must reset it when they aren't changing it
                 resetDischarge = True
 
