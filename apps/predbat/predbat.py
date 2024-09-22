@@ -4187,7 +4187,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} status: {}</td>".format(
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {}</td>".format(
             self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status
         )
         config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
@@ -5381,7 +5381,7 @@ class PredBat(hass.Hass):
 
         for loop_price in all_prices:
             pred_table = []
-            freeze_options = [True, False] if self.calculate_freeze_region else [False]
+            freeze_options = [True, False]
             for freeze in freeze_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
@@ -5397,8 +5397,11 @@ class PredBat(hass.Hass):
                                     window_n = window_index[key]["id"]
                                     typ = window_index[key]["type"]
                                     if typ == "c":
-                                        window_prices[window_n] = price
-                                        all_n.append(window_n)
+                                        if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                                            pass
+                                        else:
+                                            window_prices[window_n] = price
+                                            all_n.append(window_n)
                             elif discharge_enable:
                                 # For prices above threshold try discharge
                                 for key in links:
@@ -5406,9 +5409,12 @@ class PredBat(hass.Hass):
                                     window_n = window_index[key]["id"]
                                     if typ == "d":
                                         window_prices_discharge[window_n] = price
-                                        if (int(divide_count_d / divide) % modulo) == 0:
-                                            all_d.append(window_n)
-                                        divide_count_d += 1
+                                        if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                            pass
+                                        else:
+                                            if (int(divide_count_d / divide) % modulo) == 0:
+                                                all_d.append(window_n)
+                                            divide_count_d += 1
 
                         # Sort for print out
                         all_n.sort()
@@ -6729,12 +6735,12 @@ class PredBat(hass.Hass):
                 quiet=True,
             )
             if self.calculate_regions:
-                self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
                 region_size = int(16 * 60)
                 while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record + self.minutes_now, region_size):
                         region_end = min(region + region_size, self.end_record + self.minutes_now)
+
                         if region_end < self.minutes_now:
                             continue
                         (
@@ -6779,10 +6785,9 @@ class PredBat(hass.Hass):
                     region_size = int(region_size / 2)
 
             # Keep the freeze but not the full discharge as that will be re-introduced later
-            if self.calculate_freeze_region:
-                for window_n in range(len(ignore_discharge_limits)):
-                    if ignore_discharge_limits[window_n] == 99.0:
-                        self.discharge_limits_best[window_n] = 99.0
+            for window_n in range(len(ignore_discharge_limits)):
+                if ignore_discharge_limits[window_n] == 99.0:
+                    self.discharge_limits_best[window_n] = 99.0
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -6813,8 +6818,8 @@ class PredBat(hass.Hass):
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log(
-            "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {}".format(
-                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
+            "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} discharge limits {}".format(
+                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best, self.discharge_limits_best
             )
         )
         for pass_type in ["freeze", "normal", "low"]:
@@ -9789,7 +9794,6 @@ class PredBat(hass.Hass):
         self.log("Predbat mode is set to {}".format(self.predbat_mode))
 
         self.calculate_discharge_oncharge = self.get_arg("calculate_discharge_oncharge")
-        self.calculate_freeze_region = self.get_arg("calculate_freeze_region")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
