@@ -452,7 +452,6 @@ var options = {
         Save the Predbat config from an HTML page
         """
         postdata = await request.post()
-        self.log("Post data: {}".format(postdata))
         for pitem in postdata:
             new_value = postdata[pitem]
             if pitem:

@@ -5429,6 +5429,9 @@ class PredBat(hass.Hass):
                             if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
                                 continue
 
+                            if charge_window[window_n]["start"] in self.manual_all_times:
+                                continue
+
                             if window_n in all_n:
                                 if window_prices[window_n] > highest_price_charge:
                                     highest_price_charge = window_prices[window_n]
@@ -5443,6 +5446,9 @@ class PredBat(hass.Hass):
                                 continue
 
                             if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                continue
+
+                            if discharge_window[window_n]["start"] in self.manual_all_times:
                                 continue
 
                             try_discharge[window_n] = 100
@@ -6736,13 +6742,16 @@ class PredBat(hass.Hass):
             )
             if self.calculate_regions:
                 region_size = int(16 * 60)
-                while region_size >= 2 * 60:
+                min_region_size = int(2 * 60)
+                while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    for region in range(0, self.end_record + self.minutes_now, region_size):
+                    hit_end = False
+                    for region in range(0, self.end_record + self.minutes_now, min_region_size):
                         region_end = min(region + region_size, self.end_record + self.minutes_now)
 
                         if region_end < self.minutes_now:
                             continue
+
                         (
                             self.charge_limit_best,
                             ignore_discharge_limits,
@@ -6782,6 +6791,9 @@ class PredBat(hass.Hass):
                             best_carbon=best_carbon,
                             tried_list=tried_list,
                         )
+                        # Reached the end of the window
+                        if region_end >= self.end_record + self.minutes_now:
+                            break
                     region_size = int(region_size / 2)
 
             # Keep the freeze but not the full discharge as that will be re-introduced later
