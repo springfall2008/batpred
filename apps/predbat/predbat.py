@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-
+        
         try:
             r = requests.get(url)
         except:
@@ -4187,7 +4187,7 @@ class PredBat(hass.Hass):
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} status: {}</td>".format(
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {}</td>".format(
             self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status
         )
         config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
@@ -5397,8 +5397,11 @@ class PredBat(hass.Hass):
                                     window_n = window_index[key]["id"]
                                     typ = window_index[key]["type"]
                                     if typ == "c":
-                                        window_prices[window_n] = price
-                                        all_n.append(window_n)
+                                        if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
+                                            pass
+                                        else:
+                                            window_prices[window_n] = price
+                                            all_n.append(window_n)
                             elif discharge_enable:
                                 # For prices above threshold try discharge
                                 for key in links:
@@ -5406,9 +5409,12 @@ class PredBat(hass.Hass):
                                     window_n = window_index[key]["id"]
                                     if typ == "d":
                                         window_prices_discharge[window_n] = price
-                                        if (int(divide_count_d / divide) % modulo) == 0:
-                                            all_d.append(window_n)
-                                        divide_count_d += 1
+                                        if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                            pass
+                                        else:
+                                            if (int(divide_count_d / divide) % modulo) == 0:
+                                                all_d.append(window_n)
+                                            divide_count_d += 1
 
                         # Sort for print out
                         all_n.sort()
@@ -6778,7 +6784,7 @@ class PredBat(hass.Hass):
                         )
                     region_size = int(region_size / 2)
 
-            # Keep the freeze but not the full discharge as that will be re-introduced later
+            # Keep the freeze but not the full discharge as that will be re-introduced later        
             if self.calculate_freeze_region:
                 for window_n in range(len(ignore_discharge_limits)):
                     if ignore_discharge_limits[window_n] == 99.0:
@@ -11112,7 +11118,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
+        
         # Database tick
         self.ha_interface.db_tick()
 

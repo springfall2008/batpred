@@ -516,7 +516,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "calculate_freeze_region",
-        "friendly_name": "Calculation freeze in regions",
+        "friendly_name": "Calculate freeze in region",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
