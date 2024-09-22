@@ -6735,12 +6735,14 @@ class PredBat(hass.Hass):
                 quiet=True,
             )
             if self.calculate_regions:
-                self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
+                #self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
                 region_size = int(16 * 60)
                 while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record + self.minutes_now, region_size):
                         region_end = min(region + region_size, self.end_record + self.minutes_now)
+                        self.log("Optimise Region {} - {}".format(self.time_abs_str(region), self.time_abs_str(region_end)))
+
                         if region_end < self.minutes_now:
                             continue
                         (
@@ -6819,8 +6821,8 @@ class PredBat(hass.Hass):
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log(
-            "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {}".format(
-                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best
+            "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} discharge limits {}".format(
+                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_discharge, lowest_price_charge, self.charge_limit_best, self.discharge_limits_best
             )
         )
         for pass_type in ["freeze", "normal", "low"]:
