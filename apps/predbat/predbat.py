@@ -671,7 +671,7 @@ class PredBat(hass.Hass):
 
         if self.debug_enable:
             self.log("Download {}".format(url))
-
+        
         try:
             r = requests.get(url)
         except:
@@ -5429,6 +5429,9 @@ class PredBat(hass.Hass):
                             if region_start and (charge_window[window_n]["start"] > region_end or charge_window[window_n]["end"] < region_start):
                                 continue
 
+                            if charge_window[window_n]["start"] in self.manual_all_times:
+                                continue
+
                             if window_n in all_n:
                                 if window_prices[window_n] > highest_price_charge:
                                     highest_price_charge = window_prices[window_n]
@@ -5443,6 +5446,9 @@ class PredBat(hass.Hass):
                                 continue
 
                             if region_start and (discharge_window[window_n]["start"] > region_end or discharge_window[window_n]["end"] < region_start):
+                                continue
+
+                            if discharge_window[window_n]["start"] in self.manual_all_times:
                                 continue
 
                             try_discharge[window_n] = 100
@@ -6784,7 +6790,7 @@ class PredBat(hass.Hass):
                         )
                     region_size = int(region_size / 2)
 
-            # Keep the freeze but not the full discharge as that will be re-introduced later
+            # Keep the freeze but not the full discharge as that will be re-introduced later        
             for window_n in range(len(ignore_discharge_limits)):
                 if ignore_discharge_limits[window_n] == 99.0:
                     self.discharge_limits_best[window_n] = 99.0
@@ -11116,7 +11122,7 @@ class PredBat(hass.Hass):
         else:
             self.log("Info: Refresh config entities as config_refresh state is unknown")
             self.update_pending = True
-
+        
         # Database tick
         self.ha_interface.db_tick()
 

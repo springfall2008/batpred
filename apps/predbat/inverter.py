@@ -1222,6 +1222,10 @@ class Inverter:
         if isinstance(current_state, str):
             current_state = current_state.lower() in ["on", "enable", "true"]
 
+        if current_state == new_value:
+            self.base.log("Inverter {} No write needed for {} as {} == {}".format(self.id, name, new_value, current_state))
+            return True
+
         retry = 0
         while current_state != new_value and retry < 6:
             retry += 1
