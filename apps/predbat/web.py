@@ -20,6 +20,15 @@ class WebInterface:
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
 
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        self.template_env = Environment(
+            loader=FileSystemLoader("templates"),
+            autoescape=select_autoescape()
+        )
+
+        # Disable autoescaping for the HTML plan
+        self.template_env.filters['raw'] = lambda value: value
+
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
         if history:
@@ -60,8 +69,8 @@ class WebInterface:
 
     async def start(self):
         # Start the web server on port 5052
-        app = web.Application()
-        app.router.add_get("/", self.html_index)
+        app = web.Application(debug=True)
+        app.router.add_get("/", self.html_dash)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
         app.router.add_get("/menu", self.html_menu)
@@ -69,7 +78,8 @@ class WebInterface:
         app.router.add_get("/charts", self.html_charts)
         app.router.add_get("/config", self.html_config)
         app.router.add_post("/config", self.html_config_post)
-        app.router.add_get("/dash", self.html_dash)
+        # app.router.add_get("/dash", self.html_dash)
+        app.router.add_get("/docs", self.html_docs)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -266,24 +276,15 @@ class WebInterface:
 <script>
 window.onresize = function(){ location.reload(); };
 var width = window.innerWidth;
-var height = window.innerHeight;
 if (width < 600) {
-    width = 600
-}
-width = width - 50;
-height = height - 50;
-
-if (height * 1.68 > width) {
-   height = width / 1.68;
-}
-else {
-   width = height * 1.68;
+    width = '600px';
+} else {
+    width = '100%';
 }
 var options = {
   chart: {
     type: 'line',
-    width: width,
-    height: height
+    width: `${width}`
   },
   span: {
     start: 'minute', offset: '-12h'
@@ -374,11 +375,22 @@ var options = {
         """
         Return the Predbat plan as an HTML page
         """
-        self.default_page = "./plan"
-        html_plan = self.base.html_plan
-        text = self.get_header("Predbat Plan", refresh=60)
-        text += "<body>{}</body></html>\n".format(html_plan)
-        return web.Response(content_type="text/html", text=text)
+        # self.default_page = "./plan"
+        # html_plan = self.base.html_plan
+        # text = self.get_header("Predbat Plan", refresh=60)
+        # text += "<body>{}</body></html>\n".format(html_plan)
+        # return web.Response(content_type="text/html", text=text)
+
+        template = self.template_env.get_template('plan.html')
+
+        context = {
+            'default': self.default_page,
+            'plan_html': self.base.html_plan,
+            'refresh': 60,
+        }
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_log(self, request):
         """
@@ -397,31 +409,20 @@ var options = {
         warnings = False
         if "errors" in args:
             errors = True
-            self.default_page = "./log?errors"
+            # self.default_page = "./log?errors"
         if "warnings" in args:
             warnings = True
-            self.default_page = "./log?warnings"
+            # self.default_page = "./log?warnings"
 
         loglines = logdata.split("\n")
-        text = self.get_header("Predbat Log", refresh=10)
-        text += "<body bgcolor=#ffffff>"
 
-        if errors:
-            text += "<h2>Logfile (errors)</h2>\n"
-        elif warnings:
-            text += "<h2>Logfile (Warnings)</h2>\n"
-        else:
-            text += "<h2>Logfile (All)</h2>\n"
-
-        text += '- <a href="./log">All</a> '
-        text += '<a href="./log?warnings">Warnings</a> '
-        text += '<a href="./log?errors">Errors</a><br>\n'
-
-        text += "<table width=100%>\n"
+        text = ''
+        text = "<table width=100%>\n"
 
         total_lines = len(loglines)
         count_lines = 0
         lineno = total_lines - 1
+        line_data = []
         while count_lines < 1024 and lineno >= 0:
             line = loglines[lineno]
             line_lower = line.lower()
@@ -430,28 +431,36 @@ var options = {
             start_line = line[0:27]
             rest_line = line[27:]
 
-            if "error" in line_lower:
-                text += "<tr><td>{}</td><td nowrap><font color=#ff3333>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
+            if (
+                "error" in line_lower
+                or ((not errors) and ("warn" in line_lower))
+                or (line and (not errors) and (not warnings))
+            ):
+                line_data.append({
+                    'line_no': lineno,
+                    'start_line': start_line,
+                    'rest_line': rest_line,
+                })
                 count_lines += 1
-                continue
-            elif (not errors) and ("warn" in line_lower):
-                text += "<tr><td>{}</td><td nowrap><font color=#ffA500>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
-                continue
+        
+        template = self.template_env.get_template('logs.html')
 
-            if line and (not errors) and (not warnings):
-                text += "<tr><td>{}</td><td nowrap><font color=#33cc33>{}</font> {}</td></tr>\n".format(lineno, start_line, rest_line)
-                count_lines += 1
+        context = {
+            'errors': errors,
+            'warnings': warnings,
+            'lines': line_data,
+            'refresh': 10,
+        }
 
-        text += "</table>"
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_config_post(self, request):
         """
         Save the Predbat config from an HTML page
         """
         postdata = await request.post()
+        self.log("Post data: {}".format(postdata))
         for pitem in postdata:
             new_value = postdata[pitem]
             if pitem:
@@ -540,12 +549,21 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./dash"
-        text = self.get_header("Predbat Dashboard")
-        text += "<body>\n"
+        # text = self.get_header("Predbat Dashboard")
+        # text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status)
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        text = self.get_status_html(soc_perc, self.base.current_status)
+        # text += "</body></html>\n"
+        # return web.Response(content_type="text/html", text=text)
+
+        template = self.template_env.get_template('dash.html')
+
+        context = {
+            'dash_html': text,
+        }
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     def prune_today(self, data, prune=True, group=15):
         """
@@ -674,7 +692,7 @@ var options = {
             pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
-                {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
+                {"name": "Forecast History", "data": pv_forecast, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7"},
                 {"name": "Forecast", "data": pv_today_forecast, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#a8a8a7"},
                 {"name": "Forecast 10%", "data": pv_today_forecast10, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#6b6b6b"},
                 {"name": "Forecast 90%", "data": pv_today_forecast90, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#cccccc"},
@@ -692,29 +710,41 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Config")
-        text += "<body>\n"
-        text += "<h2>{} Chart</h2>\n".format(chart)
-        text += '- <a href="./charts?chart=Battery">Battery</a> '
-        text += '<a href="./charts?chart=Power">Power</a> '
-        text += '<a href="./charts?chart=Cost">Cost</a> '
-        text += '<a href="./charts?chart=Rates">Rates</a> '
-        text += '<a href="./charts?chart=InDay">InDay</a> '
-        text += '<a href="./charts?chart=PV">PV</a> '
-        text += '<a href="./charts?chart=PV7">PV7</a> '
+        text = ''
+        # text = self.get_header("Predbat Config")
+        # text += "<body>\n"
+        # text += "<h2>{} Chart</h2>\n".format(chart)
+        # text += '- <a href="./charts?chart=Battery">Battery</a> '
+        # text += '<a href="./charts?chart=Power">Power</a> '
+        # text += '<a href="./charts?chart=Cost">Cost</a> '
+        # text += '<a href="./charts?chart=Rates">Rates</a> '
+        # text += '<a href="./charts?chart=InDay">InDay</a> '
+        # text += '<a href="./charts?chart=PV">PV</a> '
+        # text += '<a href="./charts?chart=PV7">PV7</a> '
 
         text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        # text += "</body></html>\n"
+        # return web.Response(content_type="text/html", text=text)
+
+        template = self.template_env.get_template('charts.html')
+
+        context = {
+            'chart_html': text,
+            'chart_title': chart,
+        }
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_apps(self, request):
         """
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Config")
-        text += "<body>\n"
+        text = ""
+        # text = self.get_header("Predbat Config")
+        # text += "<body>\n"
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 
@@ -730,8 +760,17 @@ var options = {
             text += '<tr><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td></tr>\n'.format(arg, self.render_type(arg, value))
 
         text += "</table>"
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        # text += "</body></html>\n"
+        # return web.Response(content_type="text/html", text=text)
+
+        template = self.template_env.get_template('apps.html')
+
+        context = {
+            'apps_html': text,
+        }
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_config(self, request):
         """
@@ -739,8 +778,9 @@ var options = {
         """
 
         self.default_page = "./config"
-        text = self.get_header("Predbat Config", refresh=60)
-        text += "<body>\n"
+        text = ""
+        # text = self.get_header("Predbat Config", refresh=60)
+        # text += "<body>\n"
         text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
@@ -797,36 +837,48 @@ var options = {
 
         text += "</table>"
         text += "</form>"
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        # text += "</body></html>\n"
+        # return web.Response(content_type="text/html", text=text)
+
+        template = self.template_env.get_template('config.html')
+
+        context = {
+            'config_html': text,
+            'refresh': 60,
+        }
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_menu(self, request):
         """
         Return the Predbat Menu page as an HTML page
         """
-        text = self.get_header("Predbat Menu")
-        text += "<body>\n"
-        text += "<table><tr>\n"
-        text += '<td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>\n'
-        text += '<td><a href="./dash" target="main_frame">Dash</a></td>\n'
-        text += '<td><a href="./plan" target="main_frame">Plan</a></td>\n'
-        text += '<td><a href="./charts" target="main_frame">Charts</a></td>\n'
-        text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
-        text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
-        text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
-        text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
-        text += "</table></body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        template = self.template_env.get_template('menu.html')
+
+        context = {}
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
 
     async def html_index(self, request):
         """
         Return the Predbat index page as an HTML page
         """
-        text = self.get_header("Predbat Index")
-        text += "<body>\n"
-        text += '<div class="iframe-container">\n'
-        text += '<iframe src="./menu" title="Menu frame" class="menu-frame" name="menu_frame"></iframe>\n'
-        text += '<iframe src="{}" title="Main frame" class="main-frame" name="main_frame"></iframe>\n'.format(self.default_page)
-        text += "</div>\n"
-        text += "</body></html>\n"
-        return web.Response(content_type="text/html", text=text)
+        template = self.template_env.get_template('index.html')
+
+        context = {'default': self.default_page}
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')
+
+    async def html_docs(self, request):
+        """
+        Returns the Github documentation for Predbat
+        """
+        template = self.template_env.get_template('docs.html')
+
+        context = {'default': self.default_page}
+
+        rendered_template = template.render(context)
+        return web.Response(text=rendered_template, content_type='text/html')

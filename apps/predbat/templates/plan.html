@@ -1,0 +1,11 @@
+{% extends "layout.html" %}
+
+{% block title %}Home{% endblock %}
+
+
+{% block content %}
+Plan
+{% autoescape false %}
+{{ plan_html }}
+{% endautoescape %}
+{% endblock %}

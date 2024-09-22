@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+    <head>
+        <title>Predbat Web Interface</title>
+        <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
+        <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+        <style>
+            body, html {
+                margin: 0;
+                padding: 0;
+                height: 100%;
+            }
+           .iframe-container {
+                display: flex;
+                flex-direction: column;
+                height: 90vh;
+            }
+            /* Style for the top menu iframe */
+            .menu-frame {
+                height: 80px; /* Adjust the height of the menu bar */
+                width: 100%;
+                border: none;
+                overflow: hidden;
+            }
+            /* Style for the full height iframe */
+            .main-frame {
+                flex-grow: 1;
+                width: 100%;
+                border: none;
+            }
+            body {
+                font-family: Arial, sans-serif;
+                text-align: left;
+                margin: 5px;
+                background-color: #ffffff;
+                color: #333;
+            }
+            h1 {
+                color: #4CAF50;
+            }
+            h2 {
+                color: #4CAF50;
+                display: inline
+            }
+            table {
+                border-collapse: collapse;
+                padding: 1px;
+                border: 1px solid blue;
+            }
+            th,
+            td {
+                text-align: left;
+                padding: 5px;
+                vertical-align: top;
+            }
+            th {
+                background-color: #4CAF50;
+                color: white;
+            }
+            .default {
+                background-color: #FFFFFF;
+            }
+            .modified {
+                background-color: #FFCCCC;
+            }
+        </style>
+        {% if refresh is defined %}
+        <meta http-equiv="refresh" content="{{ refresh }}" >
+        {% endif %}
+
+    </head>
+    <body>
+        <div>
+            <table>
+                <tr>
+                    <td><h2>Predbat</h2></td><td><img src="https://github-production-user-asset-6210df.s3.amazonaws.com/48591903/249456079-e98a0720-d2cf-4b71-94ab-97fe09b3cee1.png" width="50" height="50"></td>
+                    <td><a href="./">Dash</a></td>
+                    <td><a href="./plan">Plan</a></td>
+                    <td><a href="./charts">Charts</a></td>
+                    <td><a href="./config">Config</a></td>
+                    <td><a href="./apps">apps.yaml</a></td>
+                    <td><a href="./log?warnings">Log</a></td>
+                    <td><a href="./docs">Docs</a></td>
+                </tr>
+            </table>
+        </div>
+        {% block content %}{% endblock %}
+    </body>
+</html>

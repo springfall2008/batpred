@@ -1,0 +1,19 @@
+{% extends "layout.html" %}
+
+{% block title %}Home{% endblock %}
+
+{% block content %}
+    <h2>{{ chart_title }} Chart</h2>
+    - <a href="./charts?chart=Battery">Battery</a>
+    <a href="./charts?chart=Power">Power</a>
+    <a href="./charts?chart=Cost">Cost</a>
+    <a href="./charts?chart=Rates">Rates</a>
+    <a href="./charts?chart=InDay">InDay</a>
+    <a href="./charts?chart=PV">PV</a>
+    <a href="./charts?chart=PV7">PV7</a>
+    <div id="chart">
+        {% autoescape false %}
+        {{ chart_html }}
+        {% endautoescape %}
+    </div>
+{% endblock %}
