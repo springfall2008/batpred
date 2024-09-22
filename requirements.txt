@@ -3,3 +3,4 @@ appdaemon
 mkdocs
 pre-commit
 pytz
+Jinja2
