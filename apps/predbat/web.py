@@ -21,13 +21,11 @@ class WebInterface:
         self.pv_forecast_hist = {}
 
         from jinja2 import Environment, FileSystemLoader, select_autoescape
-        self.template_env = Environment(
-            loader=FileSystemLoader("templates"),
-            autoescape=select_autoescape()
-        )
+
+        self.template_env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape())
 
         # Disable autoescaping for the HTML plan
-        self.template_env.filters['raw'] = lambda value: value
+        self.template_env.filters["raw"] = lambda value: value
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
@@ -381,16 +379,16 @@ var options = {
         # text += "<body>{}</body></html>\n".format(html_plan)
         # return web.Response(content_type="text/html", text=text)
 
-        template = self.template_env.get_template('plan.html')
+        template = self.template_env.get_template("plan.html")
 
         context = {
-            'default': self.default_page,
-            'plan_html': self.base.html_plan,
-            'refresh': 60,
+            "default": self.default_page,
+            "plan_html": self.base.html_plan,
+            "refresh": 60,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_log(self, request):
         """
@@ -416,7 +414,7 @@ var options = {
 
         loglines = logdata.split("\n")
 
-        text = ''
+        text = ""
         text = "<table width=100%>\n"
 
         total_lines = len(loglines)
@@ -431,29 +429,27 @@ var options = {
             start_line = line[0:27]
             rest_line = line[27:]
 
-            if (
-                "error" in line_lower
-                or ((not errors) and ("warn" in line_lower))
-                or (line and (not errors) and (not warnings))
-            ):
-                line_data.append({
-                    'line_no': lineno,
-                    'start_line': start_line,
-                    'rest_line': rest_line,
-                })
+            if "error" in line_lower or ((not errors) and ("warn" in line_lower)) or (line and (not errors) and (not warnings)):
+                line_data.append(
+                    {
+                        "line_no": lineno,
+                        "start_line": start_line,
+                        "rest_line": rest_line,
+                    }
+                )
                 count_lines += 1
-        
-        template = self.template_env.get_template('logs.html')
+
+        template = self.template_env.get_template("logs.html")
 
         context = {
-            'errors': errors,
-            'warnings': warnings,
-            'lines': line_data,
-            'refresh': 10,
+            "errors": errors,
+            "warnings": warnings,
+            "lines": line_data,
+            "refresh": 10,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_config_post(self, request):
         """
@@ -556,14 +552,14 @@ var options = {
         # text += "</body></html>\n"
         # return web.Response(content_type="text/html", text=text)
 
-        template = self.template_env.get_template('dash.html')
+        template = self.template_env.get_template("dash.html")
 
         context = {
-            'dash_html': text,
+            "dash_html": text,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     def prune_today(self, data, prune=True, group=15):
         """
@@ -710,7 +706,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = ''
+        text = ""
         # text = self.get_header("Predbat Config")
         # text += "<body>\n"
         # text += "<h2>{} Chart</h2>\n".format(chart)
@@ -727,15 +723,15 @@ var options = {
         # text += "</body></html>\n"
         # return web.Response(content_type="text/html", text=text)
 
-        template = self.template_env.get_template('charts.html')
+        template = self.template_env.get_template("charts.html")
 
         context = {
-            'chart_html': text,
-            'chart_title': chart,
+            "chart_html": text,
+            "chart_title": chart,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_apps(self, request):
         """
@@ -763,14 +759,14 @@ var options = {
         # text += "</body></html>\n"
         # return web.Response(content_type="text/html", text=text)
 
-        template = self.template_env.get_template('apps.html')
+        template = self.template_env.get_template("apps.html")
 
         context = {
-            'apps_html': text,
+            "apps_html": text,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_config(self, request):
         """
@@ -840,45 +836,45 @@ var options = {
         # text += "</body></html>\n"
         # return web.Response(content_type="text/html", text=text)
 
-        template = self.template_env.get_template('config.html')
+        template = self.template_env.get_template("config.html")
 
         context = {
-            'config_html': text,
-            'refresh': 60,
+            "config_html": text,
+            "refresh": 60,
         }
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_menu(self, request):
         """
         Return the Predbat Menu page as an HTML page
         """
-        template = self.template_env.get_template('menu.html')
+        template = self.template_env.get_template("menu.html")
 
         context = {}
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_index(self, request):
         """
         Return the Predbat index page as an HTML page
         """
-        template = self.template_env.get_template('index.html')
+        template = self.template_env.get_template("index.html")
 
-        context = {'default': self.default_page}
+        context = {"default": self.default_page}
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
 
     async def html_docs(self, request):
         """
         Returns the Github documentation for Predbat
         """
-        template = self.template_env.get_template('docs.html')
+        template = self.template_env.get_template("docs.html")
 
-        context = {'default': self.default_page}
+        context = {"default": self.default_page}
 
         rendered_template = template.render(context)
-        return web.Response(text=rendered_template, content_type='text/html')
+        return web.Response(text=rendered_template, content_type="text/html")
