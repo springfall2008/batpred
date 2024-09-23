@@ -23,11 +23,16 @@ It uses the solar production forecast from Solcast combined with your historical
 
 - **SoC** - State of Charge - the % or kWh level of charge of your battery
 - **Target SoC** - The target level that the battery is being charged to, e.g. we target 100% SoC means the battery is being charged to full
+- **Charge Limit** - Another word for Target SoC
 - **Load** - The energy your home is using to power your equipment e.g. oven, lights or electric car charging
 - **Grid** - Your electric supply outside the house
 - **Import** - Electricity drawn from the grid to be used in the home or to charge the battery
 - **Export** - Electricity from your home from the battery or solar which is sent to the grid
-- **PV** - Solar power that is generated in your home
+- **Eco** - ECO Mode is when the battery covers the house load and charges from solar, to avoid importing or exporting.
+- **Charge** - When your battery is charging, in Predbat this refers to force charge (from the grid).
+- **Discharge** - When your battery is discharging, in Predbat this refers to force discharge (or force export to grid).
+- **Discharge Limit** - When your battery is being force discharged (exported) the discharge limit is the % battery level where the discharge will stop if reached.
+- **PV** - Solar power that is generated in your home. Can also refer to a prediction of the solar for the day, by default is the 50% scenario (most likely generation).
 - **Inverter** - The box that converts DC energy from solar or from your battery into AC power for your home and the grid.
 The inverter also converts AC power from the grid into DC to charge a battery.
 - **Hybrid inverter** - An inverter that can charge a battery from solar directly using DC power as well as charging it from AC power from the grid
@@ -36,7 +41,20 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Slot** - A period of time where Predbat performs an action e.g. charging. In Predbat everything is a multiple of 5 minutes
     - Charge slots are always in multiples of 30 minutes and align to a 30-minute boundary to match the way energy rates are allocated
     - Discharge slots can be any multiple of 5 minutes and always finish on a 30-minute boundary.
+- **Loss** - Refers to energy lost in your system due to heat or other factors.
 
+- **PV10** - A prediction of the 10% scenario for solar, this is like a worst case, occurs 1 in 10 days
+- **PV90** - A prediction of the 90% scenario for solar, this is like a best case, occurs 1 in 10 days
+- **Base** - Usually refers to the expected outcome if Predbat takes no further action, meaning just what is currently configured on your inverter.
+- **Best** - The best plan that Predbat could come up with, as in what it will do (assuming Read only is off)
+- **Actual** - Used to refer to what has already happened in the past.
+- **Base10** - The base scenario but with the 10% outcome for Solar and Load (worst case)
+- **Charge Limit Base** - This is the target charge % in the Base plan (what is currently set on your inverter)
+- **Best10** - The best plan but with the 10% outcome for Solar and Load (worst case)
+- **Charge Limit Best** - This is the target charge % in the Best plan (what is currently set on your inverter)
+- **Discharge Limit Best** - This is the target discharge % in the Best plan.
+- **Best SOC Keep** - The amount of battery you want to keep in the plan that Predbat has made
+  
 ### Predbat modes
 
 When you first install Predbat it will be in 'Monitor' mode.
