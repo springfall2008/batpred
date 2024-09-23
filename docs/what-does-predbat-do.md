@@ -54,7 +54,7 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Charge Limit Best** - This is the target charge % in the Best plan (what is currently set on your inverter)
 - **Discharge Limit Best** - This is the target discharge % in the Best plan.
 - **Best SOC Keep** - The amount of battery you want to keep in the plan that Predbat has made
-  
+
 ### Predbat modes
 
 When you first install Predbat it will be in 'Monitor' mode.
