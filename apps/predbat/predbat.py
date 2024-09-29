@@ -8325,6 +8325,29 @@ class PredBat(hass.Hass):
         # Return if we recomputed or not
         return recompute
 
+    def adjust_battery_target_multi(self, inverter, soc, is_charging):
+        """
+        Adjust target SOC based on the current SOC of all the inverters accounting for their
+        charge rates and battery capacities
+        """
+        target_kwh = self.dp2(self.soc_max * (soc / 100.0))
+        soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+
+        if target_kwh == self.soc_kw:
+            new_soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
+            self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.inverter_id, new_soc_percent, soc))
+        else:
+            add_kwh = target_kwh - self.soc_kw
+            add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
+            new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
+            new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
+            self.log(
+                "Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
+                    inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)
+                )
+            )
+        inverter.adjust_battery_target(new_soc_percent, is_charging)
+
     def reset_inverter(self):
         """
         Reset inverter to safe mode
@@ -8707,7 +8730,7 @@ class PredBat(hass.Hass):
                 if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
                     # If we are discharging and not setting reserve then we should reset the target SOC to 0%
                     # as some inverters can use this as a target for discharge
-                    inverter.adjust_battery_target(self.discharge_limits_best[0], False)
+                    self.adjust_battery_target_multi(inverter, self.discharge_limits_best[0], False)
                 elif (
                     self.charge_limit_best
                     and (self.minutes_now < inverter.charge_end_time_minutes)
@@ -8719,26 +8742,26 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
-                                inverter.adjust_battery_target(inverter.soc_percent, True)
+                                self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging)
                             else:
                                 # Not yet in the freeze, hold at 100% target SOC
-                                inverter.adjust_battery_target(100.0, False)
+                                self.adjust_battery_target_multi(inverter, 100.0, False)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
                             if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
-                                inverter.adjust_battery_target(100.0, False)
+                                self.adjust_battery_target_multi(inverter, 100.0, False)
                             else:
-                                inverter.adjust_battery_target(self.charge_limit_percent_best[0], isCharging)
+                                self.adjust_battery_target_multi(inverter, self.charge_limit_percent_best[0], isCharging)
                     else:
                         if not inverter.inv_has_target_soc:
                             # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
                             inverter.mimic_target_soc(0)
                         elif not self.inverter_hybrid and self.inverter_soc_reset:
                             # AC Coupled, charge to 0 on solar
-                            inverter.adjust_battery_target(100.0, False)
+                            self.adjust_battery_target_multi(inverter, 100.0, False)
                         else:
                             # Hybrid, no charge timer, set target soc back to 0
-                            inverter.adjust_battery_target(0, False)
+                            self.adjust_battery_target_multi(inverter, 0, False)
                 else:
                     if not inverter.inv_has_target_soc:
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
@@ -8764,7 +8787,7 @@ class PredBat(hass.Hass):
                                     self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
                                 )
                             )
-                            inverter.adjust_battery_target(100.0, False)
+                            self.adjust_battery_target_multi(inverter, 100.0, False)
                     else:
                         self.log(
                             "Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
@@ -8772,7 +8795,7 @@ class PredBat(hass.Hass):
                             )
                         )
                         if not inverter.inv_has_charge_enable_time:
-                            inverter.adjust_battery_target(0, False)
+                            self.adjust_battery_target_multi(inverter, 0, False)
 
             # If we should set reserve during charging
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
