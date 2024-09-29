@@ -398,6 +398,23 @@ class HAInterface:
         else:
             return None
 
+    def set_state_db_later(self, entity_id, state, attributes, timestamp=None):
+        if not self.db_enable:
+            return
+
+        if timestamp:
+            now_utc = timestamp
+        else:
+            now_utc = self.base.now_utc_real
+
+        # Convert time to GMT+0
+        now_utc = now_utc.replace(tzinfo=None) - timedelta(hours=now_utc.utcoffset().seconds // 3600)
+        now_utc_txt = now_utc.strftime(TIME_FORMAT_DB)
+
+        item = {"last_changed": now_utc_txt, "state": state, "attributes": attributes}
+        self.update_state_item(item=item, entity_id=entity_id, nodb=True)
+        return
+
     def set_state_db(self, entity_id, state, attributes, timestamp=None):
         """
         Records the state of a predbat entity into the SQLLite database
@@ -481,9 +498,6 @@ class HAInterface:
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
 
-        # Keep local copy up to date
-        self.update_state_item(item={"last_changed": now_utc_txt, "state": state, "attributes": attributes}, entity_id=entity_id, nodb=True)
-
     def cleanup_db(self):
         """
         This searches all tables for data older than N days and deletes it
@@ -510,25 +524,21 @@ class HAInterface:
         """
         self.db_mirror_list[entity_id] = True
 
-        if self.db_primary and self.db_enable:
-            self.set_state_db(entity_id, state, attributes)
-            return
+        if self.db_mirror_ha or self.db_primary:
+            self.set_state_db_later(entity_id, state, attributes)
 
-        if not self.ha_key:
+        if self.ha_key:
+            data = {"state": state}
+            if attributes:
+                data["attributes"] = attributes
+                data["unrecorded_attributes"] = ["results"]
+            self.api_call("/api/states/{}".format(entity_id), data, post=True)
+            self.update_state(entity_id)
+        elif not self.db_primary:
             if attributes:
                 return self.base.set_state(entity_id, state=state, attributes=attributes)
             else:
                 return self.base.set_state(entity_id, state=state)
-
-        if self.db_mirror_ha:
-            self.set_state_db(entity_id, state, attributes)
-
-        data = {"state": state}
-        if attributes:
-            data["attributes"] = attributes
-            data["unrecorded_attributes"] = ["results"]
-        self.api_call("/api/states/{}".format(entity_id), data, post=True)
-        self.update_state(entity_id)
 
     def call_service(self, service, **kwargs):
         """
