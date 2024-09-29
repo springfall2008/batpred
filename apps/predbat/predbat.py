@@ -33,7 +33,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.8"
+THIS_VERSION = "v8.4.10"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -6725,7 +6725,7 @@ class PredBat(hass.Hass):
                 region_size = int(16 * 60)
                 while region_size >= 2 * 60:
                     self.log(">> Region optimisation pass width {}".format(region_size))
-                    for region in range(0, self.end_record + self.minutes_now, region_size):
+                    for region in range(0, self.end_record + self.minutes_now, min_region_size):
                         region_end = min(region + region_size, self.end_record + self.minutes_now)
                         if region_end < self.minutes_now:
                             continue
@@ -8352,7 +8352,7 @@ class PredBat(hass.Hass):
                 break
 
             resetDischarge = False
-            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge:
+            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge or inverter.inv_charge_discharge_with_rate:
                 # These options mess with discharge rate, so we must reset it when they aren't changing it
                 resetDischarge = True
 
