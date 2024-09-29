@@ -55,8 +55,8 @@ class WebInterface:
         Update the history data
         """
         self.log("Web interface history update")
-        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper("predbat.pv_power", 7))
-        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor.predbat_pv_forecast_h0", 7))
+        self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7))
+        self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
 
     async def start(self):
         # Start the web server on port 5052
@@ -579,29 +579,29 @@ var options = {
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 soc_kw_h0[stamp] = hist.get(self.base.minutes_now - minute, 0)
         soc_kw_h0[now_str] = self.base.soc_kw
-        soc_kw = self.get_entity_results("predbat.soc_kw")
-        soc_kw_best = self.get_entity_results("predbat.soc_kw_best")
-        soc_kw_best10 = self.get_entity_results("predbat.soc_kw_best10")
-        soc_kw_base10 = self.get_entity_results("predbat.soc_kw_base10")
-        charge_limit_kw = self.get_entity_results("predbat.charge_limit_kw")
-        best_charge_limit_kw = self.get_entity_results("predbat.best_charge_limit_kw")
-        best_discharge_limit_kw = self.get_entity_results("predbat.best_discharge_limit_kw")
-        battery_power_best = self.get_entity_results("predbat.battery_power_best")
-        pv_power_best = self.get_entity_results("predbat.pv_power_best")
-        grid_power_best = self.get_entity_results("predbat.grid_power_best")
-        load_power_best = self.get_entity_results("predbat.load_power_best")
-        iboost_best = self.get_entity_results("predbat.iboost_best")
-        metric = self.get_entity_results("predbat.metric")
-        best_metric = self.get_entity_results("predbat.best_metric")
-        best10_metric = self.get_entity_results("predbat.best10_metric")
-        cost_today = self.get_entity_results("predbat.cost_today")
-        cost_today_export = self.get_entity_results("predbat.cost_today_export")
-        cost_today_import = self.get_entity_results("predbat.cost_today_import")
-        base10_metric = self.get_entity_results("predbat.base10_metric")
-        rates = self.get_entity_results("predbat.rates")
-        rates_export = self.get_entity_results("predbat.rates_export")
-        rates_gas = self.get_entity_results("predbat.rates_gas")
-        record = self.get_entity_results("predbat.record")
+        soc_kw = self.get_entity_results(self.base.prefix + ".soc_kw")
+        soc_kw_best = self.get_entity_results(self.base.prefix + ".soc_kw_best")
+        soc_kw_best10 = self.get_entity_results(self.base.prefix + ".soc_kw_best10")
+        soc_kw_base10 = self.get_entity_results(self.base.prefix + ".soc_kw_base10")
+        charge_limit_kw = self.get_entity_results(self.base.prefix + ".charge_limit_kw")
+        best_charge_limit_kw = self.get_entity_results(self.base.prefix + ".best_charge_limit_kw")
+        best_discharge_limit_kw = self.get_entity_results(self.base.prefix + ".best_discharge_limit_kw")
+        battery_power_best = self.get_entity_results(self.base.prefix + ".battery_power_best")
+        pv_power_best = self.get_entity_results(self.base.prefix + ".pv_power_best")
+        grid_power_best = self.get_entity_results(self.base.prefix + ".grid_power_best")
+        load_power_best = self.get_entity_results(self.base.prefix + ".load_power_best")
+        iboost_best = self.get_entity_results(self.base.prefix + ".iboost_best")
+        metric = self.get_entity_results(self.base.prefix + ".metric")
+        best_metric = self.get_entity_results(self.base.prefix + ".best_metric")
+        best10_metric = self.get_entity_results(self.base.prefix + ".best10_metric")
+        cost_today = self.get_entity_results(self.base.prefix + ".cost_today")
+        cost_today_export = self.get_entity_results(self.base.prefix + ".cost_today_export")
+        cost_today_import = self.get_entity_results(self.base.prefix + ".cost_today_import")
+        base10_metric = self.get_entity_results(self.base.prefix + ".base10_metric")
+        rates = self.get_entity_results(self.base.prefix + ".rates")
+        rates_export = self.get_entity_results(self.base.prefix + ".rates_export")
+        rates_gas = self.get_entity_results(self.base.prefix + ".rates_gas")
+        record = self.get_entity_results(self.base.prefix + ".record")
 
         text = ""
 
@@ -656,9 +656,9 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
-            load_energy_actual = self.get_entity_results("predbat.load_energy_actual")
-            load_energy_predicted = self.get_entity_results("predbat.load_energy_predicted")
-            load_energy_adjusted = self.get_entity_results("predbat.load_energy_adjusted")
+            load_energy_actual = self.get_entity_results(self.base.prefix + ".load_energy_actual")
+            load_energy_predicted = self.get_entity_results(self.base.prefix + ".load_energy_predicted")
+            load_energy_adjusted = self.get_entity_results(self.base.prefix + ".load_energy_adjusted")
 
             series_data = [
                 {"name": "Actual", "data": load_energy_actual, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
@@ -669,9 +669,9 @@ var options = {
         elif chart == "PV" or chart == "PV7":
             pv_power = self.prune_today(self.pv_power_hist, prune=chart == "PV")
             pv_forecast = self.prune_today(self.pv_forecast_hist, prune=chart == "PV")
-            pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate"), prune=False)
-            pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate10"), prune=False)
-            pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor.predbat_pv_today", "pv_estimate90"), prune=False)
+            pv_today_forecast = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate"), prune=False)
+            pv_today_forecast10 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate10"), prune=False)
+            pv_today_forecast90 = self.prune_today(self.get_entity_detailedForecast("sensor." + self.base.prefix + "_pv_today", "pv_estimate90"), prune=False)
             series_data = [
                 {"name": "PV Power", "data": pv_power, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#f5c43d"},
                 {"name": "Forecast History", "data": pv_forecast, "opacity": "0.3", "stroke_width": "3", "stroke_curve": "smooth", "color": "#a8a8a7", "chart_type": "area"},
