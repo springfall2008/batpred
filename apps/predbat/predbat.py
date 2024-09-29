@@ -4636,18 +4636,20 @@ class PredBat(hass.Hass):
             )
         return rates
 
-    def today_cost(self, import_today, export_today):
+    def today_cost(self, import_today, export_today, car_today):
         """
         Work out energy costs today (approx)
         """
         day_cost = 0
         day_cost_import = 0
         day_cost_export = 0
+        day_cost_car = 0
         day_energy = 0
         day_energy_export = 0
         day_cost_time = {}
         day_cost_time_import = {}
         day_cost_time_export = {}
+        car_cost_time = {}
         day_carbon_time = {}
         carbon_g = 0
 
@@ -4659,7 +4661,12 @@ class PredBat(hass.Hass):
 
             minute_back = self.minutes_now - minute - 1
             energy = 0
+            car_energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
+
+            if car_today:
+                car_energy = self.get_from_incrementing(car_today, minute_back)
+
             if export_today:
                 energy_export = self.get_from_incrementing(export_today, minute_back)
             else:
@@ -4670,10 +4677,12 @@ class PredBat(hass.Hass):
             if self.rate_import:
                 day_cost += self.rate_import[minute] * energy
                 day_cost_import += self.rate_import[minute] * energy
+                day_cost_car += self.rate_import[minute] * car_energy
 
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
+            
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
@@ -4683,6 +4692,7 @@ class PredBat(hass.Hass):
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 day_cost_time[stamp] = self.dp2(day_cost)
+                car_cost_time[stamp] = self.dp2(day_cost_car)
                 day_cost_time_import[stamp] = self.dp2(day_cost_import)
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
@@ -4698,6 +4708,18 @@ class PredBat(hass.Hass):
                 "icon": "mdi:currency-usd",
             },
         )
+        if self.num_cars > 0:
+            self.dashboard_item(
+                self.prefix + ".cost_today_car",
+                state=self.dp2(day_cost_car),
+                attributes={
+                    "results": self.filtered_times(car_cost_time),
+                    "friendly_name": "Car cost so far today (approx)",
+                    "state_class": "measurement",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:currency-usd",
+                },
+            )
         if self.carbon_enable:
             self.dashboard_item(
                 self.prefix + ".carbon_today",
@@ -5264,6 +5286,8 @@ class PredBat(hass.Hass):
         self.savings_today_predbat_soc = 0.0
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
+        self.cost_yesterday_car = 0.0
+        self.cost_total_car = 0.0
         self.yesterday_load_step = {}
         self.yesterday_pv_step = {}
         self.rate_import = {}
@@ -7812,6 +7836,15 @@ class PredBat(hass.Hass):
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
 
+        cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2)
+        if not cost_today_car_data:
+            cost_today_car_data = {}
+            cost_data_car = {}
+            cost_yesterday_car = 0
+        else:
+            cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            cost_yesterday_car = cost_data_car.get(self.minutes_now + 5, 0.0)
+
         # Save state
         self.dashboard_item(
             self.prefix + ".cost_yesterday",
@@ -7823,6 +7856,17 @@ class PredBat(hass.Hass):
                 "icon": "mdi:currency-usd",
             },
         )
+        if self.num_cars > 0:
+            self.dashboard_item(
+                self.prefix + ".cost_yesterday_car",
+                state=self.dp2(cost_yesterday_car),
+                attributes={
+                    "friendly_name": "Cost yesterday car",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "p",
+                    "icon": "mdi:currency-usd",
+                },
+            )
 
         # Save step data for debug
         if self.debug_enable:
@@ -7901,6 +7945,7 @@ class PredBat(hass.Hass):
         self.savings_today_predbat = saving
         self.savings_today_predbat_soc = final_soc
         self.savings_today_actual = cost_yesterday
+        self.cost_yesterday_car = cost_yesterday_car
 
         # Save state
         self.dashboard_item(
@@ -8341,11 +8386,7 @@ class PredBat(hass.Hass):
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-            self.log(
-                "Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
-                    inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)
-                )
-            )
+            self.log("Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)))
         inverter.adjust_battery_target(new_soc_percent, is_charging)
 
     def reset_inverter(self):
@@ -9380,7 +9421,7 @@ class PredBat(hass.Hass):
 
         # Work out cost today
         if self.import_today:
-            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today)
+            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
@@ -10017,6 +10058,12 @@ class PredBat(hass.Hass):
                 savings_total_actual = float(savings_total_actual)
             except (ValueError, TypeError):
                 savings_total_actual = 0.0
+            
+            cost_total_car = self.load_previous_value_from_ha(self.prefix + ".cost_total_car")
+            try:
+                cost_total_car = float(cost_total_car)
+            except (ValueError, TypeError):
+                cost_total_car = 0.0
 
             # Increment total at midnight for next day
             if (self.minutes_now >= 0) and (self.minutes_now < self.calculate_plan_every) and scheduled and recompute:
@@ -10024,6 +10071,7 @@ class PredBat(hass.Hass):
                 savings_total_pvbat += self.savings_today_pvbat
                 savings_total_soc = self.savings_today_predbat_soc
                 savings_total_actual += self.savings_today_actual
+                cost_total_car += self.cost_yesterday_car
 
             self.dashboard_item(
                 self.prefix + ".savings_total_predbat",
@@ -10068,6 +10116,18 @@ class PredBat(hass.Hass):
                     "icon": "mdi:cash-multiple",
                 },
             )
+            if self.num_cars > 0:
+                self.dashboard_item(
+                    self.prefix + ".cost_total_car",
+                    state=self.dp2(cost_total_car),
+                    attributes={
+                        "friendly_name": "Total car cost (approx)",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "p",
+                        "pounds": self.dp2(cost_total_car / 100.0),
+                        "icon": "mdi:cash-multiple",
+                    },
+                )
 
         # Car SOC increment
         if scheduled:
