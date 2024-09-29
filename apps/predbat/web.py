@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from config import CONFIG_ITEMS
 from utils import calc_percent_limit
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
-
+from environment import is_jinja2_installed
 
 class WebInterface:
     def __init__(self, base) -> None:
@@ -20,12 +20,16 @@ class WebInterface:
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
 
-        from jinja2 import Environment, FileSystemLoader, select_autoescape
+        # Set up Jinja2 templating (as long as installed)
+        if is_jinja2_installed():
+            from jinja2 import Environment, FileSystemLoader, select_autoescape
+            self.template_env = Environment(
+                loader=FileSystemLoader("templates"),
+                autoescape=select_autoescape()
+            )
 
-        self.template_env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape())
-
-        # Disable autoescaping for the HTML plan
-        self.template_env.filters["raw"] = lambda value: value
+            # Disable autoescaping for the HTML plan
+            self.template_env.filters['raw'] = lambda value: value
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
@@ -67,17 +71,24 @@ class WebInterface:
 
     async def start(self):
         # Start the web server on port 5052
+        # TODO: Turn off debugging
         app = web.Application(debug=True)
-        app.router.add_get("/", self.html_dash)
-        app.router.add_get("/plan", self.html_plan)
-        app.router.add_get("/log", self.html_log)
-        app.router.add_get("/menu", self.html_menu)
-        app.router.add_get("/apps", self.html_apps)
-        app.router.add_get("/charts", self.html_charts)
-        app.router.add_get("/config", self.html_config)
-        app.router.add_post("/config", self.html_config_post)
-        # app.router.add_get("/dash", self.html_dash)
-        app.router.add_get("/docs", self.html_docs)
+
+        # Check if required dependencies are present
+        if is_jinja2_installed():
+            app.router.add_get("/", self.html_dash)
+            app.router.add_get("/plan", self.html_plan)
+            app.router.add_get("/log", self.html_log)
+            app.router.add_get("/menu", self.html_menu)
+            app.router.add_get("/apps", self.html_apps)
+            app.router.add_get("/charts", self.html_charts)
+            app.router.add_get("/config", self.html_config)
+            app.router.add_post("/config", self.html_config_post)
+            app.router.add_get("/docs", self.html_docs)
+        else:
+            # Display the missing dependencies/update message
+            app.router.add_get('/', self.update_message)
+
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -147,82 +158,6 @@ class WebInterface:
             )
         text += "</table>\n"
 
-        return text
-
-    def get_header(self, title, refresh=0):
-        """
-        Return the HTML header for a page
-        """
-        text = "<!doctype html><html><head><title>Predbat Web Interface</title>"
-
-        text += """
-<link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
-<style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-        }
-       .iframe-container {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        /* Style for the top menu iframe */
-        .menu-frame {
-            height: 80px; /* Adjust the height of the menu bar */
-            width: 100%;
-            border: none;
-            overflow: hidden;
-        }
-        /* Style for the full height iframe */
-        .main-frame {
-            flex-grow: 1;
-            width: 100%;
-            border: none;
-        }
-        body {
-            font-family: Arial, sans-serif;
-            text-align: left;
-            margin: 5px;
-            background-color: #ffffff;
-            color: #333;
-        }
-        h1 {
-            color: #4CAF50;
-        }
-        h2 {
-            color: #4CAF50;
-            display: inline
-        }
-        table {
-            border-collapse: collapse;
-            padding: 1px;
-            border: 1px solid blue;
-        }
-        th,
-        td {
-            text-align: left;
-            padding: 5px;
-            vertical-align: top;
-        }
-        th {
-            background-color: #4CAF50;
-            color: white;
-        }
-        .default {
-            background-color: #fffffff;
-        }
-        .modified {
-            background-color: #ffcccc;
-        }
-        """
-        text += "</style>"
-
-        if refresh:
-            text += '<meta http-equiv="refresh" content="{}" >'.format(refresh)
-        text += "</head>\n"
         return text
 
     def get_entity_detailedForecast(self, entity, subitem="pv_estimate"):
@@ -373,13 +308,7 @@ var options = {
         """
         Return the Predbat plan as an HTML page
         """
-        # self.default_page = "./plan"
-        # html_plan = self.base.html_plan
-        # text = self.get_header("Predbat Plan", refresh=60)
-        # text += "<body>{}</body></html>\n".format(html_plan)
-        # return web.Response(content_type="text/html", text=text)
-
-        template = self.template_env.get_template("plan.html")
+        template = self.template_env.get_template('plan.html')
 
         context = {
             "default": self.default_page,
@@ -545,12 +474,9 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./dash"
-        # text = self.get_header("Predbat Dashboard")
-        # text += "<body>\n"
+
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         text = self.get_status_html(soc_perc, self.base.current_status)
-        # text += "</body></html>\n"
-        # return web.Response(content_type="text/html", text=text)
 
         template = self.template_env.get_template("dash.html")
 
@@ -706,22 +632,8 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = ""
-        # text = self.get_header("Predbat Config")
-        # text += "<body>\n"
-        # text += "<h2>{} Chart</h2>\n".format(chart)
-        # text += '- <a href="./charts?chart=Battery">Battery</a> '
-        # text += '<a href="./charts?chart=Power">Power</a> '
-        # text += '<a href="./charts?chart=Cost">Cost</a> '
-        # text += '<a href="./charts?chart=Rates">Rates</a> '
-        # text += '<a href="./charts?chart=InDay">InDay</a> '
-        # text += '<a href="./charts?chart=PV">PV</a> '
-        # text += '<a href="./charts?chart=PV7">PV7</a> '
-
-        text += '<div id="chart"></div>'
+        text = '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
-        # text += "</body></html>\n"
-        # return web.Response(content_type="text/html", text=text)
 
         template = self.template_env.get_template("charts.html")
 
@@ -738,10 +650,8 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = ""
-        # text = self.get_header("Predbat Config")
-        # text += "<body>\n"
-        text += "<table>\n"
+
+        text = "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 
         args = self.base.args
@@ -756,8 +666,6 @@ var options = {
             text += '<tr><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td></tr>\n'.format(arg, self.render_type(arg, value))
 
         text += "</table>"
-        # text += "</body></html>\n"
-        # return web.Response(content_type="text/html", text=text)
 
         template = self.template_env.get_template("apps.html")
 
@@ -774,10 +682,8 @@ var options = {
         """
 
         self.default_page = "./config"
-        text = ""
-        # text = self.get_header("Predbat Config", refresh=60)
-        # text += "<body>\n"
-        text += '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
+
+        text = '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
 
@@ -833,8 +739,6 @@ var options = {
 
         text += "</table>"
         text += "</form>"
-        # text += "</body></html>\n"
-        # return web.Response(content_type="text/html", text=text)
 
         template = self.template_env.get_template("config.html")
 
@@ -878,3 +782,9 @@ var options = {
 
         rendered_template = template.render(context)
         return web.Response(text=rendered_template, content_type="text/html")
+
+    async def update_message(self, request):
+        return web.Response(
+            text='Please update to the latest version of the add-on or Dockerfile, as you have missing dependencies',
+            content_type='text/html'
+        )
