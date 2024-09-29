@@ -11,6 +11,7 @@ from utils import calc_percent_limit
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 from environment import is_jinja2_installed
 
+
 class WebInterface:
     def __init__(self, base) -> None:
         self.abort = False
@@ -23,13 +24,11 @@ class WebInterface:
         # Set up Jinja2 templating (as long as installed)
         if is_jinja2_installed():
             from jinja2 import Environment, FileSystemLoader, select_autoescape
-            self.template_env = Environment(
-                loader=FileSystemLoader("templates"),
-                autoescape=select_autoescape()
-            )
+
+            self.template_env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape())
 
             # Disable autoescaping for the HTML plan
-            self.template_env.filters['raw'] = lambda value: value
+            self.template_env.filters["raw"] = lambda value: value
 
     def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
         results = {}
@@ -87,7 +86,7 @@ class WebInterface:
             app.router.add_get("/docs", self.html_docs)
         else:
             # Display the missing dependencies/update message
-            app.router.add_get('/', self.update_message)
+            app.router.add_get("/", self.update_message)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -308,7 +307,7 @@ var options = {
         """
         Return the Predbat plan as an HTML page
         """
-        template = self.template_env.get_template('plan.html')
+        template = self.template_env.get_template("plan.html")
 
         context = {
             "default": self.default_page,
@@ -784,7 +783,4 @@ var options = {
         return web.Response(text=rendered_template, content_type="text/html")
 
     async def update_message(self, request):
-        return web.Response(
-            text='Please update to the latest version of the add-on or Dockerfile, as you have missing dependencies',
-            content_type='text/html'
-        )
+        return web.Response(text="Please update to the latest version of the add-on or Dockerfile, as you have missing dependencies", content_type="text/html")
