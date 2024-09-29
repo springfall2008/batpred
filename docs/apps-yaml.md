@@ -222,7 +222,7 @@ num_inverters: 1
 
 ### geserial
 
-Only for GE inverters, this is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
 If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
 
 ```yaml
@@ -230,9 +230,17 @@ geserial: 're:sensor.givtcp_(.+)_soc_kwh'
 geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
+If you are running GivTCP v3 and have an AIO or a 3 phase inverter then the helper regular expression will not correctly work
+and you will need to manually set geserial in apps.yaml to your inverter serial number, i.e.:
+
+```yaml
+geserial: 'chNNNNgZZZ'
+```
+
 *TIP:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.
-geserial should be configured to be your AIO gateway serial number and all the geserial2 lines should be commented out in apps.yaml.
-GivTCP version 3 is required for multiple AIO's.
+geserial should be configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in apps.yaml.
+
+GivTCP version 3 is required for multiple AIO's or a 3 phase inverter.
 
 ## Historical data
 

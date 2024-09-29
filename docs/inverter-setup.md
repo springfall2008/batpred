@@ -74,8 +74,8 @@ The rest of the [Predbat installation instructions](install.md) should now be fo
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
 These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
 
-- If you have multiple AIO's then all control of the AIO's is done through the Gateway
-so you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to the Gateway serial number
+- If you are using GivTCP v3 and have an AIO or 3 phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number
+- If you have multiple AIO's then all control of the AIO's is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
