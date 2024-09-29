@@ -56,6 +56,10 @@ the Configuration tab is now no longer used and all configuration is now done vi
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
+- If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns (givtcp, givtcp2, givtcp3, etc)
+to make it easier to identify your devices within Home Assistant.
+For example if you have a gateway and two AIO's you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
+The prefixes should be set before you start using GivTCP in anger as changing the prefixes later on will result in both the old and new sensor names in Home Assistant!
 - Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
 recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
