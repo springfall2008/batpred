@@ -786,6 +786,7 @@ class Prediction:
                         iboost_rate_okay
                         and iboost_today_kwh < self.iboost_max_energy
                         and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc))
+                        and (self.iboost_on_discharge or (discharge_window_n < 0))
                     ):
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
