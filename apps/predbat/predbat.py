@@ -8341,7 +8341,11 @@ class PredBat(hass.Hass):
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-            self.log("Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)))
+            self.log(
+                "Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
+                    inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)
+                )
+            )
         inverter.adjust_battery_target(new_soc_percent, is_charging)
 
     def reset_inverter(self):
