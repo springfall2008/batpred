@@ -8378,7 +8378,6 @@ class PredBat(hass.Hass):
 
         isCharging = False
         isDischarging = False
-        inverter_id = 0
         for inverter in self.inverters:
             # Read-only mode
             if self.set_read_only:
@@ -8815,9 +8814,6 @@ class PredBat(hass.Hass):
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve and not setReserve:
                 inverter.adjust_reserve(0)
-
-            # Count inverter number
-            inverter_id += 1
 
         # Set the charge/discharge status information
         self.set_charge_discharge_status(isCharging and not disabled_charge_window, isDischarging and not disabled_discharge)
