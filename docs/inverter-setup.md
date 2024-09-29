@@ -87,6 +87,9 @@ If you have a Gen 1 or a firmware version that allows reserve being set to 100 t
 - If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup',
 [consider setting input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
 
+**NB: GivTCP and Predbat do not currently yet work together for 3 phase inverters**.
+This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with predbat](https://github.com/britkat1980/giv_tcp/issues/218)
+
 ## Solis Inverters
 
 To run PredBat with Solis hybrid inverters, follow the following steps:
