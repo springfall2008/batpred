@@ -8330,11 +8330,18 @@ class PredBat(hass.Hass):
         Adjust target SOC based on the current SOC of all the inverters accounting for their
         charge rates and battery capacities
         """
-        required_kwh = self.soc_max * (soc / 100.0)
-        add_this = required_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
-        new_soc_kwh = min(inverter.soc_kwh + add_this, inverter.soc_max)
-        new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-        self.log("Inverter {} adjust target soc to {}% based on requested all inverter soc {}%".format(inverter.inverter_id, new_soc_percent, soc))
+        target_kwh = self.dp2(self.soc_max * (soc / 100.0))
+        soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+
+        if target_kwh == self.soc_kw:
+            new_soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
+            self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.inverter_id, new_soc_percent, soc))
+        else:
+            add_kwh = target_kwh - self.soc_kw
+            add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
+            new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
+            new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
+            self.log("Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)))
         inverter.adjust_battery_target(new_soc_percent, is_charging)
 
     def reset_inverter(self):
