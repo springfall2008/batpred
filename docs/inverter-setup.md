@@ -392,7 +392,6 @@ template:
     name : "My Shiny new Inverter"
     has_rest_api: False
     has_mqtt_api: False
-    has_service_api: True
     output_charge_control: "power"
     has_charge_enable_time: False
     has_discharge_enable_time: False
@@ -455,7 +454,7 @@ These three change between battery charge/discharge and auto (idle) mode:
 - **topic**/set/discharge - payload=discharge_rate
 - **topic**/set/auto - payload=true
 
-### inv_has_service_api
+### Service API
 
 When True a Home Assistant service will be used to issue control messages for the inverter
 

@@ -159,7 +159,6 @@ class Inverter:
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
         self.inv_has_rest_api = INVERTER_DEF[self.inverter_type]["has_rest_api"]
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
-        self.inv_has_service_api = INVERTER_DEF[self.inverter_type]["has_service_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
         self.inv_charge_control_immediate = INVERTER_DEF[self.inverter_type]["charge_control_immediate"]
@@ -1867,34 +1866,32 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
-        if self.inv_has_service_api:
-            if target_soc > 0:
-                service_data = {
-                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                    "target_soc": target_soc,
-                    "power": int(self.battery_rate_max_charge * MINUTE_WATT),
-                }
-                self.call_service_template("charge_start_service", service_data)
-            else:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-                self.call_service_template("charge_stop_service", service_data)
+        if target_soc > 0:
+            service_data = {
+                "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                "target_soc": target_soc,
+                "power": int(self.battery_rate_max_charge * MINUTE_WATT),
+            }
+            self.call_service_template("charge_start_service", service_data)
+        else:
+            service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
+            self.call_service_template("charge_stop_service", service_data)
 
     def adjust_discharge_immediate(self, target_soc):
         """
         Adjust from discharging or not discharging based on passed target soc
         """
-        if self.inv_has_service_api:
-            if target_soc > 0:
-                service_data = {
-                    "device_id": self.base.get_arg("device_id", index=self.id, default=""),
-                    "target_soc": target_soc,
-                    "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
-                }
-                self.call_service_template("discharge_start_service", service_data)
-            else:
-                service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-                self.call_service_template("charge_stop_service", service_data)
-                self.call_service_template("discharge_stop_service", service_data)
+        if target_soc > 0:
+            service_data = {
+                "device_id": self.base.get_arg("device_id", index=self.id, default=""),
+                "target_soc": target_soc,
+                "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
+            }
+            self.call_service_template("discharge_start_service", service_data)
+        else:
+            service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
+            self.call_service_template("charge_stop_service", service_data)
+            self.call_service_template("discharge_stop_service", service_data)
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
