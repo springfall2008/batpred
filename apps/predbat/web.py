@@ -17,7 +17,6 @@ class WebInterface:
         self.abort = False
         self.base = base
         self.log = base.log
-        self.default_page = "./dash"
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
 
@@ -319,7 +318,6 @@ var options = {
         template = self.template_env.get_template("plan.html")
 
         context = {
-            "default": self.default_page,
             "plan_html": self.base.html_plan,
             "refresh": 60,
         }
@@ -333,7 +331,6 @@ var options = {
         """
         logfile = "predbat.log"
         logdata = ""
-        self.default_page = "./log"
         if os.path.exists(logfile):
             with open(logfile, "r") as f:
                 logdata = f.read()
@@ -344,10 +341,8 @@ var options = {
         warnings = False
         if "errors" in args:
             errors = True
-            # self.default_page = "./log?errors"
         if "warnings" in args:
             warnings = True
-            # self.default_page = "./log?warnings"
 
         loglines = logdata.split("\n")
 
@@ -481,8 +476,6 @@ var options = {
         """
         Render apps.yaml as an HTML page
         """
-        self.default_page = "./dash"
-
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         text = self.get_status_html(soc_perc, self.base.current_status)
 
@@ -639,7 +632,7 @@ var options = {
         """
         args = request.query
         chart = args.get("chart", "Battery")
-        self.default_page = "./charts?chart={}".format(chart)
+
         text = '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
 
@@ -657,8 +650,6 @@ var options = {
         """
         Render apps.yaml as an HTML page
         """
-        self.default_page = "./apps"
-
         text = "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 
@@ -688,9 +679,6 @@ var options = {
         """
         Return the Predbat config as an HTML page
         """
-
-        self.default_page = "./config"
-
         text = '<form class="form-inline" action="./config" method="post" enctype="multipart/form-data" id="configform">\n'
         text += "<table>\n"
         text += "<tr><th></th><th>Name</th><th>Entity</th><th>Type</th><th>Current</th><th>Default</th><th>Select</th></tr>\n"
@@ -775,7 +763,7 @@ var options = {
         """
         template = self.template_env.get_template("index.html")
 
-        context = {"default": self.default_page}
+        context = {}
 
         rendered_template = template.render(context)
         return web.Response(text=rendered_template, content_type="text/html")
@@ -786,7 +774,7 @@ var options = {
         """
         template = self.template_env.get_template("docs.html")
 
-        context = {"default": self.default_page}
+        context = {}
 
         rendered_template = template.render(context)
         return web.Response(text=rendered_template, content_type="text/html")
