@@ -480,7 +480,8 @@ def simple_scenario(
         plot(name, prediction)
     return failed
 
-class DummyInverter():
+
+class DummyInverter:
     def __init__(self, log, inverter_id=0):
         self.soc_kw = 0
         self.soc_max = 100
@@ -488,13 +489,27 @@ class DummyInverter():
         self.battery_rate_max_charge = 1.0
         self.log = log
         self.id = inverter_id
-    
+
     def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
         self.soc_target = soc
         self.isCharging = isCharging
         self.isDischarging = isDischarging
 
-def run_inverter_multi_test(name, my_predbat, inverter, soc, isCharging=False, battery_rate_max_charge=1.0, battery_rate_max_charge_all=1.0, soc_max=100.0, soc_max_all=100.0, soc_kw=0.0, soc_kw_all=0.0, assert_soc=0):
+
+def run_inverter_multi_test(
+    name,
+    my_predbat,
+    inverter,
+    soc,
+    isCharging=False,
+    battery_rate_max_charge=1.0,
+    battery_rate_max_charge_all=1.0,
+    soc_max=100.0,
+    soc_max_all=100.0,
+    soc_kw=0.0,
+    soc_kw_all=0.0,
+    assert_soc=0,
+):
     print("Run scenario {}".format(name))
     failed = False
     inverter.battery_rate_max_charge = battery_rate_max_charge
@@ -514,6 +529,7 @@ def run_inverter_multi_test(name, my_predbat, inverter, soc, isCharging=False, b
         failed = True
     return failed
 
+
 def run_inverter_multi_tests(my_predbat):
     print("**** Running inverter multi tests ****\n")
 
@@ -524,9 +540,15 @@ def run_inverter_multi_tests(my_predbat):
     failed |= run_inverter_multi_test("charge_soc", my_predbat, inverter, 50, isCharging=False, assert_soc=50, soc_kw=50.0, soc_kw_all=50.0)
     failed |= run_inverter_multi_test("charge2", my_predbat, inverter, 50, isCharging=False, assert_soc=50, battery_rate_max_charge_all=2.0, soc_max_all=200.0)
     failed |= run_inverter_multi_test("charge3", my_predbat, inverter, 50, isCharging=False, assert_soc=75, battery_rate_max_charge_all=2.0, soc_max=50.0, soc_max_all=150.0)
-    failed |= run_inverter_multi_test("charge4", my_predbat, inverter, 50, isCharging=True, assert_soc=67, battery_rate_max_charge=2.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0)
-    failed |= run_inverter_multi_test("charge5", my_predbat, inverter, 50, isCharging=True, assert_soc=33, battery_rate_max_charge=1.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0)
-    failed |= run_inverter_multi_test("discharge", my_predbat, inverter, 50, isCharging=False, assert_soc=50, soc_max_all=200.0, soc_max=100.0, soc_kw=100.0, soc_kw_all=200.0, battery_rate_max_charge_all=2.0)
+    failed |= run_inverter_multi_test(
+        "charge4", my_predbat, inverter, 50, isCharging=True, assert_soc=67, battery_rate_max_charge=2.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0
+    )
+    failed |= run_inverter_multi_test(
+        "charge5", my_predbat, inverter, 50, isCharging=True, assert_soc=33, battery_rate_max_charge=1.0, battery_rate_max_charge_all=3.0, soc_max_all=200.0
+    )
+    failed |= run_inverter_multi_test(
+        "discharge", my_predbat, inverter, 50, isCharging=False, assert_soc=50, soc_max_all=200.0, soc_max=100.0, soc_kw=100.0, soc_kw_all=200.0, battery_rate_max_charge_all=2.0
+    )
     return failed
 
 
