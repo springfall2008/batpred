@@ -371,6 +371,9 @@ class HAInterface:
         :param sensor: The sensor to get the history for.
         :return: The history for the sensor.
         """
+        if not sensor:
+            return None
+
         self.db_mirror_list[sensor.lower()] = True
 
         if (self.db_primary or force_db) and self.db_enable:

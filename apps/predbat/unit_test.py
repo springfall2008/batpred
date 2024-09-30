@@ -488,7 +488,7 @@ class DummyInverter:
         self.soc_percent = 0
         self.battery_rate_max_charge = 1.0
         self.log = log
-        self.inverter_id = inverter_id
+        self.id = inverter_id
 
     def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
         self.soc_target = soc
