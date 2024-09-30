@@ -463,30 +463,34 @@ trigger:
       minutes: 15
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - sensor.givtcp_<inverter id>_status
-    from: "online"
+    from: online
     for:
       minutes: 15
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: numeric_state
     entity_id:
       - sensor.givtcp_<inverter id>_invertor_temperature
     for:
       minutes: 15
-    below: 5
+    below: 10
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
-    to: "unknown"
+    to: unknown
     for:
       minutes: 15
     variables:
       alert_text: Battery <battery_id> is offline to GivTCP
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - binary_sensor.givtcp_running
@@ -495,6 +499,7 @@ trigger:
       minutes: 15
     variables:
       alert_text: GivTCP add-on is not running
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - binary_sensor.mosquitto_broker_running
@@ -503,6 +508,7 @@ trigger:
       minutes: 15
     variables:
       alert_text: Mosquitto Broker add-on is not running
+      restart_app: Mosquitto
   - platform: state
     entity_id:
       - binary_sensor.<appdaemon><-predbat>_running
@@ -511,13 +517,15 @@ trigger:
       minutes: 15
     variables:
       alert_text: <AppDaemon><-predbat> add-on is not running
+      restart_app: Predbat
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: GivTCP communication issue
       message: |
         {{now().strftime('%-d %b %H:%M')}} ISSUE:
-        {{ alert_text }} for the past 15 minutes.
+        {{ alert_text }} for the past 15 minutes, restarting 
+        {{ restart_app }}
       data:
         visibility: public
         persistent: true
@@ -528,6 +536,31 @@ action:
             volume: 0.8
           sticky: true
           color: red
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'GivTCP' }}"
+        sequence:
+          - alias: Restart GivTCP add-on
+            action: hassio.addon_restart
+            data:
+              addon: 533ea71a_givtcp
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'Mosquitto' }}"
+        sequence:
+          - alias: Restart Mosquitto add-on
+            action: hassio.addon_restart
+            data:
+              addon: core_mosquitto
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'Predbat' }}"
+        sequence:
+          - alias: Restart Predbat add-on
+            action: hassio.addon_restart
+            data:
+              addon: a06adb4f0d_predbat
 mode: single
 ```
 
@@ -540,18 +573,11 @@ You will need to enable a binary sensor for each add-on to be able to use these 
 
 Repeat these steps for the 'Mosquitto' add-on and either 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' depending on which Predbat install option you followed.
 
-As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
+As an extension to the above, if you don't want the automation to restart the failing add-on and instead just send an alert that there is a problem, delete the 'choose' code above.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
 
-To restart the GivTCP add-on, add the following at the end of the action section:
-
-```yaml
-  - service: hassio.addon_restart
-    data:
-      addon: 533ea71a_givtcp
-```
-
-NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
+NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp';
+and if you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
 
 ### Predbat error monitor
 
