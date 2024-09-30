@@ -581,7 +581,10 @@ and if you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d
 
 ### Predbat error monitor
 
-This automation will raise an alert if Predbat's status turns to *ERROR* for more than 10 minutes.
+This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
+
+In normal operation Predbat will automatically run and update its forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
+then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 The script will need to be customised for your mobile details.
 
@@ -590,24 +593,45 @@ alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trigger:
   - platform: template
+    alias: Predbat status contains 'Error' for 5 minutes
     value_template: "{{ 'Error' in states('predbat.status') }}"
     for:
-      minutes: 10
+      minutes: 5
+    variables:
+      alert_text: >-
+        predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
   - platform: state
-    entity_id:
-      - predbat.status
+    alias: Predbat is in error status for 5 minutes
+    entity_id: predbat.status
     attribute: error
     to: "true"
     for:
-      minutes: 10
+      minutes: 5
+    variables:
+      alert_text: >-
+        predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
+  - platform: state
+    alias: Predbat status.last_updated has not changed for 20 minutes
+    entity_id: predbat.status
+    attribute: last_updated
+    for:
+      minutes: 20
+    variables:
+      alert_text: >-
+        Predbat stalled? Restarting. last_updated=' {{
+        state_attr('predbat.status','last_updated')|as_timestamp|timestamp_custom('%a
+        %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
+        }}'
+      restart_predbat: "Y"
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: Predbat status issue
       message: |
         {{now().strftime('%-d %b %H:%M')}} ISSUE:
-        Predbat status is {{ states('predbat.status') }}, error={{
-        state_attr('predbat.status', 'error') }}
+        {{ alert_text }}
       data:
         visibility: public
         persistent: true
@@ -618,8 +642,18 @@ action:
             volume: 0.8
         sticky: true
         color: red
+  - if:
+      - condition: template
+        value_template: "{{ restart_predbat == 'Y' }}"
+    then:
+      - action: hassio.addon_restart
+        data:
+          addon: 6adb4f0d_predbat
+        alias: Restart Predbat add-on
 mode: single
 ```
+
+NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
 
 An error alert looks like this:
 
