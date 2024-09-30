@@ -4682,6 +4682,7 @@ class PredBat(hass.Hass):
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
+            
 
             if self.carbon_enable:
                 carbon_g += self.carbon_history.get(minute_back, 0) * energy
@@ -7841,9 +7842,7 @@ class PredBat(hass.Hass):
             cost_data_car = {}
             cost_yesterday_car = 0
         else:
-            cost_data_car = self.minute_data(
-                cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0
-            )
+            cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_yesterday_car = cost_data_car.get(self.minutes_now + 5, 0.0)
 
         # Save state
@@ -8381,17 +8380,13 @@ class PredBat(hass.Hass):
 
         if target_kwh == self.soc_kw:
             new_soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
-            self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.inverter_id, new_soc_percent, soc))
+            self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         else:
             add_kwh = target_kwh - self.soc_kw
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-            self.log(
-                "Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
-                    inverter.inverter_id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)
-                )
-            )
+            self.log("Inverter {} adjust target soc for charge to {}% based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(inverter.id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)))
         inverter.adjust_battery_target(new_soc_percent, is_charging)
 
     def reset_inverter(self):
@@ -10063,7 +10058,7 @@ class PredBat(hass.Hass):
                 savings_total_actual = float(savings_total_actual)
             except (ValueError, TypeError):
                 savings_total_actual = 0.0
-
+            
             cost_total_car = self.load_previous_value_from_ha(self.prefix + ".cost_total_car")
             try:
                 cost_total_car = float(cost_total_car)
