@@ -435,7 +435,15 @@ to view Predbat's logfile - see [editing configuration files within Home Assista
 ## Automated monitoring that Predbat and GivTCP are running OK
 
 With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
-you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device.
+you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device running the Home Assistant Companion app.
+
+To create a new automation:
+
+- Settings / Automations & Scenes
+- Create Automation / Create new Automation
+- Three dots (top right corner) / Edit in YAML
+- Delete the existing (template) automation code and copy/paste the supplied automation code below
+
 
 ### GivTCP activity monitor
 
