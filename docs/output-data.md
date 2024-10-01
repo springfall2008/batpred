@@ -73,10 +73,11 @@ Installation steps:
 
 Now create the dynamic dashboard:
 
-- Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
-
-- Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
-delete the template card configuration and paste the following YAML into the dashboard and click 'Save':
+- Go to Settings/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
+- Click the pencil icon in the top right corner, then the plus symbol on the far right of the next row to create a new View
+- Enter a title of the View, then Save
+- Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following YAML into the dashboard and click 'Save':
 
 ```yaml
 type: vertical-stack
@@ -443,7 +444,6 @@ To create a new automation:
 - Create Automation / Create new Automation
 - Three dots (top right corner) / Edit in YAML
 - Delete the existing (template) automation code and copy/paste the supplied automation code below
-
 
 ### GivTCP activity monitor
 
