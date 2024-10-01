@@ -532,7 +532,7 @@ action:
       title: GivTCP communication issue
       message: |
         {{now().strftime('%-d %b %H:%M')}} ISSUE:
-        {{ alert_text }} for the past 15 minutes, restarting 
+        {{ alert_text }} for the past 15 minutes, restarting
         {{ restart_app }}
       data:
         visibility: public
