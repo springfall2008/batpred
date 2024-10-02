@@ -237,8 +237,13 @@ and you will need to manually set geserial in apps.yaml to your inverter serial 
 geserial: 'chNNNNgZZZ'
 ```
 
-*TIP:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.
-geserial should be configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in apps.yaml.
+*TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
+Check the GivTCP configuration to determine whether inverter 1 (the givtcp sensors) is the AIO or the gateway, or inverter 2 (the givtcp2 sensors) is the AIO or gateway.<BR>
+Then in apps.yaml comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
+Also delete the [appropriate givtcp_rest inverter control line](#rest-interface-inverter-control) corresponding to the gateway so that Predbat controls the AIO directly.
+
+*TIP2:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.<BR>
+geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in apps.yaml.
 You should also delete the [second givtcp_rest inverter control line](#rest-interface-inverter-control) so that Predbat controls the AIO's via the gateway.
 
 GivTCP version 3 is required for multiple AIO's or a 3 phase inverter.
