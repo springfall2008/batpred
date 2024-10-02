@@ -4387,7 +4387,7 @@ class PredBat(hass.Hass):
 
             if discharge_window_n >= 0:
                 limit = self.discharge_limits_best[discharge_window_n]
-                if limit == 99:
+                if limit == 99:                               # freeze discharging
                     if state == soc_sym:
                         state = ""
                     if state:
@@ -4396,12 +4396,12 @@ class PredBat(hass.Hass):
                     else:
                         state_color = "#AAAAAA"
                     state += "FrzDis&rarr;"
-                    show_limit = str(int(limit))
+                    show_limit = ""                            # suppress displaying the limit (of 99) when freeze discharging as its a meaningless number
                 elif limit < 100:
                     if state == soc_sym:
                         state = ""
                     if state:
-                        state += "</td><td bgcolor=#FFFF00>"  # charging and discharging in the same slot
+                        state += "</td><td bgcolor=#FFFF00>"  # charging and discharging in the same slot, split the state into two
                         split = True
                     else:
                         state_color = "#FFFF00"

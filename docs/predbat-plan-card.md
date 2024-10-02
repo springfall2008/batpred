@@ -97,7 +97,7 @@ Alongside the state is an arrow which points upwards if the battery SoC is incre
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
 If Predbat's plan has been over-ridden and the [slot has been manually controlled](customisation.md#manual-control) to be a Charging slot, Discharging or Idle,
 then alongside the State and battery SoC arrow will be an upside down 'F' indicating it is a 'Forced' activity.<BR>
-The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Pale Blue for Hold Charging or White for Idle.<BR>
+The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
 NB: The Predbat plan is shown in 30 minute time slots but Predbat actually plans battery activity in 5 minute segments within the 30 minute slot.
 If the Home Assistant control *switch.predbat_calculate_discharge_oncharge* is set to True,
 then within a 30 minute slot (and depending on import and export rates) Predbat could potentially plan for there to be both

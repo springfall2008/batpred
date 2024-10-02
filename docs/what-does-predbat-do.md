@@ -85,7 +85,7 @@ but if there is excess Solar power above house load, the excess solar will be us
 
 - **Freeze discharging** - The battery is in Discharge mode, the same as Idle (Eco) mode, but with charging disabled.
 The battery or solar covers the house load. As charging is disabled, if there is excess solar generated, the current SoC level will be held and the excess solar will be exported.
-If there is a shortfall of solar power to meet house load, the battery will discharge.
+If there is a shortfall of generated solar power to meet house load, the battery will discharge to meet the extra load.
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge then a full charge
