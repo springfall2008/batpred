@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.10"
+THIS_VERSION = "v8.4.11"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -9832,7 +9832,7 @@ class PredBat(hass.Hass):
         self.set_soc_enable = True
         self.set_reserve_enable = self.get_arg("set_reserve_enable")
         self.set_reserve_hold = True
-        self.set_discharge_freeze = True
+        self.set_discharge_freeze = self.get_arg("set_discharge_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.calculate_discharge_first = True
