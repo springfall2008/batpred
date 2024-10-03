@@ -1733,7 +1733,7 @@ class Inverter:
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                     if self.inv_charge_control_immediate:
                         self.enable_charge_discharge_with_time_current("charge", False)
-                else:
+                if not self.inv_has_charge_enable_time:
                     self.adjust_charge_window(self.base.midnight_utc, self.base.midnight_utc, self.base.minutes_now)
 
             if self.base.set_inverter_notify and notify:
@@ -1959,6 +1959,7 @@ class Inverter:
         if not in_new_window and not self.rest_data and ((new_start != old_start) or (new_end != old_end)) and self.inv_has_charge_enable_time:
             self.disable_charge_window(notify=False)
             have_disabled = True
+
         if new_start != old_start:
             if self.rest_data:
                 pass  # REST will be written as start/end together

@@ -603,6 +603,13 @@ CONFIG_ITEMS = [
         "reset_inverter": True,
     },
     {
+        "name": "set_discharge_freeze",
+        "friendly_name": "Set Discharge Freeze",
+        "type": "switch",
+        "default": True,
+        "reset_inverter": True,
+    },
+    {
         "name": "set_discharge_freeze_only",
         "friendly_name": "Set Discharge Freeze Only",
         "type": "switch",
