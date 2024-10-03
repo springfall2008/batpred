@@ -56,6 +56,13 @@ the Configuration tab is now no longer used and all configuration is now done vi
 - On the GivTCP add-on, click 'START' to start the add-on
 - Once the add-on has started, click 'Open Web UI' or go to [http://homeassistant.local:8099/](http://homeassistant.local:8099/), then click 'Go to Config Page' to configure GivTCP
 - GivTCP will auto-discover your inverters and batteries so you shouldn't need to manually enter these, but check the IP address(s) it finds are correct
+- If you have multiple inverters you may wish to change the default device prefixes that GivTCP assigns ('givtcp', 'givtcp2', 'givtcp3', etc)
+to make it easier to identify your devices within Home Assistant.<BR>
+For example if you have a gateway and two AIO's you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
+The prefixes should be set before you start using GivTCP in anger
+as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
+Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
+and change the sensor names that predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
 - Click Next and Next to get to the Selfrun page, and turn on Self run. The Self Run Loop Timer is how often GivTCP will retrieve data from your inverters - it's
 recommended that set this to a value between 20 and 60, but not less than 15 seconds as otherwise the inverter will then spend all its time talking to GivTCP
 and won't communicate with the GivEnergy portal and app
@@ -74,14 +81,18 @@ The rest of the [Predbat installation instructions](install.md) should now be fo
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
 These settings are documented in the appropriate place in the documentation, but for ease of identification, are repeated here:
 
-- If you have multiple AIO's then all control of the AIO's is done through the Gateway
-so you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to the Gateway serial number
+- If you are using GivTCP v3 and have an AIO or 3 phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number
+- If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
+- If you have multiple AIO's then all control of the AIO's is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
 If you have a Gen 1 or a firmware version that allows reserve being set to 100 then you can change the default from 98 to 100
-- If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup',
-[consider setting input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
+- If your inverter has been wired as an EPS (Emergency Power Supply) or AIO 'whole home backup', consider setting
+[input_number.predbat_set_reserve_min](customisation.md#inverter-control-options) to reserve some battery power for use in emergencies.
+
+**NB: GivTCP and Predbat do not currently yet work together for 3 phase inverters**.
+This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable to charge or discharge 3 phase inverters with predbat](https://github.com/britkat1980/giv_tcp/issues/218)
 
 ## Solis Inverters
 

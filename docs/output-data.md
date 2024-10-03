@@ -73,10 +73,11 @@ Installation steps:
 
 Now create the dynamic dashboard:
 
-- Go to System/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
-
-- Click the pencil icon in the top right corner, click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
-delete the template card configuration and paste the following YAML into the dashboard and click 'Save':
+- Go to Settings/Dashboards, click 'Open' against an existing dashboard or 'Add Dashboard'/'New dashboard from scratch'/enter a name/click Create, then click 'Open'
+- Click the pencil icon in the top right corner, then the plus symbol on the far right of the next row to create a new View
+- Enter a title of the View, then Save
+- Click the blue 'Add card', scroll down the list of cards to the bottom and click 'Manual',
+delete the template card configuration and copy/paste the following YAML into the dashboard and click 'Save':
 
 ```yaml
 type: vertical-stack
@@ -435,7 +436,14 @@ to view Predbat's logfile - see [editing configuration files within Home Assista
 ## Automated monitoring that Predbat and GivTCP are running OK
 
 With GivTCP and Predbat performing an important function, managing your battery charging and discharging to best reduce your electricity bills,
-you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device.
+you may find these automations useful to monitor that GivTCP and Predbat are running OK, and if not, to raise an alert on your mobile device running the Home Assistant Companion app.
+
+To create a new automation:
+
+- Settings / Automations & Scenes
+- Create Automation / Create new Automation
+- Three dots (top right corner) / Edit in YAML
+- Delete the existing (template) automation code and copy/paste the supplied automation code below
 
 ### GivTCP activity monitor
 
@@ -463,30 +471,34 @@ trigger:
       minutes: 15
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - sensor.givtcp_<inverter id>_status
-    from: "online"
+    from: online
     for:
       minutes: 15
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: numeric_state
     entity_id:
       - sensor.givtcp_<inverter id>_invertor_temperature
     for:
       minutes: 15
-    below: 5
+    below: 10
     variables:
       alert_text: No GivTCP update received from inverter <id>
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
-    to: "unknown"
+    to: unknown
     for:
       minutes: 15
     variables:
       alert_text: Battery <battery_id> is offline to GivTCP
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - binary_sensor.givtcp_running
@@ -495,6 +507,7 @@ trigger:
       minutes: 15
     variables:
       alert_text: GivTCP add-on is not running
+      restart_app: GivTCP
   - platform: state
     entity_id:
       - binary_sensor.mosquitto_broker_running
@@ -503,6 +516,7 @@ trigger:
       minutes: 15
     variables:
       alert_text: Mosquitto Broker add-on is not running
+      restart_app: Mosquitto
   - platform: state
     entity_id:
       - binary_sensor.<appdaemon><-predbat>_running
@@ -511,13 +525,15 @@ trigger:
       minutes: 15
     variables:
       alert_text: <AppDaemon><-predbat> add-on is not running
+      restart_app: Predbat
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: GivTCP communication issue
       message: |
         {{now().strftime('%-d %b %H:%M')}} ISSUE:
-        {{ alert_text }} for the past 15 minutes.
+        {{ alert_text }} for the past 15 minutes, restarting
+        {{ restart_app }}
       data:
         visibility: public
         persistent: true
@@ -528,6 +544,31 @@ action:
             volume: 0.8
           sticky: true
           color: red
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'GivTCP' }}"
+        sequence:
+          - alias: Restart GivTCP add-on
+            action: hassio.addon_restart
+            data:
+              addon: 533ea71a_givtcp
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'Mosquitto' }}"
+        sequence:
+          - alias: Restart Mosquitto add-on
+            action: hassio.addon_restart
+            data:
+              addon: core_mosquitto
+      - conditions:
+          - condition: template
+            value_template: "{{ restart_app == 'Predbat' }}"
+        sequence:
+          - alias: Restart Predbat add-on
+            action: hassio.addon_restart
+            data:
+              addon: a06adb4f0d_predbat
 mode: single
 ```
 
@@ -540,22 +581,18 @@ You will need to enable a binary sensor for each add-on to be able to use these 
 
 Repeat these steps for the 'Mosquitto' add-on and either 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' depending on which Predbat install option you followed.
 
-As an extension to the above, instead of just alerting that GivTCP has a problem, the automation could also restart GivTCP add-on which usually cures most GivTCP connectivity issues.
+As an extension to the above, if you don't want the automation to restart the failing add-on and instead just send an alert that there is a problem, delete the 'choose' code above.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
 
-To restart the GivTCP add-on, add the following at the end of the action section:
-
-```yaml
-  - service: hassio.addon_restart
-    data:
-      addon: 533ea71a_givtcp
-```
-
-NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
+NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp';
+and if you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
 
 ### Predbat error monitor
 
-This automation will raise an alert if Predbat's status turns to *ERROR* for more than 10 minutes.
+This automation will raise an alert if Predbat's status turns to *Error* for more than 5 minutes.
+
+In normal operation Predbat will automatically run and update its forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
+then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 The script will need to be customised for your mobile details.
 
@@ -564,24 +601,45 @@ alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
 trigger:
   - platform: template
+    alias: Predbat status contains 'Error' for 5 minutes
     value_template: "{{ 'Error' in states('predbat.status') }}"
     for:
-      minutes: 10
+      minutes: 5
+    variables:
+      alert_text: >-
+        predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
   - platform: state
-    entity_id:
-      - predbat.status
+    alias: Predbat is in error status for 5 minutes
+    entity_id: predbat.status
     attribute: error
     to: "true"
     for:
-      minutes: 10
+      minutes: 5
+    variables:
+      alert_text: >-
+        predbat status is {{ states('predbat.status') }}, error={{
+        state_attr('predbat.status', 'error') }}
+  - platform: state
+    alias: Predbat status.last_updated has not changed for 20 minutes
+    entity_id: predbat.status
+    attribute: last_updated
+    for:
+      minutes: 20
+    variables:
+      alert_text: >-
+        Predbat stalled? Restarting. last_updated=' {{
+        state_attr('predbat.status','last_updated')|as_timestamp|timestamp_custom('%a
+        %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
+        }}'
+      restart_predbat: "Y"
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
       title: Predbat status issue
       message: |
         {{now().strftime('%-d %b %H:%M')}} ISSUE:
-        Predbat status is {{ states('predbat.status') }}, error={{
-        state_attr('predbat.status', 'error') }}
+        {{ alert_text }}
       data:
         visibility: public
         persistent: true
@@ -592,8 +650,18 @@ action:
             volume: 0.8
         sticky: true
         color: red
+  - if:
+      - condition: template
+        value_template: "{{ restart_predbat == 'Y' }}"
+    then:
+      - action: hassio.addon_restart
+        data:
+          addon: 6adb4f0d_predbat
+        alias: Restart Predbat add-on
 mode: single
 ```
+
+NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
 
 An error alert looks like this:
 

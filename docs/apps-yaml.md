@@ -222,7 +222,7 @@ num_inverters: 1
 
 ### geserial
 
-Only for GE inverters, this is a helper regular expression to find your serial number, if it doesn't work edit it manually or change individual entities to match.
+Only for GE inverters, this is a helper regular expression to find your inverter serial number, if it doesn't work edit it manually or change individual entities to match.
 If you  have more than one inverter you will need one per inverter to be used in the later configuration lines
 
 ```yaml
@@ -230,9 +230,23 @@ geserial: 're:sensor.givtcp_(.+)_soc_kwh'
 geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 ```
 
-*TIP:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.
-geserial should be configured to be your AIO gateway serial number and all the geserial2 lines should be commented out in apps.yaml.
-GivTCP version 3 is required for multiple AIO's.
+If you are running GivTCP v3 and have an AIO or a 3 phase inverter then the helper regular expression will not correctly work
+and you will need to manually set geserial in apps.yaml to your inverter serial number, e.g.:
+
+```yaml
+geserial: 'chNNNNgZZZ'
+```
+
+*TIP:* If you have a single GivEnergy AIO, all control is directly to the AIO and the gateway is not required.<BR>
+Check the GivTCP configuration to determine whether inverter 1 (the givtcp sensors) is the AIO or the gateway, or inverter 2 (the givtcp2 sensors) is the AIO or gateway.<BR>
+Then in apps.yaml comment out the lines corresponding to the gateway, leaving just the givtcp or givtcp2 lines for the AIO.
+Also delete the [appropriate givtcp_rest inverter control line](#rest-interface-inverter-control) corresponding to the gateway so that Predbat controls the AIO directly.
+
+*TIP2:* If you have multiple GivEnergy AIO's, all the AIO's are controlled by the AIO gateway and not controlled individually.<BR>
+geserial should be manually configured to be your AIO gateway serial number 'gwNNNNgZZZ' and all the geserial2 lines should be commented out in apps.yaml.
+You should also delete the [second givtcp_rest inverter control line](#rest-interface-inverter-control) so that Predbat controls the AIO's via the gateway.
+
+GivTCP version 3 is required for multiple AIO's or a 3 phase inverter.
 
 ## Historical data
 
@@ -371,7 +385,8 @@ For GivEnergy inverters Predbat can control the inverter directly via REST inste
 When configured in apps.yaml, control communication from Predbat to GivTCP is via REST which bypasses some issues with MQTT.
 
 - **givtcp_rest** - One entry per Inverter, sets the GivTCP REST API URL ([http://homeassistant.local:6345](http://homeassistant.local:6345)
-is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you haven't a second inverter, delete the second line.<BR>
+is the normal address and port for the first inverter, and the same address but ending :6346 if you have a second inverter - if you don't have a second inverter
+(or if you have multiple AIO's that are controlled through the gateway), delete the second line.<BR>
 If you are using Docker then change 'homeassistant.local' to the Docker IP address.
 
 *TIP:* You can replace *homeassistant.local* with the IP address of your Home Assistant server if you have it set to a fixed IP address.
