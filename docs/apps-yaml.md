@@ -314,19 +314,24 @@ for more accurate predictions.
 ## Inverter control configurations
 
 - **inverter_limit** - One per inverter. When set defines the maximum AC output power in watts for your inverter or micro-inverters (e.g. 3600).
-This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+This is used by Predbat in calculating the plan to emulate clipping that occurs in the inverter when your solar produces more than the inverter can handle,
+but it won't be that accurate as the source of the data isn't minute by minute.
 If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR>
 For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
 If though you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
 
+NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
+
 - **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
-This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
+This is used by Predbat in calculating the plan to emulate your inverter's software export limit setting that you will have if your G98/G99
 approval was lower than your maximum inverter power (check your install information for details).
 If you do not set an export limit then it's the same as the inverter limit.
 
-- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in watts, overrides the maximum
+NB: export_limit is ONLY used by Predbat to improve the quality of the plan, any export limit is done by the inverter and is not controlled by Predbat.
+
+- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in Watts, overrides the maximum
 charge/discharge rate settings used when controlling the inverter.
-This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
+This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
 ## Controlling the Inverter
