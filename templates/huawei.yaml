@@ -243,15 +243,23 @@ pred_bat:
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 
-  # Set import and export entity to point to the Octopus Energy plugin
-  # automatically matches your meter number assuming you have only one
-  # Will be ignored if you don't have the sensor
-  # Or manually set it to the correct sensor names e.g:
-  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_current_rate
-  # sensor.octopus_energy_electricity_xxxxxxxxxx_xxxxxxxxxxxxx_export_current_rate
-  metric_octopus_import: sensor.nordpool_kwh_se3_sek_3_10_025
-  metric_octopus_export: sensor.nordpool_moms
-
+  # Set import and export entity to point to the Octopus Energy plugin import and export sensors
+  # automatically matches your meter number assuming you have only one (no need to edit the below)
+  # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
+  # NOTE: To get detailed energy rates you need to go in and manually enable the following events in HA
+  #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  # and if you have export enable:
+  #       event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  # Predbat will automatically find the event. entities from the link below to the sensors
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  #metric_octopus_export: sensor.nordpool_moms
+  
   # Standing charge can be set to a sensor (e.g. Octopus) or manually entered in pounds here (e.g. 0.50 is 50p)
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
 
