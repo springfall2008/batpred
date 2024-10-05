@@ -259,7 +259,7 @@ pred_bat:
   #metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
   #metric_octopus_export: sensor.nordpool_moms
-  
+
   # Standing charge can be set to a sensor (e.g. Octopus) or manually entered in pounds here (e.g. 0.50 is 50p)
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
 
