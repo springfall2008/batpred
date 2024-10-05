@@ -229,7 +229,7 @@ class HAInterface:
         """
         self.db_mirror_list[entity_id.lower()] = True
 
-        if self.db_primary and self.db_enable:
+        if self.db_primary and self.db_enable and not self.ha_key:
             self.update_state_db(entity_id)
             return
 
@@ -252,7 +252,7 @@ class HAInterface:
         if not entity_index:
             return None
 
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_index=?", (entity_index,))
         res = self.db_cursor.fetchone()
         if res:
             state = res[1]
@@ -308,7 +308,7 @@ class HAInterface:
         Update the state data from Home Assistant.
         """
 
-        if self.db_primary and self.db_enable:
+        if self.db_primary and self.db_enable and not self.ha_key:
             self.update_states_db()
             return
 
@@ -446,12 +446,15 @@ class HAInterface:
         system = {}
 
         attributes_record = {}
+        attributes_record_full = {}
         for key in attributes:
             value = attributes[key]
             # Ignore large fields which will increase the database size
             if len(str(value)) < 128:
                 attributes_record[key] = attributes[key]
+            attributes_record_full[key] = attributes[key]
         attributes_record_json = json.dumps(attributes_record)
+        attributes_record_full_json = json.dumps(attributes_record_full)
         system_json = json.dumps(system)
 
         # Record the state of the entity
@@ -497,6 +500,22 @@ class HAInterface:
                     keep,
                 ),
             )
+            # Also update the latest table
+            self.db_cursor.execute(
+                "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
+                (entity_index,),
+            )
+            self.db_cursor.execute(
+                "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    entity_index,
+                    now_utc_txt,
+                    state,
+                    attributes_record_full_json,
+                    system_json,
+                    keep,
+                ),
+            )
             self.db.commit()
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
@@ -512,6 +531,7 @@ class HAInterface:
         self.db_cursor.execute(
             "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
         )
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
