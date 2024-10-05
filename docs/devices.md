@@ -60,7 +60,7 @@ octopus_ready_time: 'time.ohme_target_time'
 octopus_charge_limit: 'number.ohme_target_percent'
 ```
 
-**Using Ohme car charging plans on other tariff's e.g. Agile **
+**Using Ohme car charging plans on other tariff's e.g. Agile**
 
 ```yaml
 octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
