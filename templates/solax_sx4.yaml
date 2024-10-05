@@ -245,7 +245,7 @@ pred_bat:
   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
-  # Carbon Intensity data from National grid 
+  # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1

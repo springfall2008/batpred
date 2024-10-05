@@ -282,15 +282,15 @@ pred_bat:
   #octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
   #octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
   #octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
-  
+
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
-  
+
   # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
   #octopus_slot_low_rate: False
-  
+
   # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 

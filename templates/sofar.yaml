@@ -214,7 +214,7 @@ pred_bat:
   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
-  # Carbon Intensity data from National grid 
+  # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
@@ -224,7 +224,7 @@ pred_bat:
 
   # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
   #octopus_slot_low_rate: False
-  
+
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # rate configured with input_number.predbat_metric_octopus_saving_rate in-side HA
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
