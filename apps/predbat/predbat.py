@@ -1188,10 +1188,10 @@ class PredBat(hass.Hass):
                 if "unit_of_measurement" in item["attributes"]:
                     unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ["kWh"] and unit in ["W"]:
+                        if required_unit in ['kWh'] and unit in ['W']:
                             state = state / 1000.0
                             integrate = True
-                        elif required_unit in ["kWh"] and unit in ["kW"]:
+                        elif required_unit in ['kWh'] and unit in ['kW']:
                             integrate = True
                         elif required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
                             state = state / 1000.0
@@ -3877,16 +3877,19 @@ class PredBat(hass.Hass):
                     start_minutes = int(round(start_minutes / 30, 0) * 30)
                     end_minutes = int(round(end_minutes / 30, 0) * 30)
 
+                    if octopus_slot_low_rate:
+                        assumed_price = self.rate_min
+                        for minute in range(start_minutes, end_minutes):
+                            if minute >= (-96 * 60) and minute < self.forecast_minutes:
+                                rates[minute] = assumed_price
+                    else:
+                        assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+
                     self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), self.rate_min, kwh, location, source
+                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(
+                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), assumed_price, kwh, location, source, octopus_slot_low_rate
                         )
                     )
-
-                    if octopus_slot_low_rate:
-                        for minute in range(start_minutes, end_minutes):
-                            if minute >= (-24 * 60) and minute < self.forecast_minutes:
-                                rates[minute] = self.rate_min
 
         return rates
 
