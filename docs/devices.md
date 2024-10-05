@@ -60,6 +60,15 @@ octopus_ready_time: 'time.ohme_target_time'
 octopus_charge_limit: 'number.ohme_target_percent'
 ```
 
+**Using Ohme car charging plans on other tariff's e.g. Agile**
+
+```yaml
+octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+octopus_ready_time: 'time.ohme_target_time'
+octopus_charge_limit: 'number.ohme_target_percent'
+octopus_slot_low_rate: False
+```
+
 **Determine if the car is charging now**
 
 Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
