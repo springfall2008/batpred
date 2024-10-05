@@ -503,9 +503,7 @@ class HAInterface:
             # Also update the latest table
             self.db_cursor.execute(
                 "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
-                (
-                    entity_index,
-                ),
+                (entity_index,),
             )
             self.db_cursor.execute(
                 "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
@@ -533,9 +531,7 @@ class HAInterface:
         self.db_cursor.execute(
             "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
         )
-        self.db_cursor.execute(
-            "CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
-        )
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
