@@ -272,6 +272,9 @@ pred_bat:
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
 
+  # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
+  #octopus_slot_low_rate: False
+
   # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
