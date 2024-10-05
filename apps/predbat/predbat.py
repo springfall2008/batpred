@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.11"
+THIS_VERSION = "v8.4.12"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -1183,11 +1183,17 @@ class PredBat(hass.Hass):
                 continue
 
             # Find and converter units
+            integrate = False
             if required_unit and ("attributes" in item):
                 if "unit_of_measurement" in item["attributes"]:
                     unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
+                        if required_unit in ['kWh'] and unit in ['W']:
+                            state = state / 1000.0
+                            integrate = True
+                        elif required_unit in ['kWh'] and unit in ['kW']:
+                            integrate = True
+                        elif required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
                             state = state / 1000.0
                         elif required_unit in ["W", "Wh", "g", "g/kWh"] and unit in ["kW", "kWh", "kg", "kg/kWh"]:
                             state = state * 1000.0
@@ -1244,6 +1250,11 @@ class PredBat(hass.Hass):
             if minutes < newest_age:
                 newest_age = minutes
                 newest_state = state
+
+            # Power to Energy
+            if integrate and to_time:
+                total_minutes = abs(minutes_to - minutes)
+                state = last_state + state * total_minutes / 60.0
 
             if to_time:
                 minute = minutes
@@ -7315,6 +7326,10 @@ class PredBat(hass.Hass):
                 entity_ids = [entity_ids]
 
             for entity_id in entity_ids:
+                if not entity_id:
+                    self.log("Warn: Unable to fetch load forecast data, check your setting of load_forecast")
+                    continue
+
                 attribute = None
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
