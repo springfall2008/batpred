@@ -649,8 +649,8 @@ class PredBat(hass.Hass):
 
         # Download failed?
         if not pdata:
-            self.log("Warn: Unable to download futurerate data from URL {}".format(url))
-            self.record_status("Warn: Unable to download futurerate data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             if url in self.futurerate_url_cache:
                 pdata = self.futurerate_url_cache[url]["data"]
                 return pdata
