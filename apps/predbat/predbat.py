@@ -1188,10 +1188,10 @@ class PredBat(hass.Hass):
                 if "unit_of_measurement" in item["attributes"]:
                     unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ["kWh"] and unit in ["W"]:
+                        if required_unit in ['kWh'] and unit in ['W']:
                             state = state / 1000.0
                             integrate = True
-                        elif required_unit in ["kWh"] and unit in ["kW"]:
+                        elif required_unit in ['kWh'] and unit in ['kW']:
                             integrate = True
                         elif required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
                             state = state / 1000.0
@@ -6866,7 +6866,7 @@ class PredBat(hass.Hass):
 
         # Optimise individual windows in the price band for charge/discharge
         # First optimise those at or below threshold highest to lowest (to turn down values)
-        # then optimise those above the threshold lowest to highest (to turn up values)
+        # then optimise those above the threshset_old lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log(
             "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} discharge limits {}".format(
@@ -8392,7 +8392,7 @@ class PredBat(hass.Hass):
         # Return if we recomputed or not
         return recompute
 
-    def adjust_battery_target_multi(self, inverter, soc, is_charging):
+    def adjust_battery_target_multi(self, inverter, soc, is_charging, is_discharging):
         """
         Adjust target SOC based on the current SOC of all the inverters accounting for their
         charge rates and battery capacities
@@ -8413,7 +8413,7 @@ class PredBat(hass.Hass):
                     inverter.id, soc, soc_percent, new_soc_percent, self.dp2(add_kwh), self.dp2(add_this), self.dp2(new_soc_kwh)
                 )
             )
-        inverter.adjust_battery_target(new_soc_percent, is_charging)
+        inverter.adjust_battery_target(new_soc_percent, is_charging, is_discharging)
 
     def reset_inverter(self):
         """
@@ -8797,7 +8797,7 @@ class PredBat(hass.Hass):
                 if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
                     # If we are discharging and not setting reserve then we should reset the target SOC to 0%
                     # as some inverters can use this as a target for discharge
-                    self.adjust_battery_target_multi(inverter, self.discharge_limits_best[0], False)
+                    self.adjust_battery_target_multi(inverter, self.discharge_limits_best[0], isCharging, isDischarging)
                 elif (
                     self.charge_limit_best
                     and (self.minutes_now < inverter.charge_end_time_minutes)
@@ -8809,30 +8809,32 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
-                                self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging)
+                                self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isDischarging)
                             else:
                                 # Not yet in the freeze, hold at 100% target SOC
-                                self.adjust_battery_target_multi(inverter, 100.0, False)
+                                self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
                             if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
-                                self.adjust_battery_target_multi(inverter, 100.0, False)
+                                self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                             else:
-                                self.adjust_battery_target_multi(inverter, self.charge_limit_percent_best[0], isCharging)
+                                self.adjust_battery_target_multi(inverter, self.charge_limit_percent_best[0], isCharging, isDischarging)
                     else:
                         if not inverter.inv_has_target_soc:
                             # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
-                            inverter.mimic_target_soc(0)
+                            if not isCharging and not isDischarging:
+                                inverter.mimic_target_soc(0)
                         elif not self.inverter_hybrid and self.inverter_soc_reset:
                             # AC Coupled, charge to 0 on solar
-                            self.adjust_battery_target_multi(inverter, 100.0, False)
+                            self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                         else:
                             # Hybrid, no charge timer, set target soc back to 0
-                            self.adjust_battery_target_multi(inverter, 0, False)
+                            self.adjust_battery_target_multi(inverter, 0, isCharging, isDischarging)
                 else:
                     if not inverter.inv_has_target_soc:
                         # If the inverter doesn't support target soc and soc_enable is on then do that logic here:
-                        inverter.mimic_target_soc(0)
+                        if not isCharging and not isDischarging:
+                            inverter.mimic_target_soc(0)
                     elif not self.inverter_hybrid and self.inverter_soc_reset:
                         if (
                             self.charge_limit_best
@@ -8854,7 +8856,7 @@ class PredBat(hass.Hass):
                                     self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
                                 )
                             )
-                            self.adjust_battery_target_multi(inverter, 100.0, False)
+                            self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                     else:
                         self.log(
                             "Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
@@ -8862,7 +8864,7 @@ class PredBat(hass.Hass):
                             )
                         )
                         if not inverter.inv_has_charge_enable_time:
-                            self.adjust_battery_target_multi(inverter, 0, False)
+                            self.adjust_battery_target_multi(inverter, 0, isCharging, isDischarging)
 
             # If we should set reserve during charging
             if self.set_soc_enable and self.set_reserve_enable and not setReserve:
@@ -9854,6 +9856,7 @@ class PredBat(hass.Hass):
         self.set_reserve_enable = self.get_arg("set_reserve_enable")
         self.set_reserve_hold = True
         self.set_discharge_freeze = self.get_arg("set_discharge_freeze")
+        print("set_discharge_freeze", self.set_discharge_freeze)
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.calculate_discharge_first = True
@@ -10735,7 +10738,8 @@ class PredBat(hass.Hass):
         history = self.get_history_wrapper(entity_id=entity)
         if history:
             history = history[0]
-            ha_value = history[-1]["state"]
+            if history:
+                ha_value = history[-1]["state"]
         return ha_value
 
     async def trigger_watch_list(self, entity_id, attribute, old, new):
