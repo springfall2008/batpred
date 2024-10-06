@@ -207,19 +207,19 @@ class PredBat(hass.Hass):
                     if isinstance(default, list):
                         value = override
                     else:
-                        value = override.get('value', None)
+                        value = override.get("value", None)
                     break
                     self.log("Note: API Overriden arg {} value {}".format(arg, value))
                 else:
-                    override_index = override.get('index', None)
+                    override_index = override.get("index", None)
                     if (override_index is None) or (override_index == index):
                         if isinstance(default, list):
                             value = override
                         else:
-                            value = override.get('value', None)
+                            value = override.get("value", None)
 
                         self.log("Note: API Overriden arg {} index {} value {}".format(arg, index, value))
-                        break               
+                        break
 
         # Get From HA config
         if value is None:
@@ -3062,9 +3062,9 @@ class PredBat(hass.Hass):
 
     def split_command_index(self, command):
         command_index = None
-        if '[' in command:
-            command = command.replace(']', '')
-            command_split = command.split('[')
+        if "[" in command:
+            command = command.replace("]", "")
+            command_split = command.split("[")
             if len(command_split) > 1:
                 command = command_split[0]
                 command_index = int(command_split[1])
@@ -3077,15 +3077,15 @@ class PredBat(hass.Hass):
         apply_commands = []
         command_index = None
         for api_command in self.manual_api:
-            command_split = api_command.split('?')
+            command_split = api_command.split("?")
             if len(command_split) > 1:
                 command = command_split[0]
                 command, command_index = self.split_command_index(command)
-                command_args = command_split[1].split('&')
+                command_args = command_split[1].split("&")
                 args_dict = {}
                 args_dict["index"] = command_index
                 for arg in command_args:
-                    arg_split = arg.split('=')
+                    arg_split = arg.split("=")
                     if len(arg_split) > 1:
                         args_dict[arg_split[0]] = arg_split[1]
                     else:
@@ -3093,7 +3093,7 @@ class PredBat(hass.Hass):
                 if command == command_type:
                     apply_commands.append(args_dict)
             else:
-                command_split = api_command.split('=')
+                command_split = api_command.split("=")
                 if len(command_split) > 1:
                     command = command_split[0]
                     command, command_index = self.split_command_index(command)
@@ -3106,7 +3106,6 @@ class PredBat(hass.Hass):
                         apply_commands.append(args_dict)
 
         return apply_commands
-
 
     def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
         """
@@ -3128,7 +3127,7 @@ class PredBat(hass.Hass):
 
         max_minute = max(rates) + 1
         midnight = datetime.strptime("00:00:00", "%H:%M:%S")
-        for this_rate in (info + manual_items):
+        for this_rate in info + manual_items:
             if this_rate:
                 start_str = this_rate.get("start", "00:00:00")
                 start_str = self.resolve_arg("start", start_str, "00:00:00")
