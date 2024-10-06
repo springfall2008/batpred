@@ -6866,7 +6866,7 @@ class PredBat(hass.Hass):
 
         # Optimise individual windows in the price band for charge/discharge
         # First optimise those at or below threshold highest to lowest (to turn down values)
-        # then optimise those above the threshset_old lowest to highest (to turn up values)
+        # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for discharge.
         self.log(
             "Starting second optimisation end_record {} best_price {} best_price_discharge {} lowest_price_charge {} with charge limits {} discharge limits {}".format(
@@ -9856,7 +9856,6 @@ class PredBat(hass.Hass):
         self.set_reserve_enable = self.get_arg("set_reserve_enable")
         self.set_reserve_hold = True
         self.set_discharge_freeze = self.get_arg("set_discharge_freeze")
-        print("set_discharge_freeze", self.set_discharge_freeze)
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.calculate_discharge_first = True
