@@ -649,8 +649,8 @@ class PredBat(hass.Hass):
 
         # Download failed?
         if not pdata:
-            self.log("Warn: Unable to download futurerate data from URL {}".format(url))
-            self.record_status("Warn: Unable to download futurerate data from cloud", debug=url, had_errors=True)
+            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             if url in self.futurerate_url_cache:
                 pdata = self.futurerate_url_cache[url]["data"]
                 return pdata
@@ -1188,10 +1188,10 @@ class PredBat(hass.Hass):
                 if "unit_of_measurement" in item["attributes"]:
                     unit = item["attributes"]["unit_of_measurement"]
                     if unit != required_unit:
-                        if required_unit in ["kWh"] and unit in ["W"]:
+                        if required_unit in ['kWh'] and unit in ['W']:
                             state = state / 1000.0
                             integrate = True
-                        elif required_unit in ["kWh"] and unit in ["kW"]:
+                        elif required_unit in ['kWh'] and unit in ['kW']:
                             integrate = True
                         elif required_unit in ["kW", "kWh", "kg", "kg/kWh"] and unit in ["W", "Wh", "g", "g/kWh"]:
                             state = state / 1000.0
