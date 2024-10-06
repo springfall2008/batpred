@@ -69,6 +69,7 @@ from config import (
     CONFIG_REFRESH_PERIOD,
     TIME_FORMAT_HA,
     TIMEOUT,
+    CONFIG_API_OVERRIDE,
 )
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_discharge, reset_prediction_globals
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
@@ -195,9 +196,34 @@ class PredBat(hass.Hass):
         Argument getter that can use HA state as well as fixed values
         """
         value = None
+        overriden = False
+
+        can_override = CONFIG_API_OVERRIDE.get(arg, False)
+
+        if can_override:
+            overrides = self.get_manual_api(arg)
+            for override in overrides:
+                if index is None:
+                    if isinstance(default, list):
+                        value = override
+                    else:
+                        value = override.get('value', None)
+                    break
+                    self.log("Note: API Overriden arg {} value {}".format(arg, value))
+                else:
+                    override_index = override.get('index', None)
+                    if (override_index is None) or (override_index == index):
+                        if isinstance(default, list):
+                            value = override
+                        else:
+                            value = override.get('value', None)
+
+                        self.log("Note: API Overriden arg {} index {} value {}".format(arg, index, value))
+                        break               
 
         # Get From HA config
-        value, default = self.get_ha_config(arg, default)
+        if value is None:
+            value, default = self.get_ha_config(arg, default)
 
         # Resolve locally if no HA config
         if value is None:
@@ -760,7 +786,12 @@ class PredBat(hass.Hass):
 
         # Perform fetch
         self.log("Fetching {}".format(url))
-        r = requests.get(url, params=params)
+        try:
+            r = requests.get(url, params=params)
+        except requests.exceptions.ConnectionError as e:
+            self.log("Warn: Error downloading data from URL {}, error {}".format(url, e))
+            return data
+
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading data from url {}, code {}".format(url, r.status_code))
         else:
@@ -964,13 +995,13 @@ class PredBat(hass.Hass):
         """
         return self.ha_interface.call_service(service, **kwargs)
 
-    def get_history_wrapper(self, entity_id, days=30):
+    def get_history_wrapper(self, entity_id, days=30, required=True):
         """
         Wrapper function to get history from HA
         """
         history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
 
-        if history is None:
+        if required and (history is None):
             self.log("Error: Failure to fetch history for {}".format(entity_id))
             raise ValueError
         else:
@@ -3029,6 +3060,54 @@ class PredBat(hass.Hass):
             rate_low_average = self.dp2(rate_low_average / rate_low_count)
         return rate_low_start, rate_low_end, rate_low_average
 
+    def split_command_index(self, command):
+        command_index = None
+        if '[' in command:
+            command = command.replace(']', '')
+            command_split = command.split('[')
+            if len(command_split) > 1:
+                command = command_split[0]
+                command_index = int(command_split[1])
+        return command, command_index
+
+    def get_manual_api(self, command_type):
+        """
+        Get the manual API command
+        """
+        apply_commands = []
+        command_index = None
+        for api_command in self.manual_api:
+            command_split = api_command.split('?')
+            if len(command_split) > 1:
+                command = command_split[0]
+                command, command_index = self.split_command_index(command)
+                command_args = command_split[1].split('&')
+                args_dict = {}
+                args_dict["index"] = command_index
+                for arg in command_args:
+                    arg_split = arg.split('=')
+                    if len(arg_split) > 1:
+                        args_dict[arg_split[0]] = arg_split[1]
+                    else:
+                        args_dict[arg_split[0]] = True
+                if command == command_type:
+                    apply_commands.append(args_dict)
+            else:
+                command_split = api_command.split('=')
+                if len(command_split) > 1:
+                    command = command_split[0]
+                    command, command_index = self.split_command_index(command)
+                    command_arg = command_split[1]
+                    args_dict = {}
+                    args_dict["index"] = command_index
+                    args_dict["value"] = command_arg
+
+                    if command == command_type:
+                        apply_commands.append(args_dict)
+
+        return apply_commands
+
+
     def basic_rates(self, info, rtype, prev=None, rate_replicate={}):
         """
         Work out the energy rates based on user supplied time periods
@@ -3043,9 +3122,13 @@ class PredBat(hass.Hass):
             for minute in range(24 * 60):
                 rates[minute] = 0
 
+        manual_items = self.get_manual_api(rtype)
+        if manual_items:
+            self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
+
         max_minute = max(rates) + 1
         midnight = datetime.strptime("00:00:00", "%H:%M:%S")
-        for this_rate in info:
+        for this_rate in (info + manual_items):
             if this_rate:
                 start_str = this_rate.get("start", "00:00:00")
                 start_str = self.resolve_arg("start", start_str, "00:00:00")
@@ -5146,6 +5229,7 @@ class PredBat(hass.Hass):
         self.manual_freeze_discharge_times = []
         self.manual_idle_times = []
         self.manual_all_times = []
+        self.manual_api = []
         self.config_index = {}
         self.dashboard_index = []
         self.dashboard_values = {}
@@ -9121,7 +9205,7 @@ class PredBat(hass.Hass):
                 raise ValueError
         else:
             # Basic rates defined by user over time
-            self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "import")
+            self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "rates_import")
 
         # Gas rates if set
         if "metric_octopus_gas" in self.args:
@@ -9134,7 +9218,7 @@ class PredBat(hass.Hass):
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
-            self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "gas")
+            self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
             self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
 
@@ -9266,7 +9350,7 @@ class PredBat(hass.Hass):
                 self.record_status(message="Error: metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
-            self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "export")
+            self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
         # Octopus saving session
         octopus_saving_slots = []
@@ -9356,8 +9440,7 @@ class PredBat(hass.Hass):
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
-            if "rates_import_override" in self.args:
-                self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "import", self.rate_import, self.rate_import_replicated)
+            self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
@@ -9370,8 +9453,7 @@ class PredBat(hass.Hass):
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
-            if "rates_export_override" in self.args:
-                self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "export", self.rate_export, self.rate_export_replicated)
+            self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
             self.rate_export = self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
@@ -9613,6 +9695,12 @@ class PredBat(hass.Hass):
         """
         return await self.run_in_executor(self.manual_select, config_item, value)
 
+    async def async_api_select(self, config_item, value):
+        """
+        Async wrapper for selection on api dropdown
+        """
+        return await self.run_in_executor(self.api_select, config_item, value)
+
     def manual_select(self, config_item, value):
         """
         Selection on manual times dropdown
@@ -9659,6 +9747,85 @@ class PredBat(hass.Hass):
                 value = item.get("value", "")
                 if value and value != "reset" and exclude_list:
                     self.manual_times(item["name"], exclude=exclude_list)
+
+    def api_select(self, config_item, value):
+        """
+        Selection on manual times dropdown
+        """
+        item = self.config_index.get(config_item)
+        if not item:
+            return
+        if not value:
+            # Ignore null selections
+            return
+        if value.startswith("+"):
+            # Ignore selections which are just the current value
+            return
+        values = item.get("value", "")
+        if not values:
+            values = ""
+        values = values.replace("+", "")
+        values_list = []
+        if values:
+            values_list = values.split(",")
+        if value == "off":
+            values_list = []
+        elif "[" in value:
+            value = value.replace("[", "")
+            value = value.replace("]", "")
+            if value in values_list:
+                values_list.remove(value)
+        else:
+            if value not in values_list:
+                values_list.append(value)
+        item_value = ",".join(values_list)
+        if item_value:
+            item_value = "+" + item_value
+
+        if not item_value:
+            item_value = "off"
+        self.api_select_update(config_item, new_value=item_value)
+
+    def api_select_update(self, config_item, new_value=None):
+        """
+        Update API selector
+        """
+        time_overrides = []
+
+        # Deconstruct the value into a list of minutes
+        item = self.config_index.get(config_item)
+        if new_value:
+            values = new_value
+        else:
+            values = item.get("value", "")
+        values = values.replace("+", "")
+        values_list = []
+        if values:
+            values_list = values.split(",")
+
+        for value in values_list:
+            if value == "off":
+                continue
+            time_overrides.append(value)
+
+        values = ",".join(time_overrides)
+        if values:
+            values = "+" + values
+
+        # Create the new dropdown
+        time_values = []
+        for minute_str in time_overrides:
+            minute_str = "[" + minute_str + "]"
+            time_values.append(minute_str)
+
+        if values not in time_values:
+            time_values.append(values)
+        time_values.append("off")
+        item["options"] = time_values
+        if not values:
+            values = "off"
+        self.expose_config(config_item, values, force=True)
+        return time_overrides
 
     def manual_times(self, config_item, exclude=[], new_value=None):
         """
@@ -9964,6 +10131,8 @@ class PredBat(hass.Hass):
         self.manual_all_times = (
             self.manual_charge_times + self.manual_discharge_times + self.manual_idle_times + self.manual_freeze_charge_times + self.manual_freeze_discharge_times
         )
+        self.manual_api = self.api_select_update("manual_api")
+
         # Update list of config options to save/restore to
         self.update_save_restore_list()
 
@@ -10310,6 +10479,8 @@ class PredBat(hass.Hass):
                         await self.async_restore_settings_yaml(value)
                 elif item.get("manual"):
                     await self.async_manual_select(item["name"], value)
+                elif item.get("api"):
+                    await self.async_api_select(item["name"], value)
                 else:
                     await self.async_expose_config(item["name"], value, event=True)
                 self.update_pending = True
@@ -10734,7 +10905,7 @@ class PredBat(hass.Hass):
         if ha_value is not None:
             return ha_value
 
-        history = self.get_history_wrapper(entity_id=entity)
+        history = self.get_history_wrapper(entity_id=entity, required=False)
         if history:
             history = history[0]
             if history:
@@ -10876,6 +11047,8 @@ class PredBat(hass.Hass):
             if ha_value is not None:
                 if item.get("manual"):
                     self.manual_times(name, new_value=ha_value)
+                elif item.get("api"):
+                    self.api_select_update(name, new_value=ha_value)
                 else:
                     self.expose_config(item["name"], ha_value, quiet=quiet, force_ha=True)
 

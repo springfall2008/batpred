@@ -102,7 +102,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
-        "default": 1.0,
+        "default": 1.05,
     },
     {
         "name": "load_scaling10",
@@ -746,6 +746,16 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
+        "name": "manual_api",
+        "friendly_name": "Manual API controls",
+        "type": "select",
+        "options": ["off"],
+        "icon": "mdi:state-machine",
+        "default": "off",
+        "restore": False,
+        "api": True,
+    },
+    {
         "name": "manual_freeze_charge",
         "friendly_name": "Manual force charge freeze",
         "type": "select",
@@ -1004,6 +1014,22 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
 ]
+
+CONFIG_API_OVERRIDE = {
+    "inverter_limit" : True,
+    "export_limit" : True,
+    "inverter_battery_rate_min" : True,
+    "inverter_reserve_max" : True,
+    "attery_rate_max" : True,
+    "car_charging_soc" : True,
+    "car_charging_limit": True,
+    "car_charging_battery_size": True,
+    "days_previous": True,
+    "days_previous_weight": True,
+    "battery_scaling": True,
+    "forecast_hours": True,
+    "import_export_scaling": True
+}
 
 """
 GE Inverters are the default but not all inverters have the same parameters so this constant
