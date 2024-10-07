@@ -1,0 +1,81 @@
+# Predbat automation API
+
+**CAUTION** This is an expert feature only, you can break Predbat if you set the wrong things here.
+
+While for most people Predbat will do what you want without any adjustments there are some special cases where users wish to write some more complex
+automations which override Predbat settings
+
+For settings inside Home Assistant e.g. switch.predbat_*, select.predbat_* and input_number.predbat_* you can already use an automation to change these values
+
+For settings in apps.yaml its very difficult or impossible to update them via an automation.
+
+For this reasons there is a selector called **select.predbat_manual_api** which works a bit like the manual override ones but this can have new values added using the select API in Home Assistant.
+The only function the selector itself serves is to store override commands, you can clear from the selector but you have to set them using a service call.
+
+Certain settings from apps.yaml maybe overridden using this method.
+
+Each override is in a string format and works a bit like a web URL, setting the command and the values.
+
+The supported formats are:
+
+```text
+off
+<command>=<value>
+[<command>=<value>]
+<command>=<value>|<value>
+[<command>=<value>|<value>]
+<command>?<name>=<value>
+[<command>?<name>=<value>]
+<command>?<name>=<value>&<name2>=<value2>
+[<command>?<name>=<value>&<name2>=<value2>]
+```
+
+Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets [] 
+
+For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as apps.yaml but in a URL type format
+
+```text
+rates_export_override?start=17:00:00&end=19:00:00&rate=0
+```
+If you override a single value item with something like:
+
+```text
+inverter_limit=4000
+```
+
+To disable this override again:
+
+```text
+[inverter_limit=4000]
+```
+
+If the setting is indexed e.g. per inverter then you have to add 'index' if it applies to just one e.g.
+
+```text
+inverter_limit?value=4000&index=0
+```
+
+To disable all overriddes
+```text
+off
+```
+
+The following settings can be overridden with this method:
+
+- rates_export_override
+- rates_import_override
+- inverter_limit
+- export_limit
+- days_previous
+- days_previous_weight
+- inverter_battery_rate_min
+- inverter_reserve_max
+- battery_rate_max
+- car_charging_soc
+- car_charging_limit
+- car_charging_battery_size
+- battery_scaling
+- forecast_hours
+- import_export_scaling
+- inverter_limit_charge
+- inverter_limit_discharge
