@@ -134,9 +134,7 @@ class WebInterface:
             friendly_name = attributes.get("friendly_name", "")
             if not state:
                 state = "None"
-            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(
-                icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity)
-            )
+            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
         text += "</table>\n"
 
         return text
