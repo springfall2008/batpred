@@ -21,14 +21,18 @@ The supported formats are:
 ```text
 off
 <command>=<value>
-[<command>=<value>]
-<command>=<value>|<value>
-[<command>=<value>|<value>]
+<command>(index)=<value>
 <command>?<name>=<value>
-[<command>?<name>=<value>]
+<command>(index)?<name>=<value>
 <command>?<name>=<value>&<name2>=<value2>
-[<command>?<name>=<value>&<name2>=<value2>]
+<command>(index)?<name>=<value>&<name2>=<value2>
 ```
+
+Commands are disabled again by putting them in square brackets e.g:
+```text
+[<command>?<name>=<value>&<name2>=<value2>]
+````
+
 
 Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
 
@@ -38,23 +42,19 @@ For the rates you can use **rates_export_override** or **rates_import_override**
 rates_export_override?start=17:00:00&end=19:00:00&rate=0
 ```
 
-If you override a single value item with something like:
+If you override a single value item in a list with something like:
 
 ```text
-inverter_limit=4000
+inverter_limit(0)=4000
 ```
 
 To disable this override again:
 
 ```text
-[inverter_limit=4000]
+[inverter_limit(0)=4000]
 ```
 
-If the setting is indexed e.g. per inverter then you have to add 'index' if it applies to just one e.g.
-
-```text
-inverter_limit?value=4000&index=0
-```
+If you ommit the index then all entries in the list will be overridden.
 
 To disable all overriddes
 
