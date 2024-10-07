@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+
+{% block title %}Home{% endblock %}
+
+
+{% block content %}
+    <h2>Logfile ({% if errors %}Errors{% elif warnings %}Warnings{% else %}All{% endif %})</h2>
+    - <a href="./log">All</a> <a href="./log?warnings">Warnings</a> <a href="./log?errors">Errors</a><br>
+    <table width=100%>
+        {% for line in lines %}
+        <tr><td>{{ line.line_no}}</td><td nowrap><font color="#{% if "error" in line.rest_line.lower() %}ff3333{% elif not errors and "warn" in line.rest_line.lower()%}ffA500{% else %}33cc33{% endif %}">{{ line.start_line }}</font> {{ line.rest_line }}</td></tr>
+        {% endfor %}
+    </table>
+    {% autoescape false %}
+    {% endautoescape %}
+{% endblock %}
