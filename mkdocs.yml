@@ -16,6 +16,7 @@ nav:
     - video-guides.md
     - faq.md
     - devices.md
+    - manual-api.md
   - 'Viewing Predbat data':
     - output-data.md
     - predbat-plan-card.md
