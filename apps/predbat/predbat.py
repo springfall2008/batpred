@@ -217,7 +217,7 @@ class PredBat(hass.Hass):
                             value = override.get('value', None)
 
                         self.log("Note: API Overridden arg {} index {} value {}".format(arg, index, value))
-                        break
+                        break               
 
         # Get From HA config
         if value is None:
@@ -543,7 +543,7 @@ class PredBat(hass.Hass):
 
         try:
             pdata = self.download_futurerate_data(url)
-        except ValueError:
+        except (ValueError, TypeError):
             return {}, {}
 
         nord_tz = pytz.timezone("Europe/Oslo")
@@ -1058,7 +1058,7 @@ class PredBat(hass.Hass):
         for entity_id in entity_ids:
             try:
                 history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
-            except ValueError:
+            except (ValueError, TypeError):
                 history = []
 
             if history:
@@ -3144,14 +3144,14 @@ class PredBat(hass.Hass):
 
                 try:
                     start = datetime.strptime(start_str, "%H:%M:%S")
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
                     self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
                 try:
                     end = datetime.strptime(end_str, "%H:%M:%S")
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
                     self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)
                     continue
@@ -3161,7 +3161,7 @@ class PredBat(hass.Hass):
                     date_str = self.resolve_arg("date", this_rate["date"])
                     try:
                         date = datetime.strptime(date_str, "%Y-%m-%d")
-                    except ValueError, TypeError:
+                    except (ValueError, TypeError):
                         self.log("Warn: Bad date {} provided in energy rates".format(this_rate["date"]))
                         self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                         continue
@@ -3183,7 +3183,7 @@ class PredBat(hass.Hass):
                 # Ensure the end result is a float
                 try:
                     rate = float(rate)
-                except ValueError:
+                except (ValueError, TypeError):
                     self.log("Warn: Bad rate {} provided in energy rates".format(rate))
                     self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
                     continue
@@ -3335,7 +3335,7 @@ class PredBat(hass.Hass):
 
         try:
             ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
-        except ValueError:
+        except (ValueError, TypeError):
             ready_time = datetime.strptime("07:00:00", "%H:%M:%S")
             self.log("Warn: Car charging plan time for car {} is invalid".format(car_n))
 
@@ -3456,7 +3456,7 @@ class PredBat(hass.Hass):
                 try:
                     start = self.str2time(start)
                     end = self.str2time(end)
-                except ValueError:
+                except (ValueError, TypeError):
                     start = None
                     end = None
                     self.log("Warn: Unable to decode Octopus saving session start/end time")
@@ -9009,7 +9009,7 @@ class PredBat(hass.Hass):
         if state is not None:
             try:
                 carbon_history = self.minute_data_import_export(self.now_utc, entity_id, required_unit="g/kWh", increment=False, smoothing=False)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
         else:
             self.log("Warn: No carbon intensity history in sensor {}".format(entity_id))
@@ -9292,7 +9292,7 @@ class PredBat(hass.Hass):
                     if octopus_limit:
                         try:
                             octopus_limit = float(octopus_limit)
-                        except ValueError:
+                        except (ValueError, TypeError):
                             self.log("Warn: octopus_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
                             octopus_limit = None
                     if octopus_limit:
@@ -9413,7 +9413,7 @@ class PredBat(hass.Hass):
                                     octopus_saving_slot["rate"] = saving_rate
                                     octopus_saving_slot["state"] = state
                                     octopus_saving_slots.append(octopus_saving_slot)
-                            except ValueError:
+                            except (ValueError, TypeError):
                                 self.log(
                                     "Warn: Bad start time for joined Octopus saving session: {}-{} at rate {} p/kWh state {}".format(
                                         start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate, state
@@ -9851,7 +9851,7 @@ class PredBat(hass.Hass):
                 continue
             try:
                 start_time = datetime.strptime(value, "%H:%M:%S")
-            except ValueError:
+            except (ValueError, TypeError):
                 start_time = None
             if start_time:
                 minutes = start_time.hour * 60 + start_time.minute
