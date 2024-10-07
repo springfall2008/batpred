@@ -30,13 +30,14 @@ off
 [<command>?<name>=<value>&<name2>=<value2>]
 ```
 
-Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets [] 
+Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
 
 For the rates you can use **rates_export_override** or **rates_import_override** with all the same options as apps.yaml but in a URL type format
 
 ```text
 rates_export_override?start=17:00:00&end=19:00:00&rate=0
 ```
+
 If you override a single value item with something like:
 
 ```text
@@ -56,6 +57,7 @@ inverter_limit?value=4000&index=0
 ```
 
 To disable all overriddes
+
 ```text
 off
 ```
