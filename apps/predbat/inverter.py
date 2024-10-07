@@ -222,9 +222,7 @@ class Inverter:
                 if invname not in raw_data:
                     invname = "inverter"
                 if invname in raw_data and "battery_nominal_capacity" in raw_data[invname]:
-                    self.nominal_capacity = (
-                        float(raw_data[invname]["battery_nominal_capacity"]) / 19.53125
-                    )  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+                    self.nominal_capacity = float(raw_data[invname]["battery_nominal_capacity"]) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
                 if self.base.battery_capacity_nominal:
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
@@ -523,13 +521,9 @@ class Inverter:
                             # Find a period where charging was at full rate and the SOC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (
-                                    predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0
-                                ):
+                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
                                     break
-                                if discharge and (
-                                    predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0
-                                ):
+                                if discharge and (predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -642,29 +636,19 @@ class Inverter:
                             rate_scaling = round(rate_scaling, 2)
                             if discharge:
                                 if rate_scaling != self.base.battery_rate_max_scaling_discharge:
-                                    self.log(
-                                        "Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(
-                                            rate_scaling, self.base.battery_rate_max_scaling_discharge
-                                        )
-                                    )
+                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling_discharge))
                             else:
                                 if rate_scaling != self.base.battery_rate_max_scaling:
-                                    self.log(
-                                        "Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling)
-                                    )
+                                    self.log("Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(rate_scaling, self.base.battery_rate_max_scaling))
                             return final_curve
                         else:
                             self.log("Note: Found incorrect battery charging curve (was 0), maybe try again when you have more data.")
                     else:
                         self.log("Note: Found incomplete battery charging curve (no data points), maybe try again when you have more data.")
                 else:
-                    self.log(
-                        "Note: Cannot find battery charge curve (no final curve), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
-                    )
+                    self.log("Note: Cannot find battery charge curve (no final curve), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml")
             else:
-                self.log(
-                    "Note: Cannot find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml"
-                )
+                self.log("Note: Cannot find battery charge curve (missing history), one of the required settings for predbat_status, soc_kw, battery_power and charge_rate do not have history, check apps.yaml")
         else:
             self.log("Note: Cannot find battery charge curve (settings missing), one of the required settings for soc_kw, battery_power and charge_rate are missing from apps.yaml")
         return {}
@@ -745,11 +729,7 @@ class Inverter:
             self.charge_rate_now = self.rest_data["Control"]["Battery_Charge_Rate"] / MINUTE_WATT
             self.discharge_rate_now = self.rest_data["Control"]["Battery_Discharge_Rate"] / MINUTE_WATT
         else:
-            self.log(
-                "Inverter {} scheduled_charge_enable {} scheduled_discharge_enable {}".format(
-                    self.id, self.base.get_arg("scheduled_charge_enable", "on", index=self.id), self.base.get_arg("scheduled_discharge_enable", "off", index=self.id)
-                )
-            )
+            self.log("Inverter {} scheduled_charge_enable {} scheduled_discharge_enable {}".format(self.id, self.base.get_arg("scheduled_charge_enable", "on", index=self.id), self.base.get_arg("scheduled_discharge_enable", "off", index=self.id)))
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
             self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
@@ -813,9 +793,7 @@ class Inverter:
                 charge_end_time = datetime.strptime(self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S")
             else:
                 self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
-                self.base.record_status(
-                    "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True
-                )
+                self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
                 raise ValueError
 
             # Update simulated charge enable time to match the charge window time.
@@ -1030,9 +1008,7 @@ class Inverter:
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
                     self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
-                self.base.log(
-                    f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
-                )
+                self.base.log(f"Current SOC {self.soc_percent}% is less than Target SOC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
 
     def adjust_reserve(self, reserve):
         """
@@ -1111,9 +1087,7 @@ class Inverter:
                 self.rest_setChargeRate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
-                    self.write_and_poll_value(
-                        "charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12)
-                    )
+                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -2144,9 +2118,7 @@ class Inverter:
                 return True
 
         self.base.log("Warn: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]))
-        self.base.record_status(
-            "Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True
-        )
+        self.base.record_status("Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True)
         return False
 
     def rest_setBatteryMode(self, inverter_mode):

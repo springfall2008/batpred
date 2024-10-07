@@ -1030,6 +1030,8 @@ CONFIG_API_OVERRIDE = {
     "battery_scaling": True,
     "forecast_hours": True,
     "import_export_scaling": True,
+    "inverter_limit_charge": True,
+    "inverter_limit_discharge": True,
 }
 
 """

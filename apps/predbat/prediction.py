@@ -57,11 +57,7 @@ def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=Fa
     battery_balance = battery_balance * inverter_loss if battery_balance > 0 else battery_balance / inverter_loss
     diff = load_yesterday - battery_balance - pv_ac
     if debug:
-        print(
-            "battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(
-                battery_draw * 60 / 5, pv_dc * 60 / 5, pv_ac * 60 / 5, load_yesterday * 60 / 5, battery_balance * 60 / 5, diff * 60 / 5
-            )
-        )
+        print("battery_draw {} pv_dc {} pv_ac {} load_yesterday {} battery_balance {} diff {}".format(battery_draw * 60 / 5, pv_dc * 60 / 5, pv_ac * 60 / 5, load_yesterday * 60 / 5, battery_balance * 60 / 5, diff * 60 / 5))
     return diff
 
 
@@ -588,12 +584,7 @@ class Prediction:
             if discharge_window_n >= 0:
                 discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
 
-            if (
-                not self.set_discharge_freeze_only
-                and (discharge_window_n >= 0)
-                and discharge_limits[discharge_window_n] < 100.0
-                and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min
-            ):
+            if not self.set_discharge_freeze_only and (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
                 discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
@@ -654,9 +645,7 @@ class Prediction:
                 # Charge enable
                 if save in ["best", "best10", "test"]:
                     # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = (
-                        find_charge_rate(self, minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
-                    )
+                    charge_rate_now = find_charge_rate(self, minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
                 else:
                     charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
 
@@ -674,11 +663,7 @@ class Prediction:
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
                 if save == "test":
-                    print(
-                        "minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(
-                            minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc
-                        )
-                    )
+                    print("minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc))
 
                 if (charge_limit_n - soc) < (charge_rate_now_curve * step):
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
@@ -782,12 +767,7 @@ class Prediction:
             if self.iboost_enable:
                 # iBoost Solar diversion model
                 if self.iboost_solar:
-                    if (
-                        iboost_rate_okay
-                        and iboost_today_kwh < self.iboost_max_energy
-                        and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc))
-                        and (self.iboost_on_discharge or (discharge_window_n < 0))
-                    ):
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_discharge or (discharge_window_n < 0)):
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
                         iboost_amount += iboost_pv_amount
