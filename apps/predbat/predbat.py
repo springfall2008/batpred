@@ -217,7 +217,7 @@ class PredBat(hass.Hass):
                             value = override.get('value', None)
 
                         self.log("Note: API Overridden arg {} index {} value {}".format(arg, index, value))
-                        break               
+                        break
 
         # Get From HA config
         if value is None:

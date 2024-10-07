@@ -29,10 +29,10 @@ off
 ```
 
 Commands are disabled again by putting them in square brackets e.g:
+
 ```text
 [<command>?<name>=<value>&<name2>=<value2>]
 ````
-
 
 Below is an example of setting a rate override, you can clear all overrides by calling 'off' or this specific one only by calling the same thing again but in square brackets []
 
