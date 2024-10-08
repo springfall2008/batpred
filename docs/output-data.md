@@ -517,15 +517,6 @@ trigger:
     variables:
       alert_text: Mosquitto Broker add-on is not running
       restart_app: Mosquitto
-  - platform: state
-    entity_id:
-      - binary_sensor.<appdaemon><-predbat>_running
-    to: "off"
-    for:
-      minutes: 15
-    variables:
-      alert_text: <AppDaemon><-predbat> add-on is not running
-      restart_app: Predbat
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
@@ -561,31 +552,22 @@ action:
             action: hassio.addon_restart
             data:
               addon: core_mosquitto
-      - conditions:
-          - condition: template
-            value_template: "{{ restart_app == 'Predbat' }}"
-        sequence:
-          - alias: Restart Predbat add-on
-            action: hassio.addon_restart
-            data:
-              addon: a06adb4f0d_predbat
 mode: single
 ```
 
-The last three triggers (GivTCP, Mosquitto and Predbat/AppDaemon running) trigger if any of these add-ons that Predbat is dependent upon are not running.
+The last two triggers (GivTCP and Mosquitto running) trigger if any of these add-ons that Predbat is dependent upon are not running.
 You will need to enable a binary sensor for each add-on to be able to use these triggers in the automation:
 
 - Navigate to Settings / Devices and Services / Devices and search for 'GivTCP'
 - Click on the GivTCP add-on, and under 'Sensors', click 'XX entities not shown'
 - Click the 'Running' sensor, then the cogwheel, and Enable the sensor
 
-Repeat these steps for the 'Mosquitto' add-on and either 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' depending on which Predbat install option you followed.
+Repeat these steps for the 'Mosquitto' add-on.
 
 As an extension to the above, if you don't want the automation to restart the failing add-on and instead just send an alert that there is a problem, delete the 'choose' code above.
 Restarting GivTCP does however lose the current GivTCP log in Home Assistant.
 
-NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp';
-and if you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
+NB: If you are using GivTCP v2 rather than v3, replace the '533ea71a_givtcp' with 'a6a2857d_givtcp'.
 
 ### Predbat error monitor
 
@@ -593,6 +575,9 @@ This automation will raise an alert if Predbat's status turns to *Error* for mor
 
 In normal operation Predbat will automatically run and update its forecast every 5 minutes. If the automation detects that Predbat has not done this for 20 minutes,
 then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
+
+In the same way for the GivTCP and Mosquitto add-on's above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
+Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat install option you followed.
 
 The script will need to be customised for your mobile details.
 
@@ -633,6 +618,14 @@ trigger:
         %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
         }}'
       restart_predbat: "Y"
+  - platform: state
+    entity_id: binary_sensor.predbat_running
+    to: "off"
+    for:
+      minutes: 15
+    variables:
+      alert_text: Predbat add-on is not running
+      restart_predbat: "Y"
 action:
   - service: notify.mobile_app_<your mobile device id>
     data:
@@ -661,7 +654,7 @@ action:
 mode: single
 ```
 
-NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon'.
+NB: If you are using AppDaemon rather than the Predbat add-on, replace '6adb4f0d_predbat' with 'a0d7b954_appdaemon' and change 'binary_sensor.predbat_running' to 'binary_sensor.appdaemon_running'.
 
 An error alert looks like this:
 
