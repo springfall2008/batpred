@@ -8686,7 +8686,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_pause_mode(pause_charge=True)
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
-                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
+                            status_extra = " current SoC {}%".format(inverter.soc_percent)       # Discharge limit (99) is meaningless when Freeze Discharging so don't display it
                             isDischarging = True
                         else:
                             status = "Hold discharging"
