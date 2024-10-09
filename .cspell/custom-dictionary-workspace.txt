@@ -182,6 +182,7 @@ unstaged
 useid
 venv
 Wallbox
+weblink
 welink
 xaxis
 xlabel

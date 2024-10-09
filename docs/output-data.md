@@ -86,6 +86,9 @@ cards:
   - type: entities
     entities:
       - entity: predbat.status
+      - type: weblink
+        name: Predbat Web Console
+        url: /hassio/ingress/6adb4f0d_predbat
       - entity: update.predbat_version
       - entity: select.predbat_update
       - entity: select.predbat_mode
