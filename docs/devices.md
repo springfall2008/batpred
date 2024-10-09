@@ -51,30 +51,6 @@ Also can be used with Octopus Intelligent GO to map out the cars charging slots 
 ```yaml
 car_charging_energy: 'sensor.ohme_session_energy'
 ```
-## PodPoint
-
-<https://github.com/mattrayner/pod-point-home-assistant-component>
-
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
-
-```yaml
-car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
-car_charging_planned:
-  - 're:(sensor.psl_[0-9]+_status)'
-car_charging_planned_response:
-  - 'plugged in'
-  - 'connected-waiting-for-schedule'
-  - 'suspended-evse'
-  - 'pending'
-  - 'charging'
-car_charging_now:
-  - 're:(sensor.psl_[0-9]+_status)'
-car_charging_now_response:
-  - 'charging'
-```
-
-Also can be used to control the cars charging with an automation linked to the Predbat slot sensor.
-The device needs to be set to 'Smart' mode in the PodPoint app. Your automation trigger should then set the `switch.psl_XXXXXX_charging_allowed` to on. And off to stop charging. This uses the PodPoint schedule override setting to start/stop the charge.
 
 **Octopus Intelligent GO**
 
@@ -101,6 +77,31 @@ Normally not recommended if you are on Intelligent GO, but can be useful for ad-
 car_charging_now:
   - 'binary_sensor.ohme_car_charging'
 ```
+
+## PodPoint
+
+<https://github.com/mattrayner/pod-point-home-assistant-component>
+
+Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+
+```yaml
+car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
+car_charging_planned:
+  - 're:(sensor.psl_[0-9]+_status)'
+car_charging_planned_response:
+  - 'plugged in'
+  - 'connected-waiting-for-schedule'
+  - 'suspended-evse'
+  - 'pending'
+  - 'charging'
+car_charging_now:
+  - 're:(sensor.psl_[0-9]+_status)'
+car_charging_now_response:
+  - 'charging'
+```
+
+Also can be used to control the cars charging with an automation linked to the Predbat slot sensor.
+The device needs to be set to 'Smart' mode in the PodPoint app. Your automation trigger should then set the `switch.psl_XXXXXX_charging_allowed` to on. And off to stop charging. This uses the PodPoint schedule override setting to start/stop the charge.
 
 ## Octopus Energy
 
