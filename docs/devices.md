@@ -39,6 +39,19 @@ car_charging_soc:
   - 're:sensor.xxx_battery'
 ```
 
+## Toyota
+
+<https://github.com/DurgNomis-drol/ha_toyota> - For Toyota EU cars only
+
+Can be used to extract the cars current SOC.
+
+```yaml
+car_charging_soc:
+  - 'sensor.toyota_XXX_battery_level'
+```
+
+Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
+
 ## Ohme
 
 <https://github.com/dan-r/HomeAssistant-Ohme>
