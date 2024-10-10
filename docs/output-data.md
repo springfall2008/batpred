@@ -414,8 +414,11 @@ import rate in the 24 hour Period
 
 ## Solar forecast data
 
-- sensor.predbat_pv_today - Tracks the PV forecast for today, attributes give the remaining amount today and the half hourly data
-- sensor.predbat_pv_tomorrow - Tracks the PV forecast for tomorrow, attributes give the remaining amount today and the half hourly data
+- sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the remaining amount today and the half hourly data
+- sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the remaining amount today and the half hourly data
+- sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
+- sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
+- sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
 
 ## Predbat Logfile
 
