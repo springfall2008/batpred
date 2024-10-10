@@ -326,7 +326,18 @@ The calculated baseline results under PV 10% scenario for the forecast_hours dur
 
 Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan:
 
-- predbat.best_battery_hours_left - Number of hours left under best plan
+- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed), with attributes of the prediction every 5 minutes to end of plan
+- predbat.battery_power_best - Predicted remaining battery power in kWh with attributes of the prediction every 5 minutes
+- predbat.best_battery_hours_left - Total number of hours of battery capacity left under the best plan
+- predbat.best_charge_end - Predicted time the next forced battery charging under the best plan will end
+- predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent, attributes of all future battery charging times & limits
+- predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh, attributes of future charging times & limits
+- predbat.best_charge_start - Predicted time the next forced battery charging under the best plan will start
+- predbat.best_discharge_end - Predicted time the next forced battery discharging under the best plan will end
+- predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not), attributes of all future battery discharges
+- predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
+- predbat.best_discharge_start - Predicted time the next forced battery discharging under the best plan will start
+
 - predbat.best_export_energy - Predicted exports under best plan
 - predbat_best_import_energy - Predicted imports under best plan
 - predbat_best_load - Predicted best load energy
@@ -338,12 +349,6 @@ Predbat outputs the following 'best' entities from the forecast (for the forecas
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
 - predbat_best_metric - The predicted cost if the proposed SoC % charge target is selected. Also contains data for charting cost in attributes
-- predbat.best_charge_limit - Predicted best battery charge limit in percent
-- predbat.best_charge_limit_kw - Predicted best battery charge limit in kWh
-- predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
-- predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
-- predbat.battery_power_best  - Predicted best battery power per minute, for charting
-- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed)
 - predbat.pv_power_best - Predicted best PV power per minute, for charting
 - predbat.grid_power - Predicted best Grid power per minute, for charting
 - predbat.car_soc_best - The expected charge level of your car in best plan at the end of the plan using the proposed SoC%/Window. Can also be charted
@@ -353,12 +358,12 @@ Predbat outputs the following 'best' entities from the forecast (for the forecas
 
 The calculated best results under the PV 10% scenario for the forecast_hours duration:
 
-- predbat.soc_kw_best10 - As soc_kw_best but using the 10% solar forecast, also holds minute by minute data (in attributes) to be charted
+- predbat.best10_metric - Predicted best cost in pence using the PV 10% solar forecast
+- predbat.best10_export_energy- Predicted best export energy in kWh for PV 10%
+- predbat.best10_import_energy- Predicted best import energy in kWH for PV 10%
+- predbat.best10_load_energy - Predicted best load energy in kWh for PV 10%
 - predbat.best10_pv_energy - Predicted best PV 10% energy in kWh
-- predbat.best10_metric - Predicted best cost for PV 10%
-- predbat.best10_export_energy- Predicted best export energy for PV 10%
-- predbat.best10_load_energy - Predicted best load energy for PV 10%
-- predbat.best10_import_energy- Predicted best import energy for PV 10%
+- predbat.soc_kw_best10 - As soc_kw_best but using the PV 10%, also holds minute by minute data (in attributes) to be charted
 
 ## Battery status
 
