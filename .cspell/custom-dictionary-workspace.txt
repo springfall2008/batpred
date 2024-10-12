@@ -27,6 +27,7 @@ citem
 Codespaces
 collapsable
 configform
+coro
 crosscharge
 customisation
 Customise
@@ -57,6 +58,7 @@ feedin
 fentry
 Fingerbot
 firstparty
+FLOMASTA
 foxess
 futurerate
 gekey
@@ -72,6 +74,9 @@ HAOS
 hass
 hassapi
 hassio
+heatingactive
+heatingtemp
+heatpump
 heatsink
 homeassistant
 houseb
@@ -116,11 +121,13 @@ nearr
 njpwerner
 nord
 Nordpool
+nrgheat
 octoplus
 octopoints
 Ohme
 onchange
 oncharge
+openweathermap
 pdata
 pdetails
 perc

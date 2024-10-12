@@ -32,8 +32,8 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.4.12"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py"]
+THIS_VERSION = "v8.5.0"
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -76,6 +76,7 @@ from utils import remove_intersecting_windows, get_charge_rate_curve, get_discha
 from inverter import Inverter
 from ha import HAInterface
 from web import WebInterface
+from predheat import PredHeat
 
 """
 Used to mimic threads when they are disabled
@@ -191,7 +192,7 @@ class PredBat(hass.Hass):
                 value = self.get_state_wrapper(entity_id=value, default=default)
         return value
 
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None):
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None):
         """
         Argument getter that can use HA state as well as fixed values
         """
@@ -228,7 +229,10 @@ class PredBat(hass.Hass):
             if (arg not in self.args) and default and (index is not None):
                 # Allow default to apply to all indices if there is not config item set
                 index = None
-            value = self.args.get(arg, default)
+            if domain:
+                value = self.args.get(domain, {}).get(arg, default)
+            else:
+                value = self.args.get(arg, default)
             value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index)
 
         if isinstance(default, float):
@@ -981,6 +985,18 @@ class PredBat(hass.Hass):
         """
         return self.ha_interface.call_service(service, **kwargs)
 
+    def call_service_websocket_wrapper(self, service, **kwargs):
+        """
+        Wrapper function to call a HA service
+        """
+        return self.ha_interface.call_service_websocket(service, **kwargs)
+
+    def get_services_wrapper(self):
+        """
+        Wrapper function to get services from HA
+        """
+        return self.ha_interface.get_services()
+
     def get_history_wrapper(self, entity_id, days=30, required=True):
         """
         Wrapper function to get history from HA
@@ -1082,12 +1098,11 @@ class PredBat(hass.Hass):
             age_days = 0
         return load_minutes, age_days
 
-    def minute_data_state(self, history, days, now, state_key, last_updated_key):
+    def minute_data_state(self, history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
         """
         Get historical data for state (e.g. predbat status)
         """
         mdata = {}
-        prev_last_updated_time = None
         last_state = "unknown"
         newest_state = 0
         last_state = 0
@@ -1162,6 +1177,8 @@ class PredBat(hass.Hass):
         adjust_key=None,
         spreading=None,
         required_unit=None,
+        prev_last_updated_time=None,
+        last_state=0,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -1170,9 +1187,7 @@ class PredBat(hass.Hass):
         mdata = {}
         adata = {}
         newest_state = 0
-        last_state = 0
         newest_age = 999999
-        prev_last_updated_time = None
         max_increment = MAX_INCREMENT
 
         # Check history is valid
@@ -5162,6 +5177,7 @@ class PredBat(hass.Hass):
         Init stub
         """
         reset_prediction_globals()
+        self.predheat = None
         self.soc_kwh_history = {}
         self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}
@@ -9136,7 +9152,7 @@ class PredBat(hass.Hass):
                         saving_rate = event.get("octopoints_per_kwh", saving_rate * octopoints_per_penny) / octopoints_per_penny  # Octopoints per pence
                         if code:  # Join the new Octopus saving event and send an alert
                             self.log("Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
-                            self.call_service("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                            self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
 
                 if joined_events:
@@ -11077,6 +11093,12 @@ class PredBat(hass.Hass):
             seconds_next_balance = seconds_now + (run_every_balance - seconds_offset_balance) + 15  # Offset to start after Predbat update task
             next_time_balance = self.midnight + timedelta(seconds=seconds_next_balance)
             self.run_every(self.run_time_loop_balance, next_time_balance, run_every_balance, random_start=0, random_end=0)
+
+        # Predheat
+        predheat = self.args.get("predheat", {})
+        if predheat:
+            self.predheat = PredHeat(self)
+            self.predheat.initialize()
 
     async def terminate(self):
         """

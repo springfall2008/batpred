@@ -1013,6 +1013,22 @@ CONFIG_ITEMS = [
         "default": False,
         "enable": "expert_mode",
     },
+    {
+        "name": "predheat_enable",
+        "friendly_name": "Enable Predbat",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "next_volume_temp",
+        "friendly_name": "Volume Temperature Next",
+        "type": "input_number",
+        "min": -20,
+        "max": 40,
+        "step": 0.1,
+        "unit": "c",
+        "enable": "predheat_enable",
+    },
 ]
 
 # These settings can be overridden by the API

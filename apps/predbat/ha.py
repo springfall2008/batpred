@@ -20,9 +20,34 @@ import json
 import requests
 import traceback
 import sqlite3
+import threading
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
+
+
+class RunThread(threading.Thread):
+    def __init__(self, coro):
+        self.coro = coro
+        self.result = None
+        super().__init__()
+
+    def run(self):
+        self.result = asyncio.run(self.coro)
+
+
+def run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        thread = RunThread(coro)
+        thread.start()
+        thread.join()
+        return thread.result
+    else:
+        return asyncio.run(coro)
 
 
 class HAInterface:
@@ -87,6 +112,58 @@ class HAInterface:
         Get the add-on slug.
         """
         return self.slug
+
+    def call_service_websocket_command(self, domain, service, data):
+        """
+        Call a service via the web socket interface
+        """
+        return run_async(self.async_call_service_websocket_command(domain, service, data))
+
+    async def async_call_service_websocket_command(self, domain, service, service_data):
+        """
+        Call a service via the web socket interface
+        """
+        url = "{}/api/websocket".format(self.ha_url)
+        response = None
+        self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
+
+        return_response = service_data.get("return_response", False)
+        if "return_response" in service_data:
+            del service_data["return_response"]
+
+        async with ClientSession() as session:
+            try:
+                async with session.ws_connect(url) as websocket:
+                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+                    id = 1
+                    await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+
+                    async for message in websocket:
+                        if self.base.stop_thread:
+                            self.log("Info: Web socket stopping")
+                            break
+
+                        if message.type == WSMsgType.TEXT:
+                            try:
+                                data = json.loads(message.data)
+                                if data:
+                                    message_type = data.get("type", "")
+                                    # self.log("Info: Web Socket data {} type {}".format(data, message_type))
+                                    if message_type == "result":
+                                        response = data.get("result", {}).get("response", None)
+                                        # self.log("Info: Web Socket response {}".format(response))
+                                        break
+
+                            except Exception as e:
+                                self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                self.log("Error: " + traceback.format_exc())
+                                break
+
+            except Exception as e:
+                self.log("Error: Web Socket exception in startup: {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+
+        return response
 
     async def socketLoop(self):
         """
@@ -360,6 +437,19 @@ class HAInterface:
             history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
         return [history]
 
+    def get_services(self):
+        """
+        Get the list of services from Home Assistant.
+        """
+        if not self.ha_key:
+            return self.base.get_services()
+
+        res = self.api_call("/api/services")
+        if res:
+            return res
+        else:
+            return None
+
     def get_history(self, sensor, now, days=30, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
@@ -557,6 +647,16 @@ class HAInterface:
             else:
                 return self.base.set_state(entity_id, state=state)
 
+    def call_service_websocket(self, service, **kwargs):
+        """
+        Call a service in Home Assistant via Websocket
+        """
+        data = {}
+        for key in kwargs:
+            data[key] = kwargs[key]
+        domain, service = service.split("/")
+        return self.call_service_websocket_command(domain, service, data)
+
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant.
@@ -567,7 +667,7 @@ class HAInterface:
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        self.api_call("/api/services/{}".format(service), data, post=True)
+        return self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
