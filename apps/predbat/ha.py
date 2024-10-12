@@ -35,6 +35,7 @@ class RunThread(threading.Thread):
     def run(self):
         self.result = asyncio.run(self.coro)
 
+
 def run_async(coro):
     try:
         loop = asyncio.get_running_loop()
@@ -47,6 +48,7 @@ def run_async(coro):
         return thread.result
     else:
         return asyncio.run(coro)
+
 
 class HAInterface:
     """
@@ -134,7 +136,7 @@ class HAInterface:
                 async with session.ws_connect(url) as websocket:
                     await websocket.send_json({"type": "auth", "access_token": self.ha_key})
                     id = 1
-                    await websocket.send_json({"id": id, "type": "call_service", "domain" : domain, "service": service, "service_data": service_data, "return_response": return_response})
+                    await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
 
                     async for message in websocket:
                         if self.base.stop_thread:
@@ -146,10 +148,10 @@ class HAInterface:
                                 data = json.loads(message.data)
                                 if data:
                                     message_type = data.get("type", "")
-                                    #self.log("Info: Web Socket data {} type {}".format(data, message_type))
+                                    # self.log("Info: Web Socket data {} type {}".format(data, message_type))
                                     if message_type == "result":
                                         response = data.get("result", {}).get("response", None)
-                                        #self.log("Info: Web Socket response {}".format(response))
+                                        # self.log("Info: Web Socket response {}".format(response))
                                         break
 
                             except Exception as e:
@@ -190,9 +192,7 @@ class HAInterface:
 
                         # Fire events to say we have registered services
                         for item in self.base.SERVICE_REGISTER_LIST:
-                            await websocket.send_json(
-                                {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
-                            )
+                            await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
                             sid += 1
 
                         self.log("Info: Web Socket active")
@@ -223,9 +223,7 @@ class HAInterface:
                                                         self.log("Warn: Web Socket state_changed event has no entity_id {}".format(new_state))
                                                     # Only trigger on value change or you get too many updates
                                                     if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
-                                                        await self.base.trigger_watch_list(
-                                                            new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
-                                                        )
+                                                        await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
                                             elif event_type == "call_service":
                                                 service_data = event_info.get("data", {})
                                                 await self.base.trigger_callback(service_data)
@@ -591,9 +589,7 @@ class HAInterface:
             # Also update the latest table
             self.db_cursor.execute(
                 "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
-                (
-                    entity_index,
-                ),
+                (entity_index,),
             )
             self.db_cursor.execute(
                 "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
@@ -618,12 +614,8 @@ class HAInterface:
             return
 
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute(
-            "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
-        )
-        self.db_cursor.execute(
-            "CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
-        )
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
