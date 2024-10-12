@@ -1013,16 +1013,34 @@ CONFIG_ITEMS = [
         "default": False,
         "enable": "expert_mode",
     },
+    {
+        "name": "predheat_enable",
+        "friendly_name": "Enable Predbat",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        'name' : 'next_volume_temp',  
+        'friendly_name' : 
+        'Volume Temperature Next', 
+        'type' : 'input_number', 
+        'min' : -20,   
+        'max' : 40,     
+        'step' : 0.1,  
+        'unit' : 'c',
+        "enable": "predheat_enable",
+     },
+
 ]
 
 # These settings can be overridden by the API
 CONFIG_API_OVERRIDE = {
-    "inverter_limit": True,
-    "export_limit": True,
-    "inverter_battery_rate_min": True,
-    "inverter_reserve_max": True,
-    "battery_rate_max": True,
-    "car_charging_soc": True,
+    "inverter_limit" : True,
+    "export_limit" : True,
+    "inverter_battery_rate_min" : True,
+    "inverter_reserve_max" : True,
+    "battery_rate_max" : True,
+    "car_charging_soc" : True,
     "car_charging_limit": True,
     "car_charging_battery_size": True,
     "days_previous": True,
