@@ -20,10 +20,33 @@ import json
 import requests
 import traceback
 import sqlite3
+import threading
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
 
+
+class RunThread(threading.Thread):
+    def __init__(self, coro):
+        self.coro = coro
+        self.result = None
+        super().__init__()
+
+    def run(self):
+        self.result = asyncio.run(self.coro)
+
+def run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        thread = RunThread(coro)
+        thread.start()
+        thread.join()
+        return thread.result
+    else:
+        return asyncio.run(coro)
 
 class HAInterface:
     """
@@ -88,6 +111,58 @@ class HAInterface:
         """
         return self.slug
 
+    def call_service_websocket_command(self, domain, service, data):
+        """
+        Call a service via the web socket interface
+        """
+        return run_async(self.async_call_service_websocket_command(domain, service, data))
+
+    async def async_call_service_websocket_command(self, domain, service, service_data):
+        """
+        Call a service via the web socket interface
+        """
+        url = "{}/api/websocket".format(self.ha_url)
+        response = None
+        self.log("Info: Web socket serivce {}/{} socket for url {}".format(domain, service, url))
+
+        return_response = service_data.get("return_response", False)
+        if "return_response" in service_data:
+            del service_data["return_response"]
+
+        async with ClientSession() as session:
+            try:
+                async with session.ws_connect(url) as websocket:
+                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+                    id = 1
+                    await websocket.send_json({"id": id, "type": "call_service", "domain" : domain, "service": service, "service_data": service_data, "return_response": return_response})
+
+                    async for message in websocket:
+                        if self.base.stop_thread:
+                            self.log("Info: Web socket stopping")
+                            break
+
+                        if message.type == WSMsgType.TEXT:
+                            try:
+                                data = json.loads(message.data)
+                                if data:
+                                    message_type = data.get("type", "")
+                                    self.log("Info: Web Socket data {} type {}".format(data, message_type))
+                                    if message_type == "result" and str(data.get("id", 0)) == str(id):
+                                        response = data.get("response", None)
+                                        self.log("Info: Web Socket response {}".format(response))
+                                        break
+
+                            except Exception as e:
+                                self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                self.log("Error: " + traceback.format_exc())
+                                break
+
+            except Exception as e:
+                self.log("Error: Web Socket exception in startup: {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+
+        return response
+
     async def socketLoop(self):
         """
         Web socket loop for HA interface
@@ -115,7 +190,9 @@ class HAInterface:
 
                         # Fire events to say we have registered services
                         for item in self.base.SERVICE_REGISTER_LIST:
-                            await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
+                            await websocket.send_json(
+                                {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
+                            )
                             sid += 1
 
                         self.log("Info: Web Socket active")
@@ -146,7 +223,9 @@ class HAInterface:
                                                         self.log("Warn: Web Socket state_changed event has no entity_id {}".format(new_state))
                                                     # Only trigger on value change or you get too many updates
                                                     if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
-                                                        await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
+                                                        await self.base.trigger_watch_list(
+                                                            new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
+                                                        )
                                             elif event_type == "call_service":
                                                 service_data = event_info.get("data", {})
                                                 await self.base.trigger_callback(service_data)
@@ -360,6 +439,19 @@ class HAInterface:
             history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
         return [history]
 
+    def get_services(self):
+        """
+        Get the list of services from Home Assistant.
+        """
+        if not self.ha_key:
+            return self.base.get_services()
+
+        res = self.api_call("/api/services")
+        if res:
+            return res
+        else:
+            return None
+
     def get_history(self, sensor, now, days=30, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
@@ -499,7 +591,9 @@ class HAInterface:
             # Also update the latest table
             self.db_cursor.execute(
                 "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
-                (entity_index,),
+                (
+                    entity_index,
+                ),
             )
             self.db_cursor.execute(
                 "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
@@ -524,8 +618,12 @@ class HAInterface:
             return
 
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
-        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
+        self.db_cursor.execute(
+            "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
+        )
+        self.db_cursor.execute(
+            "CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
+        )
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
@@ -557,6 +655,19 @@ class HAInterface:
             else:
                 return self.base.set_state(entity_id, state=state)
 
+    def call_service_websocket(self, service, **kwargs):
+        """
+        Call a service in Home Assistant via Websocket
+        """
+        data = {}
+        for key in kwargs:
+            data[key] = kwargs[key]
+        domain, service = service.split("/")
+        self.log("Info: Call service {} with data {}".format(service, data))
+        data = self.call_service_websocket_command(domain, service, data)
+        self.log("Info: Call service response {}".format(data))
+        return data
+
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant.
@@ -567,7 +678,7 @@ class HAInterface:
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        self.api_call("/api/services/{}".format(service), data, post=True)
+        return self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
