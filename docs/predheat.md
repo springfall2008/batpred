@@ -7,6 +7,7 @@ Predheat attemps to model water based central heating systems based on a boiler 
 The app runs every 5 minutes and it will automatically update its prediction for the heating system for the next period, up to a maximum of 48 hours.
 
 The inputs are as follows
+
 - An external temperature sensor, can be a real one or one created by an Internet service
 - An internal temperature sensor, ideally from your home thermostat.
 - The target temperature sensor, this is what your home thermostat is set to.
@@ -16,17 +17,17 @@ The inputs are as follows
 - Some data about your home that you have to figure out for yourself and calibrate
 
 The outputs are:
+
 - Prediction of the internal house temperature going forward, including times when the heating will be active.
 - Your predicted energy usage and costs. The energy usage, if electric, can also be connected into Predbat to help you project your home battery usage.
 
 Future versions will also offer Predbat to run in master mode, controlling your homes heating in the same way as a smart thermostat (e.g. Nest)
 
-
 ## Installation guide
 
 ### Openweather install
 
-See: https://www.home-assistant.io/integrations/openweathermap
+See: <https://www.home-assistant.io/integrations/openweathermap>
 
 First create an OpenWeather account and then register for a "One Call by Call" subscription plan. This does need a credit/debit card but won't cost anything. You get 1000 API calls a day for free, so edit your limit in the account to 1000 to avoid ever being charged.
 
@@ -34,7 +35,7 @@ Then add in the Home Assistant service and connect up your API key to obtain hou
 
 ### Apex Charts install
 
-Use HACS to install Apex Charts (Lovelace frontend add-on) - https://github.com/RomRider/apexcharts-card
+Use HACS to install Apex Charts (Lovelace frontend add-on) - <https://github.com/RomRider/apexcharts-card>
 
 ## Configuration guide
 
@@ -50,7 +51,7 @@ predheat:
     # Days previous is the number of days back to find historical load data
     # Recommended is 7 to capture day of the week but 1 can also be used
     # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
-    days_previous: 
+    days_previous:
       - 7
 
     # Gas or heatpump mode ('gas' or 'pump')
@@ -137,10 +138,10 @@ Set **heating_energy** To point to a sensor that indicates the energy consumed b
 
 Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below maybe useful for various standard radiators:
 
-  * https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119
-  * https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174
-  * https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176
-  * https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175
+- <https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119>
+- <https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174>
+- <https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176>
+- <https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175>
 
 Add up all the BTUs and divide by 3.41 to gain the heat output in Watts and set that in **heat_output** configuration option.
 Add up all the litres of water, add in some extra for the piping and an expansion vessle if present (e.g. 5-10 litres) and set **heat_volume** accordingly.
@@ -163,9 +164,8 @@ What will help here is historical temperature data, find a time period in the la
 
 _Note in future versions of Predheat I might make this calculation automatic._
 
-Next we need to work out the number of watts of heat loss in the house, this can be done by looking at the energy consumed when the heating comes on. Pick a period of heating, ideally from the time the temperature starts increasing for a complete hour of increase, looking at the increase in temperature in degrees, add to that static heat loss which is  heat_loss_degrees * (internal temp - external temp) * 1 hours to get the total degrees accounted for. Now divide that by the external temperature difference again / (internal_temp - external_temp) and multiply the final figure by the energy your system consumed in Watts during that period (can be found either from your sensor or just by looking at your energy bill for the same 1 hour period).
+Next we need to work out the number of watts of heat loss in the house, this can be done by looking at the energy consumed when the heating comes on. Pick a period of heating, ideally from the time the temperature starts increasing for a complete hour of increase, looking at the increase in temperature in degrees, add to that static heat loss which is  heat_loss_degrees *(internal temp - external temp)* 1 hours to get the total degrees accounted for. Now divide that by the external temperature difference again / (internal_temp - external_temp) and multiply the final figure by the energy your system consumed in Watts during that period (can be found either from your sensor or just by looking at your energy bill for the same 1 hour period).
 
 The final figure should be the number of watts your house loses per 1 degree of external temperature difference and be set to **heat_loss_watts**
 
 Then you can set **heat_gain_static** to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.
-
