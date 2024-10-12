@@ -73,6 +73,9 @@ HAOS
 hass
 hassapi
 hassio
+heatingactive
+heatingtemp
+heatpump
 heatsink
 homeassistant
 houseb
@@ -117,11 +120,13 @@ nearr
 njpwerner
 nord
 Nordpool
+nrgheat
 octoplus
 octopoints
 Ohme
 onchange
 oncharge
+openweathermap
 pdata
 pdetails
 perc
