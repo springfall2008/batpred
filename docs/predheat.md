@@ -1,6 +1,6 @@
 # predheat
 
-Predheat attemps to model water based central heating systems based on a boiler or a heat pump.
+Predheat attempts to model water based central heating systems based on a boiler or a heat pump.
 
 ## Operation
 
@@ -11,7 +11,7 @@ The inputs are as follows
 - An external temperature sensor, can be a real one or one created by an Internet service
 - An internal temperature sensor, ideally from your home thermostat.
 - The target temperature sensor, this is what your home thermostat is set to.
-- A heating energy sensor in kWh (not stricty required but needed to plot historical usage and calibrate)
+- A heating energy sensor in kWh (not strictly required but needed to plot historical usage and calibrate)
 - The flow temperature setting of your heating, can be static or a sensor
 - Your current energy rates, either from the Octopus Energy plugin or hand typed into the configuration
 - Some data about your home that you have to figure out for yourself and calibrate
@@ -73,7 +73,7 @@ predheat:
     # Sensor with history that monitors the thermostat setting in the house
     target_temperature: sensor.living_room_target
 
-    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reachs it just in time
+    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
     smart_thermostat: True
 
     # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
@@ -89,24 +89,24 @@ predheat:
     # Static heat sources in the house (e.g. people/equipment)
     heat_gain_static: 200
 
-    # House heat loss in degrees per hour per degre temp difference
+    # House heat loss in degrees per hour per degree temp difference
     heat_loss_degrees: 0.030
 
-    # Heating max output (of the raditors), in Watts at delta 50 (BTU / 3.41)
+    # Heating max output (of the radiators), in Watts at delta 50 (BTU / 3.41)
     # https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119
     # https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174
     # https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176
     # https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175
     heat_output: 17000
 
-    # Add up radiator volume + any pipework or expansion vessle
+    # Add up radiator volume + any pipework or expansion vessel
     heat_volume: 75
 
     # Heating max power in Watts
     heat_max_power: 30000
     heat_min_power: 7000
 
-    # Heating cop is the maximum effiency and will be scaled down based on temperatures
+    # Heating cop is the maximum efficiency and will be scaled down based on temperatures
     # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
     heat_cop: 1.0
 
@@ -136,7 +136,7 @@ Set the **target_temperature** to point to a sensor that indicates what your boi
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 
-Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat-pump in kWh. If the sensor isn't accurate then using **heating_energy_scaling** to adjust it to the actualy energy consumed.
+Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat-pump in kWh. If the sensor isn't accurate then using **heating_energy_scaling** to adjust it to the actually energy consumed.
 
 Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below maybe useful for various standard radiators:
 
@@ -146,11 +146,11 @@ Now you need to make a list of all your radiators in the house, measure them and
 - <https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175>
 
 Add up all the BTUs and divide by 3.41 to gain the heat output in Watts and set that in **heat_output** configuration option.
-Add up all the litres of water, add in some extra for the piping and an expansion vessle if present (e.g. 5-10 litres) and set **heat_volume** accordingly.
+Add up all the litres of water, add in some extra for the piping and an expansion vessel if present (e.g. 5-10 litres) and set **heat_volume** accordingly.
 
 Set the **heat_max_power** and **heat_min_power** to the minimum and maximum power output of your boiler/heat-pump in watts.
 
-Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the effiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
+Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
