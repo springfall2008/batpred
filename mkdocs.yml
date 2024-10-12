@@ -24,5 +24,7 @@ nav:
   - 'Predbat development':
     - todo-list.md
     - developing.md
+  - 'Predheat':
+    - predheat.md
 markdown_extensions:
   - sane_lists
