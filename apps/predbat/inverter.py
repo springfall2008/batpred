@@ -1833,8 +1833,6 @@ class Inverter:
                 self.base.call_service_wrapper(service_name, **service_data)
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
-        else:
-            self.log("Warn: Inverter {} unable to find service template for {}".format(self.id, service))
 
     def adjust_charge_immediate(self, target_soc):
         """
