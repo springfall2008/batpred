@@ -1,5 +1,7 @@
-# Example charts - create one new chart per entry in here - cut and paste to ApexCharts card
-
+###################################################################################################################
+# There are multiple charts in this file, please copy each section into a different chart (starts with a comment)
+####################################################################################################################
+---
 ### Example temperature chart
 type: custom:apexcharts-card
 header:
