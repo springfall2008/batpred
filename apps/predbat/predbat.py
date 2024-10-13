@@ -8299,7 +8299,7 @@ class PredBat(hass.Hass):
         # Return if we recomputed or not
         return recompute
 
-    def adjust_battery_target_multi(self, inverter, soc, is_charging, is_discharging):
+    def adjust_battery_target_multi(self, inverter, soc, is_charging, is_discharging, isFreezeCharge=False):
         """
         Adjust target SOC based on the current SOC of all the inverters accounting for their
         charge rates and battery capacities
@@ -8307,9 +8307,15 @@ class PredBat(hass.Hass):
         target_kwh = self.dp2(self.soc_max * (soc / 100.0))
         soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
-        if target_kwh == self.soc_kw:
-            new_soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
+        if isFreezeCharge:
+            new_soc_percent = soc
             self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+        elif soc == 100.0:
+            self.log("Inverter {} adjust target soc for charge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+            new_soc_percent = 100.0
+        elif soc == 0.0:
+            self.log("Inverter {} adjust target soc for discharge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+            new_soc_percent = 0.0
         else:
             add_kwh = target_kwh - self.soc_kw
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
@@ -8681,7 +8687,7 @@ class PredBat(hass.Hass):
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
-                                self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isDischarging)
+                                self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isDischarging, isFreezeCharge=True)
                             else:
                                 # Not yet in the freeze, hold at 100% target SOC
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
