@@ -1932,7 +1932,7 @@ class Inverter:
             self.disable_charge_window(notify=False)
             have_disabled = True
 
-        if new_start != old_start:
+        if new_start != old_start or (self.inv_charge_time_format == "H M"):
             if self.rest_data:
                 pass  # REST will be written as start/end together
             elif "charge_start_time" in self.base.args:
@@ -1951,7 +1951,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
         # Program end slot
-        if new_end != old_end:
+        if new_end != old_end or (self.inv_charge_time_format == "H M"):
             if self.rest_data:
                 pass  # REST will be written as start/end together
             elif "charge_end_time" in self.base.args:
@@ -1968,7 +1968,7 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
-        if new_start != old_start or new_end != old_end:
+        if new_start != old_start or new_end != old_end or (self.inv_charge_time_format == "H M"):
             if self.rest_data:
                 self.rest_setChargeSlot1(new_start, new_end)
 
