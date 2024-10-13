@@ -8311,11 +8311,11 @@ class PredBat(hass.Hass):
             new_soc_percent = soc
             self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         elif soc == 100.0:
-            self.log("Inverter {} adjust target soc for charge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
             new_soc_percent = 100.0
+            self.log("Inverter {} adjust target soc for charge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         elif soc == 0.0:
-            self.log("Inverter {} adjust target soc for discharge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
             new_soc_percent = 0.0
+            self.log("Inverter {} adjust target soc for discharge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         else:
             add_kwh = target_kwh - self.soc_kw
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
