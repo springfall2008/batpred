@@ -216,4 +216,3 @@ series:
     curve: stepline
     name: External Temp Actual
     extend_to: now
-  
