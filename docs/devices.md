@@ -73,6 +73,8 @@ octopus_ready_time: 'time.ohme_target_time'
 octopus_charge_limit: 'number.ohme_target_percent'
 ```
 
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
 **Using Ohme car charging plans on other tariff's e.g. Agile**
 
 ```yaml
@@ -81,6 +83,8 @@ octopus_ready_time: 'time.ohme_target_time'
 octopus_charge_limit: 'number.ohme_target_percent'
 octopus_slot_low_rate: False
 ```
+
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
 
 **Determine if the car is charging now**
 
