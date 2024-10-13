@@ -931,7 +931,7 @@ class Inverter:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))
         # Pre-fill current discharge window
         # Store it even when discharge timed isn't enabled as it won't be outside the actual slot
-        if True:
+        if self.discharge_start_time_minutes != self.discharge_end_time_minutes:
             minute = max(0, self.discharge_start_time_minutes)  # Max is here is start could be before midnight now
             minute_end = self.discharge_end_time_minutes
             while minute < self.base.forecast_minutes:
