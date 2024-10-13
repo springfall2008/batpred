@@ -220,8 +220,8 @@ class PredBat(hass.Hass):
                         self.log("Note: API Overridden arg {} index {} value {}".format(arg, index, value))
                         break
 
-        # Get From HA config
-        if value is None:
+        # Get From HA config (not for domain specific which are apps.yaml options only)
+        if value is None and not domain:
             value, default = self.get_ha_config(arg, default)
 
         # Resolve locally if no HA config
