@@ -8007,13 +8007,13 @@ class PredBat(hass.Hass):
                 self.charge_window_best = copy.deepcopy(self.low_rates)
             else:
                 # Default best charge window as this one
-                self.charge_window_best = self.charge_window
+                self.charge_window_best = copy.deepcopy(self.charge_window)
 
             # Calculate best discharge windows
-            if self.high_export_rates:
+            if self.high_export_rates and self.calculate_best_discharge and self.set_discharge_window:
                 self.discharge_window_best = copy.deepcopy(self.high_export_rates)
             else:
-                self.discharge_window_best = []
+                self.discharge_window_best = copy.deepcopy(self.discharge_window)
 
             # Pre-fill best charge limit with the current charge limit
             self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
