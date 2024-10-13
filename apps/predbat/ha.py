@@ -149,10 +149,11 @@ class HAInterface:
                                 data = json.loads(message.data)
                                 if data:
                                     message_type = data.get("type", "")
-                                    # self.log("Info: Web Socket data {} type {}".format(data, message_type))
                                     if message_type == "result":
                                         response = data.get("result", {}).get("response", None)
-                                        # self.log("Info: Web Socket response {}".format(response))
+                                        success = data.get("success", False)
+                                        if not success:
+                                            self.log("Warn: Service call {}/{} failed with response {}".format(domain, service, response))
                                         break
 
                             except Exception as e:

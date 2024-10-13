@@ -505,7 +505,7 @@ var options = {
         elif isinstance(value, dict):
             text += "<table>"
             for key in value:
-                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(arg, value[key]))
+                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(key, value[key]))
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
@@ -515,7 +515,7 @@ var options = {
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
                     text = self.render_type(arg, text)
-            elif pat:
+            elif pat and (arg != "service"):
                 entity_id = value
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")
