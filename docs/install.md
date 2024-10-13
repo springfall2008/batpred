@@ -110,6 +110,8 @@ listed below.
 This is the old way of installing Predbat, to firstly install HACS (the Home Assistant Community Store), then install the AppDaemon add-on,
 and finally install Predbat from HACS to run within AppDaemon.
 
+**NOTE:** If you are using AppDaemon you now *must* set **ha_key** and **ha_url** in apps.yaml to point to your Home Assistant. The key can be obtained from HA by creating an access token.
+
 ### HACS install
 
 Predbat and AppDaemon are available through the Home Assistant Community Store (HACS). You can install Predbat manually (see below) but its usually easier to install it through HACS.

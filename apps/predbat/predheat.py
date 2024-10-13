@@ -1,10 +1,16 @@
-"""
-Heating Prediction app
-see Readme for information
-"""
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2024 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
 from datetime import datetime, timedelta
 import math
 import re
@@ -83,7 +89,6 @@ class PredHeat:
         self.get_arg = base.get_arg
         self.set_state = base.set_state_wrapper
         self.call_service = base.call_service_wrapper
-        self.call_service_websocket = base.call_service_websocket_wrapper
         self.get_history = base.get_history_wrapper
         self.expose_config = base.expose_config
         self.minute_data = base.minute_data
@@ -119,7 +124,7 @@ class PredHeat:
     def get_weather_data(self, now_utc):
         entity_id = self.get_arg("weather", indirect=False, domain="predheat")
 
-        result = self.call_service_websocket("weather/get_forecasts", type="hourly", entity_id=entity_id, return_response=True)
+        result = self.call_service("weather/get_forecasts", type="hourly", entity_id=entity_id, return_response=True)
         if result:
             data = result.get(entity_id, {}).get("forecast", {})
         else:

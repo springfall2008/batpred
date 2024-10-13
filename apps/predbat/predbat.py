@@ -961,12 +961,6 @@ class PredBat(hass.Hass):
             self.log("Car charging hold {} threshold {}".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
 
-    def get_history_ad(self, entity_id, days=30):
-        """
-        Wrapper for AppDaemon get history
-        """
-        return self.get_history(entity_id=entity_id, days=days)
-
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False):
         """
         Wrapper function to get state from HA
@@ -984,12 +978,6 @@ class PredBat(hass.Hass):
         Wrapper function to call a HA service
         """
         return self.ha_interface.call_service(service, **kwargs)
-
-    def call_service_websocket_wrapper(self, service, **kwargs):
-        """
-        Wrapper function to call a HA service
-        """
-        return self.ha_interface.call_service_websocket(service, **kwargs)
 
     def get_services_wrapper(self):
         """
@@ -11024,7 +11012,13 @@ class PredBat(hass.Hass):
         try:
             self.reset()
             self.log("Starting HA interface")
-            self.ha_interface = HAInterface(self)
+            try:
+                self.ha_interface = HAInterface(self)
+            except ValueError as e:
+                self.log("Error: Exception raised {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+                self.record_status("Error: Exception raised {}".format(e))
+                raise e
             self.web_interface = None
             self.web_interface_task = None
             self.log("Starting web interface")

@@ -78,9 +78,10 @@ class HAInterface:
 
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
-                self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
+                self.log("Error: ha_key or SUPERVISOR_TOKEN not found, you must set ha_url/ha_key in apps.yaml")
+                raise ValueError
             else:
-                self.log("Info: Using SQL Lite database as primary data source")
+                self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
         else:
             check = self.api_call("/api/")
             if not check:
@@ -190,6 +191,10 @@ class HAInterface:
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
                         sid += 1
 
+                        # Get service list
+                        # await websocket.send_json({"id": sid, "type": "get_services"})
+                        # sid += 1
+
                         # Fire events to say we have registered services
                         for item in self.base.SERVICE_REGISTER_LIST:
                             await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
@@ -233,6 +238,10 @@ class HAInterface:
                                             success = data.get("success", False)
                                             if not success:
                                                 self.log("Warn: Web Socket result failed {}".format(data))
+                                            # result = data.get("result", {})
+                                            # resultid = data.get("id", None)
+                                            # if result:
+                                            #    self.log("Info: Web Socket result id {} data {}".format(resultid, result))
                                         elif message_type == "auth_required":
                                             pass
                                         elif message_type == "auth_ok":
@@ -267,9 +276,6 @@ class HAInterface:
         """
         if entity_id:
             self.db_mirror_list[entity_id.lower()] = True
-
-        if not self.ha_key and not (self.db_enable and self.db_primary):
-            return self.base.get_state(entity_id=entity_id, default=default, attribute=attribute)
 
         if not entity_id:
             return self.state_data
@@ -441,9 +447,6 @@ class HAInterface:
         """
         Get the list of services from Home Assistant.
         """
-        if not self.ha_key:
-            return self.base.get_services()
-
         res = self.api_call("/api/services")
         if res:
             return res
@@ -464,9 +467,6 @@ class HAInterface:
 
         if (self.db_primary or force_db) and self.db_enable:
             return self.get_history_db(sensor, now, days=days)
-
-        if not self.ha_key:
-            return self.base.get_history_ad(sensor, days=days)
 
         start = now - timedelta(days=days)
         end = now
@@ -641,13 +641,8 @@ class HAInterface:
                 data["unrecorded_attributes"] = ["results"]
             self.api_call("/api/states/{}".format(entity_id), data, post=True)
             self.update_state(entity_id)
-        elif not self.db_primary:
-            if attributes:
-                return self.base.set_state(entity_id, state=state, attributes=attributes)
-            else:
-                return self.base.set_state(entity_id, state=state)
 
-    def call_service_websocket(self, service, **kwargs):
+    def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
         """
@@ -656,18 +651,6 @@ class HAInterface:
             data[key] = kwargs[key]
         domain, service = service.split("/")
         return self.call_service_websocket_command(domain, service, data)
-
-    def call_service(self, service, **kwargs):
-        """
-        Call a service in Home Assistant.
-        """
-        if not self.ha_key:
-            return self.base.call_service(service, **kwargs)
-
-        data = {}
-        for key in kwargs:
-            data[key] = kwargs[key]
-        return self.api_call("/api/services/{}".format(service), data, post=True)
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """
