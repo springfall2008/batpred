@@ -246,8 +246,6 @@ class PredHeat:
         energy_today_external = []
         adjustment_points = []
 
-        self.log("External temp now {}".format(self.temperatures.get(0, external_temp)))
-
         # Find temperature adjustment points (thermostat turned up)
         adjust_ptr = -1
         if last_predict_minute:
