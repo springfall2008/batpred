@@ -1,0 +1,219 @@
+# Example charts - create one new chart per entry in here - cut and paste to ApexCharts card
+
+### Example temperature chart
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Temperature
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: day
+  offset: +0h
+now:
+  show: true
+yaxis:
+  - min: 0
+series:
+  - entity: predheat.heat_energy
+    stroke_width: 1
+    curve: smooth
+    name: Energy actual
+    extend_to: now
+    color: red
+  - entity: sensor.living_room_target
+    stroke_width: 1
+    curve: smooth
+    name: Target temperature
+    extend_to: now
+  - entity: predheat.internal_temp
+    stroke_width: 1
+    curve: smooth
+    name: Internal Temp Actual
+    extend_to: now
+  - entity: predheat.external_temp
+    stroke_width: 1
+    curve: smooth
+    name: External Temp Actual
+    extend_to: now
+  - entity: predheat.volume_temp
+    stroke_width: 1
+    curve: smooth
+    name: Volume temp history
+    extend_to: now
+  - entity: predheat.internal_temp
+    stroke_width: 3
+    curve: smooth
+    name: Internal Temp Predicted
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predheat.external_temp
+    stroke_width: 1
+    curve: smooth
+    name: External Temp Predicted
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predheat.target_temp
+    stroke_width: 1
+    curve: smooth
+    name: Target Temp Predicted
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predheat.heat_to_temp
+    stroke_width: 3
+    curve: stepline
+    type: area
+    opacity: 0.1
+    name: Heat to temperature
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predheat.heat_energy
+    stroke_width: 1
+    curve: smooth
+    name: Energy
+    color: red
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+  - entity: predheat.volume_temp
+    stroke_width: 1
+    curve: smooth
+    name: Volume temp
+    show:
+      in_header: raw
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+
+### Example cost chart
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Heating cost
+  show_states: true
+  colorize_states: true
+graph_span: 72h
+span:
+  start: day
+  offset: +0h
+now:
+  show: true
+series:
+  - entity: predheat.cost
+    stroke_width: 1
+    curve: smooth
+    name: predicted
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predheat.cost_today
+    stroke_width: 1
+    curve: smooth
+    name: actual
+    extend_to: now
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+
+### Example calibration chart
+
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Heat Calibration
+  show_states: true
+  colorize_states: true
+graph_span: 48h
+span:
+  start: hour
+  offset: '-24h'
+now:
+  show: true
+yaxis:
+  - min: 0
+    max: 40
+series:
+  - entity: predheat.internal_temp_h1
+    stroke_width: 1
+    curve: stepline
+    name: h1
+    offset: '-1h'
+  - entity: predheat.internal_temp_h2
+    stroke_width: 1
+    curve: stepline
+    name: h2
+    offset: '-1h'
+  - entity: predheat.heat_energy
+    stroke_width: 1
+    curve: stepline
+    name: energy
+  - entity: predheat.volume_temp
+    stroke_width: 1
+    curve: stepline
+    name: volume temp
+  - entity: predheat.heat_energy_h1
+    stroke_width: 1
+    curve: stepline
+    name: energy_h1
+    offset: '-1h'
+  - entity: predheat.heat_energy_h8
+    stroke_width: 1
+    curve: stepline
+    name: energy_h8
+    offset: '-8h'
+  - entity: predheat.internal_temp_h8
+    stroke_width: 1
+    curve: stepline
+    name: h8
+    offset: '-8h'
+  - entity: sensor.living_room_target
+    stroke_width: 1
+    curve: stepline
+    name: Target temperature
+    extend_to: now
+  - entity: predheat.internal_temp
+    stroke_width: 1
+    curve: stepline
+    name: Internal Temp Actual
+    extend_to: now
+  - entity: predheat.external_temp
+    stroke_width: 1
+    curve: stepline
+    name: External Temp Actual
+    extend_to: now
+  
