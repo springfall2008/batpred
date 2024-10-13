@@ -499,7 +499,11 @@ class PredHeat:
 
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
 
-        self.log("Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {}".format(self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.heat_energy_today))
+        self.log(
+            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {}".format(
+                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.heat_energy_today
+            )
+        )
         self.get_weather_data(now_utc)
         status = "idle"
 
