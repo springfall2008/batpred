@@ -4545,7 +4545,8 @@ class PredBat(hass.Hass):
                 iboost_amount_prev = self.predict_iboost_best.get(minute_relative_slot_end - PREDICT_STEP, 0)
                 if iboost_amount_prev > iboost_amount_end:
                     # Reset condition, scale to full slot size as last 5 minutes is missing in data
-                    iboost_change = (iboost_amount_prev - iboost_amount) * (minute_relative_slot_end - minute_relative_start) / (minute_relative_slot_end - PREDICT_STEP - minute_relative_start)
+                    divide_by = max(minute_relative_slot_end - PREDICT_STEP - minute_relative_start, PREDICT_STEP)
+                    iboost_change = (iboost_amount_prev - iboost_amount) * (minute_relative_slot_end - minute_relative_start) / divide_by
                 else:
                     iboost_change = max(iboost_amount_end - iboost_amount, 0.0)
                 if iboost_change > 0:
