@@ -499,12 +499,12 @@ class PredHeat:
 
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
 
-        self.log("Predheat: Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {}".format(self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.heat_energy_today))
+        self.log("Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {}".format(self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.heat_energy_today))
         self.get_weather_data(now_utc)
         status = "idle"
 
         if self.mode == "gas":
-            self.rate_import = self.base.rate_import_gas
+            self.rate_import = self.base.rate_gas
         else:
             self.rate_import = self.base.rate_import
 
