@@ -146,7 +146,8 @@ Set the **target_temperature** to point to a sensor that indicates what your boi
 
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 
-Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat-pump in kWh. If the sensor isn't accurate then using **heating_energy_scaling** to adjust it to the actually energy consumed. You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.
+Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat-pump in kWh. If the sensor isn't accurate then using **heating_energy_scaling** to adjust it to the actually energy consumed. 
+You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.
 
 Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below maybe useful for various standard radiators:
 
