@@ -166,7 +166,7 @@ Set **flow_temp** To the target flow temperature of your system, either via a se
 
 Set **flow_difference_target** to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g. for gas boilers this maybe something around 40 while on a heat pump it could be much lower e.g. 10.
 
-Set **volume_temp** If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the 
+Set **volume_temp** If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the
 interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in **next_volume_temp** for use
 in the next calculation cycle.
 
