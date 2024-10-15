@@ -57,6 +57,7 @@ Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
 <https://www.home-assistant.io/integrations/renault>
 
 Can be used to extract the cars current SoC.
+
 ```yaml
 car_charging_soc:
   - 'sensor.battery'
