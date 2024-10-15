@@ -2308,17 +2308,6 @@ class PredBat(hass.Hass):
                     },
                 )
                 self.dashboard_item(
-                    self.prefix + ".soc_min_kwh",
-                    state=self.dp3(soc_min),
-                    attributes={
-                        "time": self.time_abs_str(soc_min_minute),
-                        "friendly_name": "Predicted minimum SOC best",
-                        "state_class": "measurement",
-                        "unit_of_measurement": "kWh",
-                        "icon": "mdi:battery-arrow-down-outline",
-                    },
-                )
-                self.dashboard_item(
                     self.prefix + ".export_energy",
                     state=self.dp3(final_export_kwh),
                     attributes={
