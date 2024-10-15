@@ -324,35 +324,41 @@ The calculated baseline results under PV 10% scenario for the forecast_hours dur
 
 ## Best
 
-Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan:
+Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan.
+The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:
 
-- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed), with attributes of the prediction every 5 minutes to end of plan
-- predbat.battery_power_best - Predicted remaining battery power in kWh with attributes of the prediction every 5 minutes
+- predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to end of plan
+- predbat.battery_power_best - Predicted remaining battery power in kW with attributes of the prediction every 5 minutes
 - predbat.best_battery_hours_left - Total number of hours of battery capacity left under the best plan
 - predbat.best_charge_end - Predicted time the next forced battery charging under the best plan will end
-- predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent, attributes of all future battery charging times & limits
-- predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh, attributes of future charging times & limits
+- predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
+- predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh with attributes of future charging times & limits
 - predbat.best_charge_start - Predicted time the next forced battery charging under the best plan will start
 - predbat.best_discharge_end - Predicted time the next forced battery discharging under the best plan will end
-- predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not), attributes of all future battery discharges
+- predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
+with attributes of all future battery discharges (kWh and time slots)
 - predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
 - predbat.best_discharge_start - Predicted time the next forced battery discharging under the best plan will start
-
-- predbat.best_export_energy - Predicted exports under best plan
-- predbat_best_import_energy - Predicted imports under best plan
-- predbat_best_load - Predicted best load energy
-- predbat.best_pv_energy - Predicted Best PV energy in kWh
-- predbat_best_import_energy_battery - Predicted imports to the battery under best SoC setting
-- predbat_best_import_energy_house - Predicted imports to the house under best SoC setting
-- predbat_soc_kw_best - Predicted best final state of charge (in kWh), holds minute by minute prediction data (in attributes) to be charted
+- predbat.best_export_energy - Total kWh of predicted exports under the best plan with attributes of the predicted export kWh and their time slots
+- predbat.best_import_energy - Total kWh of predicted imports under best plan with attributes of the predicted import kWh and their time slots
+- predbat.best_import_energy_battery - Total kWh of predicted imports to the battery under the best plan
+- predbat.best_import_energy_house - Total kWh of predicted imports to the house under the best plan
+- predbat.best_load_energy - Total kWh of predicted house load under the best plan with attributes of the predicted load kWh in 5 minute slots to the end of the plan
+- predbat.best_metric - The total predicted cost for the best plan, taking account of predicted solar generation, house load, import and export rates.
+Attributes contain data for charting the cost prediction in 5 minute slots to the end of the plan
+- predbat.best_pv_energy - Predicted PV energy in kWh under the best plan with attributes of the predicted PV generation in kWh with time slots
+- predbat.best_soc_min_kwh - Predicted lowest SoC value in kWh under the best plan with attribute of the date/time that that lowest SoC occurs at
+- predbat.car_soc_best - The expected charge level of your car in best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
+- predbat.grid_power_best - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
+in kW per 5 minute slots to the end of the best plan for charting
+- predbat.iboost_best - Gives the predicted energy in kWh going into the iBoost solar diverter under the best plan
+- predbat.load_power_best - Gives the total kW of house load power to the end the best plan,
+with attributes of the average instantaneous house load power in kW in 5 minute slots to the end of the plan
+- predbat.pv_power_best - The sensor is always zero; attributes contain the predicted PV power in kW per 5 minute slots to the end of the best plan for charting
+- predbat.soc_kw_best - Predicted final state of charge (in kWh) with attributes of the predicted SoC in 5 minute time slots to the end of the best plan, for charting
 - predbat.soc_kw_best_h1 - Single data point for the predicted state of charge in 1 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
-- predbat_best_metric - The predicted cost if the proposed SoC % charge target is selected. Also contains data for charting cost in attributes
-- predbat.pv_power_best - Predicted best PV power per minute, for charting
-- predbat.grid_power - Predicted best Grid power per minute, for charting
-- predbat.car_soc_best - The expected charge level of your car in best plan at the end of the plan using the proposed SoC%/Window. Can also be charted
-- predbat.iboost_best - Gives the predicted energy going into the iBoost solar diverter
 
 ## Best PV 10%
 
