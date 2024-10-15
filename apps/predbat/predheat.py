@@ -142,7 +142,9 @@ class PredHeat:
         """
         Download one or more entities of data
         """
-        entity_ids = self.get_arg(key, indirect=False, domain="predheat")
+        entity_ids = self.get_arg(key, indirect=False, domain="predheat", default=None)
+        if not entity_ids:
+            return {}, 0
         if isinstance(entity_ids, str):
             entity_ids = [entity_ids]
 
@@ -429,6 +431,10 @@ class PredHeat:
         day_cost_import = 0
         day_energy = 0
         day_cost_time = {}
+
+        if not import_today:
+            self.log("Predheat: No import data for today")
+            return 0
 
         for minute in range(0, self.minutes_now):
             minute_back = self.minutes_now - minute - 1
