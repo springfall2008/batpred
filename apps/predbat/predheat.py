@@ -494,14 +494,13 @@ class PredHeat:
         self.heat_max_power = self.get_arg("heat_max_power", 30000, domain="predheat")
         self.heat_min_power = self.get_arg("heat_min_power", 7000, domain="predheat")
         self.heat_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
-        self.next_volume_temp = self.get_arg("next_volume_temp", self.internal_temperature[0], domain="predheat")
         self.smart_thermostat = self.get_arg("smart_thermostat", False, domain="predheat")
-
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
+        self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
         self.log(
-            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {}".format(
-                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.dp2(self.heat_energy_today)
+            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(
+                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.dp2(self.heat_energy_today), self.dp3(self.next_volume_temp)
             )
         )
         self.get_weather_data(now_utc)
@@ -521,7 +520,7 @@ class PredHeat:
         if scheduled:
             # Update state
             self.next_volume_temp = next_volume_temp
-            self.expose_config("next_volume_temp", self.next_volume_temp)
+            self.expose_config("next_volume_temp", self.dp3(self.next_volume_temp))
 
         if self.had_errors:
             self.log("Predheat: completed run status {} with Errors reported (check log)".format(status))
