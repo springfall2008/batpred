@@ -293,7 +293,7 @@ class PredHeat:
             if self.smart_thermostat:
                 if next_adjust and minute >= adjust["start"] and minute < adjust["end"]:
                     target_temp = adjust["to"]
-                    # self.log("Predheat: Adjusted target temperature for smart heating to {} at minute {}".format(target_temp, minute))
+                    #self.log("Predheat: Adjusted target temperature for smart heating to {} at minute {}".format(target_temp, minute))
 
             temp_diff_outside = internal_temp - external_temp
             temp_diff_inside = target_temp - internal_temp
@@ -498,11 +498,7 @@ class PredHeat:
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
         self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
-        self.log(
-            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(
-                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.dp2(self.heat_energy_today), self.dp3(self.next_volume_temp)
-            )
-        )
+        self.log("Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.dp2(self.heat_energy_today), self.dp3(self.next_volume_temp)))
         self.get_weather_data(now_utc)
         status = "idle"
 
@@ -517,7 +513,6 @@ class PredHeat:
         # Run sim
         next_volume_temp, predict_minute = self.run_simulation(self.next_volume_temp, self.heating_active)
         next_volume_temp, predict_minute = self.run_simulation(self.next_volume_temp, self.heating_active, last_predict_minute=predict_minute, save="best")
-        print("Predheat: Next volume temp is {}".format(next_volume_temp))
         if scheduled:
             # Update state
             self.next_volume_temp = next_volume_temp
