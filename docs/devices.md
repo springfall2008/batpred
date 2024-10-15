@@ -135,7 +135,7 @@ The device needs to be set to 'Smart' mode in the PodPoint app. Your automation 
 
 <https://github.com/gndean/home-assistant-hypervolt-charger>
 
-Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models). 
+Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).
 
 For pluggin detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
 
@@ -155,7 +155,7 @@ Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown'
 
 **Agile Tariff**
 
-To automate the schedule charging with Predbat, setup the automation to detect when there is a change to `binary_sensor.predbat_car_charging_slot`. 
+To automate the schedule charging with Predbat, setup the automation to detect when there is a change to `binary_sensor.predbat_car_charging_slot`.
 
 Ensure that `select.hypervolt_charge_mode` is in 'Boost', when predbat charging slot is 'on', set `select.hypervolt_activation_mode` to 'Plug and Charge', when it is 'off' set the 'Schedule', this is the recommended method for start/stop charging.
 
