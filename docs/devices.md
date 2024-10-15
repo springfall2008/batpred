@@ -137,7 +137,7 @@ The device needs to be set to 'Smart' mode in the PodPoint app. Your automation 
 
 Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).
 
-For pluggin detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
+For plugged in detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
 
 ```yaml
 car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
