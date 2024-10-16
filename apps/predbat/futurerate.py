@@ -16,6 +16,7 @@ class FutureRate:
         self.record_status = base.record_status
         self.log = base.log
         self.get_arg = base.get_arg
+        self.midnight = base.midnight
         self.midnight_utc = base.midnight_utc
         self.minute_data = base.minute_data
         self.forecast_days = base.forecast_days
