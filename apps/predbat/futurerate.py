@@ -3,15 +3,15 @@ import os
 import requests
 import json
 import pytz
+import copy
 
 from config import TIME_FORMAT
-
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-
 
 class FutureRate:
     def __init__(self, base):
         self.base = base
+        self.dp1 = base.dp1
         self.dp2 = base.dp2
         self.record_status = base.record_status
         self.log = base.log
@@ -51,14 +51,14 @@ class FutureRate:
             except (ValueError, TypeError):
                 return {}, {}
             if not all_data:
-                all_data = pdata
+                all_data = copy.deepcopy(pdata)
             else:
-                if "multiAreaEntries" in pdata:
+                if 'multiAreaEntries' in pdata:
                     all_data["multiAreaEntries"].extend(pdata["multiAreaEntries"])
                 else:
                     self.log("Warn: No multiAreaEntries in pdata for nordpool data")
                     return {}
-
+            
         for entry in all_data["multiAreaEntries"]:
             deliveryStart = entry["deliveryStart"]
             deliveryEnd = entry["deliveryEnd"]
@@ -117,7 +117,7 @@ class FutureRate:
 
         self.log("Predicted future rates: {}".format(future_data))
         return mdata_import, mdata_export
-
+    
     def futurerate_analysis(self):
         """
         Analyse futurerate energy data
@@ -131,11 +131,12 @@ class FutureRate:
 
         self.log("Fetching futurerate data from {}".format(url))
 
-        if "DATE" in url:
+        if 'DATE' in url:
             return self.futurerate_analysis_new(url)
         else:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")
             return {}, {}
+
 
     def download_futurerate_data(self, url):
         """
@@ -201,12 +202,12 @@ class FutureRate:
             self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
-
+        
         try:
             struct = json.loads(r.text)
         except requests.exceptions.JSONDecodeError:
             self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
-
+        
         return struct
