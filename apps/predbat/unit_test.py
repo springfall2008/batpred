@@ -32,7 +32,7 @@ from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
 from utils import calc_percent_limit
-
+from futurerate import FutureRate
 KEEP_SCALE = 0.5
 
 
@@ -40,6 +40,7 @@ class TestHAInterface:
     def __init__(self):
         self.step = 5
         self.build_history()
+        self.history_enable = True
         pass
 
     def build_history(self, days=30):
@@ -69,7 +70,11 @@ class TestHAInterface:
 
     def get_history(self, entity_id, now=None, days=30):
         print("Getting history for {}".format(entity_id))
-        return [self.history]
+        if self.history_enable:
+            return [self.history]
+        else:
+            return None
+        
 
 
 class TestInverter:
@@ -259,6 +264,50 @@ def compute_metric_test(
         return True
     return False
 
+def run_nordpool_test(my_predbat):
+    """
+    Test the compute metric function
+    """
+    print("Starting Nordpool test")
+    my_predbat.args['futurerate_url'] = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+    my_predbat.args['futurerate_adjust_import'] = False
+    my_predbat.args['futurerate_adjust_export'] = False
+    my_predbat.args['futurerate_peak_start'] = "16:00:00"
+    my_predbat.args['futurerate_peak_end'] = "19:00:00"
+    my_predbat.args['futurerate_peak_premium_import'] = 14
+    my_predbat.args['futurerate_peak_premium_export'] = 6.5
+    failed = False
+
+    future = FutureRate(my_predbat)
+    rate_import, rate_export = future.futurerate_analysis()
+    if not rate_import:
+        print("ERROR: No rate import data")
+        failed = True
+    if not rate_export:
+        print("ERROR: No rate export data")
+        failed = True
+
+
+    # Compute the minimum value in the hash, ignoring the keys
+    min_import = min(rate_import.values())
+    min_export = min(rate_export.values())
+    max_import = max(rate_import.values())
+    max_export = max(rate_export.values())
+
+    if min_import == max_import:
+        print("ERROR: Rate import data is flat")
+        failed = True
+    if min_export == max_export:
+        print("ERROR: Rate import data is flat")
+        failed = True
+    if min_import < - 15 or max_import > 100:
+        print("ERROR: Rate import data out of range got min {} max {}".format(min_import, max_import))
+        failed = True
+    if min_export < 0 or max_export > 50:
+        print("ERROR: Rate export data out of range got min {} max {}".format(min_export, max_export))
+        failed = True
+
+    return failed    
 
 def run_compute_metric_tests(my_predbat):
     """
@@ -500,6 +549,7 @@ def run_inverter_multi_test(
     inverter,
     soc,
     isCharging=False,
+    isDischarging=False,
     battery_rate_max_charge=1.0,
     battery_rate_max_charge_all=1.0,
     soc_max=100.0,
@@ -518,7 +568,7 @@ def run_inverter_multi_test(
     my_predbat.soc_kw = soc_kw_all
     my_predbat.battery_rate_max_charge = battery_rate_max_charge_all
 
-    my_predbat.adjust_battery_target_multi(inverter, soc, isCharging)
+    my_predbat.adjust_battery_target_multi(inverter, soc, isCharging, isDischarging)
     if assert_soc != inverter.soc_target:
         print("ERROR: SOC {} should be {}".format(inverter.soc_target, assert_soc))
         failed = True
@@ -2045,10 +2095,12 @@ def main():
     my_predbat.reset()
     my_predbat.update_time()
     my_predbat.ha_interface = TestHAInterface()
+    my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
+    my_predbat.ha_interface.history_enable = True
 
     print("**** Testing Predbat ****")
     failed = False
@@ -2064,6 +2116,8 @@ def main():
         failed |= run_compute_metric_tests(my_predbat)
     if not failed:
         failed |= run_perf_test(my_predbat)
+    if not failed:
+        failed |= run_nordpool_test(my_predbat)
 
     if failed:
         print("**** ERROR: Some tests failed ****")
