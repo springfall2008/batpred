@@ -2119,6 +2119,8 @@ def main():
         failed |= run_perf_test(my_predbat)
     if not failed:
         failed |= run_nordpool_test(my_predbat)
+    if not failed:
+        failed |= run_nordpool_test(my_predbat)
 
     if failed:
         print("**** ERROR: Some tests failed ****")

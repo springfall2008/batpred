@@ -3,6 +3,7 @@ import os
 import requests
 import json
 import pytz
+import copy
 
 from config import TIME_FORMAT
 
@@ -12,6 +13,7 @@ TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 class FutureRate:
     def __init__(self, base):
         self.base = base
+        self.dp1 = base.dp1
         self.dp2 = base.dp2
         self.record_status = base.record_status
         self.log = base.log
@@ -51,7 +53,7 @@ class FutureRate:
             except (ValueError, TypeError):
                 return {}, {}
             if not all_data:
-                all_data = pdata
+                all_data = copy.deepcopy(pdata)
             else:
                 if "multiAreaEntries" in pdata:
                     all_data["multiAreaEntries"].extend(pdata["multiAreaEntries"])
