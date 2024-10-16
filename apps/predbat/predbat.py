@@ -33,7 +33,7 @@ import asyncio
 import json
 
 THIS_VERSION = "v8.5.1"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -77,6 +77,7 @@ from inverter import Inverter
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
+from futurerate import FutureRate
 
 """
 Used to mimic threads when they are disabled
@@ -520,198 +521,6 @@ class PredBat(hass.Hass):
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
-
-    def futurerate_analysis(self):
-        """
-        Analyse futurerate energy data
-        """
-
-        url = None
-        if "futurerate_url" in self.args:
-            url = self.get_arg("futurerate_url", indirect=False)
-        self.log("Fetching futurerate data from {}".format(url))
-        if not url:
-            return {}, {}
-
-        try:
-            pdata = self.download_futurerate_data(url)
-        except (ValueError, TypeError):
-            return {}, {}
-
-        nord_tz = pytz.timezone("Europe/Oslo")
-        now_offset = datetime.now(nord_tz).strftime("%z")
-        extracted_data = {}
-        extracted_keys = []
-        array_values = []
-
-        peak_start = datetime.strptime(self.get_arg("futurerate_peak_start", "00:00:00"), "%H:%M:%S")
-        peak_end = datetime.strptime(self.get_arg("futurerate_peak_end", "00:00:00"), "%H:%M:%S")
-        peak_start_minutes = peak_start.minute + peak_start.hour * 60
-        peak_end_minutes = peak_end.minute + peak_end.hour * 60
-        if peak_end_minutes < peak_start_minutes:
-            peak_end_minutes += 24 * 60
-
-        peak_premium_import = self.get_arg("futurerate_peak_premium_import", 0)
-        peak_premium_export = self.get_arg("futurerate_peak_premium_export", 0)
-
-        self.log("Future rates - peak rate is {} - {} minutes premium import {} export {}".format(peak_start_minutes, peak_end_minutes, peak_premium_import, peak_premium_export))
-
-        if pdata and "Rows" in pdata:
-            for row in pdata["Rows"]:
-                if "Name" in row:
-                    rstart = row.get("StartTime", "") + now_offset
-                    rend = row.get("EndTime", "") + now_offset
-                    rname = row.get("Name", "")
-                if "Columns" in row:
-                    for column in row["Columns"]:
-                        cname = column.get("Name", "")
-                        cvalue = column.get("Value", "")
-                        date_start, time_start = rstart.split("T")
-                        date_end, time_end = rend.split("T")
-                        if "-" in rname and "-" in cname and "," in cvalue and cname:
-                            date_start = cname
-                            date_end = cname
-                            cvalue = cvalue.replace(",", ".")
-                            cvalue = float(cvalue)
-                            rstart = date_start + "T" + time_start
-                            rend = date_end + "T" + time_end
-                            TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-                            time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
-                            time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
-                            if time_date_end < time_date_start:
-                                time_date_end += timedelta(days=1)
-                            delta_start = time_date_start - self.midnight_utc
-                            delta_end = time_date_end - self.midnight_utc
-
-                            minutes_start = delta_start.seconds / 60
-                            minutes_end = delta_end.seconds / 60
-                            if minutes_end < minutes_start:
-                                minutes_end += 24 * 60
-
-                            # Convert to pence with Agile formula, starts in pounds per Megawatt hour
-                            rate_import = (cvalue / 10) * 2.2
-                            rate_export = (cvalue / 10) * 0.95
-                            if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
-                                rate_import += peak_premium_import
-                                rate_export += peak_premium_export
-                            rate_import = min(rate_import, 95)  # Cap
-                            rate_export = max(rate_export, 0)  # Cap
-                            rate_import = rate_import * 1.05  # Vat only on import
-
-                            item = {}
-                            item["from"] = time_date_start.strftime(TIME_FORMAT)
-                            item["to"] = time_date_end.strftime(TIME_FORMAT)
-                            item["rate_import"] = self.dp2(rate_import)
-                            item["rate_export"] = self.dp2(rate_export)
-
-                            if time_date_start not in extracted_keys:
-                                extracted_keys.append(time_date_start)
-                                extracted_data[time_date_start] = item
-                            else:
-                                self.log("Warn: Duplicate key {} in extracted_keys".format(time_date_start))
-
-        if extracted_keys:
-            extracted_keys.sort()
-            for key in extracted_keys:
-                array_values.append(extracted_data[key])
-            self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
-            mdata_import = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
-            mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
-
-        future_data = []
-        minute_now_hour = int(self.minutes_now / 60) * 60
-        for minute in range(minute_now_hour, self.forecast_plan_hours * 60 + minute_now_hour, 60):
-            if mdata_import.get(minute) or mdata_export.get(minute):
-                future_data.append("{} => {} / {}".format(self.time_abs_str(minute), mdata_import.get(minute), mdata_export.get(minute)))
-
-        self.log("Predicted future rates: {}".format(future_data))
-        return mdata_import, mdata_export
-
-    def download_futurerate_data(self, url):
-        """
-        Download futurerate data directly from a URL or return from cache if recent
-        Retry 3 times and then throw error
-        """
-
-        # Check the cache first
-        now = datetime.now()
-        if url in self.futurerate_url_cache:
-            stamp = self.futurerate_url_cache[url]["stamp"]
-            pdata = self.futurerate_url_cache[url]["data"]
-            update_time_since_midnight = stamp - self.midnight
-            now_since_midnight = now - self.midnight
-            age = now - stamp
-            needs_update = False
-
-            # Update if last data was yesterday
-            if update_time_since_midnight.seconds < 0:
-                needs_update = True
-
-            # data updates at 11am CET so update every 30 minutes during this period
-            if now_since_midnight.seconds > (9.5 * 60 * 60) and now_since_midnight.seconds < (11 * 60 * 60) and age.seconds > (0.5 * 60 * 60):
-                needs_update = True
-            if age.seconds > (12 * 60 * 60):
-                needs_update = True
-
-            if not needs_update:
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
-                return pdata
-
-        # Retry up to 3 minutes
-        for retry in range(3):
-            pdata = self.download_futurerate_data_func(url)
-            if pdata:
-                break
-
-        # Download failed?
-        if not pdata:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            if url in self.futurerate_url_cache:
-                pdata = self.futurerate_url_cache[url]["data"]
-                return pdata
-            else:
-                raise ValueError
-
-        # Cache New Octopus data
-        self.futurerate_url_cache[url] = {}
-        self.futurerate_url_cache[url]["stamp"] = now
-        self.futurerate_url_cache[url]["data"] = pdata
-        return pdata
-
-    def download_futurerate_data_func(self, url):
-        """
-        Download octopus rates directly from a URL
-        """
-        mdata = {}
-
-        if self.debug_enable:
-            self.log("Download {}".format(url))
-
-        try:
-            r = requests.get(url)
-        except:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-
-        if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        try:
-            data = r.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        if "data" in data:
-            mdata = data["data"]
-        else:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        return mdata
 
     def download_octopus_rates_func(self, url):
         """
@@ -8968,7 +8777,8 @@ class PredBat(hass.Hass):
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
 
         # futurerate data
-        self.future_energy_rates_import, self.future_energy_rates_export = self.futurerate_analysis()
+        futurerate = FutureRate(self)
+        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis()
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
