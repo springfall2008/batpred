@@ -326,7 +326,7 @@ pred_bat:
     - name: 'small'
       minutes: 15
       energy: 0.25
-  
+
   # Nordpool market energy rates
   #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
   #futurerate_adjust_import: False
