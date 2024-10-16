@@ -340,7 +340,7 @@ pred_bat:
   #iboost_energy_scaling: 1.0
 
   # Nordpool market energy rates
-  #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
   #futurerate_adjust_import: False
   #futurerate_adjust_export: True
   #futurerate_peak_start: "16:00:00"
