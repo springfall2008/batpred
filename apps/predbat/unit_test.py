@@ -33,7 +33,6 @@ from prediction import Prediction
 from prediction import wrapped_run_prediction_single
 from utils import calc_percent_limit
 from futurerate import FutureRate
-
 KEEP_SCALE = 0.5
 
 
@@ -75,6 +74,7 @@ class TestHAInterface:
             return [self.history]
         else:
             return None
+        
 
 
 class TestInverter:
@@ -264,29 +264,39 @@ def compute_metric_test(
         return True
     return False
 
-
 def run_nordpool_test(my_predbat):
     """
     Test the compute metric function
     """
     print("Starting Nordpool test")
-    my_predbat.args["futurerate_url"] = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP"
-    my_predbat.args["futurerate_adjust_import"] = False
-    my_predbat.args["futurerate_adjust_export"] = False
-    my_predbat.args["futurerate_peak_start"] = "16:00:00"
-    my_predbat.args["futurerate_peak_end"] = "19:00:00"
-    my_predbat.args["futurerate_peak_premium_import"] = 14
-    my_predbat.args["futurerate_peak_premium_export"] = 6.5
+    my_predbat.args['futurerate_url'] = 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+    my_predbat.args['futurerate_adjust_import'] = False
+    my_predbat.args['futurerate_adjust_export'] = False
+    my_predbat.args['futurerate_peak_start'] = "16:00:00"
+    my_predbat.args['futurerate_peak_end'] = "19:00:00"
+    my_predbat.args['futurerate_peak_premium_import'] = 14
+    my_predbat.args['futurerate_peak_premium_export'] = 6.5
     failed = False
 
     future = FutureRate(my_predbat)
     rate_import, rate_export = future.futurerate_analysis()
     if not rate_import:
         print("ERROR: No rate import data")
-        failed = True
+        return True
     if not rate_export:
         print("ERROR: No rate export data")
-        failed = True
+        return True
+
+    future.download_futurerate_data_func = lambda x: ("empty") # Mock the download function
+    rate_import2, rate_export2 = future.futurerate_analysis()
+    for key in rate_import:
+        if rate_import[key] != rate_import2.get(key, None):
+            print("ERROR: Rate import data not the same")
+            failed = True
+    for key in rate_export:
+        if rate_export[key] != rate_export2.get(key, None):
+            print("ERROR: Rate export data not the same")
+            failed = True
 
     # Compute the minimum value in the hash, ignoring the keys
     min_import = min(rate_import.values())
@@ -300,15 +310,14 @@ def run_nordpool_test(my_predbat):
     if min_export == max_export:
         print("ERROR: Rate import data is flat")
         failed = True
-    if min_import < -15 or max_import > 100:
+    if min_import < - 15 or max_import > 100:
         print("ERROR: Rate import data out of range got min {} max {}".format(min_import, max_import))
         failed = True
     if min_export < 0 or max_export > 50:
         print("ERROR: Rate export data out of range got min {} max {}".format(min_export, max_export))
         failed = True
 
-    return failed
-
+    return failed    
 
 def run_compute_metric_tests(my_predbat):
     """
