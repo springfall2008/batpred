@@ -52,14 +52,21 @@ class FutureRate:
                 pdata = self.download_futurerate_data(url)
             except (ValueError, TypeError):
                 return {}, {}
+            if not pdata and day == 0:
+                self.log("Warn: Error downloading futurerate data from URL {}, no data".format(url))
+                self.record_status("Warn: Error downloading futurerate data from cloud, no data", debug=url, had_errors=True)
+                return {}, {}
+
             if not all_data:
                 all_data = copy.deepcopy(pdata)
             else:
                 if "multiAreaEntries" in pdata:
                     all_data["multiAreaEntries"].extend(pdata["multiAreaEntries"])
-                else:
-                    self.log("Warn: No multiAreaEntries in pdata for nordpool data")
-                    return {}
+
+        if not all_data or ("multiAreaEntries" not in all_data):
+            self.log("Warn: Error downloading futurerate data from URL {}, no multiAreaEntries".format(url))
+            self.record_status("Warn: Error downloading futurerate data from cloud, no multiAreaEntries", debug=url, had_errors=True)
+            return {}, {}
 
         for entry in all_data["multiAreaEntries"]:
             deliveryStart = entry["deliveryStart"]
@@ -185,6 +192,9 @@ class FutureRate:
             else:
                 raise ValueError
 
+        if pdata == "empty":
+            pdata = {}
+
         # Cache New Octopus data
         self.futurerate_url_cache[url] = {}
         self.futurerate_url_cache[url]["stamp"] = now
@@ -198,6 +208,9 @@ class FutureRate:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
+
+        if r.status_code in [204]:
+            return "empty"
 
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
