@@ -1,5 +1,6 @@
 adbase
 appdaemon
+Jinja2
 mkdocs
 pre-commit
 pytz
