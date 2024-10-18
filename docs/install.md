@@ -270,18 +270,16 @@ Example Solcast update automation script:
 ```yaml
 alias: Solcast update
 description: "Update Solcast solar forecast"
-trigger:
-  - platform: time
-    at: "06:02:34"
-  - platform: time
-    at: "12:07:47"
-  - platform: time
-    at: "18:09:56"
-  - platform: time
-    at: "23:11:18"
-condition: []
-action:
-  - service: solcast_solar.update_forecasts
+triggers:
+  - trigger: time
+    at:
+      - "06:02:34"
+      - "12:07:47"
+      - "18:09:56"
+      - "23:11:18"
+conditions: []
+actions:
+  - action: solcast_solar.update_forecasts
     data: {}
 mode: single
 ```

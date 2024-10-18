@@ -530,8 +530,8 @@ and can be extended for multiple inverters and batteries by duplicating the trig
 ```yaml
 alias: GivTCP activity monitor
 description: Alert when communications to GivTCP have ceased for 15 minutes
-trigger:
-  - platform: state
+triggers:
+  - trigger: state
     entity_id: sensor.givtcp_<inverter id>_last_updated_time
     to: "null"
     for:
@@ -539,7 +539,7 @@ trigger:
     variables:
       alert_text: No GivTCP update received from inverter <id>
       restart_app: GivTCP
-  - platform: state
+  - trigger: state
     entity_id:
       - sensor.givtcp_<inverter id>_status
     from: online
@@ -548,7 +548,7 @@ trigger:
     variables:
       alert_text: No GivTCP update received from inverter <id>
       restart_app: GivTCP
-  - platform: numeric_state
+  - trigger: numeric_state
     entity_id:
       - sensor.givtcp_<inverter id>_invertor_temperature
     for:
@@ -557,7 +557,7 @@ trigger:
     variables:
       alert_text: No GivTCP update received from inverter <id>
       restart_app: GivTCP
-  - platform: state
+  - trigger: state
     entity_id:
       - sensor.givtcp_<battery id>_battery_cells
     to: unknown
@@ -566,7 +566,7 @@ trigger:
     variables:
       alert_text: Battery <battery_id> is offline to GivTCP
       restart_app: GivTCP
-  - platform: state
+  - trigger: state
     entity_id:
       - binary_sensor.givtcp_running
     to: "off"
@@ -575,7 +575,7 @@ trigger:
     variables:
       alert_text: GivTCP add-on is not running
       restart_app: GivTCP
-  - platform: state
+  - trigger: state
     entity_id:
       - binary_sensor.mosquitto_broker_running
     to: "off"
@@ -584,8 +584,9 @@ trigger:
     variables:
       alert_text: Mosquitto Broker add-on is not running
       restart_app: Mosquitto
-action:
-  - service: notify.mobile_app_<your mobile device id>
+actions:
+  - action: notify.mobile_app_<your mobile device id>
+    alias: Send a notification
     data:
       title: GivTCP communication issue
       message: |
@@ -619,6 +620,8 @@ action:
             action: hassio.addon_restart
             data:
               addon: core_mosquitto
+trace:
+  stored_traces: 20
 mode: single
 ```
 
@@ -651,8 +654,10 @@ The script will need to be customised for your mobile details.
 ```yaml
 alias: Predbat error monitor
 description: Alert when Predbat has raised an exception
-trigger:
-  - platform: template
+trace:
+  stored_traces: 20
+triggers:
+  - trigger: template
     alias: Predbat status contains 'Error' for 5 minutes
     value_template: "{{ 'Error' in states('predbat.status') }}"
     for:
@@ -661,7 +666,7 @@ trigger:
       alert_text: >-
         predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
-  - platform: state
+  - trigger: state
     alias: Predbat is in error status for 5 minutes
     entity_id: predbat.status
     attribute: error
@@ -672,7 +677,7 @@ trigger:
       alert_text: >-
         predbat status is {{ states('predbat.status') }}, error={{
         state_attr('predbat.status', 'error') }}
-  - platform: state
+  - trigger: state
     alias: Predbat status.last_updated has not changed for 20 minutes
     entity_id: predbat.status
     attribute: last_updated
@@ -685,7 +690,7 @@ trigger:
         %H:%M') }}', unchanged for 20 mins; Status='{{ states('predbat.status')
         }}'
       restart_predbat: "Y"
-  - platform: state
+  - trigger: state
     entity_id: binary_sensor.predbat_running
     to: "off"
     for:
@@ -693,8 +698,9 @@ trigger:
     variables:
       alert_text: Predbat add-on is not running
       restart_predbat: "Y"
-action:
-  - service: notify.mobile_app_<your mobile device id>
+actions:
+  - action: notify.mobile_app_<your mobile device id>
+    alias: Send alert message
     data:
       title: Predbat status issue
       message: |
