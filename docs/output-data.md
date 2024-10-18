@@ -303,53 +303,22 @@ so will be much larger than sensor.solcast_pv_forecast_today which is today's So
 - predbat.charge_start - Predicted time the next forced battery charging under the baseline plan will start
 - predbat.duration - The duration of the prediction maximum in hours
 - predbat.export_energy - Total kWh of predicted exports under the baseline plan with attributes of the predicted export kWh and their time slots
-
-export energy h0
-
 - predbat.grid_power - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
 in kW per 5 minute slots to the end of the baseline plan for charting
-
-high rates
-
 - predbat.import_energy - Total kWh of predicted imports under baseline plan with attributes of the predicted import kWh and their time slots
 - predbat.import_energy_battery - Total kWh of predicted import energy to charge the home battery under the baseline plan
-
-import_energy_h0
-
 - predbat.import_energy_house - Predicted import energy used by the home under the baseline plan that is not provided by your home battery
 (e.g. due to a flat battery or load is above maximum discharge rate)
-
 - predbat.load_energy - Total kWh of predicted house load under the baseline plan with attributes of the predicted load kWh in 5 minute slots to the end of the plan
-
-load energy actual
-load energy adjusted
-load energy h0
-load energy predicted
-load inday adjustment
-
 - predbat.load_power - Gives the total kW of house load power to the end the baseline plan,
 with attributes of the average instantaneous house load power in kW in 5 minute slots to the end of the plan
-
 - predbat.metric - The total predicted cost for the baseline plan, taking account of predicted solar generation, house load, import and export rates.
 Attributes contain data for charting the cost prediction in 5 minute slots to the end of the plan
-
 - predbat.pv_energy - Predicted PV energy in kWh under the baseline plan with attributes of the predicted PV generation in kWh with time slots
-
-pv_energy_h0
-
 - predbat.pv_power - Predicted PV power now with attributes that contain the predicted PV power in kW per 5 minute slots to the end of the baseline plan for charting
-
-predbat.record
-
 - predbat.soc_kw - Predicted state of charge (in kWh) at the end of the baseline plan prediction, not very useful in itself,
 but the attributes hold prediction data in 5 minute intervals which can be charted with Apex Charts (or similar)
-
-soc_kw_h0
-
 - predbat.soc_min_kwh - Predicted lowest battery SoC value in kWh under the baseline plan with attribute of the date/time that that lowest SoC occurs at
-
-- input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
-increments during the day and is reset to zero at 11:30pm each night
 
 ## PV 10% baseline data
 
@@ -413,13 +382,38 @@ The calculated best results under the PV 10% scenario for the forecast_hours dur
 - predbat.best10_pv_energy - Predicted best PV 10% energy in kWh
 - predbat.soc_kw_best10 - As soc_kw_best but using the PV 10%, also holds minute by minute data (in attributes) to be charted
 
+## In-day load adjustment
+
+The following sensors are used in the in-day adjustment chart (see [creating the Predbat charts](creating-charts.md) and [in day load adjustment](customisation.md#battery-margins-and-metrics-options)):
+
+- predbat.load_energy_actual - Total kWh of house load to end of plan, energy up to 'now' taken from today's actual energy, energy after 'now' from Predbat's prediction.
+Attributes of this actual/predicted energy in 5 minute slots from midnight today to the end of the plan for charting
+- predbat.load_energy_adjusted - Total kWh of predicted house load to end of plan, adjusted based on variance of today's actual load
+to the predicted load (based on historical data), dampened according to input_number.predbat_metric_inday_adjust_damping.
+Attributes contain the 5 minute slot forecasts to end of plan for charting
+- predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5 minute slots from midnight today to the end of the plan for charting
+- predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by actual load today
+
+## h0
+
+export energy h0
+import_energy_h0
+load energy h0
+pv_energy_h0
+soc_kw_h0
+
 ## Battery status
 
 The following sensors are set based upon what Predbat is currently controlling the battery to do:
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
 - binary_sensor.predbat_discharging - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
-Useful for automations if for example you want to turn off car charging when the battery is being exported
+
+These are useful for automations if for example you want to turn off car charging when the battery is being exported.
+
+## Prediction window
+
+- predbat.record - The sensor is always zero; attributes contain the time window for the current predicted plan
 
 ## Energy rate data
 
@@ -430,20 +424,22 @@ Useful for automations if for example you want to turn off car charging when the
 - predbat.low_rate_end - End time of the next low import rate slot
 - predbat.low_rate_start - Start time of the next low import rate slot
 - predbat.low_rate_cost_2, predbat.low_rate_end_2, predbat.low_rate_start_2 - The cost and times of the following low import rate slot
-- binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate slot active, 'off' otherwise
+- binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate import slot active, 'off' otherwise
 
 ### High export rate entities
 
 - predbat.high_export_rate_cost - The highest export rate cost in Pence
-- predbat.high_export_rate_start - Start time of the next high export rate slot
+- predbat.low_rate_duration - The time duration in minutes of the next high rate slot
 - predbat.high_export_rate_end - End time of the next high export rate slot
-- predbat.high_export_rate_cost_2, predbat.high_export_rate_start_2, predbat.high_export_rate_end_2 - The following high export rate slot
+- predbat.high_export_rate_start - Start time of the next high export rate slot
+- predbat.high_export_rate_cost_2, predbat.high_export_rate_end_2, predbat.high_export_rate_start_2 - The cost and times of the following high export rate slot
 - binary_sensor.predbat_high_export_rate_slot - A sensor that is 'on' to indicate when there is a high export rate slot active, 'off' otherwise
 
 ### Other rate entities
 
 - predbat.rates - The current energy import rate in Pence with attributes of yesterday's, todays and tomorrow's rates which can be charted
 - predbat.rates_export - The current energy export rates in Pence (also can be charted)
+- predbat.rates_gas - The current gas rates in Pence (also can be charted)
 - predbat.cost_today - The total cost of energy so far today (since midnight) with attributes of the total cost every 5 minutes since midnight today
 - predbat.cost_today_export - Same as predbat.cost_today, but for all export income since midnight today
 - predbat.cost_today_import - Same as predbat.cost_today, but for all import costs since midnight today
@@ -458,6 +454,8 @@ as described in [Predbat led car charging](car-charging.md#car-charging-planning
 
 - binary_sensor.predbat_iboost_active - A binary sensor indicating when there is excess solar and the solar diverter (e.g. iBoost, Eddi or just plain immersion heater) should be active,
 can be used for automations to trigger the immersion heater boost
+- input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
+increments during the day and is reset to zero at 11:30pm each night
 
 ## Energy saving data
 
