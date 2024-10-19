@@ -8310,9 +8310,7 @@ class PredBat(hass.Hass):
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
                 else:
-                    self.log(
-                        "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
-                    )
+                    self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                     inverter.disable_charge_window()
             elif self.set_charge_window:
                 self.log("No charge window yet, waiting for schedule.")
@@ -8450,7 +8448,7 @@ class PredBat(hass.Hass):
 
             # Reset charge/discharge rate
             if resetPause:
-               inverter.adjust_pause_mode()
+                inverter.adjust_pause_mode()
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
