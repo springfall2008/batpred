@@ -22,6 +22,9 @@ bierner
 cexxxx
 ceyyyy
 chargedischarge
+chargefreeze
+chargehold
+chargelater
 Chrg
 citem
 Codespaces
@@ -43,6 +46,7 @@ devcontainer
 devcontainers
 dexport
 dimport
+dischargefreeze
 diverter
 dlimit
 dstamp
@@ -119,6 +123,8 @@ mypy
 nattribute
 nearr
 njpwerner
+nocharge
+nodischarge
 nord
 Nordpool
 nrgheat

@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.1"
+THIS_VERSION = "v8.5.2"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -4220,7 +4220,7 @@ class PredBat(hass.Hass):
                 limit = self.charge_limit_best[charge_window_n]
                 limit_percent = int(self.charge_limit_percent_best[charge_window_n])
                 if limit > 0.0:
-                    if self.set_charge_freeze and (limit == self.reserve):
+                    if limit == self.reserve:
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         limit_percent = soc_percent
@@ -4829,7 +4829,7 @@ class PredBat(hass.Hass):
                 soc_kw = 0
 
             # Convert % of charge freeze to current SOC number
-            if self.set_charge_freeze and (soc_perc == self.reserve_percent):
+            if soc_perc == self.reserve_percent:
                 offset = int((minute - self.minutes_now) / 5) * 5
                 soc_kw = soc.get(offset, soc_kw)
 
@@ -5728,6 +5728,8 @@ class PredBat(hass.Hass):
             try_socs.append(best_soc_min_setting)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
+        if not self.set_charge_freeze and (self.reserve in try_socs):
+            try_soc.remove(self.reserve)
 
         # Run the simulations in parallel
         results = []
@@ -6248,7 +6250,7 @@ class PredBat(hass.Hass):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
-            elif (limit > 0 and self.set_charge_freeze) or (limit > self.reserve and (not self.set_charge_freeze)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
+            elif limit > 0 or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
                 new_limit_best.append(limit)
                 new_window_best.append(window)
             else:
@@ -6397,12 +6399,11 @@ class PredBat(hass.Hass):
                             self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
                     elif soc_max < limit_soc:
                         # Bring down limit to match predicted soc for freeze only mode
-                        if self.set_discharge_freeze:
-                            # Get it 5 minute margin upwards
-                            limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
-                            discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
-                            if limit != discharge_limits_best[window_n] and self.debug_enable:
-                                self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                        # Get it 5 minute margin upwards
+                        limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
+                        discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
+                        if limit != discharge_limits_best[window_n] and self.debug_enable:
+                            self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
             else:
                 self.log("Warn: Clip discharge window {} as it's already passed".format(window_n))
                 discharge_limits_best[window_n] = 100
@@ -8189,12 +8190,10 @@ class PredBat(hass.Hass):
                 self.log("Inverter is in calibration mode, not executing plan and enabling charge/discharge at full rate.")
                 break
 
-            resetDischarge = False
-            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge or inverter.inv_charge_discharge_with_rate:
-                # These options mess with discharge rate, so we must reset it when they aren't changing it
-                resetDischarge = True
-
-            resetReserve = False
+            resetDischarge = True
+            resetCharge = True
+            resetPause = True
+            resetReserve = True
             setReserve = False
             disabled_charge_window = False
             disabled_discharge = False
@@ -8245,28 +8244,30 @@ class PredBat(hass.Hass):
                             quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
+                        resetCharge = False
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
                         # Do we disable discharge during charge?
                         pausedDischarge = False
-                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
+                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
                             inverter.adjust_discharge_rate(0)
-                            inverter.adjust_pause_mode(pause_discharge=True)
                             resetDischarge = False
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
                             pausedDischarge = True
 
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
-                        if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
+                        if self.charge_limit_best[0] == self.reserve:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
-                                inverter.adjust_pause_mode(pause_discharge=True)
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                                pausedDischarge = True
-
-                            if not pausedDischarge:
-                                inverter.adjust_pause_mode()
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
+                            pausedDischarge = True
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                         else:
@@ -8274,16 +8275,17 @@ class PredBat(hass.Hass):
                                 self.set_soc_enable
                                 and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause)
                                 and (inverter.soc_percent >= self.charge_limit_percent_best[0])
-                                and (inverter.reserve_max >= inverter.soc_percent)
+                                and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause)
                             ):
                                 status = "Hold charging"
                                 inverter.adjust_pause_mode(pause_discharge=True)
+                                resetPause = False
+                                inverter.adjust_discharge_rate(0)
+                                resetDischarge = False
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
                             else:
                                 status = "Charging"
-                                if not pausedDischarge:
-                                    inverter.adjust_pause_mode()
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
                         isCharging = True
 
@@ -8296,7 +8298,7 @@ class PredBat(hass.Hass):
                             else:
                                 # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
                                 # If we are going into freeze mode but haven't yet then don't configure the charge window as it will mean a spike of charging first
-                                if not isCharging and self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
+                                if not isCharging and self.charge_limit_best[0] == self.reserve:
                                     self.log("Charge window will be disabled as freeze charging is planned")
                                     inverter.disable_charge_window()
                                 else:
@@ -8381,13 +8383,11 @@ class PredBat(hass.Hass):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+                        resetDischarge = False
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_charge_rate(0)
-                        else:
-                            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
-                        inverter.adjust_pause_mode()
-                        resetDischarge = False
+                            resetCharge = False
                         isDischarging = True
 
                         if self.set_reserve_enable:
@@ -8401,12 +8401,15 @@ class PredBat(hass.Hass):
                     else:
                         inverter.adjust_force_discharge(False)
                         disabled_discharge = True
-                        if self.set_discharge_freeze and (self.discharge_limits_best[0] == 99):
+                        if self.discharge_limits_best[0] == 99:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            resetCharge = False
                             if inverter.inv_charge_discharge_with_rate:
                                 inverter.adjust_discharge_rate(0)
+                                resetDischarge = False
                             inverter.adjust_pause_mode(pause_charge=True)
+                            resetPause = False
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
@@ -8415,27 +8418,15 @@ class PredBat(hass.Hass):
                             status = "Hold discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                             self.log("Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
-                            inverter.adjust_pause_mode()
-                        resetReserve = True
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_limits_best[0]:
                         inverter.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
-                        resetReserve = True
                     else:
                         self.log("Setting ECO mode as we are not yet within the discharge window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
                         inverter.adjust_force_discharge(False)
-                        resetReserve = True
-
-                    if self.set_discharge_freeze and not isCharging:
-                        # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
-                        inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
             elif self.set_discharge_window:
                 self.log("Setting ECO mode as no discharge window planned")
                 inverter.adjust_force_discharge(False)
-                resetReserve = True
-                if self.set_discharge_freeze and not isCharging:
-                    # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
-                    inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
             # Car charging from battery disable?
             carHolding = False
@@ -8449,8 +8440,9 @@ class PredBat(hass.Hass):
                             # from draining the battery
                             if status not in ["Discharging", "Charging"]:
                                 inverter.adjust_discharge_rate(0)
-                                inverter.adjust_pause_mode(pause_discharge=True)
                                 resetDischarge = False
+                                inverter.adjust_pause_mode(pause_discharge=True)
+                                resetPause = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if status != "Idle":
@@ -8463,8 +8455,9 @@ class PredBat(hass.Hass):
             boostHolding = False
             if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Discharging", "Charging"]:
                 inverter.adjust_discharge_rate(0)
-                inverter.adjust_pause_mode(pause_discharge=True)
                 resetDischarge = False
+                inverter.adjust_pause_mode(pause_discharge=True)
+                resetPause = False
                 boostHolding = True
                 self.log("Disabling battery discharge while iBoost is running")
                 if status != "Idle":
@@ -8476,13 +8469,13 @@ class PredBat(hass.Hass):
             if not isCharging and (not isDischarging or disabled_discharge) and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
 
-            # Pause charge off
-            if not isCharging and not isDischarging and not carHolding and not boostHolding:
+            # Reset charge/discharge rate
+            if resetPause:
                 inverter.adjust_pause_mode()
-
-            # Reset discharge rate?
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+            if resetCharge:
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
@@ -8493,18 +8486,21 @@ class PredBat(hass.Hass):
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SOC at the current value
-                        if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
+                        if self.charge_limit_best[0] == self.reserve:
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                                 self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isDischarging, isFreezeCharge=True)
                             else:
                                 # Not yet in the freeze, hold at 100% target SOC
+                                self.log("Not yet in charge freeze, holding target soc at 100%")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
                             if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
+                                self.log("Resetting charging SOC as we are not charging and inverter_soc_reset is enabled")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                             else:
+                                self.log("Setting charging SOC to {} as per target".format(self.charge_limit_percent_best[0]))
                                 self.adjust_battery_target_multi(inverter, self.charge_limit_percent_best[0], isCharging, isDischarging)
                     else:
                         if not inverter.inv_has_target_soc:
@@ -8553,10 +8549,7 @@ class PredBat(hass.Hass):
                 if isCharging:
                     # Compute limit to account for freeze setting
                     if self.charge_limit_best[0] == self.reserve:
-                        if self.set_charge_freeze:
-                            limit = inverter.soc_percent
-                        else:
-                            limit = 0
+                        limit = inverter.soc_percent
                     else:
                         limit = self.charge_limit_percent_best[0]
 
