@@ -417,7 +417,7 @@ These are useful for automations if for example you want to turn off car chargin
 
 ## Energy rate data
 
-### Low import rate entities
+### Low rate import entities
 
 - predbat.low_rate_cost - The lowest import rate cost in Pence
 - predbat.low_rate_duration - The time duration in minutes of the next low rate slot
@@ -426,14 +426,14 @@ These are useful for automations if for example you want to turn off car chargin
 - predbat.low_rate_cost_2, predbat.low_rate_end_2, predbat.low_rate_start_2 - The cost and times of the following low import rate slot
 - binary_sensor.predbat_low_rate_slot - A sensor that is 'on' to indicate when there is a low energy rate import slot active, 'off' otherwise
 
-### High export rate entities
+### High rate export entities
 
-- predbat.high_export_rate_cost - The highest export rate cost in Pence
-- predbat.low_rate_duration - The time duration in minutes of the next high rate slot
-- predbat.high_export_rate_end - End time of the next high export rate slot
-- predbat.high_export_rate_start - Start time of the next high export rate slot
-- predbat.high_export_rate_cost_2, predbat.high_export_rate_end_2, predbat.high_export_rate_start_2 - The cost and times of the following high export rate slot
-- binary_sensor.predbat_high_export_rate_slot - A sensor that is 'on' to indicate when there is a high export rate slot active, 'off' otherwise
+- predbat.high_rate_export_cost - The highest export rate cost in Pence
+- predbat.high_rate_export_duration - The time duration in minutes of the next high rate slot
+- predbat.high_rate_export_end - End time of the next high export rate slot
+- predbat.high_rate_export_start - Start time of the next high export rate slot
+- predbat.high_rate_export_cost_2, predbat.high_rate_export_end_2, predbat.high_rate_export_start_2 - The cost and times of the following high export rate slot
+- binary_sensor.predbat_high_rate_export_slot - A sensor that is 'on' to indicate when there is a high export rate slot active, 'off' otherwise
 
 ### Other rate entities
 
