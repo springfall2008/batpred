@@ -8471,7 +8471,7 @@ class PredBat(hass.Hass):
 
             # Reset charge/discharge rate
             if resetPause:
-               inverter.adjust_pause_mode()
+                inverter.adjust_pause_mode()
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
