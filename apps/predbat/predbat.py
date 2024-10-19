@@ -8249,15 +8249,6 @@ class PredBat(hass.Hass):
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
-                        # Do we disable discharge during charge?
-                        pausedDischarge = False
-                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0]):
-                            inverter.adjust_discharge_rate(0)
-                            resetDischarge = False
-                            inverter.adjust_pause_mode(pause_discharge=True)
-                            resetPause = False
-                            pausedDischarge = True
-
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
                         if self.charge_limit_best[0] == self.reserve:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
@@ -8265,7 +8256,6 @@ class PredBat(hass.Hass):
                                 disabled_charge_window = True
                             inverter.adjust_pause_mode(pause_discharge=True)
                             resetPause = False
-                            pausedDischarge = True
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
                             status = "Freeze charging"
@@ -8274,7 +8264,7 @@ class PredBat(hass.Hass):
                             if (
                                 self.set_soc_enable
                                 and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause)
-                                and (inverter.soc_percent >= self.charge_limit_percent_best[0])
+                                and (inverter.soc_percent == self.charge_limit_percent_best[0])
                                 and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause)
                             ):
                                 status = "Hold charging"
@@ -8286,7 +8276,17 @@ class PredBat(hass.Hass):
                                 disabled_charge_window = True
                             else:
                                 status = "Charging"
+
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
+
+                        if not self.set_discharge_during_charge and not disabled_charge_window:
+                            # Do we discharge discharge during charge
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
+                            status = "Hold charging"
+                        
                         isCharging = True
 
                     if not disabled_charge_window:
@@ -8310,7 +8310,9 @@ class PredBat(hass.Hass):
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
                 else:
-                    self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                    self.log(
+                        "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
+                    )
                     inverter.disable_charge_window()
             elif self.set_charge_window:
                 self.log("No charge window yet, waiting for schedule.")
@@ -8448,7 +8450,7 @@ class PredBat(hass.Hass):
 
             # Reset charge/discharge rate
             if resetPause:
-                inverter.adjust_pause_mode()
+               inverter.adjust_pause_mode()
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
