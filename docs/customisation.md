@@ -105,6 +105,8 @@ if you don't have multiple CPUs available or set it to 'auto' (the default) to u
 **input_number.predbat_inverter_loss** is an assumed percentage figure for  energy lost during the conversion within the inverter from DC to AC or AC to DC,
 the default is 0% for legacy reasons but please adjust.
 
+_TIP:_ Make sure you set the losses correctly, they are decimal percentages, don't set to '4' thinking it'll be 4%, Predbat will take this as being 400% and your plan will be very strange!
+
 **switch.predbat_inverter_hybrid** Set to True if you have a hybrid inverter so no inverter losses will be applied for DC charging from Solar generation.
 Set to False if you have an AC coupled battery and inverter losses will be applied when charging from solar.
 NB: This switch only applies when Predbat is modelling solar charging.
