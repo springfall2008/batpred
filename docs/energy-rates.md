@@ -241,7 +241,8 @@ rates_export_override:
 You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
 
 - **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", **start** and **end** in "HH:MM:SS" time format e.g. "12:30:00", and **rate** in pence.
-- **load_scaling** is a percentage factor, where 1.0 would be no change, 0.8 is 80% of nominal house load.
+- **load_scaling** is a percentage change factor in house load for the period - 1.0 would be no change, 0.8 is 80% of nominal house load,
+2.0 would be a 100% increase (i.e. 2x) on normal historic house load
 - **rate_increment** is the number of pence to add (or subtract) to the reported energy rates during this period
 
 ## Rate offsets
