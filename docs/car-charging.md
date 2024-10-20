@@ -18,7 +18,7 @@ and you have installed the Octopus Energy integration - in which case Predbat wi
 The [Octopus Energy integration supports Octopus Intelligent](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/entities/intelligent/),
 and through that Predbat gets most of the information it needs.
     - **octopus_intelligent_slot** in `apps.yaml` is pre-configured with a regular expression to point to the Intelligent Slot sensor in the Octopus Energy integration.
-You should not need to change this, but its worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your Octopus account details
+    You should not need to change this, but its worth checking the [Predbat logfile](output-data.md#predbat-logfile) to confirm that it has found your Octopus account details
     - Set **switch.predbat_octopus_intelligent_charging** to True
     - Information about the car's battery size will be automatically extracted from the Octopus Energy integration
     - You should set the cars current soc sensor, **car_charging_soc** in `apps.yaml` to point to a Home Assistant sensor
@@ -28,18 +28,18 @@ You should not need to change this, but its worth checking the [Predbat logfile]
     If you don't set this Predbat will default to 100%.
     - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it
     - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
-can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
-if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
+    can be used to prevent Predbat from assuming the car will be charging when the car is unplugged. This will only work correctly
+    if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
     - Let the Octopus app control when your car charges.
 
 - Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
     - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml`
     - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to True
-to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.
-You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
-charging sessions but will not reset it automatically.<BR>
-NB: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off
-as otherwise the car SoC sensor will be ignored
+    to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.
+    You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
+    charging sessions but will not reset it automatically.<BR>
+    NB: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off
+    as otherwise the car SoC sensor will be ignored
     - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
     - Set **input_number.predbat_car_charging_rate** to the car's charging rate in kW per hour (e.g. 7.5 for 7.5kWh)
     - Set **select.predbat_car_charging_plan_time** to the time you want the car charging to be completed by
@@ -47,46 +47,45 @@ as otherwise the car SoC sensor will be ignored
     - You can set **input_number.predbat_car_charging_plan_max_price** if you want to set a maximum price in pence per kWh to charge your car (e.g. 10p).
     If you set this to zero, this feature is disabled, and all low rate slots will be used. This may mean you need to use expert mode and change your low rate
     threshold to configure which slots should be considered if you have a tariff with more than 2 import rates (e.g. Flux)
+    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
     - Predbat will set **binary_sensor.predbat_car_charging_slot** when it determines the car can be charged;
     you will need to write a Home Assistant automation based on this sensor to control when your car charges.<BR>
     A sample automation to start/stop car charging using a Zappi car charger and the [MyEnergi Zappi integration](https://github.com/CJNE/ha-myenergi) is as follows,
     this should be adapted for your own charger type and how it controls starting/stopping car charging:
 
-    ```yaml
-    alias: Car charging
-    description: "Start/stop car charging based on Predbat determined slots"
-    trigger:
-      - platform: state
-        entity_id:
-          - binary_sensor.predbat_car_charging_slot
-    action:
-      - choose:
-          - conditions:
-              - condition: state
-                entity_id: binary_sensor.predbat_car_charging_slot
-                state: "on"
-            sequence:
-              <commands to turn on your car charger, e.g.>
-              - service: select.select_option
-                data:
-                  option: Eco+
-                target:
-                  entity_id: select.myenergi_zappi_charge_mode
-          - conditions:
-              - condition: state
-                entity_id: binary_sensor.predbat_car_charging_slot
-                state: "off"
-            sequence:
-              <commands to turn off your car charger, e.g.>
-              - service: select.select_option
-                data:
-                  option: Stopped
-                target:
-                  entity_id: select.myenergi_zappi_charge_mode
-    mode: single
-    ```
-
-    - _WARNING: Do not set **car_charging_now** or you will create a circular dependency._
+```yaml
+alias: Car charging
+description: "Start/stop car charging based on Predbat determined slots"
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.predbat_car_charging_slot
+actions:
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_car_charging_slot
+            state: "on"
+        sequence:
+          <commands to turn on your car charger, e.g.>
+          - service: select.select_option
+            data:
+              option: Eco+
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.predbat_car_charging_slot
+            state: "off"
+        sequence:
+          <commands to turn off your car charger, e.g.>
+          - service: select.select_option
+            data:
+              option: Stopped
+            target:
+              entity_id: select.myenergi_zappi_charge_mode
+mode: single
+```
 
 NOTE: Multiple cars can be planned with Predbat.
 
@@ -211,11 +210,11 @@ In Home Assistant (Settings / Automation & Scenes), create an automation to moni
 ```yaml
 alias: Car Charging Slot
 description: ""
-trigger:
-  - platform: state
+triggers:
+  - trigger: state
     entity_id:
       - binary_sensor.predbat_car_charging_slot
-action:
+actions:
   - if:
       - condition: state
         entity_id: binary_sensor.predbat_car_charging_slot

@@ -9174,7 +9174,7 @@ class PredBat(hass.Hass):
                         try:
                             octopus_limit = float(octopus_limit)
                         except ValueError:
-                            self.log("Warn: octopus_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
+                            self.log("Warn: octopus_charge_limit is set to a bad value {} in apps.yaml, must be a number".format(octopus_limit))
                             octopus_limit = None
                     if octopus_limit:
                         octopus_limit = self.dp3(float(octopus_limit) * self.car_charging_battery_size[0] / 100.0)

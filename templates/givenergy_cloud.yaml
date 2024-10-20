@@ -266,9 +266,9 @@ pred_bat:
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
+  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_target_time)
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
