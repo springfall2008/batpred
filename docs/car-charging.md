@@ -33,7 +33,9 @@ and through that Predbat gets most of the information it needs.
     - Let the Octopus app control when your car charges.
 
 - Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
-    - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml`
+    - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
+    - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
+    when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values configured in apps.yaml
     - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to True
     to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.
     You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
