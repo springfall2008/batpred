@@ -35,17 +35,17 @@ and provide the integration with your 'Octopus API key' (that you obtain from yo
 Octopus Energy events which are disabled by default when the integration is installed:
 
 ```yaml
-    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_next_day_rates
 
-    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
 
-    event.octopus_energy_gas_xxxxxxxx_previous_day_rates
-    event.octopus_energy_gas_xxxxxxxx_current_day_rates
-    event.octopus_energy_gas_xxxxxxxx_next_day_rates
+  event.octopus_energy_gas_xxxxxxxx_previous_day_rates
+  event.octopus_energy_gas_xxxxxxxx_current_day_rates
+  event.octopus_energy_gas_xxxxxxxx_next_day_rates
 ```  
 
 To enable the above events:
@@ -187,26 +187,26 @@ to set the appropriate rate over-ride dates and times:
 
 ```yaml
 rates_import_override:
-  - date : "YYYY-MM-DD"
-    start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
+  - date: "YYYY-MM-DD"
+    start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 rates_export_override:
-  - date : "YYYY-MM-DD"
-    start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
+  - date: "YYYY-MM-DD"
+    start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 ```
 
 Optionally you can add a predicted load scaling in these periods using **load_scaling** for example:
 
 ```yaml
 rates_import_override:
-  -  date: '2024-01-21'
-     start: '17:30:00'
-     end: '18:30:00'
-     rate: 150
-     load_scaling: 0.8
+  - date: '2024-01-21'
+    start: '17:30:00'
+    end: '18:30:00'
+    rate: 150
+    load_scaling: 0.8
 ```
 
 This instructs Predbat that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
@@ -220,7 +220,7 @@ force exporting during that time. The saving session will still work correctly a
 
 ```yaml
 rates_export_override:
- -  start: '17:00:00'
+  - start: '17:00:00'
     end: '19:00:00'
     rate_increment: -10
 ```
