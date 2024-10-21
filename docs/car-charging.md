@@ -37,10 +37,12 @@ and through that Predbat gets most of the information it needs.
     - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
     when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values configured in apps.yaml
     - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to True
-    to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.
+    to have Predbat create **input_number.predbat_car_charging_manual_soc_kwh** which will hold the cars SoC in kWh.<BR>
     You will need to manually set this to the cars current charge level before charging, Predbat will increment it during
     charging sessions but will not reset it automatically.<BR>
-    NB: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off
+    NB: **input_number.predbat_car_charging_manual_soc_kwh** must be set to the current kWh value of your car battery NOT a percentage SoC figure
+    otherwise Predbat won't know how much energy there currently is in the battery.<BR>
+    NB2: If you have **car_charging_soc** set and working for your car SoC sensor in apps.yaml, **switch.predbat_car_charging_manual_soc** must be set to Off
     as otherwise the car SoC sensor will be ignored
     - Ensure **switch.predbat_octopus_intelligent_charging** in Home Assistant is set to Off
     - Set **input_number.predbat_car_charging_rate** to the car's charging rate in kW per hour (e.g. 7.5 for 7.5kWh)
@@ -207,7 +209,8 @@ And turn **off** the Predbat control switch:
 
 **HA Charging Slot Automation**
 
-In Home Assistant (Settings / Automation & Scenes), create an automation to monitor the Predbat car charging slot sensor and turn the charger on and off according to the Predbat plan:
+In Home Assistant (Settings / Automation & Scenes), create an automation to monitor the Predbat car charging slot sensor and turn the charger on and off according to the Predbat plan
+(the numeric entity id's below would need replacing with the appropriate sensor name for your car charger):
 
 ```yaml
 alias: Car Charging Slot
@@ -223,7 +226,6 @@ actions:
         state: "off"
     then:
       - type: turn_off
-        device_id: ac8b06952c7fe838314e
         entity_id: f6de2df0758744aba60f6b5f
         domain: switch
   - if:
@@ -232,7 +234,6 @@ actions:
         state: "on"
     then:
       - type: turn_on
-        device_id: ac8b06952c7fe838314e
         entity_id: f6de2df0758744aba60f6b5f
         domain: switch
 mode: single
