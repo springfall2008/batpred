@@ -269,7 +269,7 @@ Predbat accept no responsibility for any violations:
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ```yaml
-futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
+futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
 futurerate_adjust_import: True
 futurerate_adjust_export: False
 futurerate_peak_start: "16:00:00"
