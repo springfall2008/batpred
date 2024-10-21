@@ -297,22 +297,22 @@ so will be much larger than sensor.solcast_pv_forecast_today which is today's So
 - predbat.battery_hours_left - The number of hours left until your home battery is predicted to run out under the baseline plan (stops at the maximum prediction time)
 - predbat.battery_power - The sensor is always zero; attributes contain the predicted remaining battery power under the baseline plan, in 5 minute slots, for charting
 - predbat.car_soc - The expected charge level of your car at the end of the baseline plan. Can also be charted
-- predbat.charge_end - Predicted time the next forced battery charging under the baseline plan will end
+- predbat.charge_end - Predicted end time of the next forced battery charging under the baseline plan
 - predbat.charge_limit - Predicted baseline battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
 - predbat.charge_limit_kw - Predicted baseline battery charge limit for the next charge in kWh with attributes of future charging times & limits
-- predbat.charge_start - Predicted time the next forced battery charging under the baseline plan will start
+- predbat.charge_start - Predicted start time of the next forced battery charging under the baseline plan
 - predbat.duration - The duration of the prediction maximum in hours
 - predbat.export_energy - Total kWh of predicted exports under the baseline plan with attributes of the predicted export kWh and their time slots
-- predbat.grid_power - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
+- predbat.grid_power - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export)
 in kW per 5 minute slots to the end of the baseline plan for charting
 - predbat.import_energy - Total kWh of predicted imports under baseline plan with attributes of the predicted import kWh and their time slots
-- predbat.import_energy_battery - Total kWh of predicted import energy to charge the home battery under the baseline plan
+- predbat.import_energy_battery - Total kWh of predicted import energy used to charge the home battery under the baseline plan
 - predbat.import_energy_house - Predicted import energy used by the home under the baseline plan that is not provided by your home battery
 (e.g. due to a flat battery or load is above maximum discharge rate)
 - predbat.load_energy - Total kWh of predicted house load under the baseline plan with attributes of the predicted load kWh in 5 minute slots to the end of the plan
-- predbat.load_power - Gives the total kW of house load power to the end the baseline plan,
+- predbat.load_power - Total kW of predicted house load power to the end of the baseline plan,
 with attributes of the average instantaneous house load power in kW in 5 minute slots to the end of the plan
-- predbat.metric - The total predicted cost for the baseline plan, taking account of predicted solar generation, house load, import and export rates.
+- predbat.metric - Total predicted cost for the baseline plan, taking account of predicted solar generation, house load, import and export rates.
 Attributes contain data for charting the cost prediction in 5 minute slots to the end of the plan
 - predbat.pv_energy - Predicted PV energy in kWh under the baseline plan with attributes of the predicted PV generation in kWh with time slots
 - predbat.pv_power - Predicted PV power now with attributes that contain the predicted PV power in kW per 5 minute slots to the end of the baseline plan for charting
@@ -338,32 +338,32 @@ Predbat outputs the following 'best' entities from the forecast (for the forecas
 The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:
 
 - predbat.battery_cycle_best - Predicted best battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to end of plan
-- predbat.battery_power_best - Predicted remaining battery power in kW with attributes of the prediction every 5 minutes
-- predbat.best_battery_hours_left - Total number of hours of battery capacity left under the best plan
-- predbat.best_charge_end - Predicted time the next forced battery charging under the best plan will end
+- predbat.battery_power_best - Predicted remaining battery power in kW with attributes of the future prediction in 5 minute slots
+- predbat.best_battery_hours_left - Predicted total number of hours of battery capacity left under the best plan
+- predbat.best_charge_end - Predicted end time of the next forced battery charging under the best plan
 - predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
 - predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh with attributes of future charging times & limits
-- predbat.best_charge_start - Predicted time the next forced battery charging under the best plan will start
-- predbat.best_discharge_end - Predicted time the next forced battery discharging under the best plan will end
+- predbat.best_charge_start - Predicted start time of the next forced battery charging under the best plan
+- predbat.best_discharge_end - Predicted end time of the next forced battery discharging under the best plan
 - predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
 with attributes of all future battery discharges (kWh and time slots)
 - predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
-- predbat.best_discharge_start - Predicted time the next forced battery discharging under the best plan will start
+- predbat.best_discharge_start - Predicted start time of the next forced battery discharging under the best plan
 - predbat.best_export_energy - Total kWh of predicted exports under the best plan, with attributes of the predicted export kWh and their time slots
 - predbat.best_import_energy - Total kWh of predicted imports under best plan, with attributes of the predicted import kWh and their time slots
 - predbat.best_import_energy_battery - Total kWh of predicted import energy to charge the home battery under the best plan
 - predbat.best_import_energy_house - Total kWh of predicted import energy used directly by the house under the best plan
 (e.g. due to a flat battery or the house load is greater than the max discharge rate)
 - predbat.best_load_energy - Total kWh of predicted house load energy in kWh under the best plan with attributes of the predicted load kWh in 5 minute slots to the end of the plan
-- predbat.best_metric - The total predicted cost for the best plan, taking account of predicted solar generation, house load, import and export rates.
+- predbat.best_metric - Total predicted cost for the best plan, taking account of predicted solar generation, house load, import and export rates.
 Attributes contain data for charting the cost prediction in 5 minute slots to the end of the plan
 - predbat.best_pv_energy - Predicted PV energy in kWh under the best plan with attributes of the predicted PV generation in kWh with time slots
 - predbat.best_soc_min_kwh - Predicted lowest battery SoC value in kWh under the best plan with attribute of the date/time that that lowest SoC occurs at
-- predbat.car_soc_best - The expected charge level of your car in best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
+- predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
 - predbat.grid_power_best - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
 in kW per 5 minute slots to the end of the best plan for charting
-- predbat.iboost_best - Gives the predicted energy in kWh going into the iBoost solar diverter under the best plan
-- predbat.load_power_best - Gives the total kW of house load power to the end the best plan,
+- predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan
+- predbat.load_power_best - Total kW of predicted house load power to the end the best plan,
 with attributes of the average instantaneous house load power in kW in 5 minute slots to the end of the plan
 - predbat.pv_power_best - The sensor is always zero; attributes contain the predicted PV power in kW per 5 minute slots to the end of the best plan for charting
 - predbat.soc_kw_best - Predicted final state of charge (in kWh) with attributes of the predicted SoC in 5 minute time slots to the end of the best plan, for charting
@@ -394,13 +394,17 @@ Attributes contain the 5 minute slot forecasts to end of plan for charting
 - predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5 minute slots from midnight today to the end of the plan for charting
 - predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by actual load today
 
-## h0
+## 'Today' energy sensors
 
-export energy h0
-import_energy_h0
-load energy h0
-pv_energy_h0
-soc_kw_h0
+The following sensors are output by Predbat and give the 'today' energy readings.
+They mirror input sensors fed into Predbat in apps.yaml and are used in the data prediction chart (see [creating the Predbat charts](creating-charts.md)):
+
+- predbat.export_energy_h0 - Mirrors the export_today sensor configured in apps.yaml and gives today's total kWh of export energy
+- predbat.import_energy_h0 - Mirrors the import_today sensor configured in apps.yaml and gives today's total kWh of import energy
+- predbat.load_energy_h0 - Mirrors the load_today sensor configured in apps.yaml and gives today's total kWh of house load energy
+- predbat.pv_energy_h0 - Mirrors the pv_today sensor configured in apps.yaml and gives today's total kWh of generated PV energy
+- predbat.soc_kw_h0 - Mirrors the soc_kwh sensor configured in apps.yaml and gives today's total kWh of battery state of charge (SoC).
+Note that if you have configured [battery scaling](apps-yaml.md#battery-size-scaling) then soc_kw_h0 will have been scaled by the configured scaling factor
 
 ## Battery status
 
@@ -475,6 +479,10 @@ vs not having a PV and battery system at all and all house load being met from g
 
 ## Solar forecast data
 
+The following sensors give the forecast Solar data from Solcast.
+Predbat populates these sensors irrespective of whether you are using the [Predbat direct Solcast or Solcast integration method](install.md#solcast-install) to get your Solar forecast,
+but if you are using the Solcast integration then the Predbat sensors mirror the similarly named Solcast integration sensors so could be disabled if you so wish.
+
 - sensor.predbat_pv_today - Tracks the PV forecast in kWh for today, attributes give the remaining amount today and the half hourly data
 - sensor.predbat_pv_tomorrow - Tracks the PV forecast in kWh for tomorrow, attributes give the remaining amount today and the half hourly data
 - sensor.predbat_pv_d2 - Similar to the above, but tracking the PV forecast for the day after tomorrow
@@ -488,17 +496,19 @@ or if you want to verify that Predbat is running OK.
 
 There is a lot of output in the logfile, this is normal!
 
-Depending on how you installed Predbat the logfile will be held in one of three different directories in Home Assistant and the filename varies slightly:
+If you are using the Predbat add-on then the logfile can easily be viewed via the 'Log' tab of the [Predbat web console](#web-interface).
+
+To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
 - if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), the logfile will be `/addon_configs/6adb4f0d_predbat/predbat.log`,
 
-- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`,
-or
+- if the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
 
-- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`.
+- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
-to view Predbat's logfile - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
+to view Predbat's logfile if you are not using the Predbat add-on.
+See [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
 
 ## Automated monitoring that Predbat and GivTCP are running OK
 
@@ -647,7 +657,7 @@ In normal operation Predbat will automatically run and update its forecast every
 then an alert will be raised and the automation will restart the Predbat add-on to try to resolve a 'hung Predbat' issue.
 
 In the same way for the GivTCP and Mosquitto add-on's above, the last trigger requires you to enable a binary sensor that detects that the Predbat/AppDaemon add-on is running.
-Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat install option you followed.
+Follow the same steps to enable the binary sensor for either the 'Predbat', 'AppDaemon' or 'AppDaemon-predbat' add-on depending on which Predbat installation method you followed.
 
 The script will need to be customised for your mobile details.
 
