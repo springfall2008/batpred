@@ -371,6 +371,12 @@ with attributes of the average instantaneous house load power in kW in 5 minute 
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
 
+carbon_today Carbon today so far in g
+carbon_best Predicted Carbon energy best in g
+carbon Predicted Carbon energy in g
+carbon_now Grid Carbon intensity history g/kWh
+
+
 ## Best PV 10%
 
 The calculated best results under the PV 10% scenario for the forecast_hours duration:

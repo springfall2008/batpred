@@ -177,7 +177,7 @@ The gas rates are only required if you have a gas boiler, an iBoost, and are usi
 
 ## Manually over-riding energy rates
 
-You can also override the energy rates (regardless of whether they are set manually or via the Octopus Energy integration) by using the override feature in apps.yaml.
+You can also override the import or export energy rates (regardless of whether they are set manually or via the Octopus Energy integration) by using the override feature in apps.yaml.
 
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sunday's.
@@ -198,7 +198,7 @@ rates_export_override:
     rate: pence
 ```
 
-Optionally you can add a predicted load scaling in these periods using **load_scaling** for example:
+Optionally you can add a predicted load scaling factor for these periods using **load_scaling**, for example:
 
 ```yaml
 rates_import_override:
@@ -240,10 +240,13 @@ rates_export_override:
 
 You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
 
-- **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", **start** and **end** in "HH:MM:SS" time format e.g. "12:30:00", and **rate** in pence.
-- **load_scaling** is a percentage change factor in house load for the period - 1.0 would be no change, 0.8 is 80% of nominal house load,
+- **date** is optional and if specified must be in the date format of "YYYY-MM-DD" e.g. "2023-09-09".
+If a date is specified then the rate override applies that specific date, otherwise it applies to all dates
+- **start** and **end** must be specified in "HH:MM:SS" time format e.g. "12:30:00"
+- **load_scaling** is an optional percentage change factor in house load for the period - 1.0 would be no change, 0.8 is 80% of nominal house load,
 2.0 would be a 100% increase (i.e. 2x) on normal historic house load
-- **rate_increment** is the number of pence to add (or subtract) to the reported energy rates during this period
+- **rate** is optional figure in pence to override the rate for the specific period
+- **rate_increment** is optional and is the number of pence to add (or subtract) to the reported energy rates during this period
 
 ## Rate offsets
 
