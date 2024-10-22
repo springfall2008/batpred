@@ -268,7 +268,7 @@ Predbat accept no responsibility for any violations:
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ```yaml
-futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
+futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
 futurerate_adjust_import: True
 futurerate_adjust_export: False
 futurerate_peak_start: "16:00:00"
