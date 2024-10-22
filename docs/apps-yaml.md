@@ -6,10 +6,9 @@ Depending on how you installed Predbat the `apps.yaml` file will be held in one 
 
 - if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat`,
 
-- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`,
-or
+- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`.
+- if the combined AppDaemon/Predbat add-on installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -40,6 +39,8 @@ car_charging_now_response:
 ```
 
 The two spaces before the dash are especially critical. Its easy to mis-edit and have one or three spaces which isn't valid YAML.
+
+NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
 ## Templates
 

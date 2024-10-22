@@ -2,7 +2,7 @@
 
 ## I've installed Predbat but I don't see the correct entities
 
-- First look at predbat.status in Home Assistant and the AppDaemon.log (which can be found in the list of log files in the System/Log area of the GUI).
+- First look at predbat.status in Home Assistant and the Predbat/AppDaemon add-on log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error it's likely something is configured wrongly,
 check your entity settings are correct.
 - Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
@@ -242,13 +242,13 @@ and will not execute the plan nor enable battery charge or discharge.
 
 Once the inverter finishes calibrating the battery, Predbat will resume normal operations.
 
-## Inverter time is xxx AppDaemon time is xxx this is xxx minutes skewed, Predbat may not function correctly
+## Inverter time is xxx, Predbat computer time is xxx, this is xxx minutes skewed, Predbat may not function correctly
 
 If the **predbat.status** gives a warning error about the inverter time:
 
 ![IMAGE](images/Inverter-time-warning.png)
 
-Then it indicates that there is a mis-match between the clock that Predbat AppDaemon is using and the inverter time clock, and clearly with a clock mis-match,
+Then it indicates that there is a mis-match between the clock that Predbat is using and the inverter time clock, and clearly with a clock mis-match,
 charging and discharging your battery at specific times may not work as expected.
 
 There are several potential causes of this problem:

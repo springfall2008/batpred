@@ -262,6 +262,8 @@ battery SoC, car and iBoost charging, and Predbat's planned charging and dischar
 
 Its recommended to [Create the Predbat Plan card](predbat-plan-card.md) as an easy way to see the plan that Predbat has created.
 
+If you are using the Predbat add-on then the predbat plan can also be viewed via the 'Plan' tab of the [Predbat web console](#web-interface).
+
 ### Graphing the Predbat predictions
 
 A set of Apex Charts can also be created to see graphically what Predbat plans to do - [Creating the charts](creating-charts.md).
@@ -286,11 +288,12 @@ predbat.status additionally has the following attributes that are automatically 
 
 ## Baseline data
 
-What your battery is expected to do *over the forecast_hours duration of the plan* with no changes made by Predbat.  This is considered to be the 'baseline' plan:
+Predbat outputs the following sensors to predict what your battery is expected to do *over the forecast_hours duration of the plan* with no changes made by Predbat.
+This is considered to be the 'baseline' plan:
 
-NB: All of Predbat's forecasts are from 'now' to the forecast_hours duration (set in apps.yaml) into the future and shouldn't be confused with 'today' figures.
+NB: All of Predbat's forecasts are from midnight today to the forecast_hours duration (set in apps.yaml) into the future and shouldn't be confused with 'today' figures.
 
-e.g. predbat.pv_energy is the predicted PV energy from midnight today, and for the forecast_hours (typically 48) ahead
+e.g. predbat.pv_energy is the actual PV energy from midnight today, and for the predicted forecast_hours (typically 48) ahead
 so will be much larger than sensor.solcast_pv_forecast_today which is today's Solcast PV forecast.
 
 - predbat.battery_cycle - Predicted baseline battery cycle in kWh (total kWh processed) with attributes of the prediction every 5 minutes to end of plan
@@ -320,9 +323,9 @@ Attributes contain data for charting the cost prediction in 5 minute slots to th
 but the attributes hold prediction data in 5 minute intervals which can be charted with Apex Charts (or similar)
 - predbat.soc_min_kwh - Predicted lowest battery SoC value in kWh under the baseline plan with attribute of the date/time that that lowest SoC occurs at
 
-## PV 10% baseline data
+## PV 10% Baseline data
 
-The calculated baseline results under the PV 10% scenario for the forecast_hours duration of the plan:
+Predbat outputs the following baseline results under the PV 10% scenario for the forecast_hours duration of the plan, these are known as the 'base10' predictions:
 
 - predbat.base10_export_energy- Total predicted export energy in kWh for the PV 10% scenario, with attributes of the predicted export kWh and their time slots
 - predbat.base10_import_energy- Total predicted import energy in kWh for the PV 10% scenario, with attributes of the predicted import kWh and their time slots
@@ -332,7 +335,7 @@ The calculated baseline results under the PV 10% scenario for the forecast_hours
 - predbat.soc_kw_base10 - Predicted final state of charge (in kWh) of the battery,
 with attributes of the predicted SoC in 5 minute time slots to the end of the plan under the PV 10% scenario, for charting
 
-## Best
+## Best Prediction data
 
 Predbat outputs the following 'best' entities from the forecast (for the forecast_hours duration) based on the lowest cost consumption plan.
 The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted plan:
@@ -371,15 +374,9 @@ with attributes of the average instantaneous house load power in kW in 5 minute 
 - predbat.soc_kw_best_h8 - Single data point for the predicted state of charge in 8 hours time (useful for calibration charts, predicted vs actual)
 - predbat.soc_kw_best_h12 - Single data point for the predicted state of charge in 12 hours time (useful for calibration charts, predicted vs actual)
 
-carbon_today Carbon today so far in g
-carbon_best Predicted Carbon energy best in g
-carbon Predicted Carbon energy in g
-carbon_now Grid Carbon intensity history g/kWh
+## Best PV 10% Prediction data
 
-
-## Best PV 10%
-
-The calculated best results under the PV 10% scenario for the forecast_hours duration:
+Predbat outputs the following best results under the PV 10% scenario for the forecast_hours duration, these are known as the 'best10' prediction:
 
 - predbat.best10_metric - Predicted best cost in pence using the PV 10% solar forecast
 - predbat.best10_export_energy- Predicted best export energy in kWh for PV 10%
@@ -388,9 +385,9 @@ The calculated best results under the PV 10% scenario for the forecast_hours dur
 - predbat.best10_pv_energy - Predicted best PV 10% energy in kWh
 - predbat.soc_kw_best10 - As soc_kw_best but using the PV 10%, also holds minute by minute data (in attributes) to be charted
 
-## In-day load adjustment
+## In-day load adjustment data
 
-The following sensors are used in the in-day adjustment chart (see [creating the Predbat charts](creating-charts.md) and [in day load adjustment](customisation.md#battery-margins-and-metrics-options)):
+The following sensors are used in the in-day adjustment chart - see [creating the Predbat charts](creating-charts.md) and [in day load adjustment](customisation.md#battery-margins-and-metrics-options):
 
 - predbat.load_energy_actual - Total kWh of house load to end of plan, energy up to 'now' taken from today's actual energy, energy after 'now' from Predbat's prediction.
 Attributes of this actual/predicted energy in 5 minute slots from midnight today to the end of the plan for charting
@@ -400,10 +397,10 @@ Attributes contain the 5 minute slot forecasts to end of plan for charting
 - predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5 minute slots from midnight today to the end of the plan for charting
 - predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by actual load today
 
-## 'Today' energy sensors
+## 'Today' energy data
 
-The following sensors are output by Predbat and give the 'today' energy readings.
-They mirror input sensors fed into Predbat in apps.yaml and are used in the data prediction chart (see [creating the Predbat charts](creating-charts.md)):
+The following sensors output by Predbat give the 'today' energy readings.
+They mirror input sensors fed into Predbat in apps.yaml and are used in the data prediction chart - see [creating the Predbat charts](creating-charts.md):
 
 - predbat.export_energy_h0 - Mirrors the export_today sensor configured in apps.yaml and gives today's total kWh of export energy
 - predbat.import_energy_h0 - Mirrors the import_today sensor configured in apps.yaml and gives today's total kWh of import energy
@@ -459,6 +456,8 @@ These are useful for automations if for example you want to turn off car chargin
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
 as described in [Predbat led car charging](car-charging.md#car-charging-planning)
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
+- predbat.cost_total_car - A running total of the below cost_yesterday_car sensor, with attribute of the total in pounds
+- predbat.cost_yesterday_car - A sensor that gives the total energy costs of charging the car in pence for yesterday (00:00-23:59 on the previous day)
 
 ## iBoost Solar Diverter data
 
@@ -467,19 +466,28 @@ can be used for automations to trigger the immersion heater boost
 - input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
 increments during the day and is reset to zero at 11:30pm each night
 
+## Carbon data
+
+The following sensors output by Predbat give historic and predicted carbon data.
+They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md):
+
+predbat.carbon Predicted Carbon energy in g
+predbat.carbon_best Predicted Carbon energy best in g
+predbat.carbon_now Grid Carbon intensity history g/kWh
+predbat.carbon_today Carbon today so far in g
+
 ## Energy saving data
 
-- predbat.cost_yesterday - A sensor that gives you your energy costs for yesterday (00:00-23:59 on the previous day)
+The following sensors output by Predbat give cost saving data that Predbat achieved, i.e. the financial benefits of using Predbat.
+They are used in the daily cost saving and total cost savings charts - see [creating the Predbat charts](creating-charts.md):
 
-predbat.savings_total_actual
-
-- predbat.savings_total_predbat - A running total of the below savings_yesterday_predbat sensor
-- predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor
-
-predbat.savings_total_soc
-
+- predbat.cost_yesterday - A sensor that gives the total energy costs in pence for yesterday (00:00-23:59 on the previous day)
+- predbat.savings_total_actual - A running total in pence of the above cost_yesterday sensor, with attribute of the total in pounds
+- predbat.savings_total_predbat - A running total in pence of the below savings_yesterday_predbat sensor, with attribute of the total in pounds
+- predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
+- predbat.savings_total_soc - A running total of what the final SoC in kWh would have been at the end of each day if you were not using Predbat
 - predbat.savings_yesterday_predbat - A sensor which tells you how much money Predbat saved you yesterday compared to not using Predbat,
-and only charging at the lowest import rate in the 24 hour Period
+and only charging at the lowest import rate in the 24 hour period
 - predbat.savings_yesterday_pvbat - A sensor which tells you how much money you saved from using Predbat
 vs not having a PV and battery system at all and all house load being met from grid import
 
@@ -510,7 +518,7 @@ To directly view the physical logfile, it can be found in one of three different
 
 - if the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
 
-- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
+- if the combined AppDaemon/Predbat add-on installation method was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to view Predbat's logfile if you are not using the Predbat add-on.

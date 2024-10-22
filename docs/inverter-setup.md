@@ -111,7 +111,7 @@ To run PredBat with Solis hybrid inverters, follow the following steps:
 
 4. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
    The majority of settings should be correct but please check.
-   You will need to un-comment the `template` line to enable it. Save it to the `config/appdaemon/apps/predbat/config` folder.
+   You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
    Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
 6. Ensure that the inverter is set Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that
