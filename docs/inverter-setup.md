@@ -1,4 +1,4 @@
-# Inverter Setup
+# Inverter setup
 
 PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
 
