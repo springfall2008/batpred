@@ -16,6 +16,7 @@ nav:
     - video-guides.md
     - faq.md
     - devices.md
+    - manual-api.md
   - 'Viewing Predbat data':
     - output-data.md
     - predbat-plan-card.md
@@ -23,5 +24,7 @@ nav:
   - 'Predbat development':
     - todo-list.md
     - developing.md
+  - 'Predheat':
+    - predheat.md
 markdown_extensions:
   - sane_lists

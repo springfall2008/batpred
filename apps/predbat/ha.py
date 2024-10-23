@@ -20,9 +20,34 @@ import json
 import requests
 import traceback
 import sqlite3
+import threading
 from config import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_SECONDS
 
 TIME_FORMAT_DB = "%Y-%m-%dT%H:%M:%S.%f"
+
+
+class RunThread(threading.Thread):
+    def __init__(self, coro):
+        self.coro = coro
+        self.result = None
+        super().__init__()
+
+    def run(self):
+        self.result = asyncio.run(self.coro)
+
+
+def run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        thread = RunThread(coro)
+        thread.start()
+        thread.join()
+        return thread.result
+    else:
+        return asyncio.run(coro)
 
 
 class HAInterface:
@@ -53,9 +78,10 @@ class HAInterface:
 
         if not self.ha_key:
             if not (self.db_enable and self.db_primary):
-                self.log("Warn: ha_key or SUPERVISOR_TOKEN not found, you can set ha_url/ha_key in apps.yaml. Will use direct HA API")
+                self.log("Error: ha_key or SUPERVISOR_TOKEN not found, you must set ha_url/ha_key in apps.yaml")
+                raise ValueError
             else:
-                self.log("Info: Using SQL Lite database as primary data source")
+                self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
         else:
             check = self.api_call("/api/")
             if not check:
@@ -88,6 +114,59 @@ class HAInterface:
         """
         return self.slug
 
+    def call_service_websocket_command(self, domain, service, data):
+        """
+        Call a service via the web socket interface
+        """
+        return run_async(self.async_call_service_websocket_command(domain, service, data))
+
+    async def async_call_service_websocket_command(self, domain, service, service_data):
+        """
+        Call a service via the web socket interface
+        """
+        url = "{}/api/websocket".format(self.ha_url)
+        response = None
+        self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
+
+        return_response = service_data.get("return_response", False)
+        if "return_response" in service_data:
+            del service_data["return_response"]
+
+        async with ClientSession() as session:
+            try:
+                async with session.ws_connect(url) as websocket:
+                    await websocket.send_json({"type": "auth", "access_token": self.ha_key})
+                    id = 1
+                    await websocket.send_json({"id": id, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+
+                    async for message in websocket:
+                        if self.base.stop_thread:
+                            self.log("Info: Web socket stopping")
+                            break
+
+                        if message.type == WSMsgType.TEXT:
+                            try:
+                                data = json.loads(message.data)
+                                if data:
+                                    message_type = data.get("type", "")
+                                    if message_type == "result":
+                                        response = data.get("result", {}).get("response", None)
+                                        success = data.get("success", False)
+                                        if not success:
+                                            self.log("Warn: Service call {}/{} failed with response {}".format(domain, service, response))
+                                        break
+
+                            except Exception as e:
+                                self.log("Error: Web Socket exception in update loop: {}".format(e))
+                                self.log("Error: " + traceback.format_exc())
+                                break
+
+            except Exception as e:
+                self.log("Error: Web Socket exception in startup: {}".format(e))
+                self.log("Error: " + traceback.format_exc())
+
+        return response
+
     async def socketLoop(self):
         """
         Web socket loop for HA interface
@@ -113,11 +192,13 @@ class HAInterface:
                         await websocket.send_json({"id": sid, "type": "subscribe_events", "event_type": "call_service"})
                         sid += 1
 
+                        # Get service list
+                        # await websocket.send_json({"id": sid, "type": "get_services"})
+                        # sid += 1
+
                         # Fire events to say we have registered services
                         for item in self.base.SERVICE_REGISTER_LIST:
-                            await websocket.send_json(
-                                {"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}}
-                            )
+                            await websocket.send_json({"id": sid, "type": "fire_event", "event_type": "service_registered", "event_data": {"service": item["service"], "domain": item["domain"]}})
                             sid += 1
 
                         self.log("Info: Web Socket active")
@@ -148,9 +229,7 @@ class HAInterface:
                                                         self.log("Warn: Web Socket state_changed event has no entity_id {}".format(new_state))
                                                     # Only trigger on value change or you get too many updates
                                                     if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
-                                                        await self.base.trigger_watch_list(
-                                                            new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state
-                                                        )
+                                                        await self.base.trigger_watch_list(new_state["entity_id"], event_data.get("attribute", None), event_data.get("old_state", None), new_state)
                                             elif event_type == "call_service":
                                                 service_data = event_info.get("data", {})
                                                 await self.base.trigger_callback(service_data)
@@ -160,6 +239,10 @@ class HAInterface:
                                             success = data.get("success", False)
                                             if not success:
                                                 self.log("Warn: Web Socket result failed {}".format(data))
+                                            # result = data.get("result", {})
+                                            # resultid = data.get("id", None)
+                                            # if result:
+                                            #    self.log("Info: Web Socket result id {} data {}".format(resultid, result))
                                         elif message_type == "auth_required":
                                             pass
                                         elif message_type == "auth_ok":
@@ -195,9 +278,6 @@ class HAInterface:
         if entity_id:
             self.db_mirror_list[entity_id.lower()] = True
 
-        if not self.ha_key and not (self.db_enable and self.db_primary):
-            return self.base.get_state(entity_id=entity_id, default=default, attribute=attribute)
-
         if not entity_id:
             return self.state_data
         elif entity_id.lower() in self.state_data:
@@ -229,7 +309,7 @@ class HAInterface:
         """
         self.db_mirror_list[entity_id.lower()] = True
 
-        if self.db_primary and self.db_enable:
+        if self.db_primary and self.db_enable and not self.ha_key:
             self.update_state_db(entity_id)
             return
 
@@ -252,7 +332,7 @@ class HAInterface:
         if not entity_index:
             return None
 
-        self.db_cursor.execute("SELECT datetime, state, attributes FROM states WHERE entity_index=? ORDER BY datetime DESC LIMIT 1", (entity_index,))
+        self.db_cursor.execute("SELECT datetime, state, attributes FROM latest WHERE entity_index=?", (entity_index,))
         res = self.db_cursor.fetchone()
         if res:
             state = res[1]
@@ -271,7 +351,7 @@ class HAInterface:
         """
         entity_id = entity_id.lower()
         attributes = item["attributes"]
-        last_changed = item["last_changed"]
+        last_changed = item.get("last_changed", item.get("last_updated", None))
         state = item["state"]
         self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
         if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
@@ -308,7 +388,7 @@ class HAInterface:
         Update the state data from Home Assistant.
         """
 
-        if self.db_primary and self.db_enable:
+        if self.db_primary and self.db_enable and not self.ha_key:
             self.update_states_db()
             return
 
@@ -364,6 +444,16 @@ class HAInterface:
             history.append({"last_updated": item[0] + "Z", "state": state, "attributes": attributes})
         return [history]
 
+    def get_services(self):
+        """
+        Get the list of services from Home Assistant.
+        """
+        res = self.api_call("/api/services")
+        if res:
+            return res
+        else:
+            return None
+
     def get_history(self, sensor, now, days=30, force_db=False):
         """
         Get the history for a sensor from Home Assistant.
@@ -378,9 +468,6 @@ class HAInterface:
 
         if (self.db_primary or force_db) and self.db_enable:
             return self.get_history_db(sensor, now, days=days)
-
-        if not self.ha_key:
-            return self.base.get_history_ad(sensor, days=days)
 
         start = now - timedelta(days=days)
         end = now
@@ -446,12 +533,15 @@ class HAInterface:
         system = {}
 
         attributes_record = {}
+        attributes_record_full = {}
         for key in attributes:
             value = attributes[key]
             # Ignore large fields which will increase the database size
             if len(str(value)) < 128:
                 attributes_record[key] = attributes[key]
+            attributes_record_full[key] = attributes[key]
         attributes_record_json = json.dumps(attributes_record)
+        attributes_record_full_json = json.dumps(attributes_record_full)
         system_json = json.dumps(system)
 
         # Record the state of the entity
@@ -497,6 +587,22 @@ class HAInterface:
                     keep,
                 ),
             )
+            # Also update the latest table
+            self.db_cursor.execute(
+                "DELETE FROM latest WHERE entity_index = ?".format(entity_id),
+                (entity_index,),
+            )
+            self.db_cursor.execute(
+                "INSERT INTO latest (entity_index, datetime, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    entity_index,
+                    now_utc_txt,
+                    state,
+                    attributes_record_full_json,
+                    system_json,
+                    keep,
+                ),
+            )
             self.db.commit()
         except sqlite3.IntegrityError:
             self.log("Warn: SQL Integrity error inserting data for {}".format(entity_id))
@@ -509,9 +615,8 @@ class HAInterface:
             return
 
         self.db_cursor.execute("CREATE TABLE IF NOT EXISTS entities (entity_index INTEGER PRIMARY KEY AUTOINCREMENT, entity_name TEXT KEY UNIQUE)")
-        self.db_cursor.execute(
-            "CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)"
-        )
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS states (id INTEGER PRIMARY KEY AUTOINCREMENT, datetime TEXT KEY, entity_index INTEGER KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
+        self.db_cursor.execute("CREATE TABLE IF NOT EXISTS latest (entity_index INTEGER PRIMARY KEY, datetime TEXT KEY, state TEXT, attributes TEXT, system TEXT, keep TEXT KEY)")
         self.db_cursor.execute(
             "DELETE FROM states WHERE datetime < ? AND keep != ?",
             (
@@ -537,23 +642,16 @@ class HAInterface:
                 data["unrecorded_attributes"] = ["results"]
             self.api_call("/api/states/{}".format(entity_id), data, post=True)
             self.update_state(entity_id)
-        elif not self.db_primary:
-            if attributes:
-                return self.base.set_state(entity_id, state=state, attributes=attributes)
-            else:
-                return self.base.set_state(entity_id, state=state)
 
     def call_service(self, service, **kwargs):
         """
-        Call a service in Home Assistant.
+        Call a service in Home Assistant via Websocket
         """
-        if not self.ha_key:
-            return self.base.call_service(service, **kwargs)
-
         data = {}
         for key in kwargs:
             data[key] = kwargs[key]
-        self.api_call("/api/services/{}".format(service), data, post=True)
+        domain, service = service.split("/")
+        return self.call_service_websocket_command(domain, service, data)
 
     def api_call(self, endpoint, data_in=None, post=False, core=True):
         """

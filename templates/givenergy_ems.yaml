@@ -272,6 +272,9 @@ pred_bat:
   #octopus_ready_time: 'time.ohme_target_time'
   #octopus_charge_limit: 'number.ohme_target_percent'
 
+  # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
+  #octopus_slot_low_rate: False
+
   # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
@@ -402,7 +405,7 @@ pred_bat:
   metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
 
   # Nordpool market energy rates
-  #futurerate_url: 'https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
   #futurerate_adjust_import: False
   #futurerate_adjust_export: False
   #futurerate_peak_start: "16:00:00"

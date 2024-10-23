@@ -134,9 +134,7 @@ class WebInterface:
             friendly_name = attributes.get("friendly_name", "")
             if not state:
                 state = "None"
-            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(
-                icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity)
-            )
+            text += "<tr><td> {} </td><td> {} </td><td>{}</td><td>{} {}</td><td>{}</td></tr>\n".format(icon, friendly_name, entity, state, unit_of_measurement, self.get_attributes_html(entity))
         text += "</table>\n"
 
         return text
@@ -507,7 +505,7 @@ var options = {
         elif isinstance(value, dict):
             text += "<table>"
             for key in value:
-                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(arg, value[key]))
+                text += "<tr><td>{}</td><td>: {}</td></tr>\n".format(key, self.render_type(key, value[key]))
             text += "</table>"
         elif isinstance(value, str):
             pat = re.match(r"^[a-zA-Z]+\.\S+", value)
@@ -517,7 +515,7 @@ var options = {
                     text = '<span style="background-color:#FFAAAA"> {} </p>'.format(value)
                 else:
                     text = self.render_type(arg, text)
-            elif pat:
+            elif pat and (arg != "service"):
                 entity_id = value
                 if "$" in entity_id:
                     entity_id, attribute = entity_id.split("$")

@@ -647,6 +647,9 @@ whether you are within an Octopus Energy "smart charge" slot, and provides the l
 
 - **octopus_charge_limit** - Points to the Octopus Energy integration sensor that provides the car charging limit.
 
+- **octopus_slot_low_rate** - Default is True, meaning any Octopus Intelligent Slot reported will be at the lowest rate if at home. If False the existing rates only will be used
+which is only suitable for tariff's other than IOG.
+
 If you don't use Intelligent Octopus then the above 3 Octopus Intelligent configuration lines in `apps.yaml` can be commented out or deleted,
 and there are a number of other apps.yaml configuration items that should be set:
 

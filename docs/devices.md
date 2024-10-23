@@ -39,6 +39,30 @@ car_charging_soc:
   - 're:sensor.xxx_battery'
 ```
 
+## Toyota
+
+<https://github.com/DurgNomis-drol/ha_toyota> - For Toyota EU cars only
+
+Can be used to extract the cars current SOC.
+
+```yaml
+car_charging_soc:
+  - 'sensor.toyota_XXX_battery_level'
+```
+
+Example sensor name for BZ4X - `sensor.toyota_bz4x_battery_level`
+
+## Renault
+
+<https://www.home-assistant.io/integrations/renault>
+
+Can be used to extract the cars current SoC.
+
+```yaml
+car_charging_soc:
+  - 'sensor.battery'
+```
+
 ## Ohme
 
 <https://github.com/dan-r/HomeAssistant-Ohme>
@@ -60,6 +84,19 @@ octopus_ready_time: 'time.ohme_target_time'
 octopus_charge_limit: 'number.ohme_target_percent'
 ```
 
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
+**Using Ohme car charging plans on other tariff's e.g. Agile**
+
+```yaml
+octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+octopus_ready_time: 'time.ohme_target_time'
+octopus_charge_limit: 'number.ohme_target_percent'
+octopus_slot_low_rate: False
+```
+
+Note: You should turn on **switch.predbat_octopus_intelligent_ignore_unplugged** as the Ohme charger does not clear its schedule when unplugged.
+
 **Determine if the car is charging now**
 
 Normally not recommended if you are on Intelligent GO, but can be useful for ad-hoc charging not planned via Predbat
@@ -68,6 +105,59 @@ Normally not recommended if you are on Intelligent GO, but can be useful for ad-
 car_charging_now:
   - 'binary_sensor.ohme_car_charging'
 ```
+
+## PodPoint
+
+<https://github.com/mattrayner/pod-point-home-assistant-component>
+
+Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in.
+
+```yaml
+car_charging_energy: 're:(sensor.psl_[0-9]+_current_energy)'
+car_charging_planned:
+  - 're:(sensor.psl_[0-9]+_status)'
+car_charging_planned_response:
+  - 'plugged in'
+  - 'connected-waiting-for-schedule'
+  - 'suspended-evse'
+  - 'pending'
+  - 'charging'
+car_charging_now:
+  - 're:(sensor.psl_[0-9]+_status)'
+car_charging_now_response:
+  - 'charging'
+```
+
+Also can be used to control the cars charging with an automation linked to the Predbat slot sensor.
+The device needs to be set to 'Smart' mode in the PodPoint app. Your automation trigger should then set the `switch.psl_XXXXXX_charging_allowed` to on. And off to stop charging. This uses the PodPoint schedule override setting to start/stop the charge.
+
+## Hypervolt
+
+<https://github.com/gndean/home-assistant-hypervolt-charger>
+
+Can be used both for Car Charging Hold feature (to filter out previous car charging) and to determine if the car is plugged in (only V3 models).
+
+For plugged in detection on V2 models, see guidance <https://springfall2008.github.io/batpred/car-charging/#example-ev-and-charger-setup>.
+
+```yaml
+car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
+car_charging_planned:
+  - 're:(binary_sensor.hypervolt_car_plugged)'
+car_charging_planned_response:
+  - 'plugged in'
+car_charging_now:
+  - 're:(sensor.hypervolt_charging_readiness)'
+car_charging_now_response:
+  - 'charging'
+```
+
+Note: **sensor.hypervolt_session_energy_total_increasing** defaults to 'unknown' between charging sessions.
+
+**Agile Tariff**
+
+To automate the schedule charging with Predbat, setup the automation to detect when there is a change to `binary_sensor.predbat_car_charging_slot`.
+
+Ensure that `select.hypervolt_charge_mode` is in 'Boost', when predbat charging slot is 'on', set `select.hypervolt_activation_mode` to 'Plug and Charge', when it is 'off' set the 'Schedule', this is the recommended method for start/stop charging.
 
 ## Octopus Energy
 
