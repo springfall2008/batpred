@@ -2223,7 +2223,7 @@ class PredBat(hass.Hass):
                         attributes={
                             "results": self.filtered_times(predict_car_soc_time[car_n]),
                             "today": self.filtered_today(predict_car_soc_time[car_n]),
-                            "friendly_name": "Car " + str(car_n) + " battery SOC",
+                            "friendly_name": "Car " + str(car_n) + " Battery SoC",
                             "state_class": "measurement",
                             "unit_of_measurement": "%",
                             "icon": "mdi:battery",
@@ -2232,7 +2232,7 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".soc_kw_h0",
                     state=self.dp3(self.predict_soc[0]),
-                    attributes={"friendly_name": "Current SOC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Current SoC kWh", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".soc_kw",
@@ -2240,7 +2240,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(predict_soc_time),
                         "today": self.filtered_today(predict_soc_time),
-                        "friendly_name": "Predicted SOC kWh",
+                        "friendly_name": "Predicted SoC kWh",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
@@ -2305,6 +2305,17 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
                         "icon": "mdi:battery",
+                    },
+                )
+                self.dashboard_item(
+                    self.prefix + ".soc_min_kwh",
+                    state=self.dp3(soc_min),
+                    attributes={
+                        "time": self.time_abs_str(soc_min_minute),
+                        "friendly_name": "Predicted minimum SoC",
+                        "state_class": "measurement",
+                        "unit_of_measurement": "kWh",
+                        "icon": "mdi:battery-arrow-down-outline",
                     },
                 )
                 self.dashboard_item(
@@ -2442,7 +2453,7 @@ class PredBat(hass.Hass):
                         attributes={
                             "results": self.filtered_times(predict_car_soc_time[car_n]),
                             "today": self.filtered_today(predict_car_soc_time[car_n]),
-                            "friendly_name": "Car " + str(car_n) + " battery SOC best",
+                            "friendly_name": "Car " + str(car_n) + " Battery SoC best",
                             "state_class": "measurement",
                             "unit_of_measurement": "%",
                             "icon": "mdi:battery",
@@ -2454,7 +2465,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(predict_soc_time),
                         "today": self.filtered_today(predict_soc_time),
-                        "friendly_name": "Battery SOC kWh best",
+                        "friendly_name": "Battery SoC kWh best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
@@ -2524,24 +2535,24 @@ class PredBat(hass.Hass):
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best_h1",
                     state=self.dp3(self.predict_soc[60]),
-                    attributes={"friendly_name": "Predicted SOC kWh best + 1h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Predicted SoC kWh best + 1h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best_h8",
                     state=self.dp3(self.predict_soc[60 * 8]),
-                    attributes={"friendly_name": "Predicted SOC kWh best + 8h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Predicted SoC kWh best + 8h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best_h12",
                     state=self.dp3(self.predict_soc[60 * 12]),
-                    attributes={"friendly_name": "Predicted SOC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Predicted SoC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".best_soc_min_kwh",
                     state=self.dp3(soc_min),
                     attributes={
                         "time": self.time_abs_str(soc_min_minute),
-                        "friendly_name": "Predicted minimum SOC best",
+                        "friendly_name": "Predicted minimum SoC best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:battery-arrow-down-outline",
@@ -2720,7 +2731,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(predict_soc_time),
                         "today": self.filtered_today(predict_soc_time),
-                        "friendly_name": "Battery SOC kWh best 10%",
+                        "friendly_name": "Battery SoC kWh best 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
@@ -2789,7 +2800,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "results": self.filtered_times(predict_soc_time),
                         "today": self.filtered_today(predict_soc_time),
-                        "friendly_name": "Battery SOC kWh base 10%",
+                        "friendly_name": "Battery SoC kWh base 10%",
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "icon": "mdi:battery",
@@ -4160,7 +4171,7 @@ class PredBat(hass.Hass):
             html += "<td><b>Car kWh</b></td>"
         if self.iboost_enable:
             html += "<td><b>iBoost kWh</b></td>"
-        html += "<td><b>SOC %</b></td>"
+        html += "<td><b>SoC %</b></td>"
         html += "<td><b>Cost</b></td>"
         html += "<td><b>Total</b></td>"
         if self.carbon_enable:
@@ -4934,7 +4945,7 @@ class PredBat(hass.Hass):
         - charge_window (list): List of charge window dictionaries
         - charge_limit_percent (list): List of charge limit percentages
         - best (bool, optional): Flag indicating if we publish as base or as best
-        - soc (dict, optional): Dictionary of the predicted SOC over time
+        - soc (dict, optional): Dictionary of the predicted SoC over time
 
         """
         charge_limit_time = {}
@@ -4952,7 +4963,7 @@ class PredBat(hass.Hass):
                 soc_perc = 0
                 soc_kw = 0
 
-            # Convert % of charge freeze to current SOC number
+            # Convert % of charge freeze to current SoC number
             if self.set_charge_freeze and (soc_perc == self.reserve_percent):
                 offset = int((minute - self.minutes_now) / 5) * 5
                 soc_kw = soc.get(offset, soc_kw)
@@ -5712,7 +5723,7 @@ class PredBat(hass.Hass):
 
     def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, discharge_window, discharge_limits, all_n=None, end_record=None):
         """
-        Optimise a single charging window for best SOC
+        Optimise a single charging window for best SoC
         """
         loop_soc = self.soc_max
         best_soc = self.soc_max
@@ -5745,8 +5756,8 @@ class PredBat(hass.Hass):
         if self.best_soc_max > 0:
             loop_soc = min(loop_soc, self.best_soc_max)
 
-        # Create min/max SOC to avoid simulating SOC that are not going have any impact
-        # Can't do this for anything but a single window as the winder SOC impact isn't known
+        # Create min/max SoC to avoid simulating SoC that are not going have any impact
+        # Can't do this for anything but a single window as the winder SoC impact isn't known
         if not all_n:
             hans = []
             all_max_soc = 0
@@ -5840,7 +5851,7 @@ class PredBat(hass.Hass):
                     ]
                 id += 1
 
-        # Assemble list of SOCs to try
+        # Assemble list of SoC's to try
         try_socs = []
         loop_step = max(best_soc_step, 0.1)
         best_soc_min_setting = self.best_soc_min
@@ -5891,7 +5902,7 @@ class PredBat(hass.Hass):
                 result10[try_soc] = hanres10.get()
 
         window_results = {}
-        # Now we have all the results, we can pick the best SOC
+        # Now we have all the results, we can pick the best SoC
         for try_soc in try_socs:
             window = charge_window[window_n]
 
@@ -5940,7 +5951,7 @@ class PredBat(hass.Hass):
             )
 
             # Metric adjustment based on current charge limit when inside the window
-            # to try to avoid constant small changes to SOC target by forcing to keep the current % during a charge period
+            # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
             # if changing it has little impact
             if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
                 try_percent = calc_percent_limit(try_soc, self.soc_max)
@@ -5961,7 +5972,7 @@ class PredBat(hass.Hass):
 
             if self.debug_enable:
                 self.log(
-                    "Sim: SOC {} soc_min {} @ {} window {} metric {} cost {} cost10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} cycle {} carbon {} import {} export {}".format(
+                    "Sim: SoC {} soc_min {} @ {} window {} metric {} cost {} cost10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} cycle {} carbon {} import {} export {}".format(
                         try_soc,
                         self.dp4(soc_min),
                         self.time_abs_str(soc_min_minute),
@@ -5984,7 +5995,7 @@ class PredBat(hass.Hass):
 
             window_results[try_soc] = metric
 
-            # Only select the lower SOC if it makes a notable improvement has defined by min_improvement (divided in M windows)
+            # Only select the lower SoC if it makes a notable improvement has defined by min_improvement (divided in M windows)
             # and it doesn't fall below the soc_keep threshold
             if (metric + min_improvement_scaled) <= best_metric:
                 best_metric = metric
@@ -6066,7 +6077,7 @@ class PredBat(hass.Hass):
         if self.set_discharge_freeze and freeze_only:
             loop_options = [100, 99]
         elif self.set_discharge_freeze and not self.set_discharge_freeze_only:
-            # If we support freeze, try a 99% option which will freeze at any SOC level below this
+            # If we support freeze, try a 99% option which will freeze at any SoC level below this
             loop_options = [100, 99, 0]
         else:
             loop_options = [100, 0]
@@ -7598,7 +7609,7 @@ class PredBat(hass.Hass):
                 return
             inverters.append(inverter)
 
-        out_of_balance = False  # Are all the SOC % the same
+        out_of_balance = False  # Are all the SoC % the same
         total_battery_power = 0  # Total battery power across inverters
         total_max_rate = 0  # Total battery max rate across inverters
         total_charge_rates = 0  # Current total charge rates
@@ -7775,10 +7786,10 @@ class PredBat(hass.Hass):
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
 
-        # Get SOC history to find yesterday SOC
+        # Get SoC history to find yesterday SoC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
         if not soc_kwh_data:
-            self.log("Warn: No SOC data found for yesterday")
+            self.log("Warn: No SoC data found for yesterday")
             return
         soc_kwh = self.minute_data(
             soc_kwh_data[0],
@@ -8141,7 +8152,7 @@ class PredBat(hass.Hass):
             self.charge_limit, self.charge_window, self.discharge_window, self.discharge_limits, False, end_record=self.end_record
         )
 
-        # Try different battery SOCs to get the best result
+        # Try different battery SoC's to get the best result
         if recompute:
             self.rate_best_cost_threshold_charge = None
             self.rate_best_cost_threshold_discharge = None
@@ -8362,7 +8373,7 @@ class PredBat(hass.Hass):
 
     def adjust_battery_target_multi(self, inverter, soc, is_charging):
         """
-        Adjust target SOC based on the current SOC of all the inverters accounting for their
+        Adjust target SoC based on the current SoC of all the inverters accounting for their
         charge rates and battery capacities
         """
         target_kwh = self.dp2(self.soc_max * (soc / 100.0))
@@ -8581,7 +8592,7 @@ class PredBat(hass.Hass):
                                     )
                                 )
 
-                    # Set configured window minutes for the SOC adjustment routine
+                    # Set configured window minutes for the SoC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
                 elif ((minutes_start - self.minutes_now) >= (24 * 60)) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
@@ -8645,7 +8656,7 @@ class PredBat(hass.Hass):
                 self.log("Next discharge window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.discharge_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.discharge_limits_best[0] < 100.0):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
-                        self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
+                        self.log("Discharging now - current SoC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
@@ -8673,7 +8684,7 @@ class PredBat(hass.Hass):
                             if inverter.inv_charge_discharge_with_rate:
                                 inverter.adjust_discharge_rate(0)
                             inverter.adjust_pause_mode(pause_charge=True)
-                            self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
+                            self.log("Discharge Freeze as discharge is now at/below target - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
                             status_extra = " current SoC {}%".format(inverter.soc_percent)       # Discharge limit (99) is meaningless when Freeze Discharging so don't display it
                             isDischarging = True
@@ -8681,7 +8692,7 @@ class PredBat(hass.Hass):
                             status = "Hold discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                             self.log(
-                                "Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SOC {} and target {}".format(
+                                "Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SoC {} and target {}".format(
                                     self.soc_kw, discharge_soc
                                 )
                             )
@@ -8760,10 +8771,10 @@ class PredBat(hass.Hass):
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
 
-            # Set the SOC just before or within the charge window
+            # Set the SoC just before or within the charge window
             if self.set_soc_enable:
                 if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
-                    # If we are discharging and not setting reserve then we should reset the target SOC to 0%
+                    # If we are discharging and not setting reserve then we should reset the target SoC to 0%
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.discharge_limits_best[0], False)
                 elif (
@@ -8773,13 +8784,13 @@ class PredBat(hass.Hass):
                     and not (disabled_charge_window)
                 ):
                     if inverter.inv_has_charge_enable_time or isCharging:
-                        # In charge freeze hold the target SOC at the current value
+                        # In charge freeze hold the target SoC at the current value
                         if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                                 self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging)
                             else:
-                                # Not yet in the freeze, hold at 100% target SOC
+                                # Not yet in the freeze, hold at 100% target SoC
                                 self.adjust_battery_target_multi(inverter, 100.0, False)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
@@ -8809,7 +8820,7 @@ class PredBat(hass.Hass):
                             and (not disabled_charge_window)
                         ):
                             self.log(
-                                "Within the charge window, holding SOC setting {} (now {} target set_soc_minutes {} charge start time {})".format(
+                                "Within the charge window, holding SoC setting {} (now {} target set_soc_minutes {} charge start time {})".format(
                                     self.charge_limit_percent_best[0],
                                     self.time_abs_str(self.minutes_now),
                                     self.set_soc_minutes,
@@ -8818,14 +8829,14 @@ class PredBat(hass.Hass):
                             )
                         else:
                             self.log(
-                                "Resetting charging SOC as we are not within the window or charge is disabled and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(
+                                "Resetting charging SoC as we are not within the window or charge is disabled and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(
                                     self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
                                 )
                             )
                             self.adjust_battery_target_multi(inverter, 100.0, False)
                     else:
                         self.log(
-                            "Not setting charging SOC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
+                            "Not setting charging SoC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
                                 self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
                             )
                         )
@@ -8846,7 +8857,7 @@ class PredBat(hass.Hass):
 
                     # Only set the reserve when we reach the desired percent
                     if (inverter.soc_percent > limit) or (not disabled_charge_window):
-                        self.log("Adjust reserve to default as SOC {} % is above target {} % or charging active".format(inverter.soc_percent, limit))
+                        self.log("Adjust reserve to default as SoC {} % is above target {} % or charging active".format(inverter.soc_percent, limit))
                         inverter.adjust_reserve(0)
                     else:
                         self.log("Adjust reserve to target charge {} % (set_reserve_enable is true)".format(limit))
@@ -9109,7 +9120,7 @@ class PredBat(hass.Hass):
             entity_id = self.get_arg("carbon_intensity", None, indirect=False)
             self.carbon_intensity, self.carbon_history = self.fetch_carbon_intensity(entity_id)
 
-        # Work out current car SOC and limit
+        # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
         # Octopus intelligent slots
@@ -9204,7 +9215,7 @@ class PredBat(hass.Hass):
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
 
-        # Work out car SOC and reset next
+        # Work out car SoC and reset next
         self.car_charging_soc = [0.0 for car_n in range(self.num_cars)]
         self.car_charging_soc_next = [None for car_n in range(self.num_cars)]
         for car_n in range(self.num_cars):
@@ -9214,7 +9225,7 @@ class PredBat(hass.Hass):
                 self.car_charging_soc[car_n] = (self.get_arg("car_charging_soc", 0.0, index=car_n) * self.car_charging_battery_size[car_n]) / 100.0
         if self.num_cars:
             self.log(
-                "Cars: SOC kWh: {} Charge limit {} plan time {} battery size {}".format(
+                "Cars: SoC kWh: {} Charge limit {} plan time {} battery size {}".format(
                     self.car_charging_soc, self.car_charging_limit, self.car_charging_plan_time, self.car_charging_battery_size
                 )
             )
@@ -10082,7 +10093,7 @@ class PredBat(hass.Hass):
                 self.prefix + ".savings_total_soc",
                 state=self.dp2(savings_total_soc),
                 attributes={
-                    "friendly_name": "Predbat savings, yesterday SOC",
+                    "friendly_name": "Predbat savings, yesterday SoC",
                     "state_class": "measurement",
                     "unit_of_measurement": "kWh",
                     "icon": "mdi:battery-50",
@@ -10123,11 +10134,11 @@ class PredBat(hass.Hass):
                     },
                 )
 
-        # Car SOC increment
+        # Car SoC increment
         if scheduled:
             for car_n in range(self.num_cars):
                 if (car_n == 0) and self.car_charging_manual_soc:
-                    self.log("Car charging Manual SOC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
+                    self.log("Car charging Manual SoC current is {} next is {}".format(self.car_charging_soc[car_n], self.car_charging_soc_next[car_n]))
                     if self.car_charging_soc_next[car_n] is not None:
                         self.expose_config("car_charging_manual_soc_kwh", round(self.car_charging_soc_next[car_n], 3))
 
