@@ -362,10 +362,11 @@ with attributes of all future battery discharges (kWh and time slots)
 Attributes contain data for charting the cost prediction in 5 minute slots to the end of the plan
 - predbat.best_pv_energy - Predicted PV energy in kWh under the best plan with attributes of the predicted PV generation in kWh with time slots
 - predbat.best_soc_min_kwh - Predicted lowest battery SoC value in kWh under the best plan with attribute of the date/time that that lowest SoC occurs at
-- predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
+- predbat.car_soc_best - See [Car data](#car-data) below
+- predbat.carbon_best - See [Carbon data](#carbon-data) below
 - predbat.grid_power_best - The sensor is always zero; attributes contain the predicted Grid power (positive or negative for import or export),
 in kW per 5 minute slots to the end of the best plan for charting
-- predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan
+- predbat.iboost_best - See [iBoost data](#iboost-solar-diverter-data) below
 - predbat.load_power_best - Total kW of predicted house load power to the end the best plan,
 with attributes of the average instantaneous house load power in kW in 5 minute slots to the end of the plan
 - predbat.pv_power_best - The sensor is always zero; attributes contain the predicted PV power in kW per 5 minute slots to the end of the best plan for charting
@@ -418,6 +419,10 @@ The following sensors are set based upon what Predbat is currently controlling t
 
 These are useful for automations if for example you want to turn off car charging when the battery is being exported.
 
+## Export trigger
+
+- binary_sensor.predbat_export_trigger_NAME - custom binary sensors that are set to On by Predbat when more than a specified amount of energy is being exported - see [Triggers in apps.yaml](apps-yaml.md#triggers)
+
 ## Prediction window
 
 - predbat.record - The sensor is always zero; attributes contain the time window for the current predicted plan
@@ -456,8 +461,10 @@ These are useful for automations if for example you want to turn off car chargin
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
 as described in [Predbat led car charging](car-charging.md#car-charging-planning)
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
-- predbat.cost_total_car - A running total of the below cost_yesterday_car sensor, with attribute of the total in pounds
-- predbat.cost_yesterday_car - A sensor that gives the total energy costs of charging the car in pence for yesterday (00:00-23:59 on the previous day)
+- predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
+- predbat.cost_today_car - Current cost in pence so far today of charging the car, with attribute of the projected future car charging costs and slots
+- predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds
+- predbat.cost_yesterday_car - A sensor that gives the total energy costs in pence of charging the car for yesterday (00:00-23:59 on the previous day)
 
 ## iBoost Solar Diverter data
 
@@ -465,16 +472,17 @@ as described in [Predbat led car charging](car-charging.md#car-charging-planning
 can be used for automations to trigger the immersion heater boost
 - input_number.predbat_iboost_today - Gives the amount of energy modelled that will be sent to the solar diverter today,
 increments during the day and is reset to zero at 11:30pm each night
+- predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan
 
 ## Carbon data
 
 The following sensors output by Predbat give historic and predicted carbon data.
 They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md):
 
-predbat.carbon Predicted Carbon energy in g
-predbat.carbon_best Predicted Carbon energy best in g
-predbat.carbon_now Grid Carbon intensity history g/kWh
-predbat.carbon_today Carbon today so far in g
+predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots
+predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
+predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
+predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
 
 ## Energy saving data
 
