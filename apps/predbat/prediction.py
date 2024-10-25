@@ -565,12 +565,11 @@ class Prediction:
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
-            if not self.set_discharge_during_charge:
-                if (charge_window_n >= 0) and ((soc >= charge_limit_n) or not self.set_reserve_enable):
-                    discharge_rate_now = self.battery_rate_min  # 0
-                elif not car_freeze and not iboost_freeze:
-                    # Reset discharge rate
-                    discharge_rate_now = self.battery_rate_max_discharge
+            if charge_window_n >= 0:
+                if not self.set_discharge_during_charge:
+                    discharge_rate_now = self.battery_rate_min
+                elif abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0:
+                    discharge_rate_now = self.battery_rate_min
 
             charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
             discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)

@@ -1015,7 +1015,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "predheat_enable",
-        "friendly_name": "Enable Predbat",
+        "friendly_name": "Enable PredHeat",
         "type": "switch",
         "default": False,
     },

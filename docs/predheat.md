@@ -118,6 +118,11 @@ predheat:
     # Current flow temperature setting
     flow_temp: number.boiler_heatingtemp
     flow_difference_target: 40
+
+    # Current volume temperature
+    # If set will be read directly from the sensor, if not set then it will be calculated as an approximation
+    # and stored into input_number.predbat_next_volume_temp on every run.
+    # volume_temp: number.heating_volume_temp
 ```
 
 Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump
@@ -142,6 +147,7 @@ Set the **target_temperature** to point to a sensor that indicates what your boi
 Set **smart_thermostat** to True if your thermostat starts the boiler ahead of time for the new target temperature or False for regular options.
 
 Set **heating_energy** To point to a sensor that indicates the energy consumed by your boiler/heat-pump in kWh. If the sensor isn't accurate then using **heating_energy_scaling** to adjust it to the actually energy consumed.
+You can also comment this line out if you don't have a sensor, but no historical cost information will be produced.
 
 Now you need to make a list of all your radiators in the house, measure them and look up their BTU output at Delta 50 and their volume in Litres. The links below maybe useful for various standard radiators:
 
@@ -160,6 +166,10 @@ Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 
 Set **flow_temp** To the target flow temperature of your system, either via a sensor or as a fixed value. E.g. gas boilers are often set to say 60 or 70 degrees while heat pumps are much lower e.g. 30 or 40.
 
 Set **flow_difference_target** to be the difference in flow temperature (in vs out) where your heating system will run at full power if it is above. e.g. for gas boilers this maybe something around 40 while on a heat pump it could be much lower e.g. 10.
+
+Set **volume_temp** If you have a sensor on your radiators which can confirm the water temperature, this must not be near the heat pump/boiler but instead as close to the
+interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in **next_volume_temp** for use
+in the next calculation cycle.
 
 For your energy rates either have **metric_octopus_import** point to the current energy rate sensor (gas or electric) or comment it out and enter your rate(s) using **rates_import**
 

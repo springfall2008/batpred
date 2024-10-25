@@ -32,8 +32,8 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.0"
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py"]
+THIS_VERSION = "v8.5.2"
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -77,6 +77,7 @@ from inverter import Inverter
 from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
+from futurerate import FutureRate
 
 """
 Used to mimic threads when they are disabled
@@ -520,198 +521,6 @@ class PredBat(hass.Hass):
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["data"] = pdata
         return pdata
-
-    def futurerate_analysis(self):
-        """
-        Analyse futurerate energy data
-        """
-
-        url = None
-        if "futurerate_url" in self.args:
-            url = self.get_arg("futurerate_url", indirect=False)
-        self.log("Fetching futurerate data from {}".format(url))
-        if not url:
-            return {}, {}
-
-        try:
-            pdata = self.download_futurerate_data(url)
-        except (ValueError, TypeError):
-            return {}, {}
-
-        nord_tz = pytz.timezone("Europe/Oslo")
-        now_offset = datetime.now(nord_tz).strftime("%z")
-        extracted_data = {}
-        extracted_keys = []
-        array_values = []
-
-        peak_start = datetime.strptime(self.get_arg("futurerate_peak_start", "00:00:00"), "%H:%M:%S")
-        peak_end = datetime.strptime(self.get_arg("futurerate_peak_end", "00:00:00"), "%H:%M:%S")
-        peak_start_minutes = peak_start.minute + peak_start.hour * 60
-        peak_end_minutes = peak_end.minute + peak_end.hour * 60
-        if peak_end_minutes < peak_start_minutes:
-            peak_end_minutes += 24 * 60
-
-        peak_premium_import = self.get_arg("futurerate_peak_premium_import", 0)
-        peak_premium_export = self.get_arg("futurerate_peak_premium_export", 0)
-
-        self.log("Future rates - peak rate is {} - {} minutes premium import {} export {}".format(peak_start_minutes, peak_end_minutes, peak_premium_import, peak_premium_export))
-
-        if pdata and "Rows" in pdata:
-            for row in pdata["Rows"]:
-                if "Name" in row:
-                    rstart = row.get("StartTime", "") + now_offset
-                    rend = row.get("EndTime", "") + now_offset
-                    rname = row.get("Name", "")
-                if "Columns" in row:
-                    for column in row["Columns"]:
-                        cname = column.get("Name", "")
-                        cvalue = column.get("Value", "")
-                        date_start, time_start = rstart.split("T")
-                        date_end, time_end = rend.split("T")
-                        if "-" in rname and "-" in cname and "," in cvalue and cname:
-                            date_start = cname
-                            date_end = cname
-                            cvalue = cvalue.replace(",", ".")
-                            cvalue = float(cvalue)
-                            rstart = date_start + "T" + time_start
-                            rend = date_end + "T" + time_end
-                            TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-                            time_date_start = datetime.strptime(rstart, TIME_FORMAT_NORD)
-                            time_date_end = datetime.strptime(rend, TIME_FORMAT_NORD)
-                            if time_date_end < time_date_start:
-                                time_date_end += timedelta(days=1)
-                            delta_start = time_date_start - self.midnight_utc
-                            delta_end = time_date_end - self.midnight_utc
-
-                            minutes_start = delta_start.seconds / 60
-                            minutes_end = delta_end.seconds / 60
-                            if minutes_end < minutes_start:
-                                minutes_end += 24 * 60
-
-                            # Convert to pence with Agile formula, starts in pounds per Megawatt hour
-                            rate_import = (cvalue / 10) * 2.2
-                            rate_export = (cvalue / 10) * 0.95
-                            if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
-                                rate_import += peak_premium_import
-                                rate_export += peak_premium_export
-                            rate_import = min(rate_import, 95)  # Cap
-                            rate_export = max(rate_export, 0)  # Cap
-                            rate_import = rate_import * 1.05  # Vat only on import
-
-                            item = {}
-                            item["from"] = time_date_start.strftime(TIME_FORMAT)
-                            item["to"] = time_date_end.strftime(TIME_FORMAT)
-                            item["rate_import"] = self.dp2(rate_import)
-                            item["rate_export"] = self.dp2(rate_export)
-
-                            if time_date_start not in extracted_keys:
-                                extracted_keys.append(time_date_start)
-                                extracted_data[time_date_start] = item
-                            else:
-                                self.log("Warn: Duplicate key {} in extracted_keys".format(time_date_start))
-
-        if extracted_keys:
-            extracted_keys.sort()
-            for key in extracted_keys:
-                array_values.append(extracted_data[key])
-            self.log("Loaded {} datapoints of futurerate analysis".format(len(extracted_keys)))
-            mdata_import = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
-            mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
-
-        future_data = []
-        minute_now_hour = int(self.minutes_now / 60) * 60
-        for minute in range(minute_now_hour, self.forecast_plan_hours * 60 + minute_now_hour, 60):
-            if mdata_import.get(minute) or mdata_export.get(minute):
-                future_data.append("{} => {} / {}".format(self.time_abs_str(minute), mdata_import.get(minute), mdata_export.get(minute)))
-
-        self.log("Predicted future rates: {}".format(future_data))
-        return mdata_import, mdata_export
-
-    def download_futurerate_data(self, url):
-        """
-        Download futurerate data directly from a URL or return from cache if recent
-        Retry 3 times and then throw error
-        """
-
-        # Check the cache first
-        now = datetime.now()
-        if url in self.futurerate_url_cache:
-            stamp = self.futurerate_url_cache[url]["stamp"]
-            pdata = self.futurerate_url_cache[url]["data"]
-            update_time_since_midnight = stamp - self.midnight
-            now_since_midnight = now - self.midnight
-            age = now - stamp
-            needs_update = False
-
-            # Update if last data was yesterday
-            if update_time_since_midnight.seconds < 0:
-                needs_update = True
-
-            # data updates at 11am CET so update every 30 minutes during this period
-            if now_since_midnight.seconds > (9.5 * 60 * 60) and now_since_midnight.seconds < (11 * 60 * 60) and age.seconds > (0.5 * 60 * 60):
-                needs_update = True
-            if age.seconds > (12 * 60 * 60):
-                needs_update = True
-
-            if not needs_update:
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
-                return pdata
-
-        # Retry up to 3 minutes
-        for retry in range(3):
-            pdata = self.download_futurerate_data_func(url)
-            if pdata:
-                break
-
-        # Download failed?
-        if not pdata:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            if url in self.futurerate_url_cache:
-                pdata = self.futurerate_url_cache[url]["data"]
-                return pdata
-            else:
-                raise ValueError
-
-        # Cache New Octopus data
-        self.futurerate_url_cache[url] = {}
-        self.futurerate_url_cache[url]["stamp"] = now
-        self.futurerate_url_cache[url]["data"] = pdata
-        return pdata
-
-    def download_futurerate_data_func(self, url):
-        """
-        Download octopus rates directly from a URL
-        """
-        mdata = {}
-
-        if self.debug_enable:
-            self.log("Download {}".format(url))
-
-        try:
-            r = requests.get(url)
-        except:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-
-        if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        try:
-            data = r.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        if "data" in data:
-            mdata = data["data"]
-        else:
-            self.log("Warn: Error downloading futurerate data from URL {}".format(url))
-            self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
-            return {}
-        return mdata
 
     def download_octopus_rates_func(self, url):
         """
@@ -4411,7 +4220,7 @@ class PredBat(hass.Hass):
                 limit = self.charge_limit_best[charge_window_n]
                 limit_percent = int(self.charge_limit_percent_best[charge_window_n])
                 if limit > 0.0:
-                    if self.set_charge_freeze and (limit == self.reserve):
+                    if limit == self.reserve:
                         state = "FrzChrg&rarr;"
                         state_color = "#EEEEEE"
                         limit_percent = soc_percent
@@ -5020,7 +4829,7 @@ class PredBat(hass.Hass):
                 soc_kw = 0
 
             # Convert % of charge freeze to current SOC number
-            if self.set_charge_freeze and (soc_perc == self.reserve_percent):
+            if soc_perc == self.reserve_percent:
                 offset = int((minute - self.minutes_now) / 5) * 5
                 soc_kw = soc.get(offset, soc_kw)
 
@@ -5919,6 +5728,8 @@ class PredBat(hass.Hass):
             try_socs.append(best_soc_min_setting)
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
+        if not self.set_charge_freeze and (self.reserve in try_socs):
+            try_soc.remove(self.reserve)
 
         # Run the simulations in parallel
         results = []
@@ -6439,7 +6250,7 @@ class PredBat(hass.Hass):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
-            elif (limit > 0 and self.set_charge_freeze) or (limit > self.reserve and (not self.set_charge_freeze)) or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
+            elif limit > 0 or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
                 new_limit_best.append(limit)
                 new_window_best.append(window)
             else:
@@ -6588,12 +6399,11 @@ class PredBat(hass.Hass):
                             self.log("Clip up discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
                     elif soc_max < limit_soc:
                         # Bring down limit to match predicted soc for freeze only mode
-                        if self.set_discharge_freeze:
-                            # Get it 5 minute margin upwards
-                            limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
-                            discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
-                            if limit != discharge_limits_best[window_n] and self.debug_enable:
-                                self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
+                        # Get it 5 minute margin upwards
+                        limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
+                        discharge_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
+                        if limit != discharge_limits_best[window_n] and self.debug_enable:
+                            self.log("Clip down discharge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, discharge_limits_best[window_n]))
             else:
                 self.log("Warn: Clip discharge window {} as it's already passed".format(window_n))
                 discharge_limits_best[window_n] = 100
@@ -8380,13 +8190,10 @@ class PredBat(hass.Hass):
                 self.log("Inverter is in calibration mode, not executing plan and enabling charge/discharge at full rate.")
                 break
 
-            resetDischarge = False
-            if (not self.set_discharge_during_charge) or (not self.car_charging_from_battery) or self.iboost_prevent_discharge or inverter.inv_charge_discharge_with_rate:
-                # These options mess with discharge rate, so we must reset it when they aren't changing it
-                resetDischarge = True
-
-            resetReserve = False
-            setReserve = False
+            resetDischarge = True
+            resetCharge = True
+            resetPause = True
+            resetReserve = True
             disabled_charge_window = False
             disabled_discharge = False
 
@@ -8436,99 +8243,84 @@ class PredBat(hass.Hass):
                             quiet=False,
                         )
                         inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
+                        resetCharge = False
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
-                        # Do we disable discharge during charge?
-                        pausedDischarge = False
-                        if not self.set_discharge_during_charge and (inverter.soc_percent >= self.charge_limit_percent_best[0] or not self.set_reserve_enable):
-                            inverter.adjust_discharge_rate(0)
-                            inverter.adjust_pause_mode(pause_discharge=True)
-                            resetDischarge = False
-                            pausedDischarge = True
-
                         inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
-                        if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
-                            if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause):
-                                inverter.adjust_pause_mode(pause_discharge=True)
+                        if self.charge_limit_best[0] == self.reserve:
+                            if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                                pausedDischarge = True
-
-                            if not pausedDischarge:
-                                inverter.adjust_pause_mode()
+                                if self.set_reserve_enable:
+                                    inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                    resetReserve = False
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
+                            self.log("Freeze charging with soc {}%".format(inverter.soc_percent))
                         else:
-                            if (
-                                self.set_soc_enable
-                                and ((self.set_reserve_enable and self.set_reserve_hold) or inverter.inv_has_timed_pause)
-                                and (inverter.soc_percent >= self.charge_limit_percent_best[0])
-                                and (inverter.reserve_max >= inverter.soc_percent)
-                            ):
+                            if self.set_soc_enable and (inverter.soc_percent >= self.charge_limit_percent_best[0]) and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 status = "Hold charging"
-                                inverter.adjust_pause_mode(pause_discharge=True)
-                                inverter.disable_charge_window()
-                                disabled_charge_window = True
+                                self.log("Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.soc_percent, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
+                                if abs(inverter.soc_percent - self.charge_limit_percent_best[0]) <= 1.0:
+                                    if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
+                                        inverter.disable_charge_window()
+                                        disabled_charge_window = True
+                                        if self.set_reserve_enable:
+                                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                                            resetReserve = False
+                                    inverter.adjust_pause_mode(pause_discharge=True)
+                                    resetPause = False
+                                    inverter.adjust_discharge_rate(0)
+                                    resetDischarge = False
                             else:
                                 status = "Charging"
-                                if not pausedDischarge:
-                                    inverter.adjust_pause_mode()
+
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
+
+                        if not self.set_discharge_during_charge and resetPause:
+                            # Do we discharge discharge during charge
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
+                            self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
+
                         isCharging = True
 
                     if not disabled_charge_window:
                         # Configure the charge window start/end times if in the time window to set them
-                        if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes or (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes):
-                            if ((minutes_start - self.minutes_now) > self.set_window_minutes) and (minutes_end - self.minutes_now) >= 24 * 60:
-                                self.log("Charge window would wrap, disabling until later")
+                        if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes):
+                            # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
+                            # If we are going into freeze mode but haven't yet then don't configure the charge window as it will mean a spike of charging first
+                            if not isCharging and self.charge_limit_best[0] == self.reserve:
+                                self.log("Charge window will be disabled as freeze charging is planned")
                                 inverter.disable_charge_window()
                             else:
-                                # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
-                                # If we are going into freeze mode but haven't yet then don't configure the charge window as it will mean a spike of charging first
-                                if not isCharging and self.set_charge_freeze and self.charge_limit_best[0] == self.reserve:
-                                    self.log("Charge window will be disabled as freeze charging is planned")
-                                    inverter.disable_charge_window()
-                                else:
-                                    self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
-                                    inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+                                self.log("Configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                                inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
-                                self.log(
-                                    "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
-                                )
-                                inverter.disable_charge_window()
-                            else:
-                                self.log(
-                                    "Not setting charging window yet as not within the window (now {} target set_window_minutes {} charge start time {})".format(
-                                        self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
-                                    )
-                                )
+                            self.log(
+                                "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
+                            )
+                            inverter.disable_charge_window()
 
                     # Set configured window minutes for the SOC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
-                elif ((minutes_start - self.minutes_now) >= (24 * 60)) and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
-                    # No charging require in the next 24 hours
-                    self.log("No charge window required for 24-hours, disabling before the start")
-                    inverter.disable_charge_window()
                 else:
-                    if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
-                        self.log("No change to charge window yet, disabled while waiting for schedule.")
-                        inverter.disable_charge_window()
-                    else:
-                        self.log("No change to charge window yet, waiting for schedule.")
-            elif self.set_charge_window and (inverter.charge_start_time_minutes - self.minutes_now) <= self.set_window_minutes:
-                # No charge windows
-                self.log("No charge windows found, disabling before the start")
-                inverter.disable_charge_window()
+                    self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                    inverter.disable_charge_window()
             elif self.set_charge_window:
-                if not self.inverter_set_charge_before or not inverter.inv_has_charge_enable_time:
-                    self.log("No change to charge window yet, disabled while waiting for schedule.")
-                    inverter.disable_charge_window()
-                else:
-                    self.log("No change to charge window yet, waiting for schedule.")
+                self.log("No charge window yet, waiting for schedule.")
+                inverter.disable_charge_window()
+            else:
+                self.log("Set charge window is disabled")
 
             # Set discharge modes/window?
             if self.set_discharge_window and self.discharge_window_best:
@@ -8572,18 +8364,16 @@ class PredBat(hass.Hass):
                     if not self.set_discharge_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
                         self.log("Discharging now - current SOC {} and target {}".format(self.soc_kw, self.dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+                        resetDischarge = False
                         inverter.adjust_force_discharge(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_charge_rate(0)
-                        else:
-                            inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
-                        inverter.adjust_pause_mode()
-                        resetDischarge = False
+                            resetCharge = False
                         isDischarging = True
 
                         if self.set_reserve_enable:
                             inverter.adjust_reserve(self.discharge_limits_best[0])
-                            setReserve = True
+                            resetReserve = False
 
                         status = "Discharging"
                         status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
@@ -8592,12 +8382,15 @@ class PredBat(hass.Hass):
                     else:
                         inverter.adjust_force_discharge(False)
                         disabled_discharge = True
-                        if self.set_discharge_freeze and (self.discharge_limits_best[0] == 99):
+                        if self.discharge_limits_best[0] == 99:
                             # In discharge freeze mode we disable charging during discharge slots
                             inverter.adjust_charge_rate(0)
+                            resetCharge = False
                             if inverter.inv_charge_discharge_with_rate:
                                 inverter.adjust_discharge_rate(0)
+                                resetDischarge = False
                             inverter.adjust_pause_mode(pause_charge=True)
+                            resetPause = False
                             self.log("Discharge Freeze as discharge is now at/below target - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
@@ -8606,27 +8399,15 @@ class PredBat(hass.Hass):
                             status = "Hold discharging"
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.discharge_limits_best[0])
                             self.log("Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SOC {} and target {}".format(self.soc_kw, discharge_soc))
-                            inverter.adjust_pause_mode()
-                        resetReserve = True
                 else:
                     if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_limits_best[0]:
                         inverter.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
-                        resetReserve = True
                     else:
                         self.log("Setting ECO mode as we are not yet within the discharge window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
                         inverter.adjust_force_discharge(False)
-                        resetReserve = True
-
-                    if self.set_discharge_freeze and not isCharging:
-                        # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
-                        inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
             elif self.set_discharge_window:
                 self.log("Setting ECO mode as no discharge window planned")
                 inverter.adjust_force_discharge(False)
-                resetReserve = True
-                if self.set_discharge_freeze and not isCharging:
-                    # In discharge freeze mode we disable charging during discharge slots, so turn it back on otherwise
-                    inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
             # Car charging from battery disable?
             carHolding = False
@@ -8638,42 +8419,46 @@ class PredBat(hass.Hass):
                         if self.minutes_now >= window["start"] and self.minutes_now < window["end"]:
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
-                            if status not in ["Discharging", "Charging"]:
+                            if not isCharging and not isDischarging:
                                 inverter.adjust_discharge_rate(0)
-                                inverter.adjust_pause_mode(pause_discharge=True)
                                 resetDischarge = False
+                                inverter.adjust_pause_mode(pause_discharge=True)
+                                resetPause = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
-                                if status != "Idle":
-                                    status += ", Hold for car"
-                                else:
-                                    status = "Hold for car"
+                                if "Hold for car" not in status:
+                                    if status != "Idle":
+                                        status += ", Hold for car"
+                                    else:
+                                        status = "Hold for car"
                             break
 
             # Iboost running?
             boostHolding = False
             if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Discharging", "Charging"]:
                 inverter.adjust_discharge_rate(0)
-                inverter.adjust_pause_mode(pause_discharge=True)
                 resetDischarge = False
+                inverter.adjust_pause_mode(pause_discharge=True)
+                resetPause = False
                 boostHolding = True
                 self.log("Disabling battery discharge while iBoost is running")
-                if status != "Idle":
-                    status += ", Hold for iBoost"
-                else:
-                    status = "Hold for iBoost"
+                if "Hold for iBoost" not in status:
+                    if status != "Idle":
+                        status += ", Hold for iBoost"
+                    else:
+                        status = "Hold for iBoost"
 
             # Charging/Discharging off via service
             if not isCharging and (not isDischarging or disabled_discharge) and self.set_charge_window:
                 inverter.adjust_charge_immediate(0)
 
-            # Pause charge off
-            if not isCharging and not isDischarging and not carHolding and not boostHolding:
+            # Reset charge/discharge rate
+            if resetPause:
                 inverter.adjust_pause_mode()
-
-            # Reset discharge rate?
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
+            if resetCharge:
+                inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
             # Set the SOC just before or within the charge window
             if self.set_soc_enable:
@@ -8684,18 +8469,21 @@ class PredBat(hass.Hass):
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SOC at the current value
-                        if self.set_charge_freeze and (self.charge_limit_best[0] == self.reserve):
+                        if self.charge_limit_best[0] == self.reserve:
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                                 self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isDischarging, isFreezeCharge=True)
                             else:
                                 # Not yet in the freeze, hold at 100% target SOC
+                                self.log("Not yet in charge freeze, holding target soc at 100%")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
                             if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
+                                self.log("Resetting charging SOC as we are not charging and inverter_soc_reset is enabled")
                                 self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                             else:
+                                self.log("Setting charging SOC to {} as per target".format(self.charge_limit_percent_best[0]))
                                 self.adjust_battery_target_multi(inverter, self.charge_limit_percent_best[0], isCharging, isDischarging)
                     else:
                         if not inverter.inv_has_target_soc:
@@ -8739,33 +8527,8 @@ class PredBat(hass.Hass):
                         if not inverter.inv_has_charge_enable_time:
                             self.adjust_battery_target_multi(inverter, 0, isCharging, isDischarging)
 
-            # If we should set reserve during charging
-            if self.set_soc_enable and self.set_reserve_enable and not setReserve:
-                if isCharging:
-                    # Compute limit to account for freeze setting
-                    if self.charge_limit_best[0] == self.reserve:
-                        if self.set_charge_freeze:
-                            limit = inverter.soc_percent
-                        else:
-                            limit = 0
-                    else:
-                        limit = self.charge_limit_percent_best[0]
-
-                    # Only set the reserve when we reach the desired percent
-                    if (inverter.soc_percent > limit) or (not disabled_charge_window):
-                        self.log("Adjust reserve to default as SOC {} % is above target {} % or charging active".format(inverter.soc_percent, limit))
-                        inverter.adjust_reserve(0)
-                    else:
-                        self.log("Adjust reserve to target charge {} % (set_reserve_enable is true)".format(limit))
-                        inverter.adjust_reserve(min(limit + 1, 100))
-                    resetReserve = False
-                else:
-                    self.log("Adjust reserve to default (as set_reserve_enable is true)")
-                    inverter.adjust_reserve(0)
-                    resetReserve = False
-
             # Reset reserve as discharge is enable but not running right now
-            if self.set_reserve_enable and resetReserve and not setReserve:
+            if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
 
         # Set the charge/discharge status information
@@ -8968,7 +8731,8 @@ class PredBat(hass.Hass):
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
 
         # futurerate data
-        self.future_energy_rates_import, self.future_energy_rates_export = self.futurerate_analysis()
+        futurerate = FutureRate(self)
+        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis()
 
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
