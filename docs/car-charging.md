@@ -33,7 +33,7 @@ and through that Predbat gets most of the information it needs.
     - Let the Octopus app control when your car charges.
 
 - Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
-    - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
+    - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
     - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
     when the car is 'plugged in and ready to charge' is in the list of **car_charging_planned_response** values configured in apps.yaml
     - If your car does not have a state of charge (SoC) sensor you can set **switch.predbat_car_charging_manual_soc** to True
@@ -125,10 +125,10 @@ MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration w
 
 Yet it can be stopped and started with a 3rd party integration.
 
-In Home Assistant, create two helper entities (Settings / Devices & Services / Helpers) of type 'Number':
+In Home Assistant, create two helper entities (Settings / Devices & Services / Helpers) of type 'Number', and for each set 'Unit of Measurement' to 'kWh':
 
-- EV Max Charge - input_number.car_max_charge
-- EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+- Car Max Charge - input_number.car_max_charge
+- Car Manual SoC - input_number.car_manual_soc
 
 Create a 'Dropdown' helper entity that has two options 'true' and 'false' (in lower case):
 
@@ -145,18 +145,18 @@ Find the line for **car_charger_battery_size** and enter the Car Battery Size in
     - 61.7
 ```
 
-Specify the Car Charging Limit to use the EV Max Charge helper entity created earlier:
+Specify the Car Charging Limit to use the Car Max Charge helper entity created earlier:
 
 ```yaml
   car_charging_limit:
-    - 're:(input_number.car_max_charge)'
+    - 'input_number.car_max_charge'
 ```
 
-Find **car_charging_planned** and add the **input_select.car_charger_plugged_in** dropdown helper entity to the end of the line:
+Find **car_charging_planned** and replace the template Wallbox and Zappi regular expression with your new dropdown helper entity:
 
 ```yaml
   car_charging_planned:
-    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status|input_select.car_charger_plugged_in)'
+    - 'input_select.car_charger_plugged_in'
 ```
 
 Find **car_charging_planned_response** and add **'true'** to the list:
@@ -182,10 +182,12 @@ Create a helper entity (Settings / Devices & Services / Helpers) of type 'Integr
 
 Please look into [Integration - Riemann sum integral](URL) to convert kW into kWh.
 
+And add your custom car charging energy sensor in apps.yaml in place of the template Wallbox and Zappi regular expression:
+
 **Example**
 
 ```yaml
-car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy|sensor.car_energy_used)'
+car_charging_energy: 'sensor.car_energy_used'
 ```
 
 **car_charging_now** must be commented out (hashed out) in `apps.yaml`:
@@ -239,20 +241,20 @@ actions:
 mode: single
 ```
 
-Finally, for simplicity, add the below entities to your HA Dashboard:
+Finally, for simplicity, add the below entities to your HA Dashboard so you can set them when needed:
 
-- EV Max Charge - input_number.car_max_charge
-- EV Current SOC in kWh - input_number.predbat_car_charging_manual_soc_kwh
+- Car Max Charge - input_number.car_max_charge
+- Car Manual SoC - input_number.car_manual_soc
 - Car Charger Plugged in - input_select.car_charger_plugged_in
 
-Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total EV Battery capacity.<BR>
+Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Car Battery capacity.<BR>
 For example:
 
 ```text
 65/100*61.7=40.1
 ```
 
-Enter '40.1' into 'EV Current SOC in kWh' and '80%' into 'EV Max charge'.
+Enter '40.1' into 'Car Manual SoC' and '80%' into 'Car Max charge'.
 
-Once the charger is switched to **true** and your EV Max charge (target SOC) % is higher than the kWh currently in the car,
-Predbat will plan and charge the EV with the kW that are needed to reach the EV target SOC.
+Once the charger is switched to **true** and your Car Max charge (target SoC) % is higher than the kWh currently in the car,
+Predbat will plan and charge the car with the kW that are needed to reach the target SoC.
