@@ -277,10 +277,23 @@ def run_nordpool_test(my_predbat):
     my_predbat.args["futurerate_peak_end"] = "19:00:00"
     my_predbat.args["futurerate_peak_premium_import"] = 14
     my_predbat.args["futurerate_peak_premium_export"] = 6.5
+    my_predbat.args["futurerate_adjust_import"] = True
+    my_predbat.args["futurerate_adjust_export"] = True
     failed = False
 
+    # Obtain Agile octopus data
+    rates_agile = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates")
+    if not rates_agile:
+        print("ERROR: No import rate data from Octopus url {}".format(url))
+        failed = True
+    rates_agile_export = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/")
+    if not rates_agile_export:
+        print("ERROR: No export rate data from Octopus url {}".format(url))
+        failed = True
+    print("Agile rates downloaded...")
+
     future = FutureRate(my_predbat)
-    rate_import, rate_export = future.futurerate_analysis()
+    rate_import, rate_export = future.futurerate_analysis(rates_agile, rates_agile_export)
     if not rate_import:
         print("ERROR: No rate import data")
         return True
@@ -289,7 +302,7 @@ def run_nordpool_test(my_predbat):
         return True
 
     future.download_futurerate_data_func = lambda x: ("empty")  # Mock the download function
-    rate_import2, rate_export2 = future.futurerate_analysis()
+    rate_import2, rate_export2 = future.futurerate_analysis(rates_agile, rates_agile_export)
     for key in rate_import:
         if rate_import[key] != rate_import2.get(key, None):
             print("ERROR: Rate import data not the same")
@@ -317,6 +330,21 @@ def run_nordpool_test(my_predbat):
     if min_export < 0 or max_export > 50:
         print("ERROR: Rate export data out of range got min {} max {}".format(min_export, max_export))
         failed = True
+
+    # Compare Agile rates against Nordpool
+    for minute in range(0, 24 * 60, 30):
+        rate_octopus = rates_agile.get(minute, None)
+        rate_nordpool = rate_import.get(minute, None)
+        if rate_octopus is not None and rate_nordpool is not None:
+            rate_diff = abs(rate_octopus - rate_nordpool)
+            print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
+
+    for minute in range(0, 24 * 60, 30):
+        rate_octopus = rates_agile_export.get(minute, None)
+        rate_nordpool = rate_export.get(minute, None)
+        if rate_octopus is not None and rate_nordpool is not None:
+            rate_diff = abs(rate_octopus - rate_nordpool)
+            print("Export: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
 
     return failed
 
@@ -1055,6 +1083,14 @@ def run_execute_tests(my_predbat):
         soc_kw=10,
         assert_status="Discharging",
     )
+    # IBoost hold test
+    # not inverter.inv_can_span_midnight
+    # inverter.inv_charge_discharge_with_rate
+    # set_reserve_enable off
+    # not inverter.inv_has_target_soc
+    # not self.inverter_hybrid and self.inverter_soc_reset
+    # not inverter.inv_has_charge_enable_time
+    # Holiday mode
     return failed
 
 

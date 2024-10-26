@@ -27,7 +27,115 @@ class FutureRate:
         self.time_abs_str = base.time_abs_str
         self.futurerate_url_cache = base.futurerate_url_cache
 
-    def futurerate_analysis_new(self, url_template):
+    def futurerate_calibrate(self, real_mdata, mdata, is_import, peak_start_minutes, peak_end_minutes):
+        """
+        Calibrate nordpool data
+        """
+        if is_import:
+            best_diff_multiply = 2.0
+            best_diff_add_peak = 7
+            best_diff_add_all = 0
+        else:
+            best_diff_multiply = 0.95
+            best_diff_add_peak = 1.0
+            best_diff_add_all = 5.0
+        best_diff_diff = 9999999
+        vat = 1.05
+
+        if real_mdata:
+            for correlate_multiply in [x / 100 for x in range(90, 120, 5)]:
+                diff = 0
+                for minute in real_mdata:
+                    minute_mod = minute % (24 * 60)
+                    rate_real = real_mdata[minute]
+                    rate_nord = mdata.get(minute, None)
+                    if minute >= peak_start_minutes and minute_mod < peak_end_minutes:
+                        continue
+                    if rate_nord is not None:
+                        rate_nord *= correlate_multiply
+
+                        if is_import:
+                            rate_nord = min(rate_nord, 95)  # Cap
+                        else:
+                            rate_nord = max(rate_nord, 0)
+
+                        diff += abs(rate_real / vat - rate_nord)
+                if diff <= best_diff_diff:
+                    best_diff_diff = diff
+                    best_diff_multiply = correlate_multiply
+
+        best_diff_diff = 9999999
+        if is_import:
+            peak_range = [x / 10.0 for x in range(0, 160, 5)]
+            all_range = [0]
+        else:
+            peak_range = range(0, 8)
+            all_range = [x / 10.0 for x in range(0, 20, 2)]
+
+        if real_mdata:
+            for correlate_add in all_range:
+                diff = 0
+                for minute in real_mdata:
+                    minute_mod = minute % (24 * 60)
+                    rate_real = real_mdata[minute]
+                    rate_nord = mdata.get(minute, None)
+                    if rate_nord is not None:
+                        rate_nord *= best_diff_multiply
+                        rate_nord += correlate_add
+
+                        if is_import:
+                            rate_nord = min(rate_nord, 95)  # Cap
+                        else:
+                            rate_nord = max(rate_nord, 0)
+
+                        diff += abs(rate_real / vat - rate_nord)
+
+                if diff <= best_diff_diff:
+                    best_diff_diff = diff
+                    best_diff_add_all = correlate_add
+
+            for correlate_add in peak_range:
+                diff = 0
+                for minute in real_mdata:
+                    minute_mod = minute % (24 * 60)
+                    rate_real = real_mdata[minute]
+                    rate_nord = mdata.get(minute, None)
+                    if rate_nord is not None:
+                        rate_nord *= best_diff_multiply
+                        if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
+                            rate_nord += correlate_add
+                        rate_nord += best_diff_add_all
+
+                        if is_import:
+                            rate_nord = min(rate_nord, 95)  # Cap
+                        else:
+                            rate_nord = max(rate_nord, 0)
+
+                        diff += abs(rate_real / vat - rate_nord)
+
+                if diff <= best_diff_diff:
+                    best_diff_diff = diff
+                    best_diff_add_peak = correlate_add
+
+        # Perform adjustment
+        calibrated_data = {}
+        for minute in mdata:
+            minute_mod = minute % (24 * 60)
+            rate_nord = mdata[minute]
+            rate_nord *= best_diff_multiply
+            if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
+                rate_nord += best_diff_add_peak
+            rate_nord += best_diff_add_all
+            if is_import:
+                rate_nord = min(rate_nord, 95)  # Cap
+            else:
+                rate_nord = max(rate_nord, 0)
+
+            calibrated_data[minute] = rate_nord * vat
+
+        return calibrated_data
+
+    def futurerate_analysis_new(self, url_template, rate_import_real, rate_export_real):
         """
         Convert new Futurerate data to minute data
         """
@@ -42,9 +150,6 @@ class FutureRate:
         peak_end_minutes = peak_end.minute + peak_end.hour * 60
         if peak_end_minutes < peak_start_minutes:
             peak_end_minutes += 24 * 60
-
-        peak_premium_import = self.get_arg("futurerate_peak_premium_import", 0)
-        peak_premium_export = self.get_arg("futurerate_peak_premium_export", 0)
 
         for day in [0, 1]:
             url = url_template.replace("DATE", (datetime.now() + timedelta(days=day)).strftime("%Y-%m-%d"))
@@ -89,14 +194,8 @@ class FutureRate:
                 minutes_end += 24 * 60
 
             # Convert to pence with Agile formula, starts in pounds per Megawatt hour
-            rate_import = (areaPrice / 10) * 2.2
-            rate_export = (areaPrice / 10) * 0.95
-            if minutes_start >= peak_start_minutes and minutes_end <= peak_end_minutes:
-                rate_import += peak_premium_import
-                rate_export += peak_premium_export
-            rate_import = min(rate_import, 95)  # Cap
-            rate_export = max(rate_export, 0)  # Cap
-            rate_import = rate_import * 1.05  # Vat only on import
+            rate_import = (areaPrice / 10) * 2.0
+            rate_export = (areaPrice / 10) * 1.0
 
             item = {}
             item["from"] = time_date_start.strftime(TIME_FORMAT)
@@ -118,16 +217,23 @@ class FutureRate:
             mdata_import = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_import", "from", backwards=False, to_key="to")
             mdata_export = self.minute_data(array_values, self.forecast_days + 1, self.midnight_utc, "rate_export", "from", backwards=False, to_key="to")
 
+        adjust_import = self.get_arg("futurerate_adjust_import", False)
+        adjust_export = self.get_arg("futurerate_adjust_export", False)
+
+        self.log("Info: Calibrating Nordpool data...")
+        mdata_import = self.futurerate_calibrate(rate_import_real if adjust_import else {}, mdata_import, is_import=True, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
+        mdata_export = self.futurerate_calibrate(rate_export_real if adjust_export else {}, mdata_export, is_import=False, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
+
         future_data = []
         minute_now_hour = int(self.minutes_now / 60) * 60
-        for minute in range(minute_now_hour, self.forecast_plan_hours * 60 + minute_now_hour, 60):
+        for minute in range(0, self.forecast_plan_hours * 60 + minute_now_hour, 60):
             if mdata_import.get(minute) or mdata_export.get(minute):
                 future_data.append("{} => {} / {}".format(self.time_abs_str(minute), mdata_import.get(minute), mdata_export.get(minute)))
 
         self.log("Predicted future rates: {}".format(future_data))
         return mdata_import, mdata_export
 
-    def futurerate_analysis(self):
+    def futurerate_analysis(self, rate_import_real, rate_export_real):
         """
         Analyse futurerate energy data
         """
@@ -141,7 +247,7 @@ class FutureRate:
         self.log("Fetching futurerate data from {}".format(url))
 
         if "DATE" in url:
-            return self.futurerate_analysis_new(url)
+            return self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
         else:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")
             return {}, {}
