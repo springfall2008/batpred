@@ -260,7 +260,6 @@ The approximation is only used until the real Octopus Agile rates are released a
 Set these depending upon whether you have an agile tariff for import, export or both
 - **futurerate_peak_start** and **futurerate_peak_end** - during the peak period Octopus apply an additional peak-rate price adjustment.
 These configuration items enable the peak-rate hours to be adjusted
-- **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - the price premium (in pence) to be added to the energy market prices during the above-defined peak period
 
 CAUTION: You may violate the terms and conditions of the Nordpool site if you use this data and as such the authors of
 Predbat accept no responsibility for any violations:
@@ -268,13 +267,11 @@ Predbat accept no responsibility for any violations:
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ```yaml
-futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
+futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
 futurerate_adjust_import: True
 futurerate_adjust_export: False
 futurerate_peak_start: "16:00:00"
 futurerate_peak_end: "19:00:00"
-futurerate_peak_premium_import: 14
-futurerate_peak_premium_export: 6.5
 ```
 
 ## Grid Carbon intensity
