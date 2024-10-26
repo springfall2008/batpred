@@ -2754,11 +2754,10 @@ class PredBat(hass.Hass):
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
                     if is_import and self.get_arg("futurerate_adjust_import", False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
-                        prev_rate = rate_offset
-                        rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
+                        rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
                     elif (not is_import) and (not is_gas) and self.get_arg("futurerate_adjust_export", False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
-                        rate_offset = max(rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute], 0)
+                        rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
@@ -8264,7 +8263,11 @@ class PredBat(hass.Hass):
                             status_extra = " target {}%".format(inverter.soc_percent)
                             self.log("Freeze charging with soc {}%".format(inverter.soc_percent))
                         else:
-                            if self.set_soc_enable and (inverter.soc_percent >= self.charge_limit_percent_best[0]) and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
+                            if (
+                                self.set_soc_enable
+                                and (inverter.soc_percent >= self.charge_limit_percent_best[0])
+                                and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause)
+                            ):
                                 status = "Hold charging"
                                 self.log("Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.soc_percent, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
                                 if abs(inverter.soc_percent - self.charge_limit_percent_best[0]) <= 1.0:
@@ -8290,7 +8293,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_pause_mode(pause_discharge=True)
                             resetPause = False
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
-
+                        
                         isCharging = True
 
                     if not disabled_charge_window:
@@ -8314,7 +8317,9 @@ class PredBat(hass.Hass):
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
                 else:
-                    self.log("Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
+                    self.log(
+                        "Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
+                    )
                     inverter.disable_charge_window()
             elif self.set_charge_window:
                 self.log("No charge window yet, waiting for schedule.")
@@ -8454,7 +8459,7 @@ class PredBat(hass.Hass):
 
             # Reset charge/discharge rate
             if resetPause:
-                inverter.adjust_pause_mode()
+               inverter.adjust_pause_mode()
             if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
@@ -8730,10 +8735,6 @@ class PredBat(hass.Hass):
         # Log current values
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
 
-        # futurerate data
-        futurerate = FutureRate(self)
-        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis()
-
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
@@ -8952,6 +8953,10 @@ class PredBat(hass.Hass):
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
         self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+
+        # futurerate data
+        futurerate = FutureRate(self)
+        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(self.rate_import, self.rate_export)
 
         # Replicate and scan import rates
         if self.rate_import:
