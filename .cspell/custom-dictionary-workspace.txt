@@ -114,11 +114,11 @@ minb
 minmax
 minuteb
 Mixergy
-mult
 mkdocs
 Modbus
 Mosquitto
 mqtt
+mult
 myenergi
 mypy
 nattribute
