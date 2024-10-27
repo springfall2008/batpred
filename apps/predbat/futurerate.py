@@ -6,9 +6,7 @@ import pytz
 import copy
 
 from config import TIME_FORMAT
-
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
-
 
 class FutureRate:
     def __init__(self, base):
@@ -35,22 +33,25 @@ class FutureRate:
             best_diff_multiply = 2.0
             best_diff_add_peak = 7
             best_diff_add_all = 0
+            mult_range = [x / 100 for x in range(180, 240, 2)]
         else:
             best_diff_multiply = 0.95
             best_diff_add_peak = 1.0
             best_diff_add_all = 5.0
-        best_diff_diff = 9999999
+            mult_range = [x / 100 for x in range(90, 120, 2)]
         vat = 1.05
 
         if real_mdata:
-            for correlate_multiply in [x / 100 for x in range(90, 120, 5)]:
+            best_diff_diff = 9999999
+            for correlate_multiply in mult_range:
                 diff = 0
                 for minute in real_mdata:
-                    minute_mod = minute % (24 * 60)
+                    minute_mod = minute % (24*60)
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
-                    if minute >= peak_start_minutes and minute_mod < peak_end_minutes:
+                    if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                         continue
+
                     if rate_nord is not None:
                         rate_nord *= correlate_multiply
 
@@ -60,80 +61,87 @@ class FutureRate:
                             rate_nord = max(rate_nord, 0)
 
                         diff += abs(rate_real / vat - rate_nord)
+
                 if diff <= best_diff_diff:
                     best_diff_diff = diff
                     best_diff_multiply = correlate_multiply
-
-        best_diff_diff = 9999999
-        if is_import:
-            peak_range = [x / 10.0 for x in range(0, 160, 5)]
-            all_range = [0]
-        else:
-            peak_range = range(0, 8)
-            all_range = [x / 10.0 for x in range(0, 20, 2)]
+            
+        all_range = [x / 10.0 for x in range(-10, 20, 2)]
+        peak_range = [x / 10.0 for x in range(0, 160, 5)]
 
         if real_mdata:
+            best_diff_diff = 9999999
             for correlate_add in all_range:
                 diff = 0
                 for minute in real_mdata:
-                    minute_mod = minute % (24 * 60)
+                    minute_mod = minute % (24*60)
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
+
                     if rate_nord is not None:
                         rate_nord *= best_diff_multiply
-                        rate_nord += correlate_add
+                        rate_nord += correlate_add      
 
+                        if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
+                            continue
+                        
                         if is_import:
                             rate_nord = min(rate_nord, 95)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
-
+                
                         diff += abs(rate_real / vat - rate_nord)
 
                 if diff <= best_diff_diff:
                     best_diff_diff = diff
                     best_diff_add_all = correlate_add
 
+            best_diff_diff = 9999999
             for correlate_add in peak_range:
                 diff = 0
                 for minute in real_mdata:
-                    minute_mod = minute % (24 * 60)
+                    minute_mod = minute % (24*60)
                     rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if rate_nord is not None:
                         rate_nord *= best_diff_multiply
+                        rate_nord += best_diff_add_all
                         if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                             rate_nord += correlate_add
-                        rate_nord += best_diff_add_all
 
                         if is_import:
                             rate_nord = min(rate_nord, 95)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
-                        diff += abs(rate_real / vat - rate_nord)
+                        diff += abs(rate_real  / vat - rate_nord)
 
                 if diff <= best_diff_diff:
                     best_diff_diff = diff
                     best_diff_add_peak = correlate_add
 
+        # Print calibration results
+        self.log("Calibration for {} best diff {} multiply {} add_peak {} add_all {} ".format("import" if is_import else "export", best_diff_diff, best_diff_multiply, best_diff_add_peak, best_diff_add_all))
+
         # Perform adjustment
         calibrated_data = {}
         for minute in mdata:
-            minute_mod = minute % (24 * 60)
+            minute_mod = minute % (24*60)
             rate_nord = mdata[minute]
             rate_nord *= best_diff_multiply
             if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
-                rate_nord += best_diff_add_peak
+                rate_nord += best_diff_add_peak    
             rate_nord += best_diff_add_all
             if is_import:
                 rate_nord = min(rate_nord, 95)  # Cap
             else:
                 rate_nord = max(rate_nord, 0)
 
-            calibrated_data[minute] = rate_nord * vat
-
+            calibrated_data[minute] = self.dp2(rate_nord * vat)
+        
         return calibrated_data
+
+
 
     def futurerate_analysis_new(self, url_template, rate_import_real, rate_export_real):
         """
@@ -165,13 +173,19 @@ class FutureRate:
             if not all_data:
                 all_data = copy.deepcopy(pdata)
             else:
-                if "multiAreaEntries" in pdata:
+                if 'multiAreaEntries' in pdata:
                     all_data["multiAreaEntries"].extend(pdata["multiAreaEntries"])
-
+        
         if not all_data or ("multiAreaEntries" not in all_data):
             self.log("Warn: Error downloading futurerate data from URL {}, no multiAreaEntries".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud, no multiAreaEntries", debug=url, had_errors=True)
             return {}, {}
+
+        prev_time_date_start = None
+        prev_time_date_end = None
+        prev_duration = 0
+        prev_rate_import = 0
+        prev_rate_export = 0
 
         for entry in all_data["multiAreaEntries"]:
             deliveryStart = entry["deliveryStart"]
@@ -192,10 +206,10 @@ class FutureRate:
             minutes_end = delta_end.seconds / 60
             if minutes_end < minutes_start:
                 minutes_end += 24 * 60
-
+            
             # Convert to pence with Agile formula, starts in pounds per Megawatt hour
-            rate_import = (areaPrice / 10) * 2.0
-            rate_export = (areaPrice / 10) * 1.0
+            rate_import = (areaPrice / 10)
+            rate_export = (areaPrice / 10)
 
             item = {}
             item["from"] = time_date_start.strftime(TIME_FORMAT)
@@ -203,11 +217,35 @@ class FutureRate:
             item["rate_import"] = self.dp2(rate_import)
             item["rate_export"] = self.dp2(rate_export)
 
-            if time_date_start not in extracted_keys:
-                extracted_keys.append(time_date_start)
-                extracted_data[time_date_start] = item
+            # Create intermediate 30 minute data points
+            if prev_time_date_end == time_date_start and (minutes_end-minutes_start)==60:
+
+                time_end_intermediate = time_date_start + timedelta(minutes=30)
+                item["to"] = time_end_intermediate.strftime(TIME_FORMAT)
+                item["rate_import"] = self.dp2((rate_import + prev_rate_import) / 2)
+                item["rate_export"] = self.dp2((rate_export + prev_rate_export) / 2)
+                if time_date_start not in extracted_keys:
+                    extracted_keys.append(time_date_start)
+                    extracted_data[time_date_start] = item
+
+                item_intermediate = {}
+                item_intermediate["from"] = time_end_intermediate.strftime(TIME_FORMAT)
+                item_intermediate["to"] = time_date_end.strftime(TIME_FORMAT)
+                item_intermediate["rate_import"] = self.dp2(rate_import)
+                item_intermediate["rate_export"] = self.dp2(rate_export)
+                if time_end_intermediate not in extracted_keys:
+                    extracted_keys.append(time_end_intermediate)
+                    extracted_data[time_end_intermediate] = item_intermediate
             else:
-                self.log("Warn: Duplicate key {} in extracted_keys".format(time_date_start))
+                if time_date_start not in extracted_keys:
+                    extracted_keys.append(time_date_start)
+                    extracted_data[time_date_start] = item
+            
+            prev_time_date_start = time_date_start
+            prev_time_date_end = time_date_end
+            prev_duration = minutes_end - minutes_start
+            prev_rate_import = rate_import
+            prev_rate_export = rate_export
 
         if extracted_keys:
             extracted_keys.sort()
@@ -232,7 +270,7 @@ class FutureRate:
 
         self.log("Predicted future rates: {}".format(future_data))
         return mdata_import, mdata_export
-
+    
     def futurerate_analysis(self, rate_import_real, rate_export_real):
         """
         Analyse futurerate energy data
@@ -246,11 +284,12 @@ class FutureRate:
 
         self.log("Fetching futurerate data from {}".format(url))
 
-        if "DATE" in url:
+        if 'DATE' in url:
             return self.futurerate_analysis_new(url, rate_import_real, rate_export_real)
         else:
             print("Warning: Old futurerate URL, you must update this in apps.yaml")
             return {}, {}
+
 
     def download_futurerate_data(self, url):
         """
@@ -300,7 +339,7 @@ class FutureRate:
 
         if pdata == "empty":
             pdata = {}
-
+        
         # Cache New Octopus data
         self.futurerate_url_cache[url] = {}
         self.futurerate_url_cache[url]["stamp"] = now
@@ -314,7 +353,7 @@ class FutureRate:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
-
+        
         if r.status_code in [204]:
             return "empty"
 
@@ -322,12 +361,12 @@ class FutureRate:
             self.log("Warn: Error downloading futurerate data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
-
+        
         try:
             struct = json.loads(r.text)
         except requests.exceptions.JSONDecodeError:
             self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}
-
+        
         return struct
