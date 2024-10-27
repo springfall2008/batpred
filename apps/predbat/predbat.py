@@ -8475,7 +8475,7 @@ class PredBat(hass.Hass):
                             else:
                                 # Not yet in the freeze, hold at 100% target SoC
                                 self.log("Not yet in charge freeze, holding target soc at 100%")
-                                self.adjust_battery_target_multi(inverter, 100.0, False)
+                                self.adjust_battery_target_multi(inverter, 100.0, isCharging, isDischarging)
                         else:
                             # If not charging and not hybrid we should reset the target % to 100 to avoid losing solar
                             if not self.inverter_hybrid and self.inverter_soc_reset and not isCharging:
