@@ -1,4 +1,4 @@
-# Inverter Setup
+# Inverter setup
 
 PredBat was originally written for GivEnergy inverters using the GivTCP integration but this is now being extended to other inverter models:
 
@@ -84,6 +84,8 @@ These settings are documented in the appropriate place in the documentation, but
 - If you are using GivTCP v3 and have an AIO or 3 phase inverter then you will need to manually set [geserial in apps.yaml](apps-yaml.md#geserial) to your inverter serial number
 - If you have a single AIO then control is directly to the AIO. Ensure [geserial in apps.yaml](apps-yaml.md#geserial) is correctly picking the AIO and comment out geserial2 lines
 - If you have multiple AIO's then all control of the AIO's is done through the Gateway so [geserial in apps.yaml](apps-yaml.md#geserial) should be set to the Gateway serial number
+- If you have multiple AIO's you might want to consider setting [inverter charge and discharge limits](apps-yaml.md#inverter-control-configurations)
+unless you want to charge and discharge at the full 12kWh!
 - If you have a 2.6kWh, 5.2kWh or AIO battery then you will need to set [battery_scaling in apps.yaml](apps-yaml.md#battery-size-scaling)
 as the battery size is incorrectly reported to GivTCP
 - If you have a Gen 2, Gen 3 or AIO then you may need to set [inverter_reserve_max in apps.yaml](apps-yaml.md#inverter-reserve-maximum) to 98.
@@ -109,7 +111,7 @@ To run PredBat with Solis hybrid inverters, follow the following steps:
 
 4. Instead of `apps.yaml` use `ginlong_solis.yaml` from this Repo as your starting template.
    The majority of settings should be correct but please check.
-   You will need to un-comment the `template` line to enable it. Save it to the `config/appdaemon/apps/predbat/config` folder.
+   You will need to un-comment the `template` line to enable it. Save it to the appropriate [Predbat software directory](apps-yaml.md#appsyaml-settings).
    Set **solax_modbus_new** in apps.yaml to True if you have integration version 2024.03.2 or greater
 6. Ensure that the inverter is set Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that

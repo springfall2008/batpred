@@ -6,10 +6,9 @@ Depending on how you installed Predbat the `apps.yaml` file will be held in one 
 
 - if you have used the [Predbat add-on installation method](install.md#predbat-add-on-install), apps.yaml will be in the directory `/addon_configs/6adb4f0d_predbat`,
 
-- if the [combined AppDaemon/Predbat add-on installation method](install.md#appdaemon-predbat-combined-install) was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`,
-or
+- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- with the [HACS, Appdaemon add-on then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`.
+- if the combined AppDaemon/Predbat add-on installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -40,6 +39,8 @@ car_charging_now_response:
 ```
 
 The two spaces before the dash are especially critical. Its easy to mis-edit and have one or three spaces which isn't valid YAML.
+
+NB: the sequence of entries in `apps.yaml` doesn't matter, as long as the YAML itself is structured correctly you can move things and edit things anywhere in the file.
 
 ## Templates
 
@@ -314,19 +315,25 @@ for more accurate predictions.
 ## Inverter control configurations
 
 - **inverter_limit** - One per inverter. When set defines the maximum AC output power in watts for your inverter or micro-inverters (e.g. 3600).
-This will help to emulate clipping when your solar produces more than the inverter can handle, but it won't be that accurate as the source of the data isn't minute by minute.
+This is used by Predbat in calculating the plan to emulate clipping that occurs in the inverter when your solar produces more than the inverter can handle,
+but it won't be that accurate as the source of the data isn't minute by minute.
 If you have a separate Solar inverter as well then add the solar inverter limit to the battery inverter limit to give one total amount.<BR>
 For example, if you have a GivEnergy hybrid inverter you should set export_limit to 3600 or 5000 depending on which size inverter you have.
 If though you have a GivEnergy All-in-one (6kW AC limit) and a 5kW Solis solar inverter, you should set inverter_limit to 11000 (6000+5000).
+For multiple All-in-one's, add each of their limits together, plus any separate solar inverter limits.
+
+NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
 - **export_limit** - One per inverter (optional). When set defines the maximum watts of AC power your inverter can export to the grid at (e.g. 2500).
-This will emulate the software export limit setting in the Inverter that you will have if your G98/G99
+This is used by Predbat in calculating the plan to emulate your inverter's software export limit setting that you will have if your G98/G99
 approval was lower than your maximum inverter power (check your install information for details).
 If you do not set an export limit then it's the same as the inverter limit.
 
-- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in watts, overrides the maximum
+NB: export_limit is ONLY used by Predbat to improve the quality of the plan, any export limit is done by the inverter and is not controlled by Predbat.
+
+- **inverter_limit_charge** and **inverter_limit_discharge** - One per inverter (optional). When set in Watts, overrides the maximum
 charge/discharge rate settings used when controlling the inverter.
-This can be used if you need to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
+This can be used if you need Predbat to cap your inverter battery rate (e.g. charge overnight at a slower rate to reduce inverter/battery heating) as Predbat
 will normally configure all timed charges or discharges to be at the inverter's maximum rate.
 
 ## Controlling the Inverter

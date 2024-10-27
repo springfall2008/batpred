@@ -228,24 +228,24 @@ pred_bat:
   # The list of possible values is in car_charging_planned_response
   # Auto matches Zappi and Wallbox, or change it for your own
   # One entry per car
-#  car_charging_planned:
-#    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  # car_charging_planned:
+  #   - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
-#  car_charging_planned_response:
-#    - 'yes'
-#    - 'on'
-#    - 'true'
-#    - 'connected'
-#    - 'ev connected'
-#    - 'charging'
-#    - 'paused'
-#    - 'waiting for car demand'
-#    - 'waiting for ev'
-#    - 'scheduled'
-#    - 'enabled'
-#    - 'latched'
-#    - 'locked'
-#    - 'plugged in'
+  # car_charging_planned_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
+  #   - 'connected'
+  #   - 'ev connected'
+  #   - 'charging'
+  #   - 'paused'
+  #   - 'waiting for car demand'
+  #   - 'waiting for ev'
+  #   - 'scheduled'
+  #   - 'enabled'
+  #   - 'latched'
+  #   - 'locked'
+  #   - 'plugged in'
 
   # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
   # The car charging now can be set to a sensor to indicate the car is charging and to plan
@@ -254,10 +254,10 @@ pred_bat:
   #  - off
 
   # Positive responses for car_charging_now
-#  car_charging_now_response:
-#    - 'yes'
-#    - 'on'
-#    - 'true'
+  # car_charging_now_response:
+  #   - 'yes'
+  #   - 'on'
+  #   - 'true'
 
   # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
   # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
@@ -279,9 +279,10 @@ pred_bat:
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  #octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  #octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-  #octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+
+  # octopus_intelligent_slot: 're:(binary_sensor.octopus_intelligent_slot|re:binary_sensor.octopus_energy_intelligent_dispatching)'
+  # octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_target_time)
+  # octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
