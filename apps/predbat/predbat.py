@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.2"
+THIS_VERSION = "v8.5.3"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -5728,7 +5728,7 @@ class PredBat(hass.Hass):
         if self.set_charge_freeze and (self.reserve not in try_socs):
             try_socs.append(self.reserve)
         if not self.set_charge_freeze and (self.reserve in try_socs):
-            try_soc.remove(self.reserve)
+            try_socs.remove(self.reserve)
 
         # Run the simulations in parallel
         results = []
