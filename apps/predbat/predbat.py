@@ -2754,11 +2754,10 @@ class PredBat(hass.Hass):
                 # Only offset once not every day
                 if minute_mod not in adjusted_rates:
                     if is_import and self.get_arg("futurerate_adjust_import", False) and (minute in self.future_energy_rates_import) and (minute_mod in self.future_energy_rates_import):
-                        prev_rate = rate_offset
-                        rate_offset = rate_offset - self.future_energy_rates_import[minute_mod] + self.future_energy_rates_import[minute]
+                        rate_offset = self.future_energy_rates_import[minute]
                         adjust_type = "future"
                     elif (not is_import) and (not is_gas) and self.get_arg("futurerate_adjust_export", False) and (minute in self.future_energy_rates_export) and (minute_mod in self.future_energy_rates_export):
-                        rate_offset = max(rate_offset - self.future_energy_rates_export[minute_mod] + self.future_energy_rates_export[minute], 0)
+                        rate_offset = max(self.future_energy_rates_export[minute], 0)
                         adjust_type = "future"
                     elif is_import:
                         rate_offset = rate_offset + self.metric_future_rate_offset_import
@@ -8730,10 +8729,6 @@ class PredBat(hass.Hass):
         # Log current values
         self.log("Current data so far today: load {} kWh import {} kWh export {} kWh pv {} kWh".format(self.dp2(self.load_minutes_now), self.dp2(self.import_today_now), self.dp2(self.export_today_now), self.dp2(self.pv_today_now)))
 
-        # futurerate data
-        futurerate = FutureRate(self)
-        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis()
-
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
@@ -8952,6 +8947,10 @@ class PredBat(hass.Hass):
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
         self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
+
+        # futurerate data
+        futurerate = FutureRate(self)
+        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(self.rate_import, self.rate_export)
 
         # Replicate and scan import rates
         if self.rate_import:
