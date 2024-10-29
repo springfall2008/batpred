@@ -272,18 +272,16 @@ Example Solcast update automation script:
 ```yaml
 alias: Solcast update
 description: "Update Solcast solar forecast"
-trigger:
-  - platform: time
-    at: "06:02:34"
-  - platform: time
-    at: "12:07:47"
-  - platform: time
-    at: "18:09:56"
-  - platform: time
-    at: "23:11:18"
-condition: []
-action:
-  - service: solcast_solar.update_forecasts
+triggers:
+  - trigger: time
+    at:
+      - "06:02:34"
+      - "12:07:47"
+      - "18:09:56"
+      - "23:11:18"
+conditions: []
+actions:
+  - action: solcast_solar.update_forecasts
     data: {}
 mode: single
 ```
@@ -450,7 +448,7 @@ The Predbat code that runs is exactly the same and the configuration is exactly 
 6. Briefly start the new Predbat add-on so that it creates the addon_config folder and the template `apps.yaml` file:
     - Go to Settings/Add-ons
     - Click on the Predbat add-on
-    - Click START, wait a minute for the add-on to initialise itself, then click STOP
+    - Click START, wait a minute for the add-on to initialise itself, then click STOP. A predbat status warning that you have a template apps.yaml file is normal and can be ignored
 
 7. Open your file editor and open your existing `apps.yaml` file:
     - If you are using the old 'combined AppDaemon/Predbat add-on installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
@@ -470,6 +468,9 @@ select all the contents of the template apps.yaml file, and paste in the content
     - Click the back arrow
     - Click on the Predbat add-on
     - Click START, and tick 'Start on boot'
+
+11. If you are using the [Predbat automatic monitor](output-data.md#predbat-error-monitor) then you will need to enable the predbat_running binary sensor and change the automation,
+replacing the AppDaemon add-on id (a0d7b954_appdaemon) with 'a06adb4f0d_predbat', and 'binary_sensor.appdaemon_running' with 'binary_sensor.predbat_running'.
 
 And that's it.
 

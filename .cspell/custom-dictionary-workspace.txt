@@ -118,6 +118,7 @@ mkdocs
 Modbus
 Mosquitto
 mqtt
+mult
 myenergi
 mypy
 nattribute
@@ -197,6 +198,7 @@ unstaged
 useid
 venv
 Wallbox
+weblink
 welink
 xaxis
 xlabel

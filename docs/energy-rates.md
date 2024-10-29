@@ -5,8 +5,8 @@ Your Import and Export rates can be simple flat rates,
 more complex time of day tariffs (e.g. Economy 7, Octopus Flux),
 or daily/half-hourly rates that track electricity market prices (e.g. Octopus Agile or Tracker).
 
-Energy rates are all configured in the `apps.yaml` file that's stored in either the directory `/addon_configs/6adb4f0d_predbat`,
-`/addon_configs/46f69597_appdaemon-predbat/apps` or the `/config/appdaemon/apps/batpred/config/` directory depending on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
+Energy rates are all configured in the `apps.yaml` file that's stored in either the directory `/addon_configs/6adb4f0d_predbat` or `/config/appdaemon/apps/batpred/config/` directory
+depending on [what type of Predbat installation method you have used](apps-yaml.md#appsyaml-settings).
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server add-on's)
 to edit this file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -35,17 +35,17 @@ and provide the integration with your 'Octopus API key' (that you obtain from yo
 Octopus Energy events which are disabled by default when the integration is installed:
 
 ```yaml
-    event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_next_day_rates
 
-    event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
-    event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
 
-    event.octopus_energy_gas_xxxxxxxx_previous_day_rates
-    event.octopus_energy_gas_xxxxxxxx_current_day_rates
-    event.octopus_energy_gas_xxxxxxxx_next_day_rates
+  event.octopus_energy_gas_xxxxxxxx_previous_day_rates
+  event.octopus_energy_gas_xxxxxxxx_current_day_rates
+  event.octopus_energy_gas_xxxxxxxx_next_day_rates
 ```  
 
 To enable the above events:
@@ -177,7 +177,7 @@ The gas rates are only required if you have a gas boiler, an iBoost, and are usi
 
 ## Manually over-riding energy rates
 
-You can also override the energy rates (regardless of whether they are set manually or via the Octopus Energy integration) by using the override feature in apps.yaml.
+You can also override the import or export energy rates (regardless of whether they are set manually or via the Octopus Energy integration) by using the override feature in apps.yaml.
 
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sunday's.
@@ -187,26 +187,26 @@ to set the appropriate rate over-ride dates and times:
 
 ```yaml
 rates_import_override:
-  - date : "YYYY-MM-DD"
-    start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
+  - date: "YYYY-MM-DD"
+    start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 rates_export_override:
-  - date : "YYYY-MM-DD"
-    start : "HH:MM:SS"
-    end : "HH:MM:SS"
-    rate : pence
+  - date: "YYYY-MM-DD"
+    start: "HH:MM:SS"
+    end: "HH:MM:SS"
+    rate: pence
 ```
 
-Optionally you can add a predicted load scaling in these periods using **load_scaling** for example:
+Optionally you can add a predicted load scaling factor for these periods using **load_scaling**, for example:
 
 ```yaml
 rates_import_override:
-  -  date: '2024-01-21'
-     start: '17:30:00'
-     end: '18:30:00'
-     rate: 150
-     load_scaling: 0.8
+  - date: '2024-01-21'
+    start: '17:30:00'
+    end: '18:30:00'
+    rate: 150
+    load_scaling: 0.8
 ```
 
 This instructs Predbat that during a 1 hour period at 5:30-6:30pm on 21st of Jan set the import rate to 150p and assume our load will be 80% of normal (20% lower).
@@ -220,7 +220,7 @@ force exporting during that time. The saving session will still work correctly a
 
 ```yaml
 rates_export_override:
- -  start: '17:00:00'
+  - start: '17:00:00'
     end: '19:00:00'
     rate_increment: -10
 ```
@@ -240,9 +240,13 @@ rates_export_override:
 
 You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
 
-- **date** is in the date format of "YYYY-MM-DD" e.g. "2023-09-09", **start** and **end** in "HH:MM:SS" time format e.g. "12:30:00", and **rate** in pence.
-- **load_scaling** is a percentage factor, where 1.0 would be no change, 0.8 is 80% of nominal house load.
-- **rate_increment** is the number of pence to add (or subtract) to the reported energy rates during this period
+- **date** is optional and if specified must be in the date format of "YYYY-MM-DD" e.g. "2023-09-09".
+If a date is specified then the rate override applies that specific date, otherwise it applies to all dates
+- **start** and **end** must be specified in "HH:MM:SS" time format e.g. "12:30:00"
+- **load_scaling** is an optional percentage change factor in house load for the period - 1.0 would be no change, 0.8 is 80% of nominal house load,
+2.0 would be a 100% increase (i.e. 2x) on normal historic house load
+- **rate** is optional figure in pence to override the rate for the specific period
+- **rate_increment** is optional and is the number of pence to add (or subtract) to the reported energy rates during this period
 
 ## Rate offsets
 
@@ -260,7 +264,6 @@ The approximation is only used until the real Octopus Agile rates are released a
 Set these depending upon whether you have an agile tariff for import, export or both
 - **futurerate_peak_start** and **futurerate_peak_end** - during the peak period Octopus apply an additional peak-rate price adjustment.
 These configuration items enable the peak-rate hours to be adjusted
-- **futurerate_peak_premium_import** and **futurerate_peak_premium_export** - the price premium (in pence) to be added to the energy market prices during the above-defined peak period
 
 CAUTION: You may violate the terms and conditions of the Nordpool site if you use this data and as such the authors of
 Predbat accept no responsibility for any violations:
@@ -268,13 +271,11 @@ Predbat accept no responsibility for any violations:
 <https://www.nordpoolgroup.com/en/About-us/terms-and-conditions-for-useofwebsite/>
 
 ```yaml
-futurerate_url: '<https://www.nordpoolgroup.com/api/marketdata/page/325?currency=GBP>'
+futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
 futurerate_adjust_import: True
 futurerate_adjust_export: False
 futurerate_peak_start: "16:00:00"
 futurerate_peak_end: "19:00:00"
-futurerate_peak_premium_import: 14
-futurerate_peak_premium_export: 6.5
 ```
 
 ## Grid Carbon intensity
