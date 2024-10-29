@@ -144,7 +144,7 @@ car_charging_energy: 're:(sensor.hypervolt_session_energy_total_increasing)'
 car_charging_planned:
   - 're:(binary_sensor.hypervolt_car_plugged)'
 car_charging_planned_response:
-  - 'plugged in'
+  - 'on'
 car_charging_now:
   - 're:(sensor.hypervolt_charging_readiness)'
 car_charging_now_response:
