@@ -407,6 +407,11 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
+        # Create dummy idle time entities
+        if not self.inv_has_idle_time:
+            self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
+            self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
+
     def find_charge_curve(self, discharge):
         """
         Find expected charge curve
@@ -949,6 +954,38 @@ class Inverter:
         else:
             self.discharge_limits = [100.0 for i in range(len(self.discharge_window))]
 
+        # Idle time?
+        # Get previous idle start and end
+        idle_start = self.base.get_arg("idle_start_time", index=self.id)
+        idle_end = self.base.get_arg("idle_end_time", index=self.id)
+
+        # Convert to minutes
+        try:
+            # Get time
+            idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
+            idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
+            # Change to minutes
+            self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
+            self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
+        except (ValueError, TypeError):
+            print("Warn: Inverter {} unable to read idle start/end time, check your setting of idle_start_time/idle_end_time".format(self.id))
+            self.idle_start_minutes = 0
+            self.idle_end_minutes = 0
+
+        if self.idle_end_minutes < self.idle_start_minutes:
+            # As windows wrap, if end is in the future then move start back, otherwise forward
+            if self.idle_end_minutes > minutes_now:
+                self.idle_start_minutes -= 60 * 24
+            else:
+                self.idle_end_minutes += 60 * 24
+
+        # Window already passed, move it forward until the next one
+        if self.idle_end_minutes < minutes_now:
+            self.idle_start_minutes += 60 * 24
+            self.idle_end_minutes += 60 * 24
+
+        self.base.log("Inverter {} idle time is {}-{}".format(self.id, self.base.time_abs_str(self.idle_start_minutes), self.base.time_abs_str(self.idle_end_minutes)))
+
         if not quiet:
             self.base.log("Inverter {} discharge windows currently {}".format(self.id, self.discharge_window))
 
@@ -1275,8 +1312,11 @@ class Inverter:
         """
         GivTCP Workaround, keep writing until correct
         """
+        entity_base = entity_id.split(".")[0]
+        if entity_base not in ["input_select", "select"]:
+            return self.write_and_poll_value(name, entity_id, new_value)
+
         for retry in range(6):
-            entity_base = entity_id.split(".")[0]
             service = entity_base + "/select_option"
             self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
@@ -1407,10 +1447,7 @@ class Inverter:
                 self.rest_setBatteryMode(new_inverter_mode)
             else:
                 entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
-                if self.inv_has_ge_inverter_mode:
-                    self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
-                else:
-                    self.write_and_poll_value("inverter_mode", entity_id, new_inverter_mode)
+                self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 
             # Notify
             if self.base.set_inverter_notify:
@@ -1437,8 +1474,8 @@ class Inverter:
         charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, "%H:%M:%S", minutes_now)
         discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, "%H:%M:%S", minutes_now)
 
-        # Idle from now until midnight
-        idle_start_minutes = minutes_now
+        # Idle from now (or previous idle time) until midnight
+        idle_start_minutes = max(min(minutes_now, self.idle_start_minutes), 0)
         idle_end_minutes = 2 * 24 * 60 - 1
 
         if charge_start_minutes <= minutes_now and charge_end_minutes > minutes_now:
@@ -1472,6 +1509,7 @@ class Inverter:
             idle_end_minutes = 0
             # self.log("Reset idle start/end due to being no window")
 
+        # Work out new idle start/end time
         idle_start_time = self.base.midnight_utc + timedelta(minutes=idle_start_minutes)
         idle_end_time = self.base.midnight_utc + timedelta(minutes=idle_end_minutes)
         idle_start = idle_start_time.strftime("%H:%M:%S")
@@ -1479,21 +1517,23 @@ class Inverter:
 
         self.base.log("Adjust idle time computed idle is {}-{}".format(idle_start, idle_end))
 
-        # Write idle start/end time
-        if self.inv_has_idle_time:
-            idle_start_time_id = self.base.get_arg("idle_start_time", indirect=False, index=self.id)
-            idle_end_time_id = self.base.get_arg("idle_end_time", indirect=False, index=self.id)
+        # Get previous start/end
+        old_start = self.base.get_arg("idle_start_time", index=self.id)
+        old_end = self.base.get_arg("idle_end_time", index=self.id)
 
-            if idle_start_time_id and idle_end_time_id:
-                old_start = self.base.get_arg("idle_start_time", index=self.id)
-                old_end = self.base.get_arg("idle_end_time", index=self.id)
+        # Write new idle start/end time
+        idle_start_time_id = self.base.get_arg("idle_start_time", indirect=False, index=self.id)
+        idle_end_time_id = self.base.get_arg("idle_end_time", indirect=False, index=self.id)
 
-                if old_start != idle_start:
-                    self.base.log("Inverter {} set new idle start time to {} was {}".format(self.id, idle_start, old_start))
-                    self.write_and_poll_option("idle_start_time", idle_start_time_id, idle_start)
-                if old_end != idle_end:
-                    self.base.log("Inverter {} set new idle end time to {} was {}".format(self.id, idle_end, old_end))
-                    self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
+        if idle_start_time_id and idle_end_time_id:
+            if old_start != idle_start:
+                self.base.log("Inverter {} set new idle start time to {} was {}".format(self.id, idle_start, old_start))
+                self.write_and_poll_option("idle_start_time", idle_start_time_id, idle_start)
+                self.idle_start_minutes = idle_start_minutes
+            if old_end != idle_end:
+                self.base.log("Inverter {} set new idle end time to {} was {}".format(self.id, idle_end, old_end))
+                self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
+                self.idle_end_minutes = idle_end_minutes
 
     def window2minutes(self, start, end, format, minutes_now):
         """
@@ -1603,15 +1643,12 @@ class Inverter:
                 # Always write to this as it is the GE default
                 changed_start_end = True
                 entity_discharge_start_time_id = self.base.get_arg("discharge_start_time", indirect=False, index=self.id)
-                if self.inv_charge_time_entity_is_option:
-                    self.write_and_poll_option("discharge_start_time", entity_discharge_start_time_id, new_start)
-                else:
-                    self.write_and_poll_value("discharge_start_time", entity_discharge_start_time_id, new_start)
+                self.write_and_poll_option("discharge_start_time", entity_discharge_start_time_id, new_start)
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_value("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_value("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    self.write_and_poll_option("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
+                    self.write_and_poll_option("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
             else:
                 self.log("Warn: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
 
@@ -1624,15 +1661,12 @@ class Inverter:
                 # Always write to this as it is the GE default
                 changed_start_end = True
                 entity_discharge_end_time_id = self.base.get_arg("discharge_end_time", indirect=False, index=self.id)
-                if self.inv_charge_time_entity_is_option:
-                    self.write_and_poll_option("discharge_end_time", entity_discharge_end_time_id, new_end)
-                    # If the inverter uses hours and minutes then write to these entities too
-                else:
-                    self.write_and_poll_value("discharge_end_time", entity_discharge_end_time_id, new_end)
+                self.write_and_poll_option("discharge_end_time", entity_discharge_end_time_id, new_end)
 
+                # If the inverter uses hours and minutes then write to these entities too
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_value("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_value("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    self.write_and_poll_option("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
+                    self.write_and_poll_option("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
             else:
                 self.log("Warn: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
 
@@ -1938,15 +1972,12 @@ class Inverter:
             elif "charge_start_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_start = self.base.get_arg("charge_start_time", indirect=False, index=self.id)
-                if self.inv_charge_time_entity_is_option:
-                    self.write_and_poll_option("charge_start_time", entity_id_start, new_start)
-                else:
-                    self.write_and_poll_value("charge_start_time", entity_id_start, new_start)
+                self.write_and_poll_option("charge_start_time", entity_id_start, new_start)
 
                 if self.inv_charge_time_format == "H M":
                     # If the inverter uses hours and minutes then write to these entities too
-                    self.write_and_poll_value("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
-                    self.write_and_poll_value("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
+                    self.write_and_poll_option("charge_start_hour", self.base.get_arg("charge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
+                    self.write_and_poll_option("charge_start_minute", self.base.get_arg("charge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
             else:
                 self.log("Warn: Inverter {} unable write charge window start as neither REST or charge_start_time are set".format(self.id))
 
@@ -1957,14 +1988,11 @@ class Inverter:
             elif "charge_end_time" in self.base.args:
                 # Always write to this as it is the GE default
                 entity_id_end = self.base.get_arg("charge_end_time", indirect=False, index=self.id)
-                if self.inv_charge_time_entity_is_option:
-                    self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
-                else:
-                    self.write_and_poll_value("charge_end_time", entity_id_end, new_end)
+                self.write_and_poll_option("charge_end_time", entity_id_end, new_end)
 
                 if self.inv_charge_time_format == "H M":
-                    self.write_and_poll_value("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
-                    self.write_and_poll_value("charge_end_minute", self.base.get_arg("charge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
+                    self.write_and_poll_option("charge_end_hour", self.base.get_arg("charge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
+                    self.write_and_poll_option("charge_end_minute", self.base.get_arg("charge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
             else:
                 self.log("Warn: Inverter {} unable write charge window end as neither REST, charge_end_hour or charge_end_time are set".format(self.id))
 
