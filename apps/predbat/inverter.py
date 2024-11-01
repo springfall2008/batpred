@@ -407,7 +407,7 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
-        # Create dummy idle time entities
+        # Create dummy idle time entities        
         if not self.inv_has_idle_time:
             self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
@@ -958,13 +958,13 @@ class Inverter:
         # Get previous idle start and end
         idle_start = self.base.get_arg("idle_start_time", index=self.id)
         idle_end = self.base.get_arg("idle_end_time", index=self.id)
-
+        
         # Convert to minutes
         try:
             # Get time
             idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
             idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
-            # Change to minutes
+            # Change to minutes            
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
         except (ValueError, TypeError):
@@ -1832,13 +1832,24 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data):
+    def call_service_template(self, service, data, domain="charge"):
         """
         Call a service template with data
         """
         service_list = self.base.args.get(service, "")
         if not service_list:
-            return
+            return False
+        
+        hash_index = domain + str(self.id)
+        last_service_hash = self.base.last_service_hash.get(hash_index, "")
+        this_service_hash = hash(str(service) + "_" + str(data))
+
+        if last_service_hash == this_service_hash:
+            self.log("Inverter {} Skipping service {} with data {} as already called".format(self.id, service, data))
+            return True
+        else:
+            # Record the last service called
+            self.base.last_service_hash[hash_index] = this_service_hash
 
         if not isinstance(service_list, list):
             service_list = [service_list]
@@ -1868,6 +1879,8 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
 
+        return True
+
     def adjust_charge_immediate(self, target_soc):
         """
         Adjust from charging or not charging based on passed target soc
@@ -1878,10 +1891,10 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_charge * MINUTE_WATT),
             }
-            self.call_service_template("charge_start_service", service_data)
+            self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
             service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-            self.call_service_template("charge_stop_service", service_data)
+            self.call_service_template("charge_stop_service", service_data, domain="charge")
 
     def adjust_discharge_immediate(self, target_soc):
         """
@@ -1893,11 +1906,11 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
-            self.call_service_template("discharge_start_service", service_data)
+            self.call_service_template("discharge_start_service", service_data, domain="discharge")
         else:
             service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-            self.call_service_template("charge_stop_service", service_data)
-            self.call_service_template("discharge_stop_service", service_data)
+            if not self.call_service_template("discharge_stop_service", service_data, domain="discharge"):
+                self.call_service_template("charge_stop_service", service_data, domain="charge")
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
