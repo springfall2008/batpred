@@ -5191,6 +5191,7 @@ class PredBat(hass.Hass):
         self.iboost_running = False
         self.iboost_running_full = False
         self.iboost_running_solar = False
+        self.last_service_hash = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
