@@ -7574,7 +7574,7 @@ class PredBat(hass.Hass):
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        minutes_back = (self.now_utc_real- self.midnight_utc).total_seconds() / 60
+        minutes_back = (self.now_utc_real - self.midnight_utc).total_seconds() / 60
 
         # Get SoC history to find yesterday SoC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
