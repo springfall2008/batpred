@@ -7574,7 +7574,7 @@ class PredBat(hass.Hass):
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        minutes_back = (self.now_utc_real - self.midnight_utc).total_seconds() / 60
+        minutes_back = self.minutes_now + 5
 
         # Get SoC history to find yesterday SoC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
@@ -7624,8 +7624,8 @@ class PredBat(hass.Hass):
             return
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_data_per_kwh = self.minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        cost_yesterday = cost_data.get(minutes_back + 5, 0.0)
-        cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back + 5, 0.0)
+        cost_yesterday = cost_data.get(minutes_back, 0.0)
+        cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back, 0.0)
 
         cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2)
         if not cost_today_car_data:
@@ -7636,8 +7636,8 @@ class PredBat(hass.Hass):
         else:
             cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_data_car_per_kwh = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-            cost_yesterday_car = cost_data_car.get(minutes_back + 5, 0.0)
-            cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back + 5, 0.0)
+            cost_yesterday_car = cost_data_car.get(minutes_back, 0.0)
+            cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back, 0.0)
 
         # Save state
         self.dashboard_item(
