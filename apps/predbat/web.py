@@ -19,9 +19,11 @@ class WebInterface:
         self.default_page = "./dash"
         self.pv_power_hist = {}
         self.pv_forecast_hist = {}
+        self.cost_today_hist = {}
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False):
         results = {}
+        last_updated_time = None
         if history:
             history = history[0]
 
@@ -30,19 +32,27 @@ class WebInterface:
 
         # Process history
         for item in history:
-            # Ignore data without correct keys
-            if state_key not in item:
-                continue
             if last_updated_key not in item:
                 continue
 
-            # Unavailable or bad values
-            if item[state_key] == "unavailable" or item[state_key] == "unknown":
-                continue
+            if attributes:
+                if state_key not in item["attributes"]:
+                    continue
+                state = item["attributes"][state_key]
+            else:
+                # Ignore data without correct keys
+                if state_key not in item:
+                    continue
+
+                # Unavailable or bad values
+                if item[state_key] == "unavailable" or item[state_key] == "unknown":
+                    continue
+
+                state = item[state_key]
 
             # Get the numerical key and the timestamp and ignore if in error
             try:
-                state = float(item[state_key]) * scale
+                state = float(state) * scale
                 last_updated_time = item[last_updated_key]
             except (ValueError, TypeError):
                 continue
@@ -57,6 +67,7 @@ class WebInterface:
         self.log("Web interface history update")
         self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7))
         self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
+        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_today", 2), state_key='p/kWh', attributes=True)
 
     async def start(self):
         # Start the web server on port 5052
@@ -77,7 +88,6 @@ class WebInterface:
         print("Web interface started")
         while not self.abort:
             await asyncio.sleep(1)
-        print("Web interface cleanup")
         await runner.cleanup()
         print("Web interface stopped")
 
@@ -474,7 +484,6 @@ var options = {
                     if itemtype == "input_number" and step == 1:
                         old_value = int(old_value)
                     if old_value != new_value:
-                        self.log("set {} from {} to {}".format(pitem, old_value, new_value))
                         service_data = {}
                         service_data["domain"] = itemtype
                         if itemtype == "switch":
@@ -488,7 +497,6 @@ var options = {
                             service_data["service_data"] = {"entity_id": pitem, "option": new_value}
                         else:
                             continue
-                        self.log("Call service {}".format(service_data))
                         await self.base.trigger_callback(service_data)
         raise web.HTTPFound("./config")
 
@@ -545,7 +553,7 @@ var options = {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
-    def prune_today(self, data, prune=True, group=15):
+    def prune_today(self, data, prune=True, group=15, prune_future=False):
         """
         Remove data from before today
         """
@@ -560,6 +568,8 @@ var options = {
             if last_time and (timekey - last_time).seconds < group * 60:
                 continue
             if not prune or (timekey > self.base.midnight_utc):
+                if prune_future and (timekey > self.base.now_utc):
+                    continue
                 results[key] = data[key]
                 last_time = timekey
         return results
@@ -647,10 +657,12 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
+            cost_pkwh = self.prune_today(self.cost_today_hist, prune=False, prune_future=True)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
+                {"name": "p/kWh", "data": cost_pkwh, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
