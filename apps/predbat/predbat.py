@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.4"
+THIS_VERSION = "v8.5.5"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -976,6 +976,7 @@ class PredBat(hass.Hass):
         required_unit=None,
         prev_last_updated_time=None,
         last_state=0,
+        attributes=False,
     ):
         """
         Turns data from HA into a hash of data indexed by minute with the data being the value
@@ -994,19 +995,27 @@ class PredBat(hass.Hass):
 
         # Process history
         for item in history:
-            # Ignore data without correct keys
-            if state_key not in item:
-                continue
             if last_updated_key not in item:
                 continue
 
-            # Unavailable or bad values
-            if item[state_key] == "unavailable" or item[state_key] == "unknown":
-                continue
+            if attributes:
+                if state_key not in item["attributes"]:
+                    continue
+                if item["attributes"][state_key] == "unavailable" or item["attributes"][state_key] == "unknown":
+                    continue
+                state = item["attributes"][state_key]
+            else:
+                # Ignore data without correct keys
+                if state_key not in item:
+                    continue
+                # Unavailable or bad values
+                if item[state_key] == "unavailable" or item[state_key] == "unknown":
+                    continue
+                state = item[state_key]
 
             # Get the numerical key and the timestamp and ignore if in error
             try:
-                state = float(item[state_key]) * scale
+                state = float(state) * scale
                 last_updated_time = self.str2time(item[last_updated_key])
             except (ValueError, TypeError):
                 continue
@@ -4507,9 +4516,13 @@ class PredBat(hass.Hass):
         day_cost = 0
         day_cost_import = 0
         day_cost_export = 0
+        day_import = 0
+        day_export = 0
+        day_car = 0
         day_cost_car = 0
         day_energy = 0
         day_energy_export = 0
+        day_energy_total = 0
         day_cost_time = {}
         day_cost_time_import = {}
         day_cost_time_export = {}
@@ -4537,12 +4550,16 @@ class PredBat(hass.Hass):
                 energy_export = 0
             day_energy += energy
             day_energy_export += energy_export
+            day_energy_total += energy - energy_export
 
+            day_import += energy
+            day_car += car_energy
             if self.rate_import:
                 day_cost += self.rate_import[minute] * energy
                 day_cost_import += self.rate_import[minute] * energy
                 day_cost_car += self.rate_import[minute] * car_energy
 
+            day_export += energy_export
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
@@ -4569,6 +4586,8 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_energy_total),
+                "p/kWh": self.dp2(day_cost / day_energy_total),
             },
         )
         if self.num_cars > 0:
@@ -4581,6 +4600,8 @@ class PredBat(hass.Hass):
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
+                    "energy": self.dp2(day_car),
+                    "p/kWh": self.dp2(day_cost_car / day_car),
                 },
             )
         if self.carbon_enable:
@@ -4604,6 +4625,8 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_import),
+                "p/kWh": self.dp2(day_cost_import / day_import),
             },
         )
         self.dashboard_item(
@@ -4615,12 +4638,15 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_export),
+                "p/kWh": self.dp2(day_cost_export / day_export),
             },
         )
         self.log(
-            "Today's energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
+            "Today's energy import {} kWh export {} kWh total {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
                 self.dp2(day_energy),
                 self.dp2(day_energy_export),
+                self.dp2(day_energy_total),
                 self.dp2(day_cost),
                 self.currency_symbols[1],
                 self.dp2(day_cost_import),
@@ -7535,6 +7561,7 @@ class PredBat(hass.Hass):
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+        minutes_back = (self.now_utc - self.midnight_utc).total_seconds() / 60
 
         # Get SoC history to find yesterday SoC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
@@ -7583,16 +7610,21 @@ class PredBat(hass.Hass):
             self.log("Warn: No cost_today data for yesterday")
             return
         cost_data = self.minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-        cost_yesterday = cost_data.get(self.minutes_now + 5, 0.0)
+        cost_data_per_kwh = self.minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+        cost_yesterday = cost_data.get(minutes_back + 5, 0.0)
+        cost_yesterday_per_kwh = cost_data_per_kwh.get(minutes_back + 5, 0.0)
 
         cost_today_car_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today_car", days=2)
         if not cost_today_car_data:
             cost_today_car_data = {}
             cost_data_car = {}
             cost_yesterday_car = 0
+            cost_data_car_per_kwh = 0
         else:
             cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
-            cost_yesterday_car = cost_data_car.get(self.minutes_now + 5, 0.0)
+            cost_data_car_per_kwh = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            cost_yesterday_car = cost_data_car.get(minutes_back + 5, 0.0)
+            cost_car_per_kwh = cost_data_car_per_kwh.get(minutes_back + 5, 0.0)
 
         # Save state
         self.dashboard_item(
@@ -7603,6 +7635,7 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": "p",
                 "icon": "mdi:currency-usd",
+                "p/kWh": self.dp2(cost_yesterday_per_kwh),
             },
         )
         if self.num_cars > 0:
@@ -7614,6 +7647,7 @@ class PredBat(hass.Hass):
                     "state_class": "measurement",
                     "unit_of_measurement": "p",
                     "icon": "mdi:currency-usd",
+                    "p/kWh": self.dp2(cost_car_per_kwh),
                 },
             )
 
