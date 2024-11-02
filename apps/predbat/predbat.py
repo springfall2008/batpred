@@ -4577,6 +4577,19 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
 
+        day_pkwh = 0
+        day_car_pkwh = 0
+        day_import_pkwh = 0
+        day_export_pkwh = 0
+        if day_energy_total > 0:
+            day_pkwh = day_cost / day_energy_total
+        if day_car > 0:
+            day_car_pkwh = day_cost_car / day_car
+        if day_import > 0:
+            day_import_pkwh = day_cost_import / day_import
+        if day_export > 0:
+            day_export_pkwh = day_cost_export / day_export
+
         self.dashboard_item(
             self.prefix + ".cost_today",
             state=self.dp2(day_cost),
@@ -4587,7 +4600,7 @@ class PredBat(hass.Hass):
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "energy": self.dp2(day_energy_total),
-                "p/kWh": self.dp2(day_cost / day_energy_total),
+                "p/kWh": self.dp2(day_pkwh),
             },
         )
         if self.num_cars > 0:
@@ -4601,7 +4614,7 @@ class PredBat(hass.Hass):
                     "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
                     "energy": self.dp2(day_car),
-                    "p/kWh": self.dp2(day_cost_car / day_car),
+                    "p/kWh": self.dp2(day_car_pkwh),
                 },
             )
         if self.carbon_enable:
@@ -4626,7 +4639,7 @@ class PredBat(hass.Hass):
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "energy": self.dp2(day_import),
-                "p/kWh": self.dp2(day_cost_import / day_import),
+                "p/kWh": self.dp2(day_import_pkwh),
             },
         )
         self.dashboard_item(
@@ -4639,7 +4652,7 @@ class PredBat(hass.Hass):
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "energy": self.dp2(day_export),
-                "p/kWh": self.dp2(day_cost_export / day_export),
+                "p/kWh": self.dp2(day_export_pkwh),
             },
         )
         self.log(
