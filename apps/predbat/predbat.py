@@ -7574,7 +7574,7 @@ class PredBat(hass.Hass):
         yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        minutes_back = self.minutes_now + 5
+        minutes_back = self.minutes_now + 1
 
         # Get SoC history to find yesterday SoC
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
@@ -10164,7 +10164,6 @@ class PredBat(hass.Hass):
         if item:
             enabled = self.user_config_item_enabled(item)
             if not enabled:
-                self.log("Not updating HA config {} to {} as disabled".format(name, value))
                 item["value"] = None
             else:
                 entity = item.get("entity")
@@ -10180,8 +10179,6 @@ class PredBat(hass.Hass):
                             self.inverter_needs_reset_force = name
                             self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
-                    if not quiet:
-                        self.log("Updating HA config {} to {}".format(name, value))
                     if item["type"] == "input_number":
                         """INPUT_NUMBER"""
                         icon = item.get("icon", "mdi:numeric")
@@ -10562,8 +10559,6 @@ class PredBat(hass.Hass):
             ha_value = None
 
             if not enabled:
-                if not quiet:
-                    self.log("Note: Disabled configuration item {}".format(name))
                 item["value"] = None
 
                 # Remove the state if the entity still exists
