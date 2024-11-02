@@ -407,7 +407,7 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
-        # Create dummy idle time entities
+        # Create dummy idle time entities        
         if not self.inv_has_idle_time:
             self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
@@ -958,13 +958,13 @@ class Inverter:
         # Get previous idle start and end
         idle_start = self.base.get_arg("idle_start_time", index=self.id)
         idle_end = self.base.get_arg("idle_end_time", index=self.id)
-
+        
         # Convert to minutes
         try:
             # Get time
             idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
             idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
-            # Change to minutes
+            # Change to minutes            
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
         except (ValueError, TypeError):
@@ -1839,7 +1839,7 @@ class Inverter:
         service_list = self.base.args.get(service, "")
         if not service_list:
             return False
-
+        
         hash_index = domain + str(self.id)
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data))
@@ -1893,7 +1893,7 @@ class Inverter:
             }
             if target_soc == self.soc_percent or freeze:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
-                    self.call_service_template("charge_start_service", service_data, domain="charge")
+                    self.call_service_template("charge_start_service", service_data, domain="charge")        
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
@@ -1910,7 +1910,7 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
-
+            
             if freeze:
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge"):
                     self.call_service_template("discharge_start_service", service_data, domain="discharge")

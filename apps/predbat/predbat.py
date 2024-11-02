@@ -8143,12 +8143,14 @@ class PredBat(hass.Hass):
         Reset inverter to safe mode
         """
         if not self.set_read_only or (self.inverter_needs_reset_force in ["set_read_only"]):
+            self.last_service_hash = {}
             # Don't reset in read only mode unless forced
             for inverter in self.inverters:
                 self.log("Reset inverter settings to safe mode (set_charge_window={} set_discharge_window={} force={})".format(self.set_charge_window, self.set_discharge_window, self.inverter_needs_reset_force))
                 if self.set_charge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
                     inverter.disable_charge_window()
+                    inverter.adjust_charge_immediate(0)
                     inverter.adjust_battery_target(100.0, False)
                     inverter.adjust_pause_mode()
                     self.isCharging = False
@@ -8157,6 +8159,7 @@ class PredBat(hass.Hass):
                 if self.set_discharge_window or (self.inverter_needs_reset_force in ["set_read_only", "mode"]):
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_force_discharge(False)
+                    inverter.adjust_discharge_immediate(0)
                     self.isDischarging = False
 
         self.inverter_needs_reset = False
