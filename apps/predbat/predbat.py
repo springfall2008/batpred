@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timedelta
 import hashlib
 import traceback
+from environment import is_appdaemon_environment
 
 # Import AppDaemon or our standalone wrapper
 try:
@@ -10801,9 +10802,10 @@ class PredBat(hass.Hass):
                 raise e
             self.web_interface = None
             self.web_interface_task = None
-            self.log("Starting web interface")
-            self.web_interface = WebInterface(self)
-            self.web_interface_task = self.create_task(self.web_interface.start())
+            if not is_appdaemon_environment():
+                self.log("Starting web interface")
+                self.web_interface = WebInterface(self)
+                self.web_interface_task = self.create_task(self.web_interface.start())
 
             # Printable config root
             self.config_root_p = self.config_root
