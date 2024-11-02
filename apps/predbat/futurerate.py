@@ -123,7 +123,7 @@ class FutureRate:
                     best_diff_add_peak = correlate_add
 
         # Print calibration results
-        self.log("Calibration for {} best diff {} multiply {} add_peak {} add_all {} ".format("import" if is_import else "export", best_diff_diff, best_diff_multiply, best_diff_add_peak, best_diff_add_all))
+        #self.log("Calibration for {} best diff {} multiply {} add_peak {} add_all {} ".format("import" if is_import else "export", best_diff_diff, best_diff_multiply, best_diff_add_peak, best_diff_add_all))
 
         # Perform adjustment
         calibrated_data = {}

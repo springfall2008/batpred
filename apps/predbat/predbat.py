@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.4"
+THIS_VERSION = "v8.5.5"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -4507,9 +4507,13 @@ class PredBat(hass.Hass):
         day_cost = 0
         day_cost_import = 0
         day_cost_export = 0
+        day_import = 0
+        day_export = 0
+        day_car = 0
         day_cost_car = 0
         day_energy = 0
         day_energy_export = 0
+        day_energy_total = 0
         day_cost_time = {}
         day_cost_time_import = {}
         day_cost_time_export = {}
@@ -4537,12 +4541,16 @@ class PredBat(hass.Hass):
                 energy_export = 0
             day_energy += energy
             day_energy_export += energy_export
+            day_energy_total += energy - energy_export
 
+            day_import += energy
+            day_car += car_energy
             if self.rate_import:
                 day_cost += self.rate_import[minute] * energy
                 day_cost_import += self.rate_import[minute] * energy
                 day_cost_car += self.rate_import[minute] * car_energy
 
+            day_export += energy_export
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
@@ -4569,6 +4577,8 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_energy_total),
+                "p/kWh": self.dp2(day_cost / day_energy_total),
             },
         )
         if self.num_cars > 0:
@@ -4581,6 +4591,8 @@ class PredBat(hass.Hass):
                     "state_class": "measurement",
                     "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
+                    "energy": self.dp2(day_car),
+                    "p/kWh": self.dp2(day_cost_car / day_car),
                 },
             )
         if self.carbon_enable:
@@ -4604,6 +4616,8 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_import),
+                "p/kWh": self.dp2(day_cost_import / day_import),
             },
         )
         self.dashboard_item(
@@ -4615,12 +4629,15 @@ class PredBat(hass.Hass):
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
+                "energy": self.dp2(day_export),
+                "p/kWh": self.dp2(day_cost_export / day_export),
             },
         )
         self.log(
-            "Today's energy import {} kWh export {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
+            "Today's energy import {} kWh export {} kWh total {} kWh cost {} {} import {} {} export {} {} carbon {} kg".format(
                 self.dp2(day_energy),
                 self.dp2(day_energy_export),
+                self.dp2(day_energy_total),
                 self.dp2(day_cost),
                 self.currency_symbols[1],
                 self.dp2(day_cost_import),
