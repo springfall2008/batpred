@@ -67,7 +67,7 @@ class WebInterface:
         self.log("Web interface history update")
         self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7))
         self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
-        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_today", 2), state_key='p/kWh', attributes=True)
+        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_today", 2), state_key="p/kWh", attributes=True)
 
     async def start(self):
         # Start the web server on port 5052
