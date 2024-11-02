@@ -515,6 +515,10 @@ The default options passed in are:
 - target_soc - The SOC to charge to
 - power - The charge power to use
 
+#### charge_freeze_service
+
+If defined will be called for freeze charge, otherwise charge_start_service is used for freeze charge also.
+
 #### discharge_start_service
 
 Called to start a discharge
@@ -525,15 +529,19 @@ The default options passed in are:
 - target_soc - The SOC to discharge to
 - power - The discharge power to use
 
+#### discharge_freeze_service
+
+If defined will be called for Discharge freeze, otherwise discharge_start_service is used for freeze discharge also.
+
 #### charge_stop_service
 
-Called to stop a charge or stop a discharge
+Called to stop a charge
 
 device_id - as defined in apps.yaml by **device_id**
 
 #### discharge_stop_service
 
-Called to stop a discharge
+Called to stop a discharge, if not set then **charge_stop_service** will be used instead
 
 - device_id - as defined in apps.yaml by **device_id**
 

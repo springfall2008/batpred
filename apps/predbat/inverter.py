@@ -1881,7 +1881,7 @@ class Inverter:
 
         return True
 
-    def adjust_charge_immediate(self, target_soc):
+    def adjust_charge_immediate(self, target_soc, freeze=False):
         """
         Adjust from charging or not charging based on passed target soc
         """
@@ -1891,12 +1891,16 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_charge * MINUTE_WATT),
             }
-            self.call_service_template("charge_start_service", service_data, domain="charge")
+            if target_soc == self.soc_percent or freeze:
+                if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
+                    self.call_service_template("charge_start_service", service_data, domain="charge")
+            else:
+                self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
             service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
             self.call_service_template("charge_stop_service", service_data, domain="charge")
 
-    def adjust_discharge_immediate(self, target_soc):
+    def adjust_discharge_immediate(self, target_soc, freeze=False):
         """
         Adjust from discharging or not discharging based on passed target soc
         """
@@ -1906,11 +1910,16 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
-            self.call_service_template("discharge_start_service", service_data, domain="discharge")
+
+            if freeze:
+                if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge"):
+                    self.call_service_template("discharge_start_service", service_data, domain="discharge")
+            else:
+                self.call_service_template("discharge_start_service", service_data, domain="discharge")
         else:
             service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
             if not self.call_service_template("discharge_stop_service", service_data, domain="discharge"):
-                self.call_service_template("charge_stop_service", service_data, domain="charge")
+                self.call_service_template("charge_stop_service", service_data, domain="discharge")
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
