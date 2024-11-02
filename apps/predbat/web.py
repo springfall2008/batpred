@@ -662,7 +662,7 @@ var options = {
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "p/kWh", "data": cost_pkwh, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
+                {"name": "Average p/kWh", "data": cost_pkwh, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
