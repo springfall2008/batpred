@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.5"
+THIS_VERSION = "v8.5.6"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -4516,6 +4516,8 @@ class PredBat(hass.Hass):
         day_cost = 0
         day_cost_import = 0
         day_cost_export = 0
+        day_cost_nosc = 0
+        day_cost_nosc_import = 0
         day_import = 0
         day_export = 0
         day_car = 0
@@ -4557,11 +4559,14 @@ class PredBat(hass.Hass):
             if self.rate_import:
                 day_cost += self.rate_import[minute] * energy
                 day_cost_import += self.rate_import[minute] * energy
+                day_cost_nosc += self.rate_import[minute] * energy
+                day_cost_nosc_import += self.rate_import[minute] * energy
                 day_cost_car += self.rate_import[minute] * car_energy
 
             day_export += energy_export
             if self.rate_export:
                 day_cost -= self.rate_export[minute] * energy_export
+                day_cost_nosc -= self.rate_export[minute] * energy_export
                 day_cost_export -= self.rate_export[minute] * energy_export
 
             if self.carbon_enable:
@@ -4582,11 +4587,11 @@ class PredBat(hass.Hass):
         day_import_pkwh = 0
         day_export_pkwh = 0
         if day_energy_total > 0:
-            day_pkwh = day_cost / day_energy_total
+            day_pkwh = day_cost_nosc / day_energy_total
         if day_car > 0:
             day_car_pkwh = day_cost_car / day_car
         if day_import > 0:
-            day_import_pkwh = day_cost_import / day_import
+            day_import_pkwh = day_cost_nosc_import / day_import
         if day_export > 0:
             day_export_pkwh = day_cost_export / day_export
 
