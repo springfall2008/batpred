@@ -68,6 +68,7 @@ class WebInterface:
         self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7))
         self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
         self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_today", 2), state_key="p/kWh", attributes=True)
+        self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_hour", 2), state_key="p/kWh", attributes=True)
 
     async def start(self):
         # Start the web server on port 5052
@@ -657,12 +658,14 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh = self.prune_today(self.cost_today_hist, prune=False, prune_future=True)
+            cost_pkwh_today = self.prune_today(self.cost_today_hist, prune=False, prune_future=True)
+            cost_pkwh_hour = self.prune_today(self.cost_hour_hist, prune=False, prune_future=True)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Average p/kWh", "data": cost_pkwh, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
+                {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
