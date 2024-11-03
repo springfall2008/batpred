@@ -126,7 +126,7 @@ class HAInterface:
         """
         url = "{}/api/websocket".format(self.ha_url)
         response = None
-        #self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
+        # self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
 
         return_response = service_data.get("return_response", False)
         if "return_response" in service_data:

@@ -4628,15 +4628,15 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
 
-        day_pkwh = self.rate_import.get(0,0)
-        day_car_pkwh = self.rate_import.get(0,0)
-        day_import_pkwh = self.rate_import.get(0,0)
+        day_pkwh = self.rate_import.get(0, 0)
+        day_car_pkwh = self.rate_import.get(0, 0)
+        day_import_pkwh = self.rate_import.get(0, 0)
         day_export_pkwh = self.rate_export.get(0, 0)
-        hour_pkwh = self.rate_import.get(0,0)
-        hour_pkwh_import = self.rate_import.get(0,0)
-        hour_pkwh_car = self.rate_import.get(0,0)
-        hour_pkwh_export = self.rate_export.get(0,0)
-        
+        hour_pkwh = self.rate_import.get(0, 0)
+        hour_pkwh_import = self.rate_import.get(0, 0)
+        hour_pkwh_car = self.rate_import.get(0, 0)
+        hour_pkwh_export = self.rate_export.get(0, 0)
+
         if day_energy_total > 0:
             day_pkwh = day_cost_nosc / day_energy_total
         if day_car > 0:
