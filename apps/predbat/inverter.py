@@ -425,7 +425,7 @@ class Inverter:
             charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
         else:
             charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
-        predbat_status_sensor = "predbat.status"
+        predbat_status_sensor = self.base.prefix + ".status"
         battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
         final_curve = {}
         final_curve_count = {}
@@ -1840,16 +1840,17 @@ class Inverter:
         if not service_list:
             return False
 
-        hash_index = domain + str(self.id)
+        hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data))
 
         if last_service_hash == this_service_hash:
-            self.log("Inverter {} Skipping service {} with data {} as already called".format(self.id, service, data))
+            self.log("Inverter {} Skipping service {} domain {} with data {} as already called".format(self.id, service, domain, data))
             return True
         else:
             # Record the last service called
             self.base.last_service_hash[hash_index] = this_service_hash
+            self.log("Inverter {} Calling service {} domain {} with data {}".format(self.id, service, domain, data))
 
         if not isinstance(service_list, list):
             service_list = [service_list]
@@ -1857,7 +1858,6 @@ class Inverter:
         for service_template in service_list:
             service_data = {}
             service_name = ""
-            self.log("Inverter {} Call service template {} = {}".format(self.id, service, service_template))
 
             if isinstance(service_template, str):
                 service_name = service_template
@@ -1874,7 +1874,6 @@ class Inverter:
 
             if service_name:
                 service_name = service_name.replace(".", "/")
-                self.log("Inverter {} Call service {} with data {}".format(self.id, service_name, service_data))
                 self.base.call_service_wrapper(service_name, **service_data)
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))

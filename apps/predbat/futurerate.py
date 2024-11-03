@@ -257,7 +257,6 @@ class FutureRate:
         adjust_import = self.get_arg("futurerate_adjust_import", False)
         adjust_export = self.get_arg("futurerate_adjust_export", False)
 
-        self.log("Info: Calibrating Nordpool data... adjust_import {} adjust_export {}".format(adjust_import, adjust_export))
         mdata_import = self.futurerate_calibrate(rate_import_real if adjust_import else {}, mdata_import, is_import=True, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
         mdata_export = self.futurerate_calibrate(rate_export_real if adjust_export else {}, mdata_export, is_import=False, peak_start_minutes=peak_start_minutes, peak_end_minutes=peak_end_minutes)
 
