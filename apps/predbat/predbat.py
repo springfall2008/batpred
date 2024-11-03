@@ -2307,10 +2307,13 @@ class PredBat(hass.Hass):
                         },
                     )
 
-                # Compute battery value
-                rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-                rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-                battery_value_per_kwh = max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+                # Compute battery value now and at end of plan
+                rate_min_now = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                rate_min_end = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                rate_export_min_now = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_now
+                rate_export_min_end = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_end
+                value_kwh_now = rate_min_now * self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
+                value_kwh_end = rate_min_end * self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
 
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best",
@@ -2322,10 +2325,11 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
-                        "value_per_kwh": self.dp2(battery_value_per_kwh),
                         "soc_now": self.dp2(self.soc_kw),
-                        "value_now": self.dp2(self.soc_kw * battery_value_per_kwh),
-                        "value_end": self.dp2(final_soc * battery_value_per_kwh),
+                        "value_per_kwh_now": self.dp2(value_kwh_now),
+                        "value_per_kwh_end": self.dp2(value_kwh_end),
+                        "value_now": self.dp2(self.soc_kw * value_kwh_now),
+                        "value_end": self.dp2(final_soc * value_kwh_end),
                         "icon": "mdi:battery",
                     },
                 )
@@ -4628,15 +4632,15 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
 
-        day_pkwh = self.rate_import.get(0, 0)
-        day_car_pkwh = self.rate_import.get(0, 0)
-        day_import_pkwh = self.rate_import.get(0, 0)
+        day_pkwh = self.rate_import.get(0,0)
+        day_car_pkwh = self.rate_import.get(0,0)
+        day_import_pkwh = self.rate_import.get(0,0)
         day_export_pkwh = self.rate_export.get(0, 0)
-        hour_pkwh = self.rate_import.get(0, 0)
-        hour_pkwh_import = self.rate_import.get(0, 0)
-        hour_pkwh_car = self.rate_import.get(0, 0)
-        hour_pkwh_export = self.rate_export.get(0, 0)
-
+        hour_pkwh = self.rate_import.get(0,0)
+        hour_pkwh_import = self.rate_import.get(0,0)
+        hour_pkwh_car = self.rate_import.get(0,0)
+        hour_pkwh_export = self.rate_export.get(0,0)
+        
         if day_energy_total > 0:
             day_pkwh = day_cost_nosc / day_energy_total
         if day_car > 0:
