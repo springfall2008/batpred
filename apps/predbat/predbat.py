@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.7"
+THIS_VERSION = "v8.5.8"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -2312,8 +2312,8 @@ class PredBat(hass.Hass):
                 rate_min_end = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 rate_export_min_now = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_now
                 rate_export_min_end = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_end
-                value_kwh_now = rate_min_now * self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
-                value_kwh_end = rate_min_end * self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
+                value_kwh_now = self.soc_kw * self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
+                value_kwh_end = final_soc * self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
 
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best",
@@ -4555,16 +4555,17 @@ class PredBat(hass.Hass):
         hour_energy_import = 0
         hour_energy_car = 0
 
-        for minute in range(60):
-            energy_import = self.get_from_incrementing(import_today, minute)
+        for minute_back in range(60):
+            minute = self.minutes_now - minute_back
+            energy_import = self.get_from_incrementing(import_today, minute_back)
 
             if car_today:
-                energy_car = self.get_from_incrementing(car_today, minute)
+                energy_car = self.get_from_incrementing(car_today, minute_back)
             else:
                 energy_car = 0
 
             if export_today:
-                energy_export = self.get_from_incrementing(export_today, minute)
+                energy_export = self.get_from_incrementing(export_today, minute_back)
             else:
                 energy_export = 0
 

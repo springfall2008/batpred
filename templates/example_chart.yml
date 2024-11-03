@@ -243,8 +243,8 @@ series:
     data_generator: >
       let res = []; for (const [key, value] of
       Object.entries(entity.attributes.results)) { res.push([new
-      Date(key).getTime(), value*5]); } return res.sort((a, b) => { return a[0]
-      - b[0]  })
+      Date(key).getTime(), value*5]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
   - entity: predbat.rates
     attribute: threshold
     name: Low threshold
@@ -279,6 +279,33 @@ series:
       b[0]  })
     show:
       in_header: raw
+  - entity: predbat.rates_gas
+    stroke_width: 1
+    type: area
+    opacity: 0.2
+    curve: stepline
+    name: gas
+    data_generator: >
+      let res = []; for (const [key, value] of
+      Object.entries(entity.attributes.results)) { res.push([new
+      Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
+      b[0]  })
+    show:
+      in_header: raw
+  - entity: predbat.cost_hour
+    stroke_width: 2
+    type: line
+    curve: stepline
+    name: Hourly p/kWh
+    attribute: p/kWh
+    extend_to: false
+  - entity: predbat.cost_today
+    stroke_width: 2
+    type: line
+    curve: stepline
+    name: Today p/kWh
+    attribute: p/kWh
+    extend_to: false
 ###############################################
 # Data prediction chart (import/export/pv/load)
 ###############################################
