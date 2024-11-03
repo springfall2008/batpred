@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.6"
+THIS_VERSION = "v8.5.7"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -2306,6 +2306,12 @@ class PredBat(hass.Hass):
                             "icon": "mdi:battery",
                         },
                     )
+
+                # Compute battery value
+                rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+                battery_value_per_kwh = max(rate_min, 1.0, rate_export_min) * self.metric_battery_value_scaling
+
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best",
                     state=self.dp3(final_soc),
@@ -2316,6 +2322,10 @@ class PredBat(hass.Hass):
                         "state_class": "measurement",
                         "unit_of_measurement": "kWh",
                         "first_charge_kwh": first_charge_soc,
+                        "value_per_kwh": self.dp2(battery_value_per_kwh),
+                        "soc_now": self.dp2(self.soc_kw),
+                        "value_now": self.dp2(self.soc_kw * battery_value_per_kwh),
+                        "value_end": self.dp2(final_soc * battery_value_per_kwh),
                         "icon": "mdi:battery",
                     },
                 )
@@ -4532,6 +4542,42 @@ class PredBat(hass.Hass):
         day_carbon_time = {}
         carbon_g = 0
 
+        hour_cost = 0
+        hour_cost_import = 0
+        hour_cost_export = 0
+        hour_cost_car = 0
+        hour_energy = 0
+        hour_energy_export = 0
+        hour_energy_import = 0
+        hour_energy_car = 0
+
+        for minute in range(60):
+            energy_import = self.get_from_incrementing(import_today, minute)
+
+            if car_today:
+                energy_car = self.get_from_incrementing(car_today, minute)
+            else:
+                energy_car = 0
+
+            if export_today:
+                energy_export = self.get_from_incrementing(export_today, minute)
+            else:
+                energy_export = 0
+
+            hour_energy += energy_import - energy_export
+            hour_energy_import += energy_import
+            hour_energy_export += energy_export
+            hour_energy_car += energy_car
+
+            if self.rate_import:
+                hour_cost += self.rate_import[minute] * energy_import
+                hour_cost_import += self.rate_import[minute] * energy_import
+                hour_cost_car += self.rate_import[minute] * energy_car
+
+            if self.rate_export:
+                hour_cost -= self.rate_export[minute] * energy_export
+                hour_cost_export -= self.rate_export[minute] * energy_export
+
         for minute in range(self.minutes_now):
             # Add in standing charge
             if (minute % (24 * 60)) == 0:
@@ -4582,10 +4628,15 @@ class PredBat(hass.Hass):
                 day_cost_time_export[stamp] = self.dp2(day_cost_export)
                 day_carbon_time[stamp] = self.dp2(carbon_g)
 
-        day_pkwh = 0
-        day_car_pkwh = 0
-        day_import_pkwh = 0
-        day_export_pkwh = 0
+        day_pkwh = self.rate_import.get(0,0)
+        day_car_pkwh = self.rate_import.get(0,0)
+        day_import_pkwh = self.rate_import.get(0,0)
+        day_export_pkwh = self.rate_export.get(0, 0)
+        hour_pkwh = self.rate_import.get(0,0)
+        hour_pkwh_import = self.rate_import.get(0,0)
+        hour_pkwh_car = self.rate_import.get(0,0)
+        hour_pkwh_export = self.rate_export.get(0,0)
+        
         if day_energy_total > 0:
             day_pkwh = day_cost_nosc / day_energy_total
         if day_car > 0:
@@ -4594,18 +4645,47 @@ class PredBat(hass.Hass):
             day_import_pkwh = day_cost_nosc_import / day_import
         if day_export > 0:
             day_export_pkwh = day_cost_export / day_export
+        if hour_energy > 0:
+            hour_pkwh = hour_cost / hour_energy
+        if hour_energy_import > 0:
+            hour_pkwh_import = hour_cost_import / hour_energy_import
+        if hour_energy_export > 0:
+            hour_pkwh_export = hour_cost_export / hour_energy_export
+        if hour_energy_car > 0:
+            hour_pkwh_car = hour_cost_car / hour_energy_car
 
         self.dashboard_item(
             self.prefix + ".cost_today",
             state=self.dp2(day_cost),
             attributes={
                 "results": self.filtered_times(day_cost_time),
-                "friendly_name": "Cost so far today",
+                "friendly_name": "Cost so far today (since midnight)",
                 "state_class": "measurement",
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "energy": self.dp2(day_energy_total),
                 "p/kWh": self.dp2(day_pkwh),
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".cost_hour",
+            state=self.dp2(hour_cost),
+            attributes={
+                "friendly_name": "Cost in last hour",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
+                "energy": self.dp2(hour_energy),
+                "energy_import": self.dp2(hour_energy_import),
+                "energy_export": self.dp2(hour_energy_export),
+                "energy_car": self.dp2(hour_energy_car),
+                "cost_import": self.dp2(hour_cost_import),
+                "cost_export": self.dp2(hour_cost_export),
+                "cost_car": self.dp2(hour_cost_car),
+                "p/kWh": self.dp2(hour_pkwh),
+                "p/kWh_car": self.dp2(hour_pkwh_car),
+                "p/kWh_import": self.dp2(hour_pkwh_import),
+                "p/kWh_export": self.dp2(hour_pkwh_export),
             },
         )
         if self.num_cars > 0:
