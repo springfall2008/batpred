@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.8"
+THIS_VERSION = "v8.5.9"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -2312,8 +2312,8 @@ class PredBat(hass.Hass):
                 rate_min_end = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 rate_export_min_now = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_now
                 rate_export_min_end = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_end
-                value_kwh_now = self.soc_kw * self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
-                value_kwh_end = final_soc * self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
+                value_kwh_now = self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
+                value_kwh_end = self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
 
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best",
