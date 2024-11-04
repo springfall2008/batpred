@@ -7736,7 +7736,7 @@ class PredBat(hass.Hass):
             attributes={
                 "friendly_name": "Cost yesterday",
                 "state_class": "measurement",
-                "unit_of_measurement": "p",
+                "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "p/kWh": self.dp2(cost_yesterday_per_kwh),
             },
@@ -7748,7 +7748,7 @@ class PredBat(hass.Hass):
                 attributes={
                     "friendly_name": "Cost yesterday car",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "icon": "mdi:currency-usd",
                     "p/kWh": self.dp2(cost_car_per_kwh),
                 },
@@ -7847,7 +7847,7 @@ class PredBat(hass.Hass):
                 "predicted_cost": self.dp2(metric),
                 "friendly_name": "Predbat savings yesterday",
                 "state_class": "measurement",
-                "unit_of_measurement": "p",
+                "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
             },
         )
@@ -7882,7 +7882,7 @@ class PredBat(hass.Hass):
                 "predicted_cost": self.dp2(metric),
                 "friendly_name": "PV/Battery system savings yesterday",
                 "state_class": "measurement",
-                "unit_of_measurement": "p",
+                "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
             },
         )
@@ -9931,7 +9931,7 @@ class PredBat(hass.Hass):
                 attributes={
                     "friendly_name": "Total Predbat savings",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "pounds": self.dp2(savings_total_predbat / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
@@ -9952,7 +9952,7 @@ class PredBat(hass.Hass):
                 attributes={
                     "friendly_name": "Actual total energy cost",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "pounds": self.dp2(savings_total_actual / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
@@ -9963,7 +9963,7 @@ class PredBat(hass.Hass):
                 attributes={
                     "friendly_name": "Total Savings vs no PV/Battery system",
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
+                    "unit_of_measurement": self.currency_symbols[1],
                     "pounds": self.dp2(savings_total_pvbat / 100.0),
                     "icon": "mdi:cash-multiple",
                 },
@@ -9975,7 +9975,7 @@ class PredBat(hass.Hass):
                     attributes={
                         "friendly_name": "Total car cost (approx)",
                         "state_class": "measurement",
-                        "unit_of_measurement": "p",
+                        "unit_of_measurement": self.currency_symbols[1],
                         "pounds": self.dp2(cost_total_car / 100.0),
                         "icon": "mdi:cash-multiple",
                     },
