@@ -35,6 +35,7 @@ You will need to install an integration to communicate with and control your inv
 | SolarEdge | SolarEdge Modbus | <https://github.com/WillCodeForCats/solaredge-modbus-multi> |
 | SunSynk   | SunSynk Modbus   | <https://github.com/kellerza/sunsynk> |
 | Fox       | Fox Modbus       | <https://github.com/nathanmarlor/foxess_modbus> |
+| LuxPower  | LuxPython        | <https://github.com/guybw/LuxPython_DEV> |
 
 Predbat was originally written for GivEnergy inverters controlled by the GivTCP add-on but has been extended for other inverter types.
 
