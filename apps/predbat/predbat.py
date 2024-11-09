@@ -993,6 +993,40 @@ class PredBat(hass.Hass):
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
 
+        # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
+        if clean_increment and backwards:
+            if len(history) > 2:
+                prev_prev_item = history[0]
+                prev_item = history[1]
+
+                if state_key in prev_item and state_key in prev_prev_item:
+                    try:
+                        prev_value = float(prev_item[state_key])
+                    except (ValueError, TypeError):
+                        prev_value = 0
+
+                    try:
+                        prev_prev_value = float(prev_prev_item[state_key])
+                    except (ValueError, TypeError):
+                        prev_prev_value = 0
+
+                    for item in history[2:]:
+                        try:
+                            value = float(item[state_key])
+                        except (ValueError, TypeError):
+                            value = prev_value
+                            item[state_key] = value
+
+                        # Filter simple glitch
+                        if (prev_value > value) and (prev_value > prev_prev_value) and abs(prev_value - value) >= 0.1 and (value >= prev_prev_value):
+                            prev_item[state_key] = value
+                            prev_value = value
+
+                        prev_prev_item = prev_item
+                        prev_prev_value = prev_value
+                        prev_value = value
+                        prev_item = item
+
         # Process history
         for item in history:
             if last_updated_key not in item:
