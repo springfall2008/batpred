@@ -455,6 +455,11 @@ These are useful for automations if for example you want to turn off car chargin
 - predbat.cost_today - The total cost of energy so far today (since midnight) with attributes of the total cost every 5 minutes since midnight today
 - predbat.cost_today_export - Same as predbat.cost_today, but for all export income since midnight today
 - predbat.cost_today_import - Same as predbat.cost_today, but for all import costs since midnight today
+- predbat.cost_hour - The total cost of energy averaged over the last hour
+- predbat.cost_today_export - Same as predbat.cost_hour, but for export 
+- predbat.cost_today_import - Same as predbat.cost_hour, but for import
+- predbat.ppkwh_today - The cost in pence/kWh of the house load today accounting for the change in battery level
+- predbat.ppkwh_hour - The cost in pence/kWh of the house load averaged over the last hour, accounting for the change in battery level
 
 ## Car data
 
