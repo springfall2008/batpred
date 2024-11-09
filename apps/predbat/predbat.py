@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.9"
+THIS_VERSION = "v8.5.10"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -798,7 +798,7 @@ class PredBat(hass.Hass):
         """
         Wrapper function to get history from HA
         """
-        history = self.ha_interface.get_history(entity_id, days=days, now=self.now)
+        history = self.ha_interface.get_history(entity_id, days=days, now=self.now_utc)
 
         if required and (history is None):
             self.log("Error: Failure to fetch history for {}".format(entity_id))
@@ -2309,7 +2309,7 @@ class PredBat(hass.Hass):
 
                 # Compute battery value now and at end of plan
                 rate_min_now = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-                rate_min_end = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                rate_min_end = self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 rate_export_min_now = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_now
                 rate_export_min_end = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_end
                 value_kwh_now = self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
@@ -4523,7 +4523,7 @@ class PredBat(hass.Hass):
             )
         return rates
 
-    def today_cost(self, import_today, export_today, car_today):
+    def today_cost(self, import_today, export_today, car_today, load_today):
         """
         Work out energy costs today (approx)
         """
@@ -4531,12 +4531,12 @@ class PredBat(hass.Hass):
         day_cost_import = 0
         day_cost_export = 0
         day_cost_nosc = 0
-        day_cost_nosc_import = 0
         day_import = 0
         day_export = 0
         day_car = 0
         day_cost_car = 0
         day_energy = 0
+        day_load = 0
         day_energy_export = 0
         day_energy_total = 0
         day_cost_time = {}
@@ -4554,10 +4554,31 @@ class PredBat(hass.Hass):
         hour_energy_export = 0
         hour_energy_import = 0
         hour_energy_car = 0
+        hour_load = 0
+        hour_carbon_g = 0
+
+        # Work out change in battery value
+        battery_level_now = self.soc_kwh_history.get(0, 0)
+        battery_level_hour = self.soc_kwh_history.get(60, 0)
+        battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
+        battery_change_hour = battery_level_now - battery_level_hour
+        battery_change_midnight = battery_level_now - battery_level_midnight
+        rate_min = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+        rate_forward = max(rate_min, 1.0, rate_export_min)
+        value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
+        value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
+
+        self.log(
+            "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
+                self.dp2(battery_level_now), self.dp2(battery_level_hour), self.dp2(battery_level_midnight), self.dp2(value_increase_hour), self.dp2(value_increase_day), self.dp2(rate_forward)
+            )
+        )
 
         for minute_back in range(60):
             minute = self.minutes_now - minute_back
             energy_import = self.get_from_incrementing(import_today, minute_back)
+            load_energy = self.get_from_incrementing(load_today, minute_back)
 
             if car_today:
                 energy_car = self.get_from_incrementing(car_today, minute_back)
@@ -4574,6 +4595,8 @@ class PredBat(hass.Hass):
             hour_energy_export += energy_export
             hour_energy_car += energy_car
 
+            hour_load += load_energy
+
             if self.rate_import:
                 hour_cost += self.rate_import[minute] * energy_import
                 hour_cost_import += self.rate_import[minute] * energy_import
@@ -4583,16 +4606,35 @@ class PredBat(hass.Hass):
                 hour_cost -= self.rate_export[minute] * energy_export
                 hour_cost_export -= self.rate_export[minute] * energy_export
 
+            if self.carbon_enable:
+                hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
+                hour_carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
+
+        self.log(
+            "Hour energy {} import {} export {} car {} load {} cost {} import {} export {} car {} carbon {} kG".format(
+                self.dp2(hour_energy),
+                self.dp2(hour_energy_import),
+                self.dp2(hour_energy_export),
+                self.dp2(hour_energy_car),
+                self.dp2(hour_load),
+                self.dp2(hour_cost),
+                self.dp2(hour_cost_import),
+                self.dp2(hour_cost_export),
+                self.dp2(hour_cost_car),
+                self.dp2(hour_carbon_g / 1000.0),
+            )
+        )
+
         for minute in range(self.minutes_now):
             # Add in standing charge
             if (minute % (24 * 60)) == 0:
                 day_cost += self.metric_standing_charge
-                day_cost_import += self.metric_standing_charge
 
             minute_back = self.minutes_now - minute - 1
             energy = 0
             car_energy = 0
             energy = self.get_from_incrementing(import_today, minute_back)
+            load_energy = self.get_from_incrementing(load_today, minute_back)
 
             if car_today:
                 car_energy = self.get_from_incrementing(car_today, minute_back)
@@ -4604,6 +4646,7 @@ class PredBat(hass.Hass):
             day_energy += energy
             day_energy_export += energy_export
             day_energy_total += energy - energy_export
+            day_load += load_energy
 
             day_import += energy
             day_car += car_energy
@@ -4611,7 +4654,6 @@ class PredBat(hass.Hass):
                 day_cost += self.rate_import[minute] * energy
                 day_cost_import += self.rate_import[minute] * energy
                 day_cost_nosc += self.rate_import[minute] * energy
-                day_cost_nosc_import += self.rate_import[minute] * energy
                 day_cost_car += self.rate_import[minute] * car_energy
 
             day_export += energy_export
@@ -4642,22 +4684,27 @@ class PredBat(hass.Hass):
         hour_pkwh_car = self.rate_import.get(0, 0)
         hour_pkwh_export = self.rate_export.get(0, 0)
 
-        if day_energy_total > 0:
-            day_pkwh = day_cost_nosc / day_energy_total
+        if day_load > 0:
+            day_pkwh = (day_cost_nosc - value_increase_day) / day_load
+            day_load_pkwh = day_cost_nosc / day_load
         if day_car > 0:
             day_car_pkwh = day_cost_car / day_car
         if day_import > 0:
-            day_import_pkwh = day_cost_nosc_import / day_import
+            day_import_pkwh = day_cost_import / day_import
         if day_export > 0:
             day_export_pkwh = day_cost_export / day_export
-        if hour_energy > 0:
-            hour_pkwh = hour_cost / hour_energy
+        if hour_load > 0:
+            hour_pkwh = (hour_cost - value_increase_hour) / hour_load
+            hour_load_pkwh = hour_cost / hour_load
         if hour_energy_import > 0:
             hour_pkwh_import = hour_cost_import / hour_energy_import
         if hour_energy_export > 0:
             hour_pkwh_export = hour_cost_export / hour_energy_export
         if hour_energy_car > 0:
             hour_pkwh_car = hour_cost_car / hour_energy_car
+
+        load_cost_day = day_pkwh * day_load
+        load_cost_hour = hour_pkwh * hour_load
 
         self.dashboard_item(
             self.prefix + ".cost_today",
@@ -4669,7 +4716,35 @@ class PredBat(hass.Hass):
                 "unit_of_measurement": self.currency_symbols[1],
                 "icon": "mdi:currency-usd",
                 "energy": self.dp2(day_energy_total),
+                "energy_import": self.dp2(day_import),
+                "energy_export": self.dp2(day_export),
+                "energy_car": self.dp2(day_car),
+                "energy_load": self.dp2(day_load),
+                "cost_energy": self.dp2(day_cost_nosc),
+                "cost_load": self.dp2(load_cost_day),
+                "cost_import": self.dp2(day_cost_import),
+                "cost_export": self.dp2(day_cost_export),
+                "cost_car": self.dp2(day_cost_car),
+                "carbon": self.dp2(carbon_g / 1000.0),
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".ppkwh_today",
+            state=self.dp2(day_pkwh),
+            attributes={
+                "friendly_name": "Cost today in p/kWh",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
                 "p/kWh": self.dp2(day_pkwh),
+                "p/kWh_car": self.dp2(day_car_pkwh),
+                "p/kWh_import": self.dp2(day_import_pkwh),
+                "p/kWh_export": self.dp2(day_export_pkwh),
+                "p/kWh_load": self.dp2(day_load_pkwh),
+                "p/kWh_forward": self.dp2(rate_forward),
+                "battery_now": self.dp2(battery_level_now),
+                "battery_midnight": self.dp2(battery_level_midnight),
+                "battery_value_change": self.dp2(value_increase_day),
             },
         )
         self.dashboard_item(
@@ -4684,13 +4759,32 @@ class PredBat(hass.Hass):
                 "energy_import": self.dp2(hour_energy_import),
                 "energy_export": self.dp2(hour_energy_export),
                 "energy_car": self.dp2(hour_energy_car),
+                "energy_load": self.dp2(hour_load),
+                "cost_energy": self.dp2(hour_cost),
                 "cost_import": self.dp2(hour_cost_import),
                 "cost_export": self.dp2(hour_cost_export),
                 "cost_car": self.dp2(hour_cost_car),
+                "cost_load": self.dp2(load_cost_hour),
+                "carbon": self.dp2(hour_carbon_g / 1000.0),
+            },
+        )
+        self.dashboard_item(
+            self.prefix + ".ppkwh_hour",
+            state=self.dp2(hour_pkwh),
+            attributes={
+                "friendly_name": "Cost in p/kWh",
+                "state_class": "measurement",
+                "unit_of_measurement": self.currency_symbols[1],
+                "icon": "mdi:currency-usd",
                 "p/kWh": self.dp2(hour_pkwh),
                 "p/kWh_car": self.dp2(hour_pkwh_car),
                 "p/kWh_import": self.dp2(hour_pkwh_import),
                 "p/kWh_export": self.dp2(hour_pkwh_export),
+                "p/kWh_load": self.dp2(hour_load_pkwh),
+                "p/kWh_forward": self.dp2(rate_forward),
+                "battery_now": self.dp2(battery_level_now),
+                "battery_hour": self.dp2(battery_level_hour),
+                "battery_value_change": self.dp2(value_increase_hour),
             },
         )
         if self.num_cars > 0:
@@ -5674,7 +5768,7 @@ class PredBat(hass.Hass):
 
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-        rate_min = self.rate_min_forward.get(end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_min = self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         metric -= (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         metric10 -= (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
@@ -7666,31 +7760,11 @@ class PredBat(hass.Hass):
         yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
         minutes_back = self.minutes_now + 1
 
-        # Get SoC history to find yesterday SoC
-        soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
-        if not soc_kwh_data:
-            self.log("Warn: No SoC data found for yesterday")
-            return
-        soc_kwh = self.minute_data(
-            soc_kwh_data[0],
-            2,
-            self.now_utc,
-            "state",
-            "last_updated",
-            backwards=True,
-            clean_increment=False,
-            smoothing=False,
-            divide_by=1.0,
-            scale=1.0,
-            required_unit="kWh",
-        )
+        # Get yesterday's SOC
         try:
             soc_yesterday = float(self.get_state_wrapper(self.prefix + ".savings_total_soc", default=0.0))
         except (ValueError, TypeError):
             soc_yesterday = 0.0
-
-        # Store kwh history
-        self.soc_kwh_history = soc_kwh
 
         # Shift rates back
         past_rates = self.history_to_future_rates(self.rate_import, 24 * 60)
@@ -8912,6 +8986,22 @@ class PredBat(hass.Hass):
             entity_id = self.get_arg("carbon_intensity", None, indirect=False)
             self.carbon_intensity, self.carbon_history = self.fetch_carbon_intensity(entity_id)
 
+        # SOC history
+        soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
+        self.soc_kwh_history = self.minute_data(
+            soc_kwh_data[0],
+            2,
+            self.now_utc,
+            "state",
+            "last_updated",
+            backwards=True,
+            clean_increment=False,
+            smoothing=False,
+            divide_by=1.0,
+            scale=1.0,
+            required_unit="kWh",
+        )
+
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
 
@@ -9196,7 +9286,7 @@ class PredBat(hass.Hass):
 
         # Work out cost today
         if self.import_today:
-            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy)
+            self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
@@ -10432,7 +10522,7 @@ class PredBat(hass.Hass):
                     if current:
                         item_value = settings[name]
                         if current.get("value", None) != item_value:
-                            self.log("Restore saved setting: {} = {} (was {})".format(name, item_value, current.get("value", None)))
+                            # self.log("Restore saved setting: {} = {} (was {})".format(name, item_value, current.get("value", None)))
                             current["value"] = item_value
 
     def save_current_config(self):

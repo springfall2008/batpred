@@ -292,19 +292,17 @@ series:
       b[0]  })
     show:
       in_header: raw
-  - entity: predbat.cost_hour
+  - entity: predbat.ppkwh_hour
     stroke_width: 2
     type: line
     curve: stepline
     name: Hourly p/kWh
-    attribute: p/kWh
     extend_to: false
-  - entity: predbat.cost_today
+  - entity: predbat.ppkwh_today
     stroke_width: 2
     type: line
     curve: stepline
     name: Today p/kWh
-    attribute: p/kWh
     extend_to: false
 ###############################################
 # Data prediction chart (import/export/pv/load)

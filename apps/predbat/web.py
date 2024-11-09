@@ -21,7 +21,7 @@ class WebInterface:
         self.pv_forecast_hist = {}
         self.cost_today_hist = {}
 
-    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False):
+    def history_attribute(self, history, state_key="state", last_updated_key="last_updated", scale=1.0, attributes=False, print=False):
         results = {}
         last_updated_time = None
         if history:
@@ -34,6 +34,9 @@ class WebInterface:
         for item in history:
             if last_updated_key not in item:
                 continue
+
+            if print:
+                self.log("Item {}".format(item))
 
             if attributes:
                 if state_key not in item["attributes"]:
@@ -57,6 +60,7 @@ class WebInterface:
             except (ValueError, TypeError):
                 continue
 
+            # Add the state to the result
             results[last_updated_time] = state
         return results
 
@@ -67,8 +71,8 @@ class WebInterface:
         self.log("Web interface history update")
         self.pv_power_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".pv_power", 7))
         self.pv_forecast_hist = self.history_attribute(self.base.get_history_wrapper("sensor." + self.base.prefix + "_pv_forecast_h0", 7))
-        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_today", 2), state_key="p/kWh", attributes=True)
-        self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".cost_hour", 2), state_key="p/kWh", attributes=True)
+        self.cost_today_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_today", 2))
+        self.cost_hour_hist = self.history_attribute(self.base.get_history_wrapper(self.base.prefix + ".ppkwh_hour", 2))
 
     async def start(self):
         # Start the web server on port 5052
@@ -658,8 +662,8 @@ var options = {
             ]
             text += self.render_chart(series_data, self.base.currency_symbols[1], "Home Cost Prediction", now_str)
         elif chart == "Rates":
-            cost_pkwh_today = self.prune_today(self.cost_today_hist, prune=False, prune_future=True)
-            cost_pkwh_hour = self.prune_today(self.cost_hour_hist, prune=False, prune_future=True)
+            cost_pkwh_today = self.prune_today(self.cost_today_hist, prune=False, prune_future=False)
+            cost_pkwh_hour = self.prune_today(self.cost_hour_hist, prune=False, prune_future=False)
             series_data = [
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
