@@ -12,6 +12,9 @@ pred_bat:
   # Timezone to work in
   timezone: Europe/London
 
+  # XXX: Template - You must delete the following line once you have configured your inverter
+  template: True
+
   # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
    - '£'
@@ -24,11 +27,6 @@ pred_bat:
   # If you are using Predbat outside of HA then set the HA URL and Key (long lived access token here)
   #ha_url: 'http://homeassistant.local:8123'
   #ha_key: 'xxx'
-
-  # Set to auto-match with a GivEnergy serial number, but you can override the serial or the sensor names
-  # if it doesn't work or if you have more than one inverter you will need to list both
-  # geserial: 're:sensor.givtcp_(.+)_soc_kwh'
-  # geserial2: 're:sensor.givtcp2_(.+)_soc_kwh'
 
   # Sets the maximum period of zero load before the gap is filled, default 30 minutes
   # To disable set it to 1440
@@ -56,15 +54,6 @@ pred_bat:
   # Data must be in the format of 'last_updated' timestamp and 'energy' for incrementing kWh
   #load_forecast:
   #  - predheat.heat_energy$external
-  #
-  # If you enable ge_cloud_data then the load/import and export data will be fetches from the GE cloud instead of from GivTCP sensors
-  # this is usually less efficient and of course prone to internet downtime, but could be useful if you lost your GivTCP data
-  # Set the serial to the inverter serial to pull the data from and the key to your API key
-  # When this is set load_today, import_today and export_today are not used
-  #
-  # ge_cloud_data: False
-  # ge_cloud_serial: '{geserial}'
-  # ge_cloud_key: 'xxxx'
   #
   # Controls/status - must by 1 per inverter
   #
@@ -111,12 +100,6 @@ pred_bat:
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   balance_inverters_seconds: 60
   #
-  # When set use the REST API rather than HA entity for control, should be more reliable/faster to control
-  # Set one per inverter
-  # If using Docker then change homeassistant.local to the Docker IP address
-  # givtcp_rest:
-  #   - 'http://homeassistant.local:6345'
-  #   - 'http://homeassistant.local:6346'
 
   # When enabled automatic restart will restart the add-on if communication fails
   # Example below is auto-restart for GivTCP add-on itself
@@ -325,9 +308,9 @@ pred_bat:
   # Will automatically disable if not found, or comment out to disable fully
   # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless octopus intelligent charging is False)
   # This matches either the intelligent slot from the Octopus Plugin or from the Intelligent plugin
-  # octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
-  # octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
-  # octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
@@ -356,14 +339,14 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
-  # metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-  # metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
   # The default below will pick up the standing charge from the Octopus Plugin
   # The standing charge only impacts the cost graphs and doesn't change the way Predbat plans
   # If you don't want to show the standing charge then just delete this line or set to zero
-  # metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
 
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
