@@ -992,7 +992,7 @@ class PredBat(hass.Hass):
         if not history:
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
             return mdata
-        
+
         # Glitch filte, cleans glitches in the data and removes bad values, only for incrementing data
         if clean_increment and backwards:
             if len(history) > 2:
@@ -1004,7 +1004,7 @@ class PredBat(hass.Hass):
                     prev_value = float(prev_item[state_key])
                 except (ValueError, TypeError):
                     prev_value = 0
-                    
+
                 try:
                     prev_prev_value = float(prev_prev_item[state_key])
                 except (ValueError, TypeError):
@@ -4602,8 +4602,8 @@ class PredBat(hass.Hass):
         rate_min = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         rate_forward = max(rate_min, 1.0, rate_export_min)
-        value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling 
-        value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling 
+        value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
+        value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
         self.log("Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(self.dp2(battery_level_now), self.dp2(battery_level_hour), self.dp2(battery_level_midnight), self.dp2(value_increase_hour), self.dp2(value_increase_day), self.dp2(rate_forward)))
 
@@ -4640,7 +4640,7 @@ class PredBat(hass.Hass):
 
             if self.carbon_enable:
                 hour_carbon_g += self.carbon_history.get(minute_back, 0) * energy_import
-                hour_carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export                
+                hour_carbon_g -= self.carbon_history.get(minute_back, 0) * energy_export
 
         self.log("Hour energy {} import {} export {} car {} load {} cost {} import {} export {} car {} carbon {} kG".format(self.dp2(hour_energy), self.dp2(hour_energy_import), self.dp2(hour_energy_export), self.dp2(hour_energy_car), self.dp2(hour_load), self.dp2(hour_cost), self.dp2(hour_cost_import), self.dp2(hour_cost_export), self.dp2(hour_cost_car), self.dp2(hour_carbon_g / 1000.0)))
 
@@ -4702,7 +4702,7 @@ class PredBat(hass.Hass):
         hour_pkwh_import = self.rate_import.get(0,0)
         hour_pkwh_car = self.rate_import.get(0,0)
         hour_pkwh_export = self.rate_export.get(0,0)
-        
+
         if day_load > 0:
             day_pkwh = (day_cost_nosc - value_increase_day) / day_load
             day_load_pkwh = day_cost_nosc / day_load
@@ -4720,7 +4720,7 @@ class PredBat(hass.Hass):
         if hour_energy_export > 0:
             hour_pkwh_export = hour_cost_export / hour_energy_export
         if hour_energy_car > 0:
-            hour_pkwh_car = hour_cost_car / hour_energy_car            
+            hour_pkwh_car = hour_cost_car / hour_energy_car
 
         load_cost_day = day_pkwh * day_load
         load_cost_hour = hour_pkwh * hour_load
@@ -9004,7 +9004,7 @@ class PredBat(hass.Hass):
         if self.carbon_enable and ("carbon_intensity" in self.args):
             entity_id = self.get_arg("carbon_intensity", None, indirect=False)
             self.carbon_intensity, self.carbon_history = self.fetch_carbon_intensity(entity_id)
-        
+
         # SOC history
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
         self.soc_kwh_history = self.minute_data(
