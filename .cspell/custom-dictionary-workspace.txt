@@ -104,6 +104,7 @@ localfolder
 lockstep
 logdata
 loglines
+luxpower
 markdownlint
 matplotlib
 maximise

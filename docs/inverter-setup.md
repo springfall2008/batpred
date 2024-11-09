@@ -14,6 +14,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | Givenergy with GE Cloud EMC | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
+   | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 
@@ -228,6 +229,12 @@ This is experimental system, please discuss on the ticket: <https://github.com/s
 See: <https://github.com/springfall2008/batpred/issues/1401>
 
 Template is in the templates area, give it a try
+
+## Lux Power
+
+This requires the LuxPython component which integrates with your Lux Power inverter
+
+- Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
 
 ## Sunsynk
 
