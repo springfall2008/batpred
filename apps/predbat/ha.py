@@ -87,6 +87,7 @@ class HAInterface:
             if not check:
                 self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
                 self.ha_key = None
+                raise ValueError
             else:
                 self.log("Info: Connected to Home Assistant at {}".format(self.ha_url))
 
@@ -126,7 +127,7 @@ class HAInterface:
         """
         url = "{}/api/websocket".format(self.ha_url)
         response = None
-        # self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
+        #self.log("Info: Web socket service {}/{} socket for url {}".format(domain, service, url))
 
         return_response = service_data.get("return_response", False)
         if "return_response" in service_data:
