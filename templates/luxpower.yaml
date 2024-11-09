@@ -131,7 +131,7 @@ pred_bat:
 
   # If not using REST then instead set the Control here (one for each inverter)
   # You should keep this section even when using REST as a fallback if it fails and for charge curve calculations
-  timed_charge_current: 
+  timed_charge_current:
     - number.lux_charge_current_limit
   timed_discharge_current:
     - number.lux_discharge_current_limit
@@ -139,7 +139,7 @@ pred_bat:
   #   - input_number.lux_target_charge_current_w
   # discharge_rate:
   #   - input_number.lux_target_discharge_current_w
-  battery_power: 
+  battery_power:
     - sensor.lux_battery_discharge_live
   pv_power:
     - sensor.lux_solar_output_live
