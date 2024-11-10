@@ -60,7 +60,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge
                 dend = dwindow["end"]
 
                 # Overlapping window with enabled discharge?
-                if limit > 0.0 and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
                     if dstart <= start:
                         if start != dend:
                             start = dend
