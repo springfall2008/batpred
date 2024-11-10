@@ -48,7 +48,7 @@ Create a new Apex chart for each chart in this template and copy the YAML code i
 
 First you need to edit apps.yaml to configure your system.
 
-Copy the following template into The Predbat apps.yaml and edit the settings: [predheat.yaml][https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml]
+Copy the following template into The Predbat apps.yaml and edit the settings: [predheat.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml)
 
 Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump
 Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your configuration.yaml file for HA:
