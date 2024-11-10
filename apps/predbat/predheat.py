@@ -70,11 +70,8 @@ Key functions:
 """
 
 DELTA_CORRECTION = {75: 1.69, 70: 1.55, 65: 1.41, 60: 1.27, 55: 1.13, 50: 1, 45: 0.87, 40: 0.75, 35: 0.63, 30: 0.51, 25: 0.41, 20: 0.3, 15: 0.21, 10: 0.12, 5: 0.05, 0: 0.00}
-
 GAS_EFFICIENCY = {0: 0.995, 10: 0.995, 20: 0.99, 30: 0.98, 40: 0.95, 50: 0.90, 60: 0.88, 70: 0.87, 80: 0.86, 90: 0.85, 100: 0.84}
-
 HEAT_PUMP_EFFICIENCY = {-20: 2.10, -18: 2.15, -16: 2.2, -14: 2.25, -12: 2.3, -10: 2.4, -8: 2.5, -6: 2.6, -4: 2.7, -2: 2.8, 0: 2.9, 2: 3.1, 4: 3.3, 6: 3.6, 8: 3.8, 10: 3.9, 12: 4.1, 14: 4.3, 16: 4.3, 18: 4.3, 20: 4.3}
-HEAT_PUMP_EFFICIENCY_MAX = 4.3
 
 
 class PredHeat:
@@ -96,6 +93,27 @@ class PredHeat:
         self.run_every = base.run_every
         self.dp2 = base.dp2
         self.dp3 = base.dp3
+        self.heat_pump_efficiency     = HEAT_PUMP_EFFICIENCY.copy()
+        self.gas_efficiency           = GAS_EFFICIENCY.copy()
+        self.delta_correction         = DELTA_CORRECTION.copy()
+        
+        # Collect predheat settings
+        heat_pump_efficency = self.get_arg("heat_pump_efficiency", {}, domain="predheat")
+        for key, value in heat_pump_efficency.items():
+            self.heat_pump_efficiency[key] = value
+        
+        gas_efficency = self.get_arg("gas_efficency", {}, domain="predheat")
+        for key, value in gas_efficency.items():
+            self.gas_efficiency[key] = value
+        
+        delta_correction = self.get_arg("delta_correction", {}, domain="predheat")
+        for key, value in delta_correction.items():
+            self.delta_correction[key] = value
+        
+        self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
+        print("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
+        print("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
+        print("Predheat: Heat pump efficiency max {}".format(self.heat_pump_efficiency_max))
 
     def minutes_to_time(self, updated, now):
         """
@@ -336,12 +354,19 @@ class PredHeat:
                 if self.mode == "gas":
                     # Gas boiler flow temperature adjustment in efficiency based on flow temp
                     inlet_temp = int(volume_temp / 10 + 0.5) * 10
-                    condensing = GAS_EFFICIENCY.get(inlet_temp, 0.80)
+                    condensing = self.gas_efficiency.get(inlet_temp, 0.80)
                     heat_power_out *= condensing
                 else:
                     # Heat pump efficiency based on outdoor temp
                     out_temp = int(external_temp / 2 + 0.5) * 2
-                    cop_adjust = HEAT_PUMP_EFFICIENCY.get(out_temp, 2.0) / HEAT_PUMP_EFFICIENCY_MAX
+
+                    # Filling gaps in COP table                    
+                    if out_temp < 0:
+                        out_temp_use = -20
+                    else:
+                        out_temp_use = 20
+
+                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency.get(out_temp_use)) / self.heat_pump_efficiency_max
                     heat_power_out *= cop_adjust
 
                 # 1.16 watts required to raise water by 1 degree in 1 hour
@@ -351,7 +376,7 @@ class PredHeat:
             flow_delta_rounded = int(flow_delta / 5 + 0.5) * 5
             flow_delta_rounded = max(flow_delta_rounded, 0)
             flow_delta_rounded = min(flow_delta_rounded, 75)
-            correction = DELTA_CORRECTION.get(flow_delta_rounded, 0)
+            correction = self.delta_correction.get(flow_delta_rounded, 0)
             heat_output = self.heat_output * correction
 
             # Cooling of the radiators
