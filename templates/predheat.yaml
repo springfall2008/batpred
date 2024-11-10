@@ -1,6 +1,6 @@
 predbat:
   # Other predbat configuration goes here
-  # Copy the followining into predbat.yaml
+  # Copy the following into predbat.yaml
 
   predheat:
     # Days forward
@@ -28,7 +28,7 @@ predbat:
     # Sensor with history that monitors the thermostat setting in the house
     target_temperature: sensor.living_room_target
 
-    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reachs it just in time
+    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
     smart_thermostat: True
 
     # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
@@ -38,30 +38,30 @@ predbat:
     # Heating is turned on history
     heating_active: binary_sensor.boiler_heatingactive
 
-    # House heat loss in watts per degree temp difference
+    # House heat loss in watts per degrees temp difference
     heat_loss_watts: 120
 
     # Static heat sources in the house (e.g. people/equipment)
     heat_gain_static: 200
 
-    # House heat loss in degrees per hour per degre temp difference
+    # House heat loss in degrees per hour per degree temp difference
     heat_loss_degrees: 0.030
 
-    # Heating max output (of the raditors), in Watts at delta 50 (BTU / 3.41)
+    # Heating max output (of the radiators), in Watts at delta 50 (BTU / 3.41)
     # https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119
     # https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174
     # https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176
     # https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175
     heat_output: 17000
 
-    # Add up radiator volume + any pipework or expansion vessle
+    # Add up radiator volume + any pipework or expansion vessel
     heat_volume: 75
 
     # Heating max power in Watts
     heat_max_power: 30000
     heat_min_power: 7000
 
-    # Heating cop is the maximum effiency and will be scaled down based on temperatures
+    # Heating cop is the maximum efficiency and will be scaled down based on temperatures
     # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
     heat_cop: 1.0
 
