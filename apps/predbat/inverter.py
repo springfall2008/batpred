@@ -1890,6 +1890,12 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_charge * MINUTE_WATT),
             }
+
+            # Stop discharge
+            if not self.call_service_template("discharge_stop_service", service_data, domain="discharge"):
+                self.call_service_template("charge_stop_service", service_data, domain="discharge")
+
+            # Start charge or charge freeze
             if target_soc == self.soc_percent or freeze:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
                     self.call_service_template("charge_start_service", service_data, domain="charge")
@@ -1910,6 +1916,10 @@ class Inverter:
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
 
+            # Stop charge
+            self.call_service_template("charge_stop_service", service_data, domain="charge")
+
+            # Start discharge or discharge freeze
             if freeze:
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge"):
                     self.call_service_template("discharge_start_service", service_data, domain="discharge")
