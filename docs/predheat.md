@@ -48,82 +48,7 @@ Create a new Apex chart for each chart in this template and copy the YAML code i
 
 First you need to edit apps.yaml to configure your system.
 
-Copy the following template into The Predbat apps.yaml and edit the settings:
-
-```yaml
-predheat:
-    # Days forward
-    forecast_days: 2
-
-    # Days previous is the number of days back to find historical load data
-    # Recommended is 7 to capture day of the week but 1 can also be used
-    # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
-    days_previous:
-      - 7
-
-    # Gas or heatpump mode ('gas' or 'pump')
-    mode: gas
-
-    # External temperature sensor
-    # You may need to create a template sensor for this one
-    external_temperature: sensor.external_temperature
-
-    # Internal temperature sensor(s)
-    internal_temperature:
-      - sensor.living_room_temperature
-
-    # Weather data
-    weather: weather.openweathermap
-
-    # Sensor with history that monitors the thermostat setting in the house
-    target_temperature: sensor.living_room_target
-
-    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reaches it just in time
-    smart_thermostat: True
-
-    # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
-    heating_energy: sensor.boiler_nrgheat
-    heating_energy_scaling: 1.4
-
-    # Heating is turned on history
-    heating_active: binary_sensor.boiler_heatingactive
-
-    # House heat loss in watts per degree temp difference
-    heat_loss_watts: 120
-
-    # Static heat sources in the house (e.g. people/equipment)
-    heat_gain_static: 200
-
-    # House heat loss in degrees per hour per degree temp difference
-    heat_loss_degrees: 0.030
-
-    # Heating max output (of the radiators), in Watts at delta 50 (BTU / 3.41)
-    # https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119
-    # https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174
-    # https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176
-    # https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175
-    heat_output: 17000
-
-    # Add up radiator volume + any pipework or expansion vessel
-    heat_volume: 75
-
-    # Heating max power in Watts
-    heat_max_power: 30000
-    heat_min_power: 7000
-
-    # Heating cop is the maximum efficiency and will be scaled down based on temperatures
-    # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
-    heat_cop: 1.0
-
-    # Current flow temperature setting
-    flow_temp: number.boiler_heatingtemp
-    flow_difference_target: 40
-
-    # Current volume temperature
-    # If set will be read directly from the sensor, if not set then it will be calculated as an approximation
-    # and stored into input_number.predbat_next_volume_temp on every run.
-    # volume_temp: number.heating_volume_temp
-```
+Copy the following template into The Predbat apps.yaml and edit the settings: [predheat.yaml][https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/predheat.yaml]
 
 Set the mode (**mode**) to 'gas' or 'pump' depending on if you have a gas boiler or heat pump
 Set the external temperature sensor (**external_temperature**) either to a real sensor or create one from the open weather map by adding this sensor to your configuration.yaml file for HA:
@@ -171,9 +96,9 @@ Set **volume_temp** If you have a sensor on your radiators which can confirm the
 interior temperature sensor as possible. If you do not have a sensor then instead PredHeat will calculate the next temperature and store it in **next_volume_temp** for use
 in the next calculation cycle.
 
-For your energy rates either have **metric_octopus_import** point to the current energy rate sensor (gas or electric) or comment it out and enter your rate(s) using **rates_import**
+For energy rates, they will come from the Predbat configuration, ensure you have your electric or gas rates set correctly.
 
-If you want to account for standing charge set **metric_standing_charge** to a sensor or enter it manually, if not comment it out.
+Note you can also change the tables for **gas_efficiency**, **heat_pump_efficiency** and **delta_correction** in the Predheat configuration but the defaults should be fine to get going.
 
 Now comes the tricky part, we need to calculate the heat loss for your house:
 
