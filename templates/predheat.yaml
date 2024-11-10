@@ -1,6 +1,6 @@
 predbat:
   # Other predbat configuration goes here
-  # Copy the following into predbat.yaml
+  # Copy the following into apps.yaml
 
   predheat:
     # Days forward
