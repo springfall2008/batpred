@@ -9024,19 +9024,20 @@ class PredBat(hass.Hass):
 
         # SOC history
         soc_kwh_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2)
-        self.soc_kwh_history = self.minute_data(
-            soc_kwh_data[0],
-            2,
-            self.now_utc,
-            "state",
-            "last_updated",
-            backwards=True,
-            clean_increment=False,
-            smoothing=False,
-            divide_by=1.0,
-            scale=1.0,
-            required_unit="kWh",
-        )
+        if soc_kwh_data:
+            self.soc_kwh_history = self.minute_data(
+                soc_kwh_data[0],
+                2,
+                self.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+                required_unit="kWh",
+            )
 
         # Work out current car SoC and limit
         self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
