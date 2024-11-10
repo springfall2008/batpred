@@ -1884,6 +1884,7 @@ class Inverter:
         """
         Adjust from charging or not charging based on passed target soc
         """
+        service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         if target_soc > 0:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
@@ -1892,8 +1893,8 @@ class Inverter:
             }
 
             # Stop discharge
-            if not self.call_service_template("discharge_stop_service", service_data, domain="discharge"):
-                self.call_service_template("charge_stop_service", service_data, domain="discharge")
+            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
+                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
             # Start charge or charge freeze
             if target_soc == self.soc_percent or freeze:
@@ -1902,13 +1903,13 @@ class Inverter:
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
-            service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-            self.call_service_template("charge_stop_service", service_data, domain="charge")
+            self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
     def adjust_discharge_immediate(self, target_soc, freeze=False):
         """
         Adjust from discharging or not discharging based on passed target soc
         """
+        service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         if target_soc > 0:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
@@ -1917,7 +1918,7 @@ class Inverter:
             }
 
             # Stop charge
-            self.call_service_template("charge_stop_service", service_data, domain="charge")
+            self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
             # Start discharge or discharge freeze
             if freeze:
@@ -1926,9 +1927,8 @@ class Inverter:
             else:
                 self.call_service_template("discharge_start_service", service_data, domain="discharge")
         else:
-            service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-            if not self.call_service_template("discharge_stop_service", service_data, domain="discharge"):
-                self.call_service_template("charge_stop_service", service_data, domain="discharge")
+            if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
+                self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
     def adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
         """
