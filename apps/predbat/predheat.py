@@ -328,7 +328,7 @@ class PredHeat:
                     # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
 
                 energy_now = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
-                cost += energy_now + self.rate_import.get(minute_absolute, 0)
+                cost += energy_now * self.rate_import.get(minute_absolute, 0)
 
                 heat_energy += energy_now
                 heat_power_out = heat_power_in * self.heat_cop
