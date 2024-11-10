@@ -129,6 +129,9 @@ class Inverter:
         self.load_power = 0
         self.rest_api = None
         self.in_calibration = False
+        self.firmware_version = "Unknown"
+        self.givtcp_version = "n/a"
+        self.rest_v3 = False
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
@@ -195,6 +198,11 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
+                self.givtcp_version = self.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
+                self.firmware_version = self.rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
+                #if self.givtcp_version.startswith("3"):
+                #    self.rest_v3 = True
+                self.log("Inverter {} GivTCP Version: {} Firmware: {}".format(self.id, self.givtcp_version, self.firmware_version))
 
         # Timed pause support?
         if self.inv_has_timed_pause:
@@ -407,7 +415,7 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
-        # Create dummy idle time entities
+        # Create dummy idle time entities        
         if not self.inv_has_idle_time:
             self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
@@ -958,13 +966,13 @@ class Inverter:
         # Get previous idle start and end
         idle_start = self.base.get_arg("idle_start_time", index=self.id)
         idle_end = self.base.get_arg("idle_end_time", index=self.id)
-
+        
         # Convert to minutes
         try:
             # Get time
             idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
             idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
-            # Change to minutes
+            # Change to minutes            
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
         except (ValueError, TypeError):
@@ -1337,40 +1345,47 @@ class Inverter:
         if not self.inv_has_timed_pause:
             return
 
-        entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
-        entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
-        entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
-        old_pause_mode = None
-        old_start_time = None
-        old_end_time = None
+        if self.rest_data and self.rest_v3:
+            old_pause_mode = self.rest_data.get("Control", {}).get("Battery_pause_mode", "Disabled")
+            old_start_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_start_time_slot", "00:00:00")
+            old_end_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_end_time_slot", "00:00:00")
+        else:
+            entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
+            entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
+            entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
+            old_pause_mode = None
+            old_start_time = None
+            old_end_time = None
 
-        # As not all inverters have these options we need to gracefully give up if its missing
-        if entity_mode:
-            old_pause_mode = self.base.get_state_wrapper(entity_mode)
-            if old_pause_mode is None:
-                entity_mode = None
+            # As not all inverters have these options we need to gracefully give up if its missing
+            if entity_mode:
+                old_pause_mode = self.base.get_state_wrapper(entity_mode)
+                if old_pause_mode is None:
+                    entity_mode = None
 
-        if entity_start:
-            old_start_time = self.base.get_state_wrapper(entity_start)
-            if old_start_time is None:
-                entity_start = None
-                self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
+            if entity_start:
+                old_start_time = self.base.get_state_wrapper(entity_start)
+                if old_start_time is None:
+                    entity_start = None
+                    self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
 
-        if entity_end:
-            old_end_time = self.base.get_state_wrapper(entity_end)
-            if old_end_time is None:
-                self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
-                entity_end = None
+            if entity_end:
+                old_end_time = self.base.get_state_wrapper(entity_end)
+                if old_end_time is None:
+                    self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
+                    entity_end = None
 
-        if not entity_mode:
-            self.log("Warn: Inverter {} does not have pause_mode entity configured correctly".format(self.id))
-            return
+            if not entity_mode:
+                self.log("Warn: Inverter {} does not have pause_mode entity configured correctly".format(self.id))
+                return
 
         # Some inverters have start/end time registers
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
 
         # GE Cloud has different pause names
+        if self.rest_data and self.rest_v3:
+            pause_cloud = False
         if old_pause_mode in ["Not Paused", "Pause Charge", "Pause Discharge", "Pause Charge & Discharge"]:
             pause_cloud = True
         else:
@@ -1386,18 +1401,27 @@ class Inverter:
         else:
             new_pause_mode = "Not Paused" if pause_cloud else "Disabled"
 
-        if old_start_time and old_start_time != new_start_time:
-            # Don't poll as inverters with no registers will fail
-            self.base.set_state_wrapper(entity_start, state=new_start_time)
-            self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
-        if old_end_time and old_end_time != new_end_time:
-            # Don't poll as inverters with no registers will fail
-            self.base.set_state_wrapper(entity_end, state=new_end_time)
-            self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
+        if self.rest_data and self.rest_v3:
+            if (old_start_time != new_start_time) or (old_end_time != new_end_time):
+                self.base.log("Inverter {} set pause slot to {} - {}".format(self.id, new_start_time, new_end_time))
+                self.rest_setPauseSlot(new_start_time, new_end_time)
+        else:
+            if old_start_time and old_start_time != new_start_time:
+                # Don't poll as inverters with no registers will fail
+                self.base.set_state_wrapper(entity_start, state=new_start_time)
+                self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
+
+            if old_end_time and old_end_time != new_end_time:
+                # Don't poll as inverters with no registers will fail
+                self.base.set_state_wrapper(entity_end, state=new_end_time)
+                self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
 
         # Set the mode
         if new_pause_mode != old_pause_mode:
-            self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
+            if self.rest_data and self.rest_v3:
+                self.rest_setBatteryPauseMode(new_pause_mode)
+            else:
+                self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
@@ -1839,7 +1863,7 @@ class Inverter:
         service_list = self.base.args.get(service, "")
         if not service_list:
             return False
-
+        
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data))
@@ -1897,9 +1921,9 @@ class Inverter:
                 self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
             # Start charge or charge freeze
-            if target_soc == self.soc_percent or freeze:
+            if target_soc == self.soc_percent or freeze:                
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
-                    self.call_service_template("charge_start_service", service_data, domain="charge")
+                    self.call_service_template("charge_start_service", service_data, domain="charge")        
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
@@ -1916,7 +1940,7 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
-
+            
             # Stop charge
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
@@ -2197,6 +2221,26 @@ class Inverter:
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
         return False
 
+    def rest_setBatteryPauseMode(self, pause_mode):
+        """
+        Configure inverter pause mode via REST - v3.x+
+        """
+        url = self.rest_api + "/setBatteryPauseMode"
+        data = {"mode": pause_mode}
+
+        for retry in range(5):
+            r = requests.post(url, json=data)
+            # time.sleep(10)
+            self.rest_data = self.rest_runAll(self.rest_data)
+            if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
+                self.base.log("Set inverter {} pause mode {} via REST successful on retry {}".format(self.id, pause_mode, retry))
+                return True
+
+        self.base.log("Warn: Set inverter {} pause mode {} via REST failed".format(self.id, pause_mode))
+        self.base.record_status("Warn: Inverter {} REST failed to setBatteryPauseMode got {}".format(self.id, self.rest_data["Control"]["Battery_pause_mode"]), had_errors=True)
+        return False
+
+
     def rest_setReserve(self, target):
         """
         Configure reserve % via REST
@@ -2220,7 +2264,7 @@ class Inverter:
 
     def rest_enableChargeSchedule(self, enable):
         """
-        Configure reserve % via REST
+        Configure enable charge schedule via REST
         """
         url = self.rest_api + "/enableChargeSchedule"
         data = {"state": "enable" if enable else "disable"}
@@ -2241,6 +2285,50 @@ class Inverter:
 
         self.base.log("Warn: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Charge_Schedule"]))
         self.base.record_status("Warn: Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
+        return False
+
+    def rest_enableDischargeSchedule(self, enable):
+        """
+        Configure enable discharge schedule via REST (V3.x+)
+        """
+        url = self.rest_api + "/enableDishargeSchedule"
+        data = {"state": "enable" if enable else "disable"}
+
+        for retry in range(5):
+            r = requests.post(url, json=data)
+            # time.sleep(10)
+            self.rest_data = self.rest_runAll(self.rest_data)
+            new_value = self.rest_data["Control"]["Enable_Discharge_Schedule"]
+            if isinstance(new_value, str):
+                if new_value.lower() in ["enable", "on", "true"]:
+                    new_value = True
+                else:
+                    new_value = False
+            if new_value == enable:
+                self.base.log("Set inverter {} discharge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
+                return True
+
+        self.base.log("Warn: Set inverter {} discharge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Discharge_Schedule"]))
+        self.base.record_status("Warn: Inverter {} REST failed to enableDischargeSchedule".format(self.id), had_errors=True)
+        return False
+
+    def rest_setPauseSlot(self, start, finish):
+        """
+        Configure pause slot via REST - v3.x+
+        """
+        url = self.rest_api + "/setPauseSlot"
+        data = {"start": start[:5], "finish": finish[:5]}
+
+        for retry in range(5):
+            r = requests.post(url, json=data)
+            # time.sleep(10)
+            self.rest_data = self.rest_runAll(self.rest_data)
+            if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
+                self.base.log("Inverter {} set pause slot {} via REST successful after retry {}".format(self.id, data, retry))
+                return True
+
+        self.base.log("Warn: Inverter {} set pause slot {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn: Inverter {} REST failed to setPauseSlot".format(self.id), had_errors=True)
         return False
 
     def rest_setChargeSlot1(self, start, finish):
