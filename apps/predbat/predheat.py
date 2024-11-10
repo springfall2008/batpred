@@ -93,23 +93,23 @@ class PredHeat:
         self.run_every = base.run_every
         self.dp2 = base.dp2
         self.dp3 = base.dp3
-        self.heat_pump_efficiency     = HEAT_PUMP_EFFICIENCY.copy()
-        self.gas_efficiency           = GAS_EFFICIENCY.copy()
-        self.delta_correction         = DELTA_CORRECTION.copy()
-        
+        self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
+        self.gas_efficiency = GAS_EFFICIENCY.copy()
+        self.delta_correction = DELTA_CORRECTION.copy()
+
         # Collect predheat settings
         heat_pump_efficency = self.get_arg("heat_pump_efficiency", {}, domain="predheat")
         for key, value in heat_pump_efficency.items():
             self.heat_pump_efficiency[key] = value
-        
+
         gas_efficency = self.get_arg("gas_efficency", {}, domain="predheat")
         for key, value in gas_efficency.items():
             self.gas_efficiency[key] = value
-        
+
         delta_correction = self.get_arg("delta_correction", {}, domain="predheat")
         for key, value in delta_correction.items():
             self.delta_correction[key] = value
-        
+
         self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
         print("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
         print("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
@@ -360,7 +360,7 @@ class PredHeat:
                     # Heat pump efficiency based on outdoor temp
                     out_temp = int(external_temp / 2 + 0.5) * 2
 
-                    # Filling gaps in COP table                    
+                    # Filling gaps in COP table
                     if out_temp < 0:
                         out_temp_use = -20
                     else:
