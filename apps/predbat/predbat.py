@@ -4713,10 +4713,12 @@ class PredBat(hass.Hass):
         day_car_pkwh = self.rate_import.get(0, 0)
         day_import_pkwh = self.rate_import.get(0, 0)
         day_export_pkwh = self.rate_export.get(0, 0)
+        day_load_pkwh = self.rate_import.get(0, 0)
         hour_pkwh = self.rate_import.get(0, 0)
         hour_pkwh_import = self.rate_import.get(0, 0)
         hour_pkwh_car = self.rate_import.get(0, 0)
         hour_pkwh_export = self.rate_export.get(0, 0)
+        hour_load_pkwh = self.rate_import.get(0, 0)
 
         if day_load > 0:
             day_pkwh = (day_cost_nosc - value_increase_day) / day_load
