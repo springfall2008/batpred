@@ -1,0 +1,127 @@
+predbat:
+  # Other predbat configuration goes here
+  # Copy the followining into predbat.yaml
+  
+  predheat:
+    # Days forward
+    forecast_days: 2
+
+    # Days previous is the number of days back to find historical load data
+    # Recommended is 7 to capture day of the week but 1 can also be used
+    # if you have more history you could use 7 and 14 (in a list) but the standard data in HA only lasts 10 days
+    days_previous: 
+      - 7
+
+    # Gas or heatpump mode ('gas' or 'pump')
+    mode: gas
+
+    # External temperature sensor
+    external_temperature: sensor.external_temperature
+
+    # Internal temperature sensor(s)
+    internal_temperature:
+      - sensor.living_room_temperature
+
+    # Weather data
+    weather: weather.openweathermap
+
+    # Sensor with history that monitors the thermostat setting in the house
+    target_temperature: sensor.living_room_target
+
+    # When true models a smart thermostat that turns the heating ahead of the target temperature so it reachs it just in time
+    smart_thermostat: True
+
+    # Past energy consumption of heating in KWh, scaled with heating_energy_scaling
+    heating_energy: sensor.boiler_nrgheat
+    heating_energy_scaling: 1.4
+
+    # Heating is turned on history
+    heating_active: binary_sensor.boiler_heatingactive
+
+    # House heat loss in watts per degree temp difference
+    heat_loss_watts: 120
+
+    # Static heat sources in the house (e.g. people/equipment)
+    heat_gain_static: 200
+
+    # House heat loss in degrees per hour per degre temp difference
+    heat_loss_degrees: 0.030
+
+    # Heating max output (of the raditors), in Watts at delta 50 (BTU / 3.41)
+    # https://www.bestheating.com/milano-kent-straight-chrome-heated-towel-rail-various-sizes-91119
+    # https://www.bestheating.com/milano-compact-type-11-single-panel-radiator-multi-sizes-available-74174
+    # https://www.bestheating.com/milano-compact-type-22-double-panel-radiator-multi-sizes-available-74176
+    # https://www.bestheating.com/milano-compact-type-21-double-panel-plus-radiator-multi-sizes-available-74175
+    heat_output: 17000
+
+    # Add up radiator volume + any pipework or expansion vessle
+    heat_volume: 75
+
+    # Heating max power in Watts
+    heat_max_power: 30000
+    heat_min_power: 7000
+
+    # Heating cop is the maximum effiency and will be scaled down based on temperatures
+    # put 1.0 for condensing gas boilers, or around 4.0 for heat pumps
+    heat_cop: 1.0
+
+    # Current flow temperature setting
+    flow_temp: number.boiler_heatingtemp
+    flow_difference_target: 40
+
+    # Sets the conversion factors between the delta T50°C and other delta T values
+    #delta_correction:
+    #  75: 1.69
+    #  70: 1.55
+    #  65: 1.41
+    #  60: 1.27
+    #  55: 1.13
+    #  50: 1
+    #  45: 0.87
+    #  40: 0.75
+    #  35: 0.63
+    #  30: 0.51
+    #  25: 0.41
+    #  20: 0.3
+    #  15: 0.21
+    #  10: 0.12
+    #  5: 0.05
+    #  0: 0.00
+
+    # Sets the efficiency of a gas boiler at different input temperatures
+    #gas_efficiency:
+    #  0: 0.995
+    #  10: 0.995
+    #  20: 0.99
+    #  30: 0.98
+    #  40: 0.95
+    #  50: 0.90
+    #  60: 0.88
+    #  70: 0.87
+    #  80: 0.86
+    #  90: 0.85
+    #  100: 0.84
+
+    # Sets the efficiency of a heat pump in COP at different input temperatures
+    #heat_pump_efficiency:
+    #  -20: 2.10
+    #  -18: 2.15
+    #  -16: 2.2
+    #  -14: 2.25
+    #  -12: 2.3
+    #  -10: 2.4
+    #  -8: 2.5
+    #  -6: 2.6
+    #  -4: 2.7
+    #  -2: 2.8
+    #  0: 2.9
+    #  2: 3.1
+    #  4: 3.3
+    #  6: 3.6
+    #  8: 3.8
+    #  10: 3.9
+    #  12: 4.1
+    #  14: 4.3
+    #  16: 4.3
+    #  18: 4.3
+    #  20: 4.3
