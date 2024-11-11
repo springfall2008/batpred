@@ -1345,14 +1345,16 @@ class Inverter:
         if not self.inv_has_timed_pause:
             return
 
+        # For now we have to use the pause start/end entity to know if we have a pause time window (must be a better way)
+        entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
+        entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
+
         if self.rest_data and self.rest_v3:
             old_pause_mode = self.rest_data.get("Control", {}).get("Battery_pause_mode", "Disabled")
             old_start_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_start_time_slot", "00:00:00")
             old_end_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_end_time_slot", "00:00:00")
         else:
             entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
-            entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
-            entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
             old_pause_mode = None
             old_start_time = None
             old_end_time = None
@@ -1402,7 +1404,7 @@ class Inverter:
             new_pause_mode = "Not Paused" if pause_cloud else "Disabled"
 
         if self.rest_data and self.rest_v3:
-            if (old_start_time != new_start_time) or (old_end_time != new_end_time):
+            if entity_start and ((old_start_time != new_start_time) or (old_end_time != new_end_time)):
                 self.base.log("Inverter {} set pause slot to {} - {}".format(self.id, new_start_time, new_end_time))
                 self.rest_setPauseSlot(new_start_time, new_end_time)
         else:
