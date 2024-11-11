@@ -31,7 +31,7 @@ import numpy as np
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit
+from utils import calc_percent_limit, remove_intersecting_windows
 from futurerate import FutureRate
 
 KEEP_SCALE = 0.5
@@ -339,7 +339,7 @@ def run_nordpool_test(my_predbat):
         if rate_octopus is not None and rate_nordpool is not None:
             rate_diff = abs(rate_octopus - rate_nordpool)
             max_diff = max(max_diff, rate_diff)
-            # print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
+            #print("Import: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
     if max_diff > 10:
         print("ERROR: Rate import data difference too high")
         failed = True
@@ -351,7 +351,7 @@ def run_nordpool_test(my_predbat):
         if rate_octopus is not None and rate_nordpool is not None:
             rate_diff_export = abs(rate_octopus - rate_nordpool)
             max_diff = max(rate_diff_export, rate_diff)
-            # print("Export: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
+            #print("Export: Minute {} Octopus {} Nordpool {} diff {}".format(my_predbat.time_abs_str(minute), rate_octopus, rate_nordpool, rate_diff))
     if rate_diff_export > 10:
         print("ERROR: Rate export data difference too high")
         failed = True
@@ -823,7 +823,7 @@ def run_execute_test(
         if assert_soc_target != inverter.soc_target:
             print("ERROR: Inverter {} SOC target should be {} got {}".format(inverter.id, assert_soc_target, inverter.soc_target))
             failed = True
-
+        
         assert_soc_target_force = assert_immediate_soc_target if assert_status in ["Charging", "Hold charging"] else 0
         if not set_charge_window:
             assert_soc_target_force = -1
@@ -1093,18 +1093,14 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(my_predbat, "no_discharge2", discharge_window_best=discharge_window_best, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0, assert_status="Hold discharging")
     failed |= run_execute_test(my_predbat, "no_discharge3", discharge_window_best=discharge_window_best3, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0)
     failed |= run_execute_test(my_predbat, "no_discharge4", discharge_window_best=discharge_window_best3, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0)
-    failed |= run_execute_test(
-        my_predbat, "discharge", discharge_window_best=discharge_window_best, discharge_limits_best=discharge_limits_best, assert_force_discharge=True, set_charge_window=True, set_discharge_window=True, soc_kw=10, assert_status="Discharging"
-    )
-    failed |= run_execute_test(
-        my_predbat, "discharge2", discharge_window_best=discharge_window_best2, discharge_limits_best=discharge_limits_best, assert_force_discharge=True, set_charge_window=True, set_discharge_window=True, soc_kw=10, assert_status="Discharging"
-    )
+    failed |= run_execute_test(my_predbat, "discharge", discharge_window_best=discharge_window_best, discharge_limits_best=discharge_limits_best, assert_force_discharge=True, set_charge_window=True, set_discharge_window=True, soc_kw=10, assert_status="Discharging")
+    failed |= run_execute_test(my_predbat, "discharge2", discharge_window_best=discharge_window_best2, discharge_limits_best=discharge_limits_best, assert_force_discharge=True, set_charge_window=True, set_discharge_window=True, soc_kw=10, assert_status="Discharging")
     failed |= run_execute_test(
         my_predbat,
         "discharge_freeze",
         discharge_window_best=discharge_window_best,
         discharge_limits_best=discharge_limits_best_frz,
-        assert_force_discharge=False,
+        assert_force_discharge=False, 
         set_charge_window=True,
         set_discharge_window=True,
         soc_kw=9,
@@ -1220,6 +1216,19 @@ def run_window_sort_test(name, my_predbat, charge_window_best, discharge_window_
 
     return failed
 
+
+def run_intersect_window_tests(my_predbat):
+    print("**** Running intersect window tests ****")
+    failed = False
+    charge_window_best=[{"start": my_predbat.minutes_now , "end": my_predbat.minutes_now + 30, "average": 10}]
+    discharge_window_best=[{"start": my_predbat.minutes_now , "end": my_predbat.minutes_now + 30, "average": 10}]
+    charge_limit_best=[4]
+    discharge_limit_best=[2]
+    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best)
+    if len(new_window_best) != 0:
+        print("ERROR: Expected no windows but got {}".format(new_window_best))
+        failed = True
+    return failed
 
 def run_window_sort_tests(my_predbat):
     import_rate = 10.0
@@ -2690,6 +2699,8 @@ def main():
 
     print("**** Testing Predbat ****")
     failed = False
+    if not failed:
+        failed |= run_intersect_window_tests(my_predbat)
     if not failed:
         failed |= run_execute_tests(my_predbat)
     if not failed:
