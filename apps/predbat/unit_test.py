@@ -31,7 +31,7 @@ import numpy as np
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit
+from utils import calc_percent_limit, remove_intersecting_windows
 from futurerate import FutureRate
 
 KEEP_SCALE = 0.5
@@ -1218,6 +1218,20 @@ def run_window_sort_test(name, my_predbat, charge_window_best, discharge_window_
         print("Inputs: {} {}".format(charge_window_best, discharge_window_best))
         print("Results: {}".format(results))
 
+    return failed
+
+
+def run_intersect_window_tests(my_predbat):
+    print("**** Running intersect window tests ****")
+    failed = False
+    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
+    discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
+    charge_limit_best = [4]
+    discharge_limit_best = [2]
+    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best)
+    if len(new_window_best) != 0:
+        print("ERROR: Expected no windows but got {}".format(new_window_best))
+        failed = True
     return failed
 
 
@@ -2690,6 +2704,8 @@ def main():
 
     print("**** Testing Predbat ****")
     failed = False
+    if not failed:
+        failed |= run_intersect_window_tests(my_predbat)
     if not failed:
         failed |= run_execute_tests(my_predbat)
     if not failed:

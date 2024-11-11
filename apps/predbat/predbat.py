@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.5.11"
+THIS_VERSION = "v8.6.0"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -6509,7 +6509,7 @@ class PredBat(hass.Hass):
                 new_window_best[-1]["end"] = end
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
-            elif limit > 0 or (self.minutes_now >= start and self.minutes_now < end and self.charge_window and self.charge_window[0]["end"] == end):
+            elif limit > 0:
                 new_limit_best.append(limit)
                 new_window_best.append(window)
             else:
@@ -8232,6 +8232,7 @@ class PredBat(hass.Hass):
                 # Charge slot clipping
                 record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
                 self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP)
+
                 if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
@@ -10703,7 +10704,7 @@ class PredBat(hass.Hass):
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
-                print("Trigger callback for {} {}".format(item["domain"], item["service"]))
+                # print("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
 
     def define_service_list(self):
