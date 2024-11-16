@@ -410,8 +410,12 @@ Note that Predbat will still retrieve inverter information via REST, this config
 Some inverters have the Service API enabled, this allows the configuration to call an arbitrary Home Assistant service to start/stop charging and discharging
 
 - **charge_start_service** - Should be set to a service that is called when charging starts
-- **charge_stop_service** - Should be set to a service that is called when charging stops and/or discharging stops
-- **discharge_stop_service** - Should be set to a service that is called when discharging stops
+- **charge_freeze_service** - If your inverter supports charge freeze set to a service that starts this mode
+- **charge_stop_service** - Should be set to a service that is called when charging/charge freeze stops
+
+- **discharge_start_service**  - Should be set to a service that is called when discharging starts
+- **discharge_freeze_service** - If your inverter supports discharge freeze set to a service that starts this mode
+- **discharge_stop_service** - Should be set to a service that is called when discharging/discharge freeze stops
 
 Services that are not configuration will not be called.
 
@@ -422,6 +426,8 @@ Example service is below:
     service: switch.turn_off
     entity_id: "switch.sunsynk_inverter_use_timer"
 ```
+
+See [Service API](https://springfall2008.github.io/batpred/inverter-setup/#service-api) for details.
 
 Note that **device_id** will be passed to the service automatically, it can be set in apps.yaml.
 
