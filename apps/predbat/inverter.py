@@ -415,7 +415,7 @@ class Inverter:
                 for y in ["start", "end"]:
                     self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
 
-        # Create dummy idle time entities        
+        # Create dummy idle time entities
         if not self.inv_has_idle_time:
             self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
             self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
@@ -966,13 +966,13 @@ class Inverter:
         # Get previous idle start and end
         idle_start = self.base.get_arg("idle_start_time", index=self.id)
         idle_end = self.base.get_arg("idle_end_time", index=self.id)
-        
+
         # Convert to minutes
         try:
             # Get time
             idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
             idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
-            # Change to minutes            
+            # Change to minutes
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
         except (ValueError, TypeError):
@@ -1344,7 +1344,7 @@ class Inverter:
         # Ignore if inverter doesn't have pause mode
         if not self.inv_has_timed_pause:
             return
-        
+
         # For now we have to use the pause start/end entity to know if we have a pause time window (must be a better way)
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
@@ -1865,7 +1865,7 @@ class Inverter:
         service_list = self.base.args.get(service, "")
         if not service_list:
             return False
-        
+
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data))
@@ -1923,9 +1923,9 @@ class Inverter:
                 self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
             # Start charge or charge freeze
-            if target_soc == self.soc_percent or freeze:                
+            if target_soc == self.soc_percent or freeze:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
-                    self.call_service_template("charge_start_service", service_data, domain="charge")        
+                    self.call_service_template("charge_start_service", service_data, domain="charge")
             else:
                 self.call_service_template("charge_start_service", service_data, domain="charge")
         else:
@@ -1942,7 +1942,7 @@ class Inverter:
                 "target_soc": target_soc,
                 "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
             }
-            
+
             # Stop charge
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
@@ -2241,7 +2241,6 @@ class Inverter:
         self.base.log("Warn: Set inverter {} pause mode {} via REST failed".format(self.id, pause_mode))
         self.base.record_status("Warn: Inverter {} REST failed to setBatteryPauseMode got {}".format(self.id, self.rest_data["Control"]["Battery_pause_mode"]), had_errors=True)
         return False
-
 
     def rest_setReserve(self, target):
         """
