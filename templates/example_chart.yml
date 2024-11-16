@@ -303,7 +303,7 @@ series:
     type: line
     curve: stepline
     name: Today p/kWh
-    extend_to: false 
+    extend_to: false
 ###############################################
 # Data prediction chart (import/export/pv/load)
 ###############################################
