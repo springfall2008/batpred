@@ -867,7 +867,7 @@ def run_execute_tests(my_predbat):
     charge_window_best4 = [{"start": my_predbat.minutes_now + 24 * 60, "end": my_predbat.minutes_now + 60 + 24 * 60, "average": 1}]
     charge_window_best5 = [{"start": my_predbat.minutes_now - 24 * 60, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best6 = [{"start": my_predbat.minutes_now + 8 * 60, "end": my_predbat.minutes_now + 60 + 8 * 60, "average": 1}]
-    charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23*60, "average": 1}]
+    charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     charge_limit_best = [10, 10]
     charge_limit_best2 = [5]
     charge_limit_best_frz = [1]
@@ -875,7 +875,7 @@ def run_execute_tests(my_predbat):
     discharge_window_best2 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 90, "average": 1}]
     discharge_window_best3 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 90, "average": 1}]
     discharge_window_best4 = [{"start": my_predbat.minutes_now + 15, "end": my_predbat.minutes_now + 90, "average": 1}]
-    discharge_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23*60, "average": 1}]
+    discharge_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     discharge_limits_best = [0]
     discharge_limits_best_frz = [99]
 
@@ -999,7 +999,7 @@ def run_execute_tests(my_predbat):
         set_discharge_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
-        assert_charge_end_time_minutes=my_predbat.minutes_now + 23*60,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 23 * 60,
     )
     # Can span midnight false test
     for inverter in my_predbat.inverters:
@@ -1017,7 +1017,7 @@ def run_execute_tests(my_predbat):
         set_discharge_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
-        assert_charge_end_time_minutes=24*60-1,
+        assert_charge_end_time_minutes=24 * 60 - 1,
     )
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = True
@@ -1233,7 +1233,7 @@ def run_execute_tests(my_predbat):
         assert_status="Discharging",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
-        assert_discharge_end_time_minutes=my_predbat.minutes_now + 23*60 + 1,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 23 * 60 + 1,
     )
 
     # Can span midnight false test
@@ -1252,7 +1252,7 @@ def run_execute_tests(my_predbat):
         assert_status="Discharging",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
-        assert_discharge_end_time_minutes=24*60-1,
+        assert_discharge_end_time_minutes=24 * 60 - 1,
     )
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = True
@@ -1277,7 +1277,7 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
-    
+
     failed |= run_execute_test(
         my_predbat,
         "discharge_freeze",
