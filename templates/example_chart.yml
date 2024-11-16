@@ -231,7 +231,7 @@ header:
 graph_span: 72h
 span:
   start: day
-  offset: +0h
+  offset: -24h
 now:
   show: true
 series:
@@ -303,7 +303,7 @@ series:
     type: line
     curve: stepline
     name: Today p/kWh
-    extend_to: false
+    extend_to: false 
 ###############################################
 # Data prediction chart (import/export/pv/load)
 ###############################################
