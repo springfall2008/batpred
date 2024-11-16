@@ -668,11 +668,14 @@ If you have a different type of charger you will need to configure it manually.
 The template `apps.yaml` comes with a set of pre-defined sensor values that should match most EV chargers.
 Customise for your car charger sensor if it sets sensor values that are not in the list.
 
-- **car_charging_now** - For some cases finding details of planned car charging is difficult to obtain (e.g. Ohme with Intelligent doesn't report slots).<BR>
+- **car_charging_now** - For some cases finding details of planned car charging is difficult to obtain.<BR>
 The car_charging_now configuration item can be set to point to a Home Assistant sensor that tells you that the car is currently charging.
 Predbat will then assume this 30 minute slot is used for charging regardless of the plan.<BR>
 If Octopus Intelligent Charging is enabled and car_charging_now indicates the car is charging then Predbat will also assume that this is a
 low rate slot for the car/house (and might therefore start charging the battery), otherwise electricity import rates are taken from the normal rate data.
+
+**CAUTION:** Do not use car_charging_now with Predbat led charging or you will create an infinite loop. Do you use car_charging_now with Octopus intelligent
+unless you can't make it work any other way as it will assume all car charging is at low rate.
 
 - **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging.
 Useful if you have a sensor for your car charger that isn't binary.
