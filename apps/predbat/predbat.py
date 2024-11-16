@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.6.1"
+THIS_VERSION = "v8.6.2"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -8656,7 +8656,7 @@ class PredBat(hass.Hass):
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                             if inverter.inv_charge_discharge_with_rate:
-                                inverter.adjust_discharge_rate(0)
+                                inverter.adjust_charge_rate(0)
                                 resetDischarge = False
                             inverter.adjust_pause_mode(pause_charge=True)
                             resetPause = False
