@@ -8464,7 +8464,7 @@ class PredBat(hass.Hass):
                             self.log("Combine window with next window {}-{}".format(self.time_abs_str(windows["start"]), self.time_abs_str(windows["end"])))
 
                 # Avoid adjust avoid start time forward when it's already started
-                if (inverter.charge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
+                if (inverter.charge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
                     self.log("Include original charge start {}, keeping this instead of new start {}".format(self.time_abs_str(inverter.charge_start_time_minutes), self.time_abs_str(minutes_start)))
                     minutes_start = inverter.charge_start_time_minutes
 
@@ -8598,7 +8598,7 @@ class PredBat(hass.Hass):
                 minutes_end = window["end"]
 
                 # Avoid adjust avoid start time forward when it's already started
-                if (inverter.discharge_start_time_minutes < self.minutes_now) and (self.minutes_now >= minutes_start):
+                if (inverter.discharge_start_time_minutes <= self.minutes_now) and (self.minutes_now >= minutes_start):
                     minutes_start = inverter.discharge_start_time_minutes
                     # Don't allow overlap with charge window
                     if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
@@ -8671,7 +8671,7 @@ class PredBat(hass.Hass):
                             self.log("Discharge Hold (ECO mode) as discharge is now at/below target or freeze only is set - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                             inverter.adjust_discharge_immediate(0)
                 else:
-                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and self.discharge_limits_best[0]:
+                    if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes) and (self.discharge_limits_best[0] < 100):
                         inverter.adjust_force_discharge(False, discharge_start_time, discharge_end_time)
                     else:
                         self.log("Not setting discharge as we are not yet within the discharge window - next time is {} - {}".format(self.time_abs_str(minutes_start), self.time_abs_str(minutes_end)))
@@ -8736,7 +8736,7 @@ class PredBat(hass.Hass):
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
                 if (isDischarging and not disabled_discharge) and not self.set_reserve_enable:
-                    # If we are discharging and not setting reserve then we should reset the target SoC to 0%
+                    # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.discharge_limits_best[0], isCharging, isDischarging)
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
