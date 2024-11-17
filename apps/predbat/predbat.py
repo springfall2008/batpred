@@ -10580,7 +10580,6 @@ class PredBat(hass.Hass):
                             if item.get("oldname", "") == name:
                                 self.log("Restore setting from old name {} to new name {}".format(name, item["name"]))
                                 current = item
-                                name = item["name"]
                     if current:
                         item_value = settings[name]
                         if current.get("value", None) != item_value:
