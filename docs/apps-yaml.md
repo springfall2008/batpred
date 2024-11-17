@@ -413,9 +413,9 @@ Some inverters have the Service API enabled, this allows the configuration to ca
 - **charge_freeze_service** - If your inverter supports charge freeze set to a service that starts this mode
 - **charge_stop_service** - Should be set to a service that is called when charging/charge freeze stops
 
-- **discharge_start_service**  - Should be set to a service that is called when discharging starts
-- **discharge_freeze_service** - If your inverter supports discharge freeze set to a service that starts this mode
-- **discharge_stop_service** - Should be set to a service that is called when discharging/discharge freeze stops
+- **discharge_start_service**  - Should be set to a service that is called when force export (discharge) starts
+- **discharge_freeze_service** - If your inverter supports export freeze set to a service that starts this mode
+- **discharge_stop_service** - Should be set to a service that is called when export/export freeze stops
 
 Services that are not configuration will not be called.
 
