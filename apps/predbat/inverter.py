@@ -522,9 +522,9 @@ class Inverter:
                             discharge
                             and soc_percent.get(minute - 1, 0) == (data_point - 1)
                             and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") == "Discharging"
-                            and predbat_status.get(minute, "") == "Discharging"
-                            and predbat_status.get(minute + 1, "") == "Discharging"
+                            and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
+                            and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
+                            and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
                             and charge_rate.get(minute - 1, 0) == max_power
                             and charge_rate.get(minute, 0) == max_power
                             and battery_power.get(minute, 0) > 0
@@ -536,7 +536,7 @@ class Inverter:
                                 this_soc = soc_percent.get(target_minute, 0)
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
                                     break
-                                if discharge and (predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
+                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1786,7 +1786,7 @@ class Inverter:
 
         if self.inverter_type == "GS":
             # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and discharging
+            # Need to check the logic of how this is called if both charging and exporting
 
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
