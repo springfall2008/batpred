@@ -30,7 +30,7 @@ It uses the solar production forecast from Solcast combined with your historical
 - **Export** - Electricity from your home from the battery or solar which is sent to the grid
 - **Demand** - Demand Mode is when the battery covers the house load and charges from solar, to avoid importing or exporting (some systems call this ECO Mode).
 - **Charging** - When your battery is charging, in Predbat this refers to force charge (from the grid).
-- **Discharge** - The opppose of charge, when the battery is discharging.
+- **Discharge** - The opposite of charge, when the battery is discharging.
 - **Exporting** - When your battery is force discharging to create an export, in Predbat this refers to force export.
 - **Export Limit** - When your battery is being force exported the export limit is the % battery level where the discharge will stop if reached.
 - **PV** - Solar power that is generated in your home. Can also refer to a prediction of the solar for the day, by default is the 50% scenario (most likely generation).
