@@ -598,7 +598,7 @@ var options = {
         soc_kw_base10 = self.get_entity_results(self.base.prefix + ".soc_kw_base10")
         charge_limit_kw = self.get_entity_results(self.base.prefix + ".charge_limit_kw")
         best_charge_limit_kw = self.get_entity_results(self.base.prefix + ".best_charge_limit_kw")
-        best_discharge_limit_kw = self.get_entity_results(self.base.prefix + ".best_discharge_limit_kw")
+        best_export_limit_kw = self.get_entity_results(self.base.prefix + ".best_export_limit_kw")
         battery_power_best = self.get_entity_results(self.base.prefix + ".battery_power_best")
         pv_power_best = self.get_entity_results(self.base.prefix + ".pv_power_best")
         grid_power_best = self.get_entity_results(self.base.prefix + ".grid_power_best")
@@ -637,7 +637,7 @@ var options = {
                     "chart_type": "area",
                     "color": "#e3e019",
                 },
-                {"name": "Best Discharge Limit", "data": best_discharge_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
+                {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
             text += self.render_chart(series_data, "kWh", "Battery SOC Prediction", now_str)

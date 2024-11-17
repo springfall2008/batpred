@@ -33,7 +33,7 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
-def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best):
+def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
     """
@@ -53,9 +53,9 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, discharge
             clipped = False
 
             # For each discharge window
-            for dwindow_n in range(len(discharge_limit_best)):
-                dwindow = discharge_window_best[dwindow_n]
-                dlimit = discharge_limit_best[dwindow_n]
+            for dwindow_n in range(len(export_limit_best)):
+                dwindow = export_window_best[dwindow_n]
+                dlimit = export_limit_best[dwindow_n]
                 dstart = dwindow["start"]
                 dend = dwindow["end"]
 

@@ -301,7 +301,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "metric_min_improvement_discharge",
-        "friendly_name": "Metric Min Improvement Discharge",
+        "friendly_name": "Metric Min Improvement Export (discharge)",
         "type": "input_number",
         "min": -50,
         "max": 50.0,
@@ -509,7 +509,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "calculate_discharge_oncharge",
-        "friendly_name": "Calculate Discharge on charge slots",
+        "friendly_name": "Calculate Export (discharge) on charge slots",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
@@ -562,7 +562,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "combine_discharge_slots",
-        "friendly_name": "Combine Discharge Slots",
+        "friendly_name": "Combine Export (discharge) Slots",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -604,14 +604,14 @@ CONFIG_ITEMS = [
     },
     {
         "name": "set_discharge_freeze",
-        "friendly_name": "Set Discharge Freeze",
+        "friendly_name": "Set Export (discharge) Freeze",
         "type": "switch",
         "default": True,
         "reset_inverter": True,
     },
     {
         "name": "set_discharge_freeze_only",
-        "friendly_name": "Set Discharge Freeze Only",
+        "friendly_name": "Set Export (discharge) Freeze Only",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,
@@ -619,7 +619,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "set_discharge_during_charge",
-        "friendly_name": "Set Discharge During Charge",
+        "friendly_name": "Set Export (discharge) During Charge",
         "type": "switch",
         "default": True,
     },
@@ -727,7 +727,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "manual_discharge",
-        "friendly_name": "Manual force discharge",
+        "friendly_name": "Manual force export (discharge)",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -736,8 +736,8 @@ CONFIG_ITEMS = [
         "manual": True,
     },
     {
-        "name": "manual_idle",
-        "friendly_name": "Manual force idle",
+        "name": "manual_demand",
+        "friendly_name": "Manual force demand",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -767,7 +767,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "manual_freeze_discharge",
-        "friendly_name": "Manual force discharge freeze",
+        "friendly_name": "Manual force export (discharge) freeze",
         "type": "select",
         "options": ["off"],
         "icon": "mdi:state-machine",
@@ -883,7 +883,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "iboost_on_discharge",
-        "friendly_name": "iBoost is allowed when battery is force discharging",
+        "friendly_name": "iBoost is allowed when battery is force exporting (discharge)",
         "type": "switch",
         "enable": "iboost_enable",
         "default": False,
