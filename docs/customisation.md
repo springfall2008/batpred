@@ -67,9 +67,9 @@ This mode can be useful if you don't have an export rate, you have a 'no export'
 
 ### Predbat Control charge & discharge mode
 
-In **Control charge & discharge** mode Predbat will set both charge and discharge times and control charge and discharge percentages.
+In **Control charge & discharge** mode Predbat will set both charge and force export (discharge) times and control charge and force export percentages.
 
-If you have set the **switch.predbat_set_discharge_freeze_only** set to True then forced export won't occur but Predbat can force the export
+If you have set the **switch.predbat_set_export_freeze_only** set to True then forced export won't occur but Predbat can force the export
 of solar power to the grid when desired.
 
 ## Expert mode
@@ -89,8 +89,8 @@ keeping the inverter control in the 5 minute slots. E.g. a value of 10 or 15 min
 If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's
 quite CPU intensive and provides very little improvement for most systems.
 
-You can can enable **combine_charge_slots** and **combine_discharge_slots** in order to speed up planning.
-Note: Combining discharge slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
+You can can enable **combine_charge_slots** and **combine_export_slots** in order to speed up planning.
+Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with
 longer periods of fixed rates but can limit the planning ability in some cases.
 
 The number of threads you use can change your performance, you can set **threads** in `apps.yaml` to 0 to disable threading
@@ -219,24 +219,24 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 calculated in 4 hour regions before forming the detailed plan. Is True by default but can be turned off in expert
 mode.
 
-**switch.predbat_calculate_discharge_oncharge** (_expert mode_) When True calculated discharge slots will
-disable or move charge slots, allowing them to intermix. When False discharge slots will never be placed into charge slots.
+**switch.predbat_calculate_export_oncharge** (_expert mode_) When True calculated export slots will
+disable or move charge slots, allowing them to intermix. When False export slots will never be placed into charge slots.
 
 **switch.predbat_set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
 to avoid cross charging when batteries are out of balance.
 
 **switch.predbat_calculate_tweak_plan** (_expert mode_) When True causes Predbat to perform a second pass optimisation
-across the next 8 charge and discharge windows in time order.
+across the next 8 charge and export windows in time order.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which
-you want to discharge late.
+you want to force export late.
 
 **switch.predbat_calculate_second_pass** (_expert mode_) When True causes Predbat to perform a second pass optimisation
-across all the charge and discharge windows in time order.
+across all the charge and export windows in time order.
 
 NOTE: This feature is quite slow and so may need a higher performance machine.
 
-This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which you want to discharge late.
+This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which you want to force export late.
 
 ## Battery margins and metrics options
 
@@ -247,13 +247,13 @@ if you need a hard SoC constraint that will always be maintained.
 It's usually good to have best_soc_keep set to a value above 0 to allow some margin in case you use more energy than planned between charge slots.
 
 **input_number.predbat_best_soc_min** (_expert mode_) sets the minimum charge level (in kWh) for charging during each slot and the
-minimum discharge level also (set to 0 if you want to skip some slots).
+minimum force export level also (set to 0 if you want to skip some slots).
 If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0 disables this feature.
 
-**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or discharge slots together into a single larger average rate slot.
+**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots together into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
 **switch.predbat_combine_charge_slots** Controls if charge slots of > 30 minutes can be combined. When disabled they will be split up,
@@ -261,7 +261,7 @@ increasing run times but potentially more accurate for planning. Turn this off i
 during long periods of higher rates but you wouldn't charge normally in that period (e.g. pre-charge at day rate before
 a saving session). The default is disabled (False)
 
-**switch.predbat_combine_discharge_slots** (_expert mode_) Controls if discharge slots of > 30 minute can be combined. When disabled
+**switch.predbat_combine_export_slots** (_expert mode_) Controls if export slots of > 30 minute can be combined. When disabled
 they will be split up, increasing run times but potentially more accurate for planning. The default is disabled (False)
 
 **input_number.predbat_metric_min_improvement** (_expert mode_) sets the minimum cost improvement in pence that it's worth lowering the battery SOC % for.
@@ -270,9 +270,9 @@ If you use **input_number.predbat_pv_metric10_weight** then you probably don't n
 Do not use if you have multiple charge windows in a given period as it won't lead to good results (e.g. Agile)
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
-**input_number.predbat_metric_min_improvement_discharge** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced discharge (and export) for.
-A value of 0.1 is the default which prevents any marginal discharges. If you increase this value (e.g. you only want to discharge/forced export if definitely very profitable),
-then discharges will become less common and shorter. The value is in pence per 30 minutes of export time.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
+A value of 0.1 is the default which prevents any marginal exports. If you increase this value (e.g. you only want to force export if definitely very profitable),
+then exports will become less common and shorter. The value is in pence per 30 minutes of export time.
 
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
@@ -314,7 +314,7 @@ _Note: Carbon footprint tracking can only be enabled if apps.yaml is configured 
 
 ## Inverter control options
 
-**switch.predbat_set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Discharge etc). On by default.
+**switch.predbat_set_status_notify** Enables mobile notification about changes to the Predbat state (e.g. Charge, Export etc). On by default.
 
 **switch.predbat_set_inverter_notify** Enables mobile notification about all changes to inverter registers (e.g. setting window, turning discharge on/off).
 Off by default.
@@ -331,13 +331,13 @@ explains how the low power charging works and shows how Predbat automatically cr
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
 
-**switch.predbat_set_discharge_freeze** When enabled will allow Predbat to export Solar to the grid rather than charging the battery.
+**switch.predbat_set_export_freeze** When enabled will allow Predbat to export Solar to the grid rather than charging the battery.
 Enabled by default on those inverters that have this support.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When enabled will allow Predbat to hold the current battery level while drawing
 from the grid/solar as an alternative to charging. Enabled by default.
 
-**switch.predbat_set_discharge_freeze_only** (_expert mode_) When enabled forced discharge is prevented, but discharge freeze can be used
+**switch.predbat_set_export_freeze_only** (_expert mode_) When enabled forced export is prevented, but export freeze can be used
 (if enabled) to export excess solar rather than charging the battery. This is useful with tariffs that pay you for
 solar exports but don't allow forced export (brown energy).
 
@@ -443,7 +443,7 @@ Only slots of at or below the rate threshold will be selected.
 
 Note this option only applies when iboost_solar and iboost battery are both off.
 
-- **switch.predbat_iboost_on_discharge** If set to on allows iBoost to run even if the battery is discharging to the grid, otherwise it won't run in these circumstances.
+- **switch.predbat_iboost_on_export** If set to on allows iBoost to run even if the battery is force exporting to the grid, otherwise it won't run in these circumstances.
 
 - **switch.iboost_prevent_discharge** When set will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
 This switch will it will work in all modes is not recommended to be used when iBoost Solar is enabled as it will prevent your battery from discharging during excess solar periods
@@ -543,17 +543,17 @@ You can cancel a force slot by selecting the slot time again (it will be shown i
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/aa668cc3-60fc-4956-8619-822f09f601dd)
 
-The **select.predbat_manual_discharge** selector can be used to manually force a discharge within a 30 minute slot in the same way as the manual force charge feature.
-The force discharge takes priority over force charging.
+The **select.predbat_manual_export** selector can be used to manually force an export within a 30 minute slot in the same way as the manual force charge feature.
+The force export takes priority over force charging.
 
-The **select.predbat_manual_idle** selector is used to force Predbat to idle mode during a 30 minute slot, this implies no forced grid charging or discharging of the battery.
+The **select.predbat_manual_demand** selector is used to force Predbat to demand mode during a 30 minute slot, this implies no forced grid charging or exporting of the battery.
 House load will be supplied from solar, or from the battery if there is insufficient solar, or grid import if there is insufficient battery charge.
 This is described as 'ECO' Mode for GivEnergy inverters but other inverters use different terminology.
 
 The **select.predbat_manual_freeze_charge** selector is used to force Predbat to freeze charge during a 30 minute slot, this implies the battery will not discharge and
 hold at the current level. The grid maybe used if solar is not enough to cover the load.
 
-The **select.predbat_manual_freeze_discharge** selector is used to force Predbat to freeze discharge during a 30 minute slot, this implies the battery will not charge but will
+The **select.predbat_manual_freeze_export** selector is used to force Predbat to freeze export during a 30 minute slot, this implies the battery will not charge but will
 still discharge for the house load. Any solar will be exported to the grid.
 
 When you use the manual override features you can only select times in the next 18 hours, the overrides will be removed once their time
