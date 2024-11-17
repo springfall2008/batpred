@@ -607,7 +607,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "set_export_freeze",
-        "oldname": "set_export_freeze",
+        "oldname": "set_discharge_freeze",
         "friendly_name": "Set Export Freeze",
         "type": "switch",
         "default": True,
