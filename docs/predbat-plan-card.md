@@ -91,7 +91,7 @@ and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
 So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.<BR>
 If battery discharging is planned by Predbat for a particular slot, the export rate for that slot will be highlighted in bold text.
 
-- **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Eco mode),
+- **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Demand mode),
 discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC is remaining constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
@@ -101,7 +101,7 @@ The slot will be coloured Green for Charging, Yellow for Discharging, Silver Gre
 NB: The Predbat plan is shown in 30 minute time slots but Predbat actually plans battery activity in 5 minute segments within the 30 minute slot.
 If the Home Assistant control *switch.predbat_calculate_export_oncharge* is set to True,
 then within a 30 minute slot (and depending on import and export rates) Predbat could potentially plan for there to be both
-charging and discharging activity - if Predbat plans this, state will show as both Charging and Discharging in the same slot.
+charging and discharging activity - if Predbat plans this, state will show as both Charging and Exporting in the same slot.
 
 - **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the 30 minute time slot.
 e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.
