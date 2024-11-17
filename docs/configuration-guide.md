@@ -38,7 +38,7 @@ You should set **select.predbat_mode** to 'Monitor'.
 
 ## Cheap night rate with bad export rate (e.g. Octopus Go, Economy 7 etc)
 
-In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force discharge your battery.
+In this scenario you will want to charge overnight based on the next day's solar forecast and don't want Predbat to force export (discharge) your battery.
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
@@ -53,13 +53,13 @@ If you are using expert mode then these options maybe worth reviewing:
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | input_number.predbat_metric_min_improvement | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_min_improvement_export  | 0.1  | Export only if there is a profit |
 
 You should set **select.predbat_mode** to 'Control charge'
 
 ## Cheap night rate, with a good export rate (e.g. Intelligent Octopus with Octopus Outgoing)
 
-Follow the instructions from the _Cheap Night rate_ above, but also you will also want to have automatic discharge occurring when the export rates are profitable.
+Follow the instructions from the _Cheap Night rate_ above, but also you will also want to have automatic export occurring when the export rates are profitable.
 
 | Item |  Value  | Comment  |
 |---------|---------------|-------------|
@@ -72,7 +72,7 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | input_number.predbat_metric_min_improvement  | 0   | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_min_improvement_export  | 0.1  | Export only if there is a profit |
 | input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0 | Can be set non-zero if you want to force a minimum charge level |
 
@@ -80,7 +80,7 @@ You should set **select.predbat_mode** to 'Control charge & discharge'
 
 ## Multiple rates for import and export (e.g. Octopus Flux & Cozy)
 
-Follow the instructions from _Cheap Night_ rate above, but also you will want to have automatic discharge when the export rates are profitable.
+Follow the instructions from _Cheap Night_ rate above, but also you will want to have automatic export when the export rates are profitable.
 
 Recommended settings - these must be changed in Home Assistant once Predbat is running:
 
@@ -95,7 +95,7 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24 | If you set this to 24 then you will have quicker updates, the cycle repeats itself anyhow |
 | input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_min_improvement_export  | 0.1  | Export only if there is a profit |
 | input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
 
@@ -116,7 +116,7 @@ If you are using expert mode then these options maybe worth reviewing, otherwise
 |---------|---------------|-------------|
 | input_number.predbat_forecast_plan_hours  | 24-48 | If you set this to 24 then you will have quicker updates, going to 36/48 for a longer plan |
 | input_number.predbat_metric_min_improvement  | 0  | Charge less if it's cost neutral |
-| input_number.predbat_metric_min_improvement_discharge  | 0.1  | Discharge only if there is a profit |
+| input_number.predbat_metric_min_improvement_export  | 0.1  | Export only if there is a profit |
 | input_number.predbat_metric_battery_cycle  | 0-2  | Higher numbers mean less charging and discharging but higher costs |
 | input_number.predbat_best_soc_min |  0  | Don't use non-zero otherwise all slots will be force charging |
 
