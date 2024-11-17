@@ -16,7 +16,7 @@ If you are not using the Predbat Add on then you may be able to access the Web I
 The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles. You can change your view using
 the top menu bar.
 
-![image](https://github.com/user-attachments/assets/fdad3d4a-91f3-4e66-bb02-2ac649cb8854)
+![image](https://github.com/user-attachments/assets/4d7c1129-89bd-4a11-81ba-6bc8dec797cb)
 
 ## Displaying output data
 
