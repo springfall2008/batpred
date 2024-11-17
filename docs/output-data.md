@@ -16,7 +16,7 @@ If you are not using the Predbat Add on then you may be able to access the Web I
 The Web interface can allow you to view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles. You can change your view using
 the top menu bar.
 
-![image](https://github.com/user-attachments/assets/fdad3d4a-91f3-4e66-bb02-2ac649cb8854)
+![image](https://github.com/user-attachments/assets/4d7c1129-89bd-4a11-81ba-6bc8dec797cb)
 
 ## Displaying output data
 
@@ -347,11 +347,11 @@ The 'best' plan in Predbat parlance is simply Predbat's lowest cost predicted pl
 - predbat.best_charge_limit - Predicted best battery charge limit for the next charge in percent with attributes of all future battery charging times & limits
 - predbat.best_charge_limit_kw - Predicted best battery charge limit for the next charge in kWh with attributes of future charging times & limits
 - predbat.best_charge_start - Predicted start time of the next forced battery charging under the best plan
-- predbat.best_discharge_end - Predicted end time of the next forced battery discharging under the best plan
-- predbat.best_discharge_limit - Predicted best battery discharge limit in percent (will be 0% when discharging or 100% when not)
-with attributes of all future battery discharges (kWh and time slots)
-- predbat.best_discharge_limit_kw - Predicted best battery discharge limit in kWh
-- predbat.best_discharge_start - Predicted start time of the next forced battery discharging under the best plan
+- predbat.best_export_end - Predicted end time of the next forced battery export under the best plan
+- predbat.best_export_limit - Predicted best battery export limit in percent (will be 0% when discharging or 100% when not)
+with attributes of all future battery exports (kWh and time slots)
+- predbat.best_export_limit_kw - Predicted best battery export limit in kWh
+- predbat.best_export_start - Predicted start time of the next forced battery export under the best plan
 - predbat.best_export_energy - Total kWh of predicted exports under the best plan, with attributes of the predicted export kWh and their time slots
 - predbat.best_import_energy - Total kWh of predicted imports under best plan, with attributes of the predicted import kWh and their time slots
 - predbat.best_import_energy_battery - Total kWh of predicted import energy to charge the home battery under the best plan

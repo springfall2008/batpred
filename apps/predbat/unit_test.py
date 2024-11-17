@@ -108,8 +108,8 @@ def update_rates_import(my_predbat, charge_window_best):
             my_predbat.rate_import[minute] = window["average"]
 
 
-def update_rates_export(my_predbat, discharge_window_best):
-    for window in discharge_window_best:
+def update_rates_export(my_predbat, export_window_best):
+    for window in export_window_best:
         for minute in range(window["start"], window["end"]):
             my_predbat.rate_export[minute] = window["average"]
 
@@ -120,8 +120,8 @@ def reset_inverter(my_predbat):
     my_predbat.export_limit = 10 / 60.0
     my_predbat.inverters = [TestInverter()]
     my_predbat.charge_window = []
-    my_predbat.discharge_window = []
-    my_predbat.discharge_limits = []
+    my_predbat.export_window = []
+    my_predbat.export_limits = []
     my_predbat.current_charge_limit = 0
     my_predbat.soc_kw = 0.0
     my_predbat.soc_max = 100.0
@@ -158,7 +158,7 @@ def reset_inverter(my_predbat):
     my_predbat.iboost_gas_export = False
     my_predbat.iboost_charging = False
     my_predbat.iboost_smart = False
-    my_predbat.iboost_on_discharge = False
+    my_predbat.iboost_on_export = False
     my_predbat.iboost_prevent_discharge = False
     my_predbat.minutes_now = 12 * 60
     my_predbat.best_soc_keep = 0.0
@@ -419,7 +419,7 @@ def simple_scenario(
     iboost_rate_threshold_export=9999,
     iboost_smart=False,
     iboost_enable=False,
-    iboost_on_discharge=False,
+    iboost_on_export=False,
     iboost_prevent_discharge=False,
     assert_iboost_running=False,
     assert_iboost_running_solar=False,
@@ -459,7 +459,7 @@ def simple_scenario(
     my_predbat.iboost_min_power = 0.0
     my_predbat.iboost_max_power = export_limit / 60.0
     my_predbat.iboost_max_energy = iboost_max_energy
-    my_predbat.iboost_on_discharge = iboost_on_discharge
+    my_predbat.iboost_on_export = iboost_on_export
     my_predbat.iboost_prevent_discharge = iboost_prevent_discharge
     my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
     my_predbat.iboost_gas_scale = gas_scale
@@ -510,11 +510,11 @@ def simple_scenario(
         charge_limit_best = [charge]
         if not charge_window_best:
             charge_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
-    discharge_limit_best = []
-    discharge_window_best = []
+    export_limit_best = []
+    export_window_best = []
     if discharge < 100:
-        discharge_limit_best = [discharge]
-        discharge_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
+        export_limit_best = [discharge]
+        export_window_best = [{"start": my_predbat.minutes_now, "end": int(my_predbat.forecast_minutes / charge_period_divide) + my_predbat.minutes_now, "average": 0}]
     if save == "none":
         (
             metric,
@@ -528,7 +528,7 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
+        ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
     else:
         (
             metric,
@@ -542,7 +542,7 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
     metric = round(metric / 100.0, 2)
     final_soc = round(final_soc, 2)
     final_iboost = round(final_iboost, 2)
@@ -574,7 +574,7 @@ def simple_scenario(
         failed = True
 
     if failed:
-        prediction.run_prediction(charge_limit_best, charge_window_best, discharge_window_best, discharge_limit_best, pv10, end_record=(my_predbat.end_record), save="test")
+        prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save="test")
         plot(name, prediction)
     return failed
 
@@ -588,10 +588,10 @@ class DummyInverter:
         self.log = log
         self.id = inverter_id
 
-    def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
+    def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         self.soc_target = soc
         self.isCharging = isCharging
-        self.isDischarging = isDischarging
+        self.isExporting = isExporting
 
 
 def run_inverter_multi_test(
@@ -600,7 +600,7 @@ def run_inverter_multi_test(
     inverter,
     soc,
     isCharging=False,
-    isDischarging=False,
+    isExporting=False,
     battery_rate_max_charge=1.0,
     battery_rate_max_charge_all=1.0,
     soc_max=100.0,
@@ -619,7 +619,7 @@ def run_inverter_multi_test(
     my_predbat.soc_kw = soc_kw_all
     my_predbat.battery_rate_max_charge = battery_rate_max_charge_all
 
-    my_predbat.adjust_battery_target_multi(inverter, soc, isCharging, isDischarging)
+    my_predbat.adjust_battery_target_multi(inverter, soc, isCharging, isExporting)
     if assert_soc != inverter.soc_target:
         print("ERROR: SOC {} should be {}".format(inverter.soc_target, assert_soc))
         failed = True
@@ -634,7 +634,7 @@ class ActiveTestInverter:
         self.soc_target = -1
         self.id = id
         self.isCharging = False
-        self.isDischarging = False
+        self.isExporting = False
         self.pause_charge = False
         self.pause_discharge = False
         self.reserve = -1
@@ -642,7 +642,7 @@ class ActiveTestInverter:
         self.idle_charge_end = -1
         self.idle_discharge_start = -1
         self.idle_discharge_end = -1
-        self.force_discharge = False
+        self.force_export = False
         self.discharge_start_time_minutes = -1
         self.discharge_end_time_minutes = -1
         self.immediate_charge_soc_target = -1
@@ -683,12 +683,12 @@ class ActiveTestInverter:
         self.immediate_charge_soc_target = target_soc
         self.immediate_charge_soc_freeze = freeze
 
-    def adjust_discharge_immediate(self, target_soc, freeze=False):
+    def adjust_export_immediate(self, target_soc, freeze=False):
         self.immediate_discharge_soc_target = target_soc
         self.immediate_discharge_soc_freeze = freeze
 
-    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
-        self.force_discharge = force_discharge
+    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
+        self.force_export = force_export
         if new_start_time is not None:
             delta = new_start_time - self.midnight_utc
             self.discharge_start_time_minutes = delta.total_seconds() / 60
@@ -702,8 +702,8 @@ class ActiveTestInverter:
         self.idle_discharge_start = discharge_start
         self.idle_discharge_end = discharge_end
 
-    def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
-        self.force_discharge = force_discharge
+    def adjust_inverter_mode(self, force_export, changed_start_end=False):
+        self.force_export = force_export
         self.changed_start_end = changed_start_end
 
     def adjust_reserve(self, reserve):
@@ -713,10 +713,10 @@ class ActiveTestInverter:
         self.pause_charge = pause_charge
         self.pause_discharge = pause_discharge
 
-    def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
+    def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         self.soc_target = soc
         self.isCharging = isCharging
-        self.isDischarging = isDischarging
+        self.isExporting = isExporting
 
     def adjust_charge_rate(self, charge_rate):
         self.charge_rate = charge_rate
@@ -730,19 +730,19 @@ def run_execute_test(
     name,
     charge_window_best=[],
     charge_limit_best=[],
-    discharge_window_best=[],
-    discharge_limits_best=[],
+    export_window_best=[],
+    export_limits_best=[],
     car_slot=[],
     soc_kw=0,
     read_only=False,
     set_soc_enable=True,
     set_charge_window=False,
-    set_discharge_window=False,
+    set_export_window=False,
     assert_charge_time_enable=False,
-    assert_force_discharge=False,
+    assert_force_export=False,
     assert_pause_charge=False,
     assert_pause_discharge=False,
-    assert_status="Idle",
+    assert_status="Demand",
     assert_charge_start_time_minutes=-1,
     assert_charge_end_time_minutes=-1,
     assert_discharge_start_time_minutes=-1,
@@ -791,14 +791,14 @@ def run_execute_test(
     my_predbat.charge_window_best = charge_window_best
     my_predbat.charge_limit_best = charge_limit_best
     my_predbat.charge_limit_percent_best = [calc_percent_limit(x, my_predbat.soc_max) for x in charge_limit_best]
-    my_predbat.discharge_window_best = discharge_window_best
-    my_predbat.discharge_limits_best = discharge_limits_best
+    my_predbat.export_window_best = export_window_best
+    my_predbat.export_limits_best = export_limits_best
     my_predbat.set_charge_window = set_charge_window
-    my_predbat.set_discharge_window = set_discharge_window
+    my_predbat.set_export_window = set_export_window
     my_predbat.set_soc_enable = set_soc_enable
     my_predbat.set_reserve_enable = set_reserve_enable
     my_predbat.set_reserve_hold = True
-    my_predbat.set_discharge_freeze = True
+    my_predbat.set_export_freeze = True
     my_predbat.set_discharge_during_charge = set_discharge_during_charge
     my_predbat.car_charging_from_battery = False
 
@@ -811,8 +811,8 @@ def run_execute_test(
         if assert_charge_time_enable != inverter.charge_time_enable:
             print("ERROR: Inverter {} Charge time enable should be {} got {}".format(inverter.id, assert_charge_time_enable, inverter.charge_time_enable))
             failed = True
-        if assert_force_discharge != inverter.force_discharge:
-            print("ERROR: Inverter {} Force discharge should be {} got {}".format(inverter.id, assert_force_discharge, inverter.force_discharge))
+        if assert_force_export != inverter.force_export:
+            print("ERROR: Inverter {} Force discharge should be {} got {}".format(inverter.id, assert_force_export, inverter.force_export))
             failed = True
         if assert_pause_charge != inverter.pause_charge:
             print("ERROR: Inverter {} Pause charge should be {} got {}".format(inverter.id, assert_pause_charge, inverter.pause_charge))
@@ -826,10 +826,10 @@ def run_execute_test(
         if assert_charge_time_enable and assert_charge_end_time_minutes != inverter.charge_end_time_minutes:
             print("ERROR: Inverter {} Charge end time should be {} got {}".format(inverter.id, assert_charge_end_time_minutes, inverter.charge_end_time_minutes))
             failed = True
-        if assert_force_discharge and assert_discharge_start_time_minutes != inverter.discharge_start_time_minutes:
+        if assert_force_export and assert_discharge_start_time_minutes != inverter.discharge_start_time_minutes:
             print("ERROR: Inverter {} Discharge start time should be {} got {}".format(inverter.id, assert_discharge_start_time_minutes, inverter.discharge_start_time_minutes))
             failed = True
-        if assert_force_discharge and assert_discharge_end_time_minutes != inverter.discharge_end_time_minutes:
+        if assert_force_export and assert_discharge_end_time_minutes != inverter.discharge_end_time_minutes:
             print("ERROR: Inverter {} Discharge end time should be {} got {}".format(inverter.id, assert_discharge_end_time_minutes, inverter.discharge_end_time_minutes))
             failed = True
         if assert_charge_rate != inverter.charge_rate:
@@ -854,14 +854,14 @@ def run_execute_test(
         if assert_status in ["Hold charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
-        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Discharging", "Freeze discharging"] else 0
-        if not set_discharge_window:
+        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 0
+        if not set_export_window:
             assert_soc_target_force_dis = -1
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
-            print("ERROR: Inverter {} Immediate discharge SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
+            print("ERROR: Inverter {} Immediate export SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
             failed = True
-        if assert_status in ["Freeze discharging"] and inverter.immediate_discharge_soc_freeze != True:
-            print("ERROR: Inverter {} Immediate discharge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
+        if assert_status in ["Freeze exporting"] and inverter.immediate_discharge_soc_freeze != True:
+            print("ERROR: Inverter {} Immediate export SOC freeze should be True got {}".format(inverter.id, inverter.immediate_discharge_soc_freeze))
             failed = True
 
     return failed
@@ -882,16 +882,16 @@ def run_execute_tests(my_predbat):
     charge_limit_best = [10, 10]
     charge_limit_best2 = [5]
     charge_limit_best_frz = [1]
-    discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
-    discharge_window_best2 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 90, "average": 1}]
-    discharge_window_best3 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 90, "average": 1}]
-    discharge_window_best4 = [{"start": my_predbat.minutes_now + 15, "end": my_predbat.minutes_now + 90, "average": 1}]
-    discharge_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
-    discharge_window_best6 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
-    discharge_window_best7 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
-    discharge_limits_best = [0]
-    discharge_limits_best2 = [50]
-    discharge_limits_best_frz = [99]
+    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+    export_window_best2 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now + 90, "average": 1}]
+    export_window_best3 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 90, "average": 1}]
+    export_window_best4 = [{"start": my_predbat.minutes_now + 15, "end": my_predbat.minutes_now + 90, "average": 1}]
+    export_window_best5 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
+    export_window_best6 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
+    export_window_best7 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
+    export_limits_best = [0]
+    export_limits_best2 = [50]
+    export_limits_best_frz = [99]
 
     inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
     my_predbat.inverters = inverters
@@ -899,18 +899,18 @@ def run_execute_tests(my_predbat):
     failed = False
     failed |= run_execute_test(my_predbat, "off")
     my_predbat.holiday_days_left = 2
-    failed |= run_execute_test(my_predbat, "off_holiday", assert_status="Idle (Holiday)")
+    failed |= run_execute_test(my_predbat, "off_holiday", assert_status="Demand (Holiday)")
     my_predbat.holiday_days_left = 0
 
     failed |= run_execute_test(my_predbat, "no_charge", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best)
-    failed |= run_execute_test(my_predbat, "no_charge2", set_charge_window=True, set_discharge_window=True, set_discharge_during_charge=False)
-    failed |= run_execute_test(my_predbat, "no_charge_future", set_charge_window=True, set_discharge_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best)
-    failed |= run_execute_test(my_predbat, "no_charge_future_hybrid", set_charge_window=True, set_discharge_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best, inverter_hybrid=True)
+    failed |= run_execute_test(my_predbat, "no_charge2", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False)
+    failed |= run_execute_test(my_predbat, "no_charge_future", set_charge_window=True, set_export_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best)
+    failed |= run_execute_test(my_predbat, "no_charge_future_hybrid", set_charge_window=True, set_export_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best, inverter_hybrid=True)
     failed |= run_execute_test(
         my_predbat,
         "no_charge_future_no_soc",
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         charge_window_best=charge_window_best4,
         charge_limit_best=charge_limit_best,
         has_target_soc=False,
@@ -923,7 +923,7 @@ def run_execute_tests(my_predbat):
         my_predbat,
         "no_charge_future_no_enable_time",
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         charge_window_best=charge_window_best4,
         charge_limit_best=charge_limit_best,
         has_target_soc=True,
@@ -936,7 +936,7 @@ def run_execute_tests(my_predbat):
         my_predbat,
         "no_charge_future_no_enable_time_hybrid",
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         charge_window_best=charge_window_best4,
         charge_limit_best=charge_limit_best,
         has_target_soc=True,
@@ -951,7 +951,7 @@ def run_execute_tests(my_predbat):
     my_predbat.iboost_enable = True
     my_predbat.iboost_prevent_discharge = True
     my_predbat.iboost_running_full = True
-    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_discharge_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost", assert_discharge_rate=0)
+    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost", assert_discharge_rate=0)
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_iboost",
@@ -959,7 +959,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         assert_charge_time_enable=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
         assert_pause_discharge=True,
         assert_status="Freeze charging, Hold for iBoost",
@@ -972,7 +972,7 @@ def run_execute_tests(my_predbat):
         return failed
 
     my_predbat.iboost_prevent_discharge = False
-    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_discharge_window=True)
+    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True)
     my_predbat.iboost_running_full = False
     if failed:
         return failed
@@ -984,7 +984,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -999,7 +999,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 12 * 60,
@@ -1014,7 +1014,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1030,7 +1030,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1046,7 +1046,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1063,7 +1063,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
@@ -1079,7 +1079,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Hold charging",
         soc_kw=5,
         assert_charge_start_time_minutes=-1,
@@ -1096,7 +1096,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
@@ -1110,7 +1110,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         soc_kw=4,
         assert_charge_start_time_minutes=-1,
@@ -1128,7 +1128,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Hold charging",
         soc_kw=5,
         assert_charge_start_time_minutes=-1,
@@ -1146,7 +1146,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best2,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Hold charging",
         soc_kw=5,
         assert_charge_start_time_minutes=-1,
@@ -1172,7 +1172,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1190,7 +1190,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 23 * 60,
@@ -1208,7 +1208,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=24 * 60 - 1,
@@ -1226,7 +1226,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1238,7 +1238,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1250,7 +1250,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         inverter_charge_time_minutes_start=-24 * 60,
         assert_charge_start_time_minutes=my_predbat.minutes_now,
@@ -1263,8 +1263,8 @@ def run_execute_tests(my_predbat):
     my_predbat.inverters = inverters
 
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
-    failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_discharge_window=True)
-    failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_discharge_window=True, read_only=True, assert_status="Read-Only")
+    failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
+    failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only")
     failed |= run_execute_test(
         my_predbat,
         "charge3",
@@ -1273,7 +1273,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1286,7 +1286,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1299,7 +1299,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1318,7 +1318,7 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
         assert_status="Hold charging",
     )
@@ -1331,7 +1331,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best2,
         assert_charge_time_enable=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=5,
         assert_pause_discharge=True,
         assert_status="Hold charging",
@@ -1349,7 +1349,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         assert_charge_time_enable=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
         assert_pause_discharge=True,
         assert_status="Freeze charging",
@@ -1367,7 +1367,7 @@ def run_execute_tests(my_predbat):
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
         assert_pause_discharge=True,
         assert_status="Freeze charging",
@@ -1391,7 +1391,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         assert_charge_time_enable=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=5,
         assert_pause_discharge=True,
         assert_status="Freeze charging",
@@ -1410,7 +1410,7 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=5,
         assert_pause_discharge=True,
         assert_status="Freeze charging",
@@ -1426,9 +1426,9 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    failed |= run_execute_test(my_predbat, "charge_freeze3", charge_window_best=charge_window_best2, charge_limit_best=charge_limit_best_frz, assert_charge_time_enable=False, set_charge_window=True, set_discharge_window=True, soc_kw=5)
+    failed |= run_execute_test(my_predbat, "charge_freeze3", charge_window_best=charge_window_best2, charge_limit_best=charge_limit_best_frz, assert_charge_time_enable=False, set_charge_window=True, set_export_window=True, soc_kw=5)
 
-    failed |= run_execute_test(my_predbat, "no_charge4", set_charge_window=True, set_discharge_window=True)
+    failed |= run_execute_test(my_predbat, "no_charge4", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(
         my_predbat,
         "charge_later",
@@ -1436,8 +1436,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
     )
@@ -1451,8 +1451,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         inverter_hybrid=True,
@@ -1467,8 +1467,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         has_target_soc=False,
@@ -1484,8 +1484,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best_frz,
         assert_charge_time_enable=False,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         has_target_soc=False,
@@ -1501,8 +1501,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         has_charge_enable_time=False,
@@ -1517,8 +1517,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         has_charge_enable_time=False,
@@ -1535,8 +1535,8 @@ def run_execute_tests(my_predbat):
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         has_charge_enable_time=False,
@@ -1546,36 +1546,36 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    failed |= run_execute_test(my_predbat, "charge_later2", charge_window_best=charge_window_best6, charge_limit_best=charge_limit_best, assert_charge_time_enable=False, set_charge_window=True, set_discharge_window=True, assert_status="Idle")
-    failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_discharge_window=True, assert_immediate_soc_target=0)
+    failed |= run_execute_test(my_predbat, "charge_later2", charge_window_best=charge_window_best6, charge_limit_best=charge_limit_best, assert_charge_time_enable=False, set_charge_window=True, set_export_window=True, assert_status="Demand")
+    failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True, assert_immediate_soc_target=0)
     # Reset inverters
     inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
     my_predbat.inverters = inverters
 
-    failed |= run_execute_test(my_predbat, "no_discharge", discharge_window_best=discharge_window_best, discharge_limits_best=discharge_limits_best)
+    failed |= run_execute_test(my_predbat, "no_discharge", export_window_best=export_window_best, export_limits_best=export_limits_best)
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge2", discharge_window_best=discharge_window_best, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0, assert_status="Hold discharging")
+    failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge3a", discharge_window_best=discharge_window_best3, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0)
+    failed |= run_execute_test(my_predbat, "no_discharge3a", export_window_best=export_window_best3, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge3b", discharge_window_best=discharge_window_best6, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0)
+    failed |= run_execute_test(my_predbat, "no_discharge3b", export_window_best=export_window_best6, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
     if failed:
         return failed
-    failed |= run_execute_test(my_predbat, "no_discharge4", discharge_window_best=discharge_window_best4, discharge_limits_best=discharge_limits_best, set_charge_window=True, set_discharge_window=True, soc_kw=0)
+    failed |= run_execute_test(my_predbat, "no_discharge4", export_window_best=export_window_best4, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0)
     if failed:
         return failed
     failed |= run_execute_test(
         my_predbat,
         "no_discharge_car",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=0,
-        assert_status="Hold discharging, Hold for car",
+        assert_status="Hold exporting, Hold for car",
         car_slot=charge_window_best,
         assert_pause_discharge=True,
         assert_discharge_rate=0,
@@ -1586,15 +1586,15 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_long",
-        discharge_window_best=discharge_window_best7,
-        discharge_limits_best=discharge_limits_best,
+        export_window_best=export_window_best7,
+        export_limits_best=export_limits_best,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 12 * 60 + 1,
         soc_kw=10,
-        assert_status="Discharging",
-        assert_force_discharge=True,
+        assert_status="Exporting",
+        assert_force_export=True,
         assert_immediate_soc_target=0,
     )
     if failed:
@@ -1603,13 +1603,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
@@ -1620,13 +1620,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge2_no_reserve",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best2,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best2,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=50,
         assert_soc_target=50,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
@@ -1639,13 +1639,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge2_no_reserve_no_pause",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best2,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best2,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=50,
         assert_soc_target=50,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
@@ -1659,13 +1659,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge2",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best2,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best2,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=50,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
@@ -1677,13 +1677,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge3",
-        discharge_window_best=discharge_window_best2,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best2,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 90 + 1,
@@ -1694,13 +1694,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_midnight1",
-        discharge_window_best=discharge_window_best5,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best5,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 23 * 60 + 1,
@@ -1715,13 +1715,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_midnight2",
-        discharge_window_best=discharge_window_best5,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best5,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=24 * 60 - 1,
@@ -1735,13 +1735,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_with_rate",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_charge_rate=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
@@ -1753,13 +1753,13 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_freeze",
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best_frz,
-        assert_force_discharge=False,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best_frz,
+        assert_force_export=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=9,
-        assert_status="Freeze discharging",
+        assert_status="Freeze exporting",
         assert_pause_charge=True,
         assert_charge_rate=0,
         assert_immediate_soc_target=90,
@@ -1771,19 +1771,19 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat,
         "discharge_freeze2",
-        discharge_window_best=discharge_window_best2,
-        discharge_limits_best=discharge_limits_best_frz,
-        assert_force_discharge=False,
+        export_window_best=export_window_best2,
+        export_limits_best=export_limits_best_frz,
+        assert_force_export=False,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=9,
-        assert_status="Freeze discharging",
+        assert_status="Freeze exporting",
         assert_pause_charge=True,
         assert_charge_rate=0,
         assert_immediate_soc_target=90,
     )
-    failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_discharge_window=True)
-    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_discharge_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=0)
+    failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
+    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=0)
     failed |= run_execute_test(
         my_predbat,
         "car_charge",
@@ -1793,7 +1793,7 @@ def run_execute_tests(my_predbat):
         car_slot=charge_window_best,
         assert_charge_time_enable=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -1802,13 +1802,13 @@ def run_execute_tests(my_predbat):
         my_predbat,
         "car_discharge",
         car_slot=charge_window_best,
-        discharge_window_best=discharge_window_best,
-        discharge_limits_best=discharge_limits_best,
-        assert_force_discharge=True,
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
         set_charge_window=True,
-        set_discharge_window=True,
+        set_export_window=True,
         soc_kw=10,
-        assert_status="Discharging",
+        assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
@@ -1818,10 +1818,10 @@ def run_execute_tests(my_predbat):
     my_predbat.reset_inverter()
     failed |= run_execute_test(
         my_predbat,
-        "idle_after_reset",
+        "demand_after_reset",
         set_charge_window=True,
-        set_discharge_window=True,
-        assert_status="Idle",
+        set_export_window=True,
+        assert_status="Demand",
         assert_reserve=0,
         assert_immediate_soc_target=0,
         assert_soc_target=100,
@@ -1846,11 +1846,11 @@ def run_inverter_multi_tests(my_predbat):
     return failed
 
 
-def run_window_sort_test(name, my_predbat, charge_window_best, discharge_window_best, expected=[], inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
+def run_window_sort_test(name, my_predbat, charge_window_best, export_window_best, expected=[], inverter_loss=1.0, metric_battery_cycle=0.0, battery_loss=1.0, battery_loss_discharge=1.0):
     failed = False
     end_record = my_predbat.forecast_minutes
     my_predbat.calculate_best_charge = True
-    my_predbat.calculate_best_discharge = True
+    my_predbat.calculate_best_export = True
     my_predbat.inverter_loss = inverter_loss
     my_predbat.metric_battery_cycle = metric_battery_cycle
     my_predbat.battery_loss = battery_loss
@@ -1859,9 +1859,9 @@ def run_window_sort_test(name, my_predbat, charge_window_best, discharge_window_
     print("Starting window sort test {}".format(name))
 
     record_charge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, charge_window_best), 1)
-    record_discharge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, discharge_window_best), 1)
+    record_export_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, export_window_best), 1)
 
-    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window_best[:record_charge_windows], discharge_window_best[:record_discharge_windows])
+    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window_best[:record_charge_windows], export_window_best[:record_export_windows])
 
     results = []
     for price_key in price_set:
@@ -1881,7 +1881,7 @@ def run_window_sort_test(name, my_predbat, charge_window_best, discharge_window_
                 print("ERROR: Expected item {} is {} but got {}".format(n, expected[n], results[n]))
                 failed = True
     if failed:
-        print("Inputs: {} {}".format(charge_window_best, discharge_window_best))
+        print("Inputs: {} {}".format(charge_window_best, export_window_best))
         print("Results: {}".format(results))
 
     return failed
@@ -1891,10 +1891,10 @@ def run_intersect_window_tests(my_predbat):
     print("**** Running intersect window tests ****")
     failed = False
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
-    discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
+    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
     charge_limit_best = [4]
-    discharge_limit_best = [2]
-    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, discharge_limit_best, discharge_window_best)
+    export_limit_best = [2]
+    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best)
     if len(new_window_best) != 0:
         print("ERROR: Expected no windows but got {}".format(new_window_best))
         failed = True
@@ -1914,18 +1914,18 @@ def run_window_sort_tests(my_predbat):
     failed |= run_window_sort_test("single_charge", my_predbat, charge_window_best, [], expected=["c_0_10.0"])
     failed |= run_window_sort_test("single_charge_loss", my_predbat, charge_window_best, [], expected=["c_0_20.0"], inverter_loss=0.5)
 
-    discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate}]
-    failed |= run_window_sort_test("single_discharge", my_predbat, [], discharge_window_best, expected=["d_0_5.0"])
-    failed |= run_window_sort_test("single_charge_discharge", my_predbat, charge_window_best, discharge_window_best, expected=["c_0_10.0", "d_0_5.0"])
-    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, discharge_window_best, expected=["c_0_20.0", "d_0_2.5"], inverter_loss=0.5)
-    discharge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 50.0}]
-    failed |= run_window_sort_test("single_charge_discharge_loss2", my_predbat, charge_window_best, discharge_window_best, expected=["d_0_25.0", "c_0_20.0"], inverter_loss=0.5)
-    failed |= run_window_sort_test("single_charge_discharge_loss3", my_predbat, charge_window_best, discharge_window_best, expected=["c_0_200.0", "d_0_25.0"], inverter_loss=0.5, battery_loss=0.1)
+    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate}]
+    failed |= run_window_sort_test("single_discharge", my_predbat, [], export_window_best, expected=["d_0_5.0"])
+    failed |= run_window_sort_test("single_charge_discharge", my_predbat, charge_window_best, export_window_best, expected=["c_0_10.0", "d_0_5.0"])
+    failed |= run_window_sort_test("single_charge_discharge_loss", my_predbat, charge_window_best, export_window_best, expected=["c_0_20.0", "d_0_2.5"], inverter_loss=0.5)
+    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 50.0}]
+    failed |= run_window_sort_test("single_charge_discharge_loss2", my_predbat, charge_window_best, export_window_best, expected=["d_0_25.0", "c_0_20.0"], inverter_loss=0.5)
+    failed |= run_window_sort_test("single_charge_discharge_loss3", my_predbat, charge_window_best, export_window_best, expected=["c_0_200.0", "d_0_25.0"], inverter_loss=0.5, battery_loss=0.1)
     failed |= run_window_sort_test(
         "single_charge_discharge_loss4",
         my_predbat,
         charge_window_best,
-        discharge_window_best,
+        export_window_best,
         expected=["c_0_200.0", "d_0_2.5"],
         inverter_loss=0.5,
         battery_loss=0.1,
@@ -1937,15 +1937,15 @@ def run_window_sort_tests(my_predbat):
         "single_charge_discharge2",
         my_predbat,
         charge_window_best,
-        discharge_window_best,
+        export_window_best,
         expected=["c_1_400.0", "c_0_200.0", "d_0_2.5"],
         inverter_loss=0.5,
         battery_loss=0.1,
         battery_loss_discharge=0.1,
     )
-    discharge_window_best.append({"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate * 3})
-    failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, discharge_window_best, expected=["d_0_50.0", "c_1_20.0", "d_1_15.0", "c_0_10.0"])
-    failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, discharge_window_best, expected=["d_0_49.0", "c_1_21.0", "d_1_14.0", "c_0_11.0"], metric_battery_cycle=1.0)
+    export_window_best.append({"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate * 3})
+    failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, export_window_best, expected=["d_0_50.0", "c_1_20.0", "d_1_15.0", "c_0_10.0"])
+    failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, export_window_best, expected=["d_0_49.0", "c_1_21.0", "d_1_14.0", "c_0_11.0"], metric_battery_cycle=1.0)
 
     return failed
 
@@ -1986,9 +1986,9 @@ def run_optimise_levels_tests(my_predbat):
     # failed |= run_optimise_levels("dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 100], load_amount=1.0, pv_amount=1.0, expect_best_price=5.0 / 0.9, inverter_loss=0.9)
 
     # Discharge
-    discharge_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
-    # failed |= run_optimise_levels("discharge", my_predbat, charge_window_best=charge_window_best, discharge_window_best=discharge_window_best, expect_charge_limit=[0, 100], expect_discharge_limit=[0], load_amount=0, pv_amount=0, expect_best_price=5.0, inverter_loss=1, expect_metric=-2.5)
-    # failed |= run_optimise_levels("discharge_loss", my_predbat, charge_window_best=charge_window_best, discharge_window_best=discharge_window_best, expect_charge_limit=[0, 100], expect_discharge_limit=[0], load_amount=0, pv_amount=0, expect_best_price=5.0 / 0.9, inverter_loss=0.9)
+    export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
+    # failed |= run_optimise_levels("discharge", my_predbat, charge_window_best=charge_window_best, export_window_best=export_window_best, expect_charge_limit=[0, 100], expect_export_limit=[0], load_amount=0, pv_amount=0, expect_best_price=5.0, inverter_loss=1, expect_metric=-2.5)
+    # failed |= run_optimise_levels("discharge_loss", my_predbat, charge_window_best=charge_window_best, export_window_best=export_window_best, expect_charge_limit=[0, 100], expect_export_limit=[0], load_amount=0, pv_amount=0, expect_best_price=5.0 / 0.9, inverter_loss=0.9)
 
     return failed
 
@@ -1997,11 +1997,11 @@ def run_optimise_levels(
     name,
     my_predbat,
     charge_window_best=[],
-    discharge_window_best=[],
+    export_window_best=[],
     pv_amount=0,
     load_amount=0,
     expect_charge_limit=[],
-    expect_discharge_limit=[],
+    expect_export_limit=[],
     expect_best_price=0.0,
     rate_import=10.0,
     rate_export=5.0,
@@ -2014,7 +2014,7 @@ def run_optimise_levels(
     end_record = my_predbat.forecast_minutes
     failed = False
     my_predbat.calculate_best_charge = True
-    my_predbat.calculate_best_discharge = True
+    my_predbat.calculate_best_export = True
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
     my_predbat.inverter_hybrid = hybrid
@@ -2022,7 +2022,7 @@ def run_optimise_levels(
 
     reset_rates(my_predbat, rate_import, rate_export)
     update_rates_import(my_predbat, charge_window_best)
-    update_rates_export(my_predbat, discharge_window_best)
+    update_rates_export(my_predbat, export_window_best)
 
     pv_step = {}
     load_step = {}
@@ -2033,21 +2033,21 @@ def run_optimise_levels(
     my_predbat.debug_enable = True
 
     charge_limit_best = [0 for n in range(len(charge_window_best))]
-    discharge_limits_best = [100 for n in range(len(discharge_window_best))]
+    export_limits_best = [100 for n in range(len(export_window_best))]
 
     record_charge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, charge_window_best), 1)
-    record_discharge_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, discharge_window_best), 1)
+    record_export_windows = max(my_predbat.max_charge_windows(end_record + my_predbat.minutes_now, export_window_best), 1)
     print("Starting optimise levels test {}".format(name))
 
-    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window_best[:record_charge_windows], discharge_window_best[:record_discharge_windows])
+    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window_best[:record_charge_windows], export_window_best[:record_export_windows])
 
     my_predbat.optimise_charge_windows_reset(reset_all=True)
     my_predbat.optimise_charge_windows_manual()
     (
         charge_limit_best,
-        discharge_limits_best,
+        export_limits_best,
         best_price,
-        best_price_discharge,
+        best_price_export,
         best_metric,
         best_cost,
         best_keep,
@@ -2061,11 +2061,11 @@ def run_optimise_levels(
         price_links,
         window_index,
         record_charge_windows,
-        record_discharge_windows,
+        record_export_windows,
         charge_limit_best,
         charge_window_best,
-        discharge_window_best,
-        discharge_limits_best,
+        export_window_best,
+        export_limits_best,
         end_record=end_record,
         fast=True,
         quiet=True,
@@ -2078,13 +2078,13 @@ def run_optimise_levels(
             if expect_charge_limit[n] != charge_limit_best[n]:
                 print("ERROR: Expected charge limit {} is {} but got {}".format(n, expect_charge_limit[n], charge_limit_best[n]))
                 failed = True
-    if len(expect_discharge_limit) != len(discharge_limits_best):
-        print("ERROR: Expected {} discharge limits but got {}".format(len(expect_discharge_limit), len(discharge_limits_best)))
+    if len(expect_export_limit) != len(export_limits_best):
+        print("ERROR: Expected {} discharge limits but got {}".format(len(expect_export_limit), len(export_limits_best)))
         failed = True
     else:
-        for n in range(len(expect_discharge_limit)):
-            if expect_discharge_limit[n] != discharge_limits_best[n]:
-                print("ERROR: Expected discharge limit {} is {} but got {}".format(n, expect_discharge_limit[n], discharge_limits_best[n]))
+        for n in range(len(expect_export_limit)):
+            if expect_export_limit[n] != export_limits_best[n]:
+                print("ERROR: Expected discharge limit {} is {} but got {}".format(n, expect_export_limit[n], export_limits_best[n]))
                 failed = True
 
     if abs(expect_best_price - best_price) >= 0.1:
@@ -2103,11 +2103,11 @@ def run_optimise_levels(
             price_links,
             window_index,
             record_charge_windows,
-            record_discharge_windows,
+            record_export_windows,
             charge_limit_best,
             charge_window_best,
-            discharge_window_best,
-            discharge_limits_best,
+            export_window_best,
+            export_limits_best,
             end_record=end_record,
             fast=True,
             quiet=True,
@@ -2115,7 +2115,7 @@ def run_optimise_levels(
         )
         my_predbat.log = old_log
         print("Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import))
-        print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, discharge_limits_best, expect_discharge_limit))
+        print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
 
     return failed
 
@@ -3222,7 +3222,7 @@ def run_model_tests(my_predbat):
         discharge=0,
         battery_size=100,
         iboost_enable=True,
-        iboost_on_discharge=True,
+        iboost_on_export=True,
         export_limit=1,
         assert_final_iboost=24,
         assert_iboost_running=True,
@@ -3239,7 +3239,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         battery_size=100,
         iboost_enable=True,
-        iboost_on_discharge=True,
+        iboost_on_export=True,
         iboost_prevent_discharge=False,
         export_limit=1,
         assert_final_iboost=24,
@@ -3257,7 +3257,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         battery_size=100,
         iboost_enable=True,
-        iboost_on_discharge=True,
+        iboost_on_export=True,
         iboost_prevent_discharge=True,
         export_limit=1,
         assert_final_iboost=24,

@@ -28,10 +28,11 @@ It uses the solar production forecast from Solcast combined with your historical
 - **Grid** - Your electric supply outside the house
 - **Import** - Electricity drawn from the grid to be used in the home or to charge the battery
 - **Export** - Electricity from your home from the battery or solar which is sent to the grid
-- **Eco** - ECO Mode is when the battery covers the house load and charges from solar, to avoid importing or exporting.
-- **Charge** - When your battery is charging, in Predbat this refers to force charge (from the grid).
-- **Discharge** - When your battery is discharging, in Predbat this refers to force discharge (or force export to grid).
-- **Discharge Limit** - When your battery is being force discharged (exported) the discharge limit is the % battery level where the discharge will stop if reached.
+- **Demand** - Demand Mode is when the battery covers the house load and charges from solar, to avoid importing or exporting (some systems call this ECO Mode).
+- **Charging** - When your battery is charging, in Predbat this refers to force charge (from the grid).
+- **Discharge** - The opposite of charge, when the battery is discharging.
+- **Exporting** - When your battery is force discharging to create an export, in Predbat this refers to force export.
+- **Export Limit** - When your battery is being force exported the export limit is the % battery level where the discharge will stop if reached.
 - **PV** - Solar power that is generated in your home. Can also refer to a prediction of the solar for the day, by default is the 50% scenario (most likely generation).
 - **Inverter** - The box that converts DC energy from solar or from your battery into AC power for your home and the grid.
 The inverter also converts AC power from the grid into DC to charge a battery.
@@ -52,7 +53,7 @@ The inverter also converts AC power from the grid into DC to charge a battery.
 - **Charge Limit Base** - This is the target charge % in the Base plan (what is currently set on your inverter)
 - **Best10** - The best plan but with the 10% outcome for Solar and Load (worst case)
 - **Charge Limit Best** - This is the target charge % in the Best plan (what is currently set on your inverter)
-- **Discharge Limit Best** - This is the target discharge % in the Best plan.
+- **Export Limit Best** - This is the target to force export to in % in the Best plan.
 - **Best SOC Keep** - The amount of battery you want to keep in the plan that Predbat has made
 
 ### Predbat modes
@@ -68,7 +69,7 @@ Once you are ready for Predbat to take control move this setting to one of the a
 
 The current Predbat status is reported in the Home Assistant entity **predbat.status**:
 
-- **Idle** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be
+- **Demand** - This is the default, the load will be covered by solar and/or battery. Excess solar will charge the battery or be
 exported if the battery is full. This is described as 'Eco' Mode for GivEnergy inverters but other inverters use different terminology.
 
 - **Charging** - The battery charges from the grid and the grid also covers any load. Solar power will also be used to charge the battery.
@@ -81,11 +82,14 @@ but if there is excess Solar power above house load, the excess solar will be us
 
 - **No Charge** - A charge where the target SoC % is lower than the current battery SoC level so there will be no charging unless the usage is unexpectedly high.
 
-- **Discharging** - The battery is being force-discharged. The house load will be covered by the battery and any excess is exported to the grid. Any solar generated will be exported.
+- **Exporting** - The battery is being force-discharged. The house load will be covered by the battery and any excess is exported to the grid. Any solar generated will be exported.
 
-- **Freeze discharging** - The battery is in Discharge mode, the same as Idle (Eco) mode, but with charging disabled.
+- **Freeze exporting** - The battery is in demand mode, but with charging disabled.
 The battery or solar covers the house load. As charging is disabled, if there is excess solar generated, the current SoC level will be held and the excess solar will be exported.
 If there is a shortfall of generated solar power to meet house load, the battery will discharge to meet the extra load.
+
+- **Hold exporting** - The plan was to force export but the minimum battery level was reached and thus the battery is kept in Demand mode.
+If the battery level again gets above the threshold it will be changed back to Export mode.
 
 - **Calibration** - The inverter is calibrating the batteries.
 On GivEnergy systems the battery state of charge (SoC) level has to be calibrated by performing a full battery discharge then a full charge

@@ -43,9 +43,9 @@ class Inverter:
         timed = datetime.strptime("05:01:00", "%H:%M:%S")
         self.adjust_charge_window(timeb, timed, minutes_now)
         self.adjust_charge_window(timea, timec, minutes_now)
-        self.adjust_force_discharge(False, timec, timed)
-        self.adjust_force_discharge(True, timea, timeb)
-        self.adjust_force_discharge(False)
+        self.adjust_force_export(False, timec, timed)
+        self.adjust_force_export(True, timea, timeb)
+        self.adjust_force_export(False)
         self.base.log("======= INVERTER CONTROL SELF TEST END ========")
 
         if self.rest_api:
@@ -105,8 +105,8 @@ class Inverter:
         self.charge_start_time_minutes = self.base.forecast_minutes
         self.charge_start_end_minutes = self.base.forecast_minutes
         self.charge_window = []
-        self.discharge_window = []
-        self.discharge_limits = []
+        self.export_window = []
+        self.export_limits = []
         self.current_charge_limit = 0.0
         self.soc_kw = 0
         self.soc_percent = 0
@@ -522,9 +522,9 @@ class Inverter:
                             discharge
                             and soc_percent.get(minute - 1, 0) == (data_point - 1)
                             and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") == "Discharging"
-                            and predbat_status.get(minute, "") == "Discharging"
-                            and predbat_status.get(minute + 1, "") == "Discharging"
+                            and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
+                            and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
+                            and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
                             and charge_rate.get(minute - 1, 0) == max_power
                             and charge_rate.get(minute, 0) == max_power
                             and battery_power.get(minute, 0) > 0
@@ -536,7 +536,7 @@ class Inverter:
                                 this_soc = soc_percent.get(target_minute, 0)
                                 if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) >= 0):
                                     break
-                                if discharge and (predbat_status.get(target_minute, "") != "Discharging" or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
+                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) != max_power or battery_power.get(minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -714,7 +714,7 @@ class Inverter:
             self.charge_window                 list of dicts
             self.discharge_start_time_minutes  int
             self.discharge_end_time_minutes    int
-            self.discharge_window              list of dicts
+            self.export_window              list of dicts
             self.battery_voltage               float   V
 
         Output Entities:
@@ -894,7 +894,7 @@ class Inverter:
                 self.base.log("Inverter {} Charge settings: timed charged is disabled, power {} kW".format(self.id, round(self.charge_rate_now * 60.0, 2)))
 
         # Construct discharge window from GivTCP settings
-        self.discharge_window = []
+        self.export_window = []
 
         if self.rest_data:
             discharge_start = datetime.strptime(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"], "%H:%M:%S")
@@ -903,8 +903,8 @@ class Inverter:
             discharge_start = datetime.strptime(self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S")
             discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
         else:
-            self.log("Error: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id))
-            self.base.record_status("Error: Inverter {} unable to read Discharge window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
+            self.log("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id))
+            self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
             raise ValueError
 
         # Update simulated discharge enable time to match the discharge window time.
@@ -952,15 +952,15 @@ class Inverter:
                 window["start"] = minute
                 window["end"] = minute_end
                 window["average"] = 0  # Rates are not known yet
-                self.discharge_window.append(window)
+                self.export_window.append(window)
                 minute += 24 * 60
                 minute_end += 24 * 60
 
         # Pre-fill best discharge enables
         if self.discharge_enable_time:
-            self.discharge_limits = [0.0 for i in range(len(self.discharge_window))]
+            self.export_limits = [0.0 for i in range(len(self.export_window))]
         else:
-            self.discharge_limits = [100.0 for i in range(len(self.discharge_window))]
+            self.export_limits = [100.0 for i in range(len(self.export_window))]
 
         # Idle time?
         # Get previous idle start and end
@@ -995,7 +995,7 @@ class Inverter:
         self.base.log("Inverter {} idle time is {}-{}".format(self.id, self.base.time_abs_str(self.idle_start_minutes), self.base.time_abs_str(self.idle_end_minutes)))
 
         if not quiet:
-            self.base.log("Inverter {} discharge windows currently {}".format(self.id, self.discharge_window))
+            self.base.log("Inverter {} discharge windows currently {}".format(self.id, self.export_window))
 
         if INVERTER_TEST:
             self.self_test(minutes_now)
@@ -1185,7 +1185,7 @@ class Inverter:
                 self.base.call_notify("Predbat: Inverter {} discharge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
 
-    def adjust_battery_target(self, soc, isCharging=False, isDischarging=False):
+    def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
         Adjust the battery charging target SOC % in GivTCP
 
@@ -1229,7 +1229,7 @@ class Inverter:
         if not self.inv_has_target_soc:
             if isCharging:
                 self.mimic_target_soc(soc)
-            elif isDischarging:
+            elif isExporting:
                 self.mimic_target_soc(soc, discharge=True)
             else:
                 self.mimic_target_soc(0)
@@ -1430,9 +1430,9 @@ class Inverter:
 
             self.base.log("Inverter {} set pause mode to {}".format(self.id, new_pause_mode))
 
-    def adjust_inverter_mode(self, force_discharge, changed_start_end=False):
+    def adjust_inverter_mode(self, force_export, changed_start_end=False):
         """
-        Adjust inverter mode between force discharge and ECO
+        Adjust inverter mode between force export and Demand mode (ECO)
 
         Inverter Class Parameters
         =========================
@@ -1461,8 +1461,8 @@ class Inverter:
         if old_inverter_mode == "Eco (Paused)":
             old_inverter_mode = "Eco"
 
-        # Force discharge or Eco mode?
-        if force_discharge:
+        # Force export or Eco mode?
+        if force_export:
             new_inverter_mode = "Timed Export"
         else:
             new_inverter_mode = "Eco"
@@ -1477,9 +1477,9 @@ class Inverter:
 
             # Notify
             if self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} Force discharge set to {} at time {}".format(self.id, force_discharge, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Force export set to {} at time {}".format(self.id, force_export, self.base.time_now_str()))
 
-            self.base.log("Inverter {} set force discharge to {}".format(self.id, force_discharge))
+            self.base.log("Inverter {} set force export to {}".format(self.id, force_export))
 
     def adjust_idle_time(self, charge_start=None, charge_end=None, discharge_start=None, discharge_end=None):
         """
@@ -1541,7 +1541,7 @@ class Inverter:
         idle_start = idle_start_time.strftime("%H:%M:%S")
         idle_end = idle_end_time.strftime("%H:%M:%S")
 
-        self.base.log("Adjust idle time computed idle is {}-{}".format(idle_start, idle_end))
+        self.base.log("Adjust demand (idle) time computed is {}-{}".format(idle_start, idle_end))
 
         # Get previous start/end
         old_start = self.base.get_arg("idle_start_time", index=self.id)
@@ -1553,11 +1553,11 @@ class Inverter:
 
         if idle_start_time_id and idle_end_time_id:
             if old_start != idle_start:
-                self.base.log("Inverter {} set new idle start time to {} was {}".format(self.id, idle_start, old_start))
+                self.base.log("Inverter {} set new demand (idle) start time to {} was {}".format(self.id, idle_start, old_start))
                 self.write_and_poll_option("idle_start_time", idle_start_time_id, idle_start)
                 self.idle_start_minutes = idle_start_minutes
             if old_end != idle_end:
-                self.base.log("Inverter {} set new idle end time to {} was {}".format(self.id, idle_end, old_end))
+                self.base.log("Inverter {} set new demand (idle) end time to {} was {}".format(self.id, idle_end, old_end))
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
@@ -1583,9 +1583,9 @@ class Inverter:
             end_minute += 60 * 24
         return start_minute, end_minute
 
-    def adjust_force_discharge(self, force_discharge, new_start_time=None, new_end_time=None):
+    def adjust_force_export(self, force_export, new_start_time=None, new_end_time=None):
         """
-        Adjust force discharge on/off and set the time window correctly
+        Adjust force export on/off and set the time window correctly
 
         Inverter Class Parameters
         =========================
@@ -1620,7 +1620,7 @@ class Inverter:
             return False
 
         # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
-        if not self.inv_has_discharge_enable_time and not force_discharge:
+        if not self.inv_has_discharge_enable_time and not force_export:
             new_start_time = self.base.midnight_utc
             new_end_time = self.base.midnight_utc
 
@@ -1639,29 +1639,29 @@ class Inverter:
             new_end = None
 
         # Eco mode, turn it on before we change the discharge window
-        if not force_discharge:
-            self.adjust_inverter_mode(force_discharge)
+        if not force_export:
+            self.adjust_inverter_mode(force_export)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", False)
 
         # Turn off scheduled discharge
-        if not force_discharge and old_discharge_enable:
+        if not force_export and old_discharge_enable:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), False)
-            self.log("Inverter {} Turning off scheduled discharge".format(self.id))
+            self.log("Inverter {} Turning off scheduled export".format(self.id))
 
-        self.base.log("Inverter {} Adjust force discharge to {}, change times from {} - {} to {} - {}".format(self.id, force_discharge, old_start, old_end, new_start, new_end))
+        self.base.log("Inverter {} Adjust force export to {}, change times from {} - {} to {} - {}".format(self.id, force_export, old_start, old_end, new_start, new_end))
         changed_start_end = False
 
         # Some inverters have an idle time setting
-        if force_discharge:
+        if force_export:
             self.adjust_idle_time(discharge_start=new_start, discharge_end=new_end)
         else:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
 
         # Change start time
         if new_start and new_start != old_start:
-            self.base.log("Inverter {} set new start time to {}".format(self.id, new_start))
+            self.base.log("Inverter {} set new export start time to {}".format(self.id, new_start))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
 
@@ -1676,11 +1676,11 @@ class Inverter:
                     self.write_and_poll_option("discharge_start_hour", self.base.get_arg("discharge_start_hour", indirect=False, index=self.id), int(new_start[:2]))
                     self.write_and_poll_option("discharge_start_minute", self.base.get_arg("discharge_start_minute", indirect=False, index=self.id), int(new_start[3:5]))
             else:
-                self.log("Warn: Inverter {} unable write discharge start time as neither REST or discharge_start_time are set".format(self.id))
+                self.log("Warn: Inverter {} unable write export start time as neither REST or discharge_start_time are set".format(self.id))
 
         # Change end time
         if new_end and new_end != old_end:
-            self.base.log("Inverter {} Set new end time to {} was {}".format(self.id, new_end, old_end))
+            self.base.log("Inverter {} Set new export end time to {} was {}".format(self.id, new_end, old_end))
             if self.rest_data:
                 pass  # REST writes as a single start/end time
             elif "discharge_end_time" in self.base.args:
@@ -1694,7 +1694,7 @@ class Inverter:
                     self.write_and_poll_option("discharge_end_hour", self.base.get_arg("discharge_end_hour", indirect=False, index=self.id), int(new_end[:2]))
                     self.write_and_poll_option("discharge_end_minute", self.base.get_arg("discharge_end_minute", indirect=False, index=self.id), int(new_end[3:5]))
             else:
-                self.log("Warn: Inverter {} unable write discharge end time as neither REST or discharge_end_time are set".format(self.id))
+                self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
         if ((new_end != old_end) or (new_start != old_start)) and self.inv_time_button_press:
             entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
@@ -1706,13 +1706,13 @@ class Inverter:
             self.rest_setDischargeSlot1(new_start, new_end)
 
         # Change scheduled discharge enable
-        if force_discharge and not old_discharge_enable:
+        if force_export and not old_discharge_enable:
             self.write_and_poll_switch("scheduled_discharge_enable", self.base.get_arg("scheduled_discharge_enable", indirect=False, index=self.id), True)
-            self.log("Inverter {} Turning on scheduled discharge".format(self.id))
+            self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        # Force discharge, turn it on after we change the window
-        if force_discharge:
-            self.adjust_inverter_mode(force_discharge, changed_start_end=changed_start_end)
+        # Force export, turn it on after we change the window
+        if force_export:
+            self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
@@ -1720,14 +1720,13 @@ class Inverter:
         # Notify
         if changed_start_end:
             if self.base.set_inverter_notify:
-                self.base.call_notify("Predbat: Inverter {} Discharge time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
+                self.base.call_notify("Predbat: Inverter {} Export time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
     def disable_charge_window(self, notify=True):
         """
         Disable charge window
         """
         """
-        Adjust force discharge on/off and set the time window correctly
 
         Inverter Class Parameters
         =========================
@@ -1787,7 +1786,7 @@ class Inverter:
 
         if self.inverter_type == "GS":
             # Solis just has a single switch for both directions
-            # Need to check the logic of how this is called if both charging and discharging
+            # Need to check the logic of how this is called if both charging and exporting
 
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
 
@@ -1931,9 +1930,9 @@ class Inverter:
         else:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
-    def adjust_discharge_immediate(self, target_soc, freeze=False):
+    def adjust_export_immediate(self, target_soc, freeze=False):
         """
-        Adjust from discharging or not discharging based on passed target soc
+        Adjust from exporting or not exporting based on passed target soc
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         if target_soc > 0:

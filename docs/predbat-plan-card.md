@@ -91,7 +91,7 @@ and pale Red if the rate is more than 1.5 times the export rate threshold.<BR>
 So in essence, Yellow and Red coloured export rates will be considered as priorities for exporting, White will not.<BR>
 If battery discharging is planned by Predbat for a particular slot, the export rate for that slot will be highlighted in bold text.
 
-- **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Eco mode),
+- **State** - [Predbat's status](what-does-predbat-do.md#predbat-status) controls whether the battery is charging, discharging to support house load (Demand mode),
 discharging and force exported, or being held at the current level.<BR>
 Alongside the state is an arrow which points upwards if the battery SoC is increasing (i.e. charging), to the right if the battery SoC is remaining constant,
 or downwards if the battery SoC is decreasing (i.e. discharging).<BR>
@@ -99,12 +99,12 @@ If Predbat's plan has been over-ridden and the [slot has been manually controlle
 then alongside the State and battery SoC arrow will be an upside down 'F' indicating it is a 'Forced' activity.<BR>
 The slot will be coloured Green for Charging, Yellow for Discharging, Silver Grey for Freeze Charging, Dark Grey for Freeze Discharging, Pale Blue for Hold Charging or White for Idle.<BR>
 NB: The Predbat plan is shown in 30 minute time slots but Predbat actually plans battery activity in 5 minute segments within the 30 minute slot.
-If the Home Assistant control *switch.predbat_calculate_discharge_oncharge* is set to True,
+If the Home Assistant control *switch.predbat_calculate_export_oncharge* is set to True,
 then within a 30 minute slot (and depending on import and export rates) Predbat could potentially plan for there to be both
-charging and discharging activity - if Predbat plans this, state will show as both Charging and Discharging in the same slot.
+charging and discharging activity - if Predbat plans this, state will show as both Charging and Exporting in the same slot.
 
 - **Limit %** - Alongside any battery activity (charging, discharging, etc) there will be a SoC limit. This limit is what the SoC is planned to be at the end of the 30 minute time slot.
-e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Discharge&searr; 4%' is discharge the battery to the 4% reserve level.
+e.g. 'Charge&nearr; 70%' is charge to 70% SoC, and 'Exp&searr; 4%' is force exporting the battery to the 4% reserve level.
 
 - **PV kWh** - The predicted solar forecast for the half hour slot, estimated from the [Solcast Forecast](apps-yaml.md#solcast-solar-forecast).<BR>
 If the PV forecast is above 0.2kWh for the slot it will be coloured Melon Red with a little sun symbol, above 0.1kWh it will be Yellow with a sun symbol,
@@ -174,14 +174,14 @@ Using the above debug plan as an example:
 the energy being put into the battery has effectively cost 14.81p - for every 1kWh of AC grid import you don't get 1kWh of DC stored in the battery,
 so 1kWh of battery charge has effectively cost slightly more than the import rate.
 
-- At 00:30 the battery is being force discharged and excess energy (above the estimated house load of 0.47kWh) will be exported.
+- At 00:30 the battery is being force exported and excess energy (above the estimated house load of 0.47kWh) will be exported.
 The actual export rate is 18.22p, but after losses converting the stored DC battery charge into AC to supply the home and export it,
 the energy being exported has effectively only earned 17.31p - it will take slightly more than 1kWh of stored DC battery charge to get 1kWh of AC to use or export
 so each discharged and exported kWh actually earns slightly less.
 
 - Putting these together, at 00:00, the effective import rate (after losses) is 13.93p, the effective export rate is 17.31p,
 so even though battery and inverter conversion losses have been incurred, there is still a 3.38p profit per kWh and
-Predbat plans to charge and then discharge the battery in the same slot to generate that profit.
+Predbat plans to charge and then exports the battery in the same slot to generate that profit.
 
 With debug mode turned on, the Load column shows the predicted load in kWh for the half hour slot and in brackets the modelled load variance value using the [load variance model](customisation.md#cloud-coverage-and-load-variance).
 
@@ -190,7 +190,7 @@ Note that Predbat's forecasted PV generation already contains a **input_number.p
 
 Note that the values in brackets in the load and PV columns are each only shown if they are non-zero.
 
-The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or discharge the battery.
+The debug mode on the Predbat plan can be quite useful to understand from the import and export rates *after conversion losses*, why Predbat plans to charge or force export the battery.
 There's a further [explanation of the Predbat forecast and plan](faq.md#the-plan-doesnt-charge-or-discharge-when-i-expect-it-to) in the FAQ's.
 
 ## Customising and Reformatting the Predbat Plan

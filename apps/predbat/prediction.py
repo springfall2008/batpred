@@ -28,25 +28,25 @@ def reset_prediction_globals():
     PRED_GLOBAL = {}
 
 
-def wrapped_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
+def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_single(charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step)
+    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step)
 
 
-def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
 
-def wrapped_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_discharge(this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record)
+    return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
 
 
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, debug=False):
@@ -111,8 +111,8 @@ class Prediction:
             self.metric_standing_charge = base.metric_standing_charge
             self.set_charge_freeze = base.set_charge_freeze
             self.set_reserve_enable = base.set_reserve_enable
-            self.set_discharge_freeze = base.set_discharge_freeze
-            self.set_discharge_freeze_only = base.set_discharge_freeze_only
+            self.set_export_freeze = base.set_export_freeze
+            self.set_export_freeze_only = base.set_export_freeze_only
             self.set_discharge_during_charge = base.set_discharge_during_charge
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
@@ -120,7 +120,7 @@ class Prediction:
             self.car_charging_limit = base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
             self.iboost_enable = base.iboost_enable
-            self.iboost_on_discharge = base.iboost_on_discharge
+            self.iboost_on_export = base.iboost_on_export
             self.iboost_prevent_discharge = base.iboost_prevent_discharge
             self.carbon_enable = base.carbon_enable
             self.iboost_next = base.iboost_next
@@ -169,16 +169,16 @@ class Prediction:
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
 
-    def thread_run_prediction_single(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, step):
+    def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
         """
         Run single prediction in a thread
         """
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record, step=step
+            charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step
         )
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
-    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
         """
         Run prediction in a thread
         """
@@ -191,7 +191,7 @@ class Prediction:
             try_charge_limit[window_n] = try_soc
 
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            try_charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
+            try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
         )
         min_soc = 0
         max_soc = self.soc_max
@@ -220,23 +220,23 @@ class Prediction:
             max_soc,
         )
 
-    def thread_run_prediction_discharge(self, this_discharge_limit, start, window_n, charge_limit, charge_window, discharge_window, discharge_limits, pv10, all_n, end_record):
+    def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
         """
         Run prediction in a thread
         """
         # Store try value into the window
         if all_n:
             for window_id in all_n:
-                discharge_limits[window_id] = this_discharge_limit
+                export_limits[window_id] = this_export_limit
         else:
-            discharge_limits[window_n] = this_discharge_limit
+            export_limits[window_n] = this_export_limit
             # Adjust start
-            window = discharge_window[window_n]
+            window = export_window[window_n]
             start = min(start, window["end"] - 5)
-            discharge_window[window_n]["start"] = start
+            export_window[window_n]["start"] = start
 
         metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record=end_record
+            charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
         )
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
@@ -292,7 +292,7 @@ class Prediction:
                         break
         return load_amount
 
-    def run_prediction(self, charge_limit, charge_window, discharge_window, discharge_limits, pv10, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, return the results
         """
@@ -382,9 +382,9 @@ class Prediction:
         export_to_first_charge = 0
 
         # Remove intersecting windows and optimise the data format of the charge/discharge window
-        charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, discharge_limits, discharge_window)
+        charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
         charge_window_optimised = self.find_charge_window_optimised(charge_window)
-        discharge_window_optimised = self.find_charge_window_optimised(discharge_window)
+        export_window_optimised = self.find_charge_window_optimised(export_window)
 
         # For the SOC calculation we need to stop 24 hours after the first charging window starts
         # to avoid wrapping into the next day
@@ -413,7 +413,7 @@ class Prediction:
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
-            discharge_window_n = discharge_window_optimised.get(minute_absolute, -1)
+            export_window_n = export_window_optimised.get(minute_absolute, -1)
 
             # Find charge limit
             charge_limit_n = 0
@@ -527,7 +527,7 @@ class Prediction:
             iboost_freeze = False
             if self.iboost_enable:
                 # IBoost based on plan for given rates
-                if self.iboost_plan and (self.iboost_on_discharge or (discharge_window_n < 0)):
+                if self.iboost_plan and (self.iboost_on_export or (export_window_n < 0)):
                     iboost_load = self.in_iboost_slot(minute_absolute) * step / 60.0
                     iboost_amount = min(iboost_load, self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
@@ -558,10 +558,10 @@ class Prediction:
                 discharge_rate_now = self.battery_rate_max_discharge
 
             # discharge freeze, reset charge rate by default
-            if self.set_discharge_freeze:
+            if self.set_export_freeze:
                 charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
-                if (discharge_window_n >= 0) and (discharge_limits[discharge_window_n] == 99.0 or self.set_discharge_freeze_only):
+                if (export_window_n >= 0) and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only):
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
@@ -580,16 +580,16 @@ class Prediction:
 
             discharge_min = self.reserve
             use_keep = self.best_soc_keep if four_hour_rule else self.reserve
-            if discharge_window_n >= 0:
-                discharge_min = max(self.soc_max * discharge_limits[discharge_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
+            if export_window_n >= 0:
+                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
 
-            if not self.set_discharge_freeze_only and (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
+            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
                 discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
-                reserve_expected = max((self.soc_max * discharge_limits[discharge_window_n]) / 100.0, self.reserve)
+                reserve_expected = max((self.soc_max * export_limits[export_window_n]) / 100.0, self.reserve)
                 battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
                 battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
 
@@ -766,7 +766,7 @@ class Prediction:
             if self.iboost_enable:
                 # iBoost Solar diversion model
                 if self.iboost_solar:
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_discharge or (discharge_window_n < 0)):
+                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_ac > (self.iboost_min_power * step) and ((soc * 100.0 / self.soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(pv_ac, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_ac -= iboost_pv_amount
                         iboost_amount += iboost_pv_amount
@@ -871,7 +871,7 @@ class Prediction:
                 charge_has_started = True
             if charge_has_started and (charge_window_n < 0):
                 charge_has_run = True
-            if (discharge_window_n >= 0) and discharge_limits[discharge_window_n] < 100.0:
+            if (export_window_n >= 0) and export_limits[export_window_n] < 100.0:
                 discharge_has_run = True
 
             # Record soc min
