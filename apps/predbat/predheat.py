@@ -514,7 +514,10 @@ class PredHeat:
 
         self.mode = self.get_arg("mode", "pump", domain="predheat")
         self.flow_temp = self.get_arg("flow_temp", 40.0, domain="predheat")
-        self.flow_difference_target = self.get_arg("float_difference_target", 20.0, domain="predheat")
+        if self.mode == "gas":
+            self.flow_difference_target = self.get_arg("flow_difference_target", 20.0, domain="predheat")
+        else:
+            self.flow_difference_target = self.get_arg("flow_difference_target", 5, domain="predheat")
         self.log("Predheat: has {} days of historical data".format(self.minute_data_age))
         self.heat_loss_watts = self.get_arg("heat_loss_watts", 100, domain="predheat")
         self.heat_loss_degrees = self.get_arg("heat_loss_degrees", 0.02, domain="predheat")
