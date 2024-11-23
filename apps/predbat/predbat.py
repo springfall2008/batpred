@@ -8774,7 +8774,7 @@ class PredBat(hass.Hass):
                     # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.export_limits_best[0], isCharging, isExporting)
-
+                    
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
@@ -9224,8 +9224,6 @@ class PredBat(hass.Hass):
                             diff_time = start_time - self.now_utc
                             if abs(diff_time.days) <= 3:
                                 self.log("Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
-                            else:
-                                self.log("Octopus old free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
                             octopus_free_slot = {}
                             octopus_free_slot["start"] = start
                             octopus_free_slot["end"] = end
