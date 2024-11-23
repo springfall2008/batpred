@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.7.0"
+THIS_VERSION = "v8.7.1"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -3269,6 +3269,40 @@ class PredBat(hass.Hass):
                 octopus_slots.append(slot)
                 self.log("Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
+
+    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate={}):
+        """
+        Load octopus free session slot
+        """
+        start_minutes = 0
+        end_minutes = 0
+
+        for octopus_free_slot in octopus_free_slots:
+            start = octopus_free_slot["start"]
+            end = octopus_free_slot["end"]
+            rate = octopus_free_slot["rate"]
+
+            if start and end:
+                try:
+                    start = self.str2time(start)
+                    end = self.str2time(end)
+                except (ValueError, TypeError):
+                    start = None
+                    end = None
+                    self.log("Warn: Unable to decode Octopus free session start/end time")
+            if start and end:
+                start_minutes = self.minutes_to_time(start, self.midnight_utc)
+                end_minutes = min(self.minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
+
+            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
+                self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
+                for minute in range(start_minutes, end_minutes):
+                    if export:
+                        self.rate_export[minute] = rate
+                    else:
+                        self.rate_import[minute] = rate
+                        self.load_scaling_dynamic[minute] = self.load_scaling_free
+                    rate_replicate[minute] = "saving"
 
     def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate={}):
         """
@@ -8740,7 +8774,7 @@ class PredBat(hass.Hass):
                     # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.export_limits_best[0], isCharging, isExporting)
-
+                    
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
@@ -9173,6 +9207,32 @@ class PredBat(hass.Hass):
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
+        # Octopus free session
+        octopus_free_slots = []
+        if "octopus_free_session" in self.args:
+            entity_id = self.get_arg("octopus_free_session", indirect=False)
+            if entity_id:
+                events = self.get_state_wrapper(entity_id=entity_id, attribute="events")
+                if events:
+                    for event in events:
+                        start = event.get("start", None)
+                        end = event.get("end", None)
+                        code = event.get("code", None)
+                        if start and end and code:
+                            start_time = self.str2time(start)  # reformat the saving session start & end time for improved readability
+                            end_time = self.str2time(end)
+                            diff_time = start_time - self.now_utc
+                            if abs(diff_time.days) <= 3:
+                                self.log("Octopus free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            else:
+                                self.log("Octopus old free events code {} {}-{}".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            octopus_free_slot = {}
+                            octopus_free_slot["start"] = start
+                            octopus_free_slot["end"] = end
+                            octopus_free_slot["rate"] = 0
+                            octopus_free_slots.append(octopus_free_slot)
+
+
         # Octopus saving session
         octopus_saving_slots = []
         if "octopus_saving_session" in self.args:
@@ -9251,6 +9311,7 @@ class PredBat(hass.Hass):
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_free_slot(octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_import = self.rate_scan(self.rate_import, print=True)
         else:
@@ -9763,6 +9824,7 @@ class PredBat(hass.Hass):
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
+        self.load_scaling_free = self.get_arg("load_scaling_free")
         self.battery_rate_max_scaling = self.get_arg("battery_rate_max_scaling")
         self.battery_rate_max_scaling_discharge = self.get_arg("battery_rate_max_scaling_discharge")
 
