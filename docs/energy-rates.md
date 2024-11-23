@@ -123,7 +123,7 @@ simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
 
 Predbat can automatically detect Octopus free events and adjust your battery plan according.
 
-For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used. 
+For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used.
 
 Note: **You must have signed up to Octoplus to benefit from these events**
 
