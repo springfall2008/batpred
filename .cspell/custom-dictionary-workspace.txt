@@ -40,6 +40,9 @@ darkgreen
 darkred
 darray
 datap
+dayname
+daynumber
+daysymbol
 datapoints
 dend
 devcontainer
@@ -62,6 +65,7 @@ feedin
 fentry
 Fingerbot
 firstparty
+fline
 FLOMASTA
 foxess
 futurerate
