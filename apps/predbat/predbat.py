@@ -32,7 +32,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.7.1"
+THIS_VERSION = "v8.7.2"
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py"]
 from download import predbat_update_move, predbat_update_download, check_install
 
@@ -3013,7 +3013,8 @@ class PredBat(hass.Hass):
                     rate_increment = True
 
                 # Resolve any sensor links
-                rate = self.resolve_arg("rate", rate, 0.0)
+                if isinstance(rate, str) and rate[0].isalpha():
+                    rate = self.resolve_arg("rate", rate, 0.0)
 
                 # Ensure the end result is a float
                 try:
