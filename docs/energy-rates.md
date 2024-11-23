@@ -119,6 +119,30 @@ If you do not have an export tariff then forced export will not apply and Predba
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in apps.yaml.
 
+## Octopus free (power up) events
+
+Predbat can automatically detect Octopus free events and adjust your battery plan according.
+
+For Predbat to automatically manage Octopus free sessions the following additional configuration item in apps.yaml is used.
+
+Note: **You must have signed up to Octoplus to benefit from these events**
+
+Like the electricity rates this is set in the apps.yaml template to a regular expression that should auto-discover the Octopus Energy integration.
+
+**octopus_free_session** - Will point to the free event sensor that is exposed by the Octopus Energy Integration. This event sensor contains the dates/times of
+all the free events.
+
+```yaml
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+```
+
+Note: **This event may need to be enabled in Home Assistant first [How to Enable Octopus events](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them)**
+
+If you normally increase your house usage during a free session then you can change **input_number.predbat_load_scaling_free** to allow Predbat to assume an energy
+increase in this period. E.g. setting to a value of 1.2 would indicate you will use 20% more energy that normal during this period. (Default is 1.2)
+
+If you do not want Predbat to see these sessions then comment out the **octopus_free_session** setting.
+
 ## Octopus Rates URL
 
 If you do not wish to use the Octopus Energy integration and are an Octopus Energy customer then you can configure Predbat to get the electricity rates

@@ -323,6 +323,10 @@ pred_bat:
   octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
 
+  # Octopus free session points to the free session Sensor in the Octopus plugin
+  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
 
