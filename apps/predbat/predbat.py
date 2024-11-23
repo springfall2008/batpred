@@ -484,6 +484,71 @@ class PredBat(hass.Hass):
 
         return self.releases
 
+    def download_octopus_free(self, url):
+        r = requests.get(url)
+        free_sessions = []
+
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
+            self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
+            return False
+        for line in r.text.split("\n"):
+            if 'Free Electricity:' in line:
+                # Free Electricity: Sunday 24th November 7-9am 
+                res = re.search(r'Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)', line)
+                if res:
+                    print(res)
+                    dayname = res.group(1)
+                    daynumber = res.group(2)
+                    daysymbol = res.group(3)
+                    month = res.group(4)
+                    time_from= res.group(5)
+                    time_to = res.group(6)
+                    if ('pm' in time_to):
+                        is_pm = True
+                    else:
+                        is_pm = False
+                    if ('pm' in time_from):
+                        is_fpm = True
+                    elif ('am' in time_from):
+                        is_fpm = False
+                    else:
+                        is_fpm = is_pm
+                    time_to = time_to.replace('am', '')
+                    time_to = time_to.replace('pm', '')
+                    from_from = int(time_from)
+                    from_to = int(time_to)
+                    if is_fpm:
+                        time_from += 12
+                    if is_pm:
+                        time_to += 12
+                    self.log("Octopus Free Electricity: {} {} {}-{}".format(daynumber, month, time_from, time_to))
+                    # Convert into timestamp object
+                    now = datetime.now()
+                    year = now.year
+                    time_from = str(time_from)
+                    time_to = str(time_to)
+                    daynumber = str(daynumber)
+                    if len(time_from) == 1:
+                        time_from = "0" + time_from
+                    if len(time_to) == 1:
+                        time_to = "0" + time_to
+                    if len(daynumber) == 1:
+                        daynumber = "0" + daynumber
+
+                    try:
+                        timestamp_start = datetime.strptime("{} {} {} {} {}".format(year, month, daynumber, str(time_from), "00"), "%Y %B %d %H %M")
+                        timestamp_end = datetime.strptime("{} {} {} {} {}".format(year, month, daynumber, str(time_to), "00"), "%Y %B %d %H %M")
+                        # Change to local timezone
+                        timestamp_start = timestamp_start.replace(tzinfo=pytz.utc).astimezone(self.local_tz)
+                        timestamp_end = timestamp_end.replace(tzinfo=pytz.utc).astimezone(self.local_tz)
+                        free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
+                    except (ValueError, TypeError):
+                        continue
+
+        return free_sessions
+
+        
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL or return from cache if recent
@@ -8775,7 +8840,7 @@ class PredBat(hass.Hass):
                     # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.export_limits_best[0], isCharging, isExporting)
-
+                    
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
@@ -9230,6 +9295,9 @@ class PredBat(hass.Hass):
                             octopus_free_slot["end"] = end
                             octopus_free_slot["rate"] = 0
                             octopus_free_slots.append(octopus_free_slot)
+        # Direct Octopus URL
+        if "octopus_free_url" in self.args:
+            octopus_free_slots.append(self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False)))
 
         # Octopus saving session
         octopus_saving_slots = []
@@ -10005,11 +10073,11 @@ class PredBat(hass.Hass):
         """
         Update the current time/date
         """
-        local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
+        self.local_tz = pytz.timezone(self.args.get("timezone", "Europe/London"))
         skew = self.args.get("clock_skew", 0)
         if skew:
             self.log("Warn: Clock skew is set to {} minutes".format(skew))
-        self.now_utc_real = datetime.now(local_tz)
+        self.now_utc_real = datetime.now(self.local_tz)
         now_utc = self.now_utc_real + timedelta(minutes=skew)
         now = datetime.now() + timedelta(minutes=skew)
         now = now.replace(second=0, microsecond=0, minute=(now.minute - (now.minute % PREDICT_STEP)))
