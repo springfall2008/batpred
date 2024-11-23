@@ -493,22 +493,22 @@ class PredBat(hass.Hass):
             daynumber = res.group(2)
             daysymbol = res.group(3)
             month = res.group(4)
-            time_from= res.group(5)
+            time_from = res.group(5)
             time_to = res.group(6)
-            if ('pm' in time_to):
+            if "pm" in time_to:
                 is_pm = True
             else:
                 is_pm = False
-            if ('pm' in time_from):
+            if "pm" in time_from:
                 is_fpm = True
-            elif ('am' in time_from):
+            elif "am" in time_from:
                 is_fpm = False
             else:
                 is_fpm = is_pm
-            time_from = time_from.replace('am', '')
-            time_from = time_from.replace('pm', '')
-            time_to = time_to.replace('am', '')
-            time_to = time_to.replace('pm', '')
+            time_from = time_from.replace("am", "")
+            time_from = time_from.replace("pm", "")
+            time_to = time_to.replace("am", "")
+            time_to = time_to.replace("pm", "")
             try:
                 time_from = int(time_from)
                 time_to = int(time_to)
@@ -562,13 +562,13 @@ class PredBat(hass.Hass):
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
-        
+
         # Return new data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["data"] = r.text
         return r.text
-            
+
     def download_octopus_free(self, url):
         """
         Download octopus free session data directly from a URL and process the data
@@ -580,17 +580,17 @@ class PredBat(hass.Hass):
             return free_sessions
 
         for line in pdata.split("\n"):
-            if 'Past sessions' in line:
-                future_line = line.split('<p data-block-key')
+            if "Past sessions" in line:
+                future_line = line.split("<p data-block-key")
                 for fline in future_line:
-                    res = re.search(r'<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)\s*</i>', fline)
+                    res = re.search(r"<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)\s*</i>", fline)
                     self.octopus_free_line(res, free_sessions)
-            if 'Free Electricity:' in line:
-                # Free Electricity: Sunday 24th November 7-9am 
-                res = re.search(r'Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)', line)
+            if "Free Electricity:" in line:
+                # Free Electricity: Sunday 24th November 7-9am
+                res = re.search(r"Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)", line)
                 self.octopus_free_line(res, free_sessions)
         return free_sessions
-        
+
     def download_octopus_rates(self, url):
         """
         Download octopus rates directly from a URL or return from cache if recent
@@ -8882,7 +8882,7 @@ class PredBat(hass.Hass):
                     # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                     # as some inverters can use this as a target for discharge
                     self.adjust_battery_target_multi(inverter, self.export_limits_best[0], isCharging, isExporting)
-                    
+
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
