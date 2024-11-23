@@ -143,6 +143,13 @@ increase in this period. E.g. setting to a value of 1.2 would indicate you will 
 
 If you do not want Predbat to see these sessions then comment out the **octopus_free_session** setting.
 
+Note: If the above is not working due to lack of data (via a 3rd party service) Predbat can scrape directly from the Octopus Web Site, this may
+have its own issues due to change of format. If you enable this then sessions will be considered even if you forget to sign-up so be careful!
+
+```yaml
+octopus_free_url: 'http://octopus.energy/free-electricity'
+```
+
 ## Octopus Rates URL
 
 If you do not wish to use the Octopus Energy integration and are an Octopus Energy customer then you can configure Predbat to get the electricity rates
