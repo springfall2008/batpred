@@ -3370,6 +3370,13 @@ def main():
 
     print("**** Testing Predbat ****")
     failed = False
+
+    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
+    free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
+    if not free_sessions:
+        print("**** ERROR: No free sessions found ****")
+        failed = 1
+
     if not failed:
         failed |= run_intersect_window_tests(my_predbat)
     if not failed:
