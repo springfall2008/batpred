@@ -484,70 +484,112 @@ class PredBat(hass.Hass):
 
         return self.releases
 
-    def download_octopus_free(self, url):
-        r = requests.get(url)
-        free_sessions = []
+    def octopus_free_line(self, res, free_sessions):
+        """
+        Parse a line from the octopus free data
+        """
+        if res:
+            dayname = res.group(1)
+            daynumber = res.group(2)
+            daysymbol = res.group(3)
+            month = res.group(4)
+            time_from= res.group(5)
+            time_to = res.group(6)
+            if ('pm' in time_to):
+                is_pm = True
+            else:
+                is_pm = False
+            if ('pm' in time_from):
+                is_fpm = True
+            elif ('am' in time_from):
+                is_fpm = False
+            else:
+                is_fpm = is_pm
+            time_from = time_from.replace('am', '')
+            time_from = time_from.replace('pm', '')
+            time_to = time_to.replace('am', '')
+            time_to = time_to.replace('pm', '')
+            try:
+                time_from = int(time_from)
+                time_to = int(time_to)
+            except (ValueError, TypeError):
+                return
+            if is_fpm:
+                time_from += 12
+            if is_pm:
+                time_to += 12
+            # Convert into timestamp object
+            now = datetime.now()
+            year = now.year
+            time_from = str(time_from)
+            time_to = str(time_to)
+            daynumber = str(daynumber)
+            if len(time_from) == 1:
+                time_from = "0" + time_from
+            if len(time_to) == 1:
+                time_to = "0" + time_to
+            if len(daynumber) == 1:
+                daynumber = "0" + daynumber
 
+            try:
+                timestamp_start = datetime.strptime("{} {} {} {} {} Z".format(year, month, daynumber, str(time_from), "00"), "%Y %B %d %H %M %z")
+                timestamp_end = datetime.strptime("{} {} {} {} {} Z".format(year, month, daynumber, str(time_to), "00"), "%Y %B %d %H %M %z")
+                # Change to local timezone, but these times were in local zone so push the hour back to the correct one
+                timestamp_start = timestamp_start.astimezone(self.local_tz)
+                timestamp_end = timestamp_end.astimezone(self.local_tz)
+                timestamp_start = timestamp_start.replace(hour=int(time_from))
+                timestamp_end = timestamp_end.replace(hour=int(time_to))
+                free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
+            except (ValueError, TypeError) as e:
+                pass
+
+    def download_octopus_free_func(self, url):
+        """
+        Download octopus free session data directly from a URL
+        """
+        # Check the cache first
+        now = datetime.now()
+        if url in self.octopus_url_cache:
+            stamp = self.octopus_url_cache[url]["stamp"]
+            pdata = self.octopus_url_cache[url]["data"]
+            age = now - stamp
+            if age.seconds < (30 * 60):
+                self.log("Return cached octopus data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
+                return pdata
+
+        r = requests.get(url)
         if r.status_code not in [200, 201]:
             self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
-            return False
-        for line in r.text.split("\n"):
+            return None
+        
+        # Return new data
+        self.octopus_url_cache[url] = {}
+        self.octopus_url_cache[url]["stamp"] = now
+        self.octopus_url_cache[url]["data"] = r.text
+        return r.text
+            
+    def download_octopus_free(self, url):
+        """
+        Download octopus free session data directly from a URL and process the data
+        """
+
+        free_sessions = []
+        pdata = self.download_octopus_free_func(url)
+        if not pdata:
+            return free_sessions
+
+        for line in pdata.split("\n"):
+            if 'Past sessions' in line:
+                future_line = line.split('<p data-block-key')
+                for fline in future_line:
+                    res = re.search(r'<i>\s*(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)\s*</i>', fline)
+                    self.octopus_free_line(res, free_sessions)
             if 'Free Electricity:' in line:
                 # Free Electricity: Sunday 24th November 7-9am 
                 res = re.search(r'Free Electricity:\s+(\S+)\s+(\d+)(\S+)\s+(\S+)\s+(\S+)-(\S+)', line)
-                if res:
-                    print(res)
-                    dayname = res.group(1)
-                    daynumber = res.group(2)
-                    daysymbol = res.group(3)
-                    month = res.group(4)
-                    time_from= res.group(5)
-                    time_to = res.group(6)
-                    if ('pm' in time_to):
-                        is_pm = True
-                    else:
-                        is_pm = False
-                    if ('pm' in time_from):
-                        is_fpm = True
-                    elif ('am' in time_from):
-                        is_fpm = False
-                    else:
-                        is_fpm = is_pm
-                    time_to = time_to.replace('am', '')
-                    time_to = time_to.replace('pm', '')
-                    from_from = int(time_from)
-                    from_to = int(time_to)
-                    if is_fpm:
-                        time_from += 12
-                    if is_pm:
-                        time_to += 12
-                    self.log("Octopus Free Electricity: {} {} {}-{}".format(daynumber, month, time_from, time_to))
-                    # Convert into timestamp object
-                    now = datetime.now()
-                    year = now.year
-                    time_from = str(time_from)
-                    time_to = str(time_to)
-                    daynumber = str(daynumber)
-                    if len(time_from) == 1:
-                        time_from = "0" + time_from
-                    if len(time_to) == 1:
-                        time_to = "0" + time_to
-                    if len(daynumber) == 1:
-                        daynumber = "0" + daynumber
-
-                    try:
-                        timestamp_start = datetime.strptime("{} {} {} {} {}".format(year, month, daynumber, str(time_from), "00"), "%Y %B %d %H %M")
-                        timestamp_end = datetime.strptime("{} {} {} {} {}".format(year, month, daynumber, str(time_to), "00"), "%Y %B %d %H %M")
-                        # Change to local timezone
-                        timestamp_start = timestamp_start.replace(tzinfo=pytz.utc).astimezone(self.local_tz)
-                        timestamp_end = timestamp_end.replace(tzinfo=pytz.utc).astimezone(self.local_tz)
-                        free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
-                    except (ValueError, TypeError):
-                        continue
-
+                self.octopus_free_line(res, free_sessions)
         return free_sessions
-
         
     def download_octopus_rates(self, url):
         """
@@ -9297,7 +9339,7 @@ class PredBat(hass.Hass):
                             octopus_free_slots.append(octopus_free_slot)
         # Direct Octopus URL
         if "octopus_free_url" in self.args:
-            octopus_free_slots.append(self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False)))
+            octopus_free_slots.extend(self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False)))
 
         # Octopus saving session
         octopus_saving_slots = []
