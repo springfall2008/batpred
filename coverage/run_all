@@ -1,3 +1,6 @@
 rm predbat.log
+rm -rf predbat_debug
+mkdir -p predbat_debug
 cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_debug
+cp /Volumes/addon_configs/6adb4f0d_predbat/apps.yaml .
 python3 predbat_debug/unit_test.py
