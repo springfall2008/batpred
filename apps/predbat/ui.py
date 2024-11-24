@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -11,6 +10,7 @@
 
 import os
 from config import CONFIG_ITEMS
+
 
 class UI:
     async def select_event(self, event, data, kwargs):
