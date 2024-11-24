@@ -15,6 +15,7 @@ from config import THIS_VERSION, TIME_FORMAT, PREDICT_STEP
 from utils import dp0, dp2, dp3, calc_percent_limit
 from prediction import Prediction
 
+
 class Output:
     def publish_car_plan(self):
         """
@@ -1660,6 +1661,7 @@ class Output:
                     "rate": charge_average_first,
                 },
             )
+
     def record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
         """
         Records status to HA sensor
@@ -1904,9 +1906,7 @@ class Output:
             self.log("Warn: Load mean is zero, unable to calculate divergence!")
             load_divergence = 0
 
-        self.log(
-            "Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over / 60.0, dp2(load_mean), dp2(load_min), dp2(load_max), dp2(load_std_dev), dp2(load_divergence * 100.0))
-        )
+        self.log("Load divergence over {} hours mean {} W, min {} W, max {} W, std dev {} W, divergence {}%".format(look_over / 60.0, dp2(load_mean), dp2(load_min), dp2(load_max), dp2(load_std_dev), dp2(load_divergence * 100.0)))
         if self.metric_load_divergence_enable:
             return dp2(load_divergence)
         else:
@@ -2111,11 +2111,7 @@ class Output:
         # Work out savings
         saving = metric - cost_yesterday
         self.savings_today_pvbat = saving
-        self.log(
-            "Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(
-                dp2(metric), dp2(cost_yesterday), dp2(saving), dp2(import_kwh_house + import_kwh_battery), dp2(export_kwh)
-            )
-        )
+        self.log("Yesterday: No Battery/PV system cost predicted was {}p vs real {}p saving {}p with import {} export {}".format(dp2(metric), dp2(cost_yesterday), dp2(saving), dp2(import_kwh_house + import_kwh_battery), dp2(export_kwh)))
 
         # Save state
         self.dashboard_item(
