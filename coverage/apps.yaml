@@ -94,8 +94,8 @@ pred_bat:
   # Alternative method to restart GivTCP add-on via HA
   #  - service: hassio/addon_restart
   #    addon: a6a2857d_givtcp
-  
-  # Example on how to restart the inverter via GivTCP 
+
+  # Example on how to restart the inverter via GivTCP
   #  - service: switch.turn_on
   #    entity_id: switch.givtcp_{geserial}_reboot_invertor
 
@@ -191,7 +191,7 @@ pred_bat:
     99 : 0.93
     95 : 0.88
     93 : 0.94
-    90 : 0.96  
+    90 : 0.96
   #  100 : 0.15
   #  99 : 0.15
   #  98 : 0.22
@@ -299,13 +299,13 @@ pred_bat:
   octopus_ready_time: 're:(time.octopus_energy([0-9a-z_]+|)_intelligent_ready_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_limit)'
 
-  # Carbon Intensity data from National grid 
+  # Carbon Intensity data from National grid
   carbon_intensity: 're:(sensor.carbon_intensity_uk)'
 
   # Example alternative configuration for Ohme integration release >=v0.6.1
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
   #octopus_ready_time: 'time.ohme_target_time'
-  #octopus_charge_limit: 'number.ohme_target_percent'  
+  #octopus_charge_limit: 'number.ohme_target_percent'
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
@@ -347,7 +347,7 @@ pred_bat:
     -  start: "05:30:00"
        end: "23:30:00"
        rate: 26.78
-  
+
   rates_export:
     -  rate: 15.0
 
@@ -407,7 +407,7 @@ pred_bat:
 
   # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
   # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
-  battery_scaling: 
+  battery_scaling:
     - 1.0
 
   # Can be used to scale import and export data, used for workarounds
@@ -456,4 +456,3 @@ pred_bat:
     - '+[car_charging_planned]'
     - '+[car_charging_soc]'
     # - '{car_charging_now}'
-
