@@ -34,26 +34,11 @@ import json
 
 THIS_VERSION = "v8.7.3"
 PREDBAT_FILES = [
-    "predbat.py",
-    "config.py",
-    "prediction.py",
-    "gecloud.py",
-    "utils.py",
-    "inverter.py",
-    "ha.py",
-    "download.py",
-    "unit_test.py",
-    "web.py",
-    "predheat.py",
-    "futurerate.py",
-    "octopus.py",
-    "solcast.py",
-    "execute.py",
-    "plan.py",
-    "fetch.py",
-    "output.py",
-    "userinterface.py",
-]
+    "predbat.py", "config.py", "prediction.py", "gecloud.py",
+    "utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", 
+    "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py",
+    "execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"
+    ]
 from download import predbat_update_move, predbat_update_download, check_install
 
 # Sanity check the install and re-download if corrupted
@@ -90,7 +75,6 @@ from plan import Plan
 from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
-
 
 class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
     """
@@ -787,7 +771,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             except ValueError as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e))
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
             self.web_interface = None
             self.web_interface_task = None
@@ -810,7 +794,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
-            self.record_status("Error: Exception raised {}".format(e))
+            self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
             raise e
 
         # Catch template configurations and exit
@@ -824,7 +808,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e))
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
 
             return
@@ -900,7 +884,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e))
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
             finally:
                 self.prediction_started = False
@@ -953,7 +937,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e))
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
             finally:
                 self.prediction_started = False
@@ -971,5 +955,5 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             except Exception as e:
                 self.log("Error: Exception raised {}".format(e))
                 self.log("Error: " + traceback.format_exc())
-                self.record_status("Error: Exception raised {}".format(e))
+                self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc())
                 raise e
