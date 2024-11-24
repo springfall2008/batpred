@@ -7,6 +7,9 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+# pyright: reportAttributeAccessIssue=false
+# pylance: reportAttributeAccessIssue=false
+# pylance: disable=reportAttributeAccessIssue
 
 
 from datetime import datetime, timedelta
