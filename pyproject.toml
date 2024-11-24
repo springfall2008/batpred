@@ -1,7 +1,7 @@
 [tool.black]
 # https://github.com/psf/black
 target-version = ["py311"]
-line-length = 250
+line-length = 256
 color = true
 
 exclude = '''

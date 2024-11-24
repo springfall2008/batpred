@@ -169,9 +169,7 @@ class Execute:
                                 inverter.disable_charge_window()
                             else:
                                 self.log(
-                                    "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
-                                        inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
-                                    )
+                                    "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start))
                                 )
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
