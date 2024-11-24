@@ -12,12 +12,8 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-import math
-import re
-import time
 import pytz
-import requests
-import copy
+from utils import str2time, dp2, dp3, dp4
 
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
 
@@ -91,8 +87,6 @@ class PredHeat:
         self.minute_data = base.minute_data
         self.get_services = base.get_services_wrapper
         self.run_every = base.run_every
-        self.dp2 = base.dp2
-        self.dp3 = base.dp3
         self.heat_pump_efficiency = HEAT_PUMP_EFFICIENCY.copy()
         self.gas_efficiency = GAS_EFFICIENCY.copy()
         self.delta_correction = DELTA_CORRECTION.copy()
@@ -122,13 +116,6 @@ class PredHeat:
         timeday = updated - now
         minutes = int(timeday.seconds / 60) + int(timeday.days * 60 * 24)
         return minutes
-
-    def str2time(self, str):
-        if "." in str:
-            tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
-        else:
-            tdata = datetime.strptime(str, TIME_FORMAT)
-        return tdata
 
     def reset(self):
         self.had_errors = False
@@ -178,7 +165,7 @@ class PredHeat:
             if history:
                 item = history[0][0]
                 try:
-                    last_updated_time = self.str2time(item["last_updated"])
+                    last_updated_time = str2time(item["last_updated"])
                 except (ValueError, TypeError):
                     last_updated_time = now_utc
 
@@ -390,25 +377,25 @@ class PredHeat:
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                internal_temp_predict_stamp[stamp] = self.dp2(internal_temp)
-                external_temp_predict_stamp[stamp] = self.dp2(external_temp)
-                target_temp_predict_stamp[stamp] = self.dp2(target_temp)
-                heat_to_predict_stamp[stamp] = self.dp2(heat_to)
-                heat_energy_predict_stamp[stamp] = self.dp2(heat_energy)
-                volume_temp_stamp[stamp] = self.dp2(volume_temp)
-                cost_stamp[stamp] = self.dp2(cost)
+                internal_temp_predict_stamp[stamp] = dp2(internal_temp)
+                external_temp_predict_stamp[stamp] = dp2(external_temp)
+                target_temp_predict_stamp[stamp] = dp2(target_temp)
+                heat_to_predict_stamp[stamp] = dp2(heat_to)
+                heat_energy_predict_stamp[stamp] = dp2(heat_energy)
+                volume_temp_stamp[stamp] = dp2(volume_temp)
+                cost_stamp[stamp] = dp2(cost)
 
                 entry = {}
                 entry["last_updated"] = stamp
-                entry["energy"] = self.dp2(heat_energy)
+                entry["energy"] = dp2(heat_energy)
                 energy_today_external.append(entry)
 
             # Store raw data
-            target_temp_predict_minute[minute] = self.dp2(target_temp)
-            internal_temp_predict_minute[minute] = self.dp2(internal_temp)
-            heat_to_predict_temperature[minute] = self.dp2(heat_to)
-            heat_energy_predict_minute[minute] = self.dp2(heat_energy)
-            cost_minute[minute] = self.dp2(cost)
+            target_temp_predict_minute[minute] = dp2(target_temp)
+            internal_temp_predict_minute[minute] = dp2(internal_temp)
+            heat_to_predict_temperature[minute] = dp2(heat_to)
+            heat_energy_predict_minute[minute] = dp2(heat_energy)
+            cost_minute[minute] = dp2(cost)
 
             if minute == 0:
                 next_volume_temp = volume_temp
@@ -416,23 +403,23 @@ class PredHeat:
         if save == "best":
             self.set_state(
                 self.prefix + ".internal_temp",
-                state=self.dp2(self.internal_temperature[0]),
+                state=dp2(self.internal_temperature[0]),
                 attributes={"results": internal_temp_predict_stamp, "friendly_name": "Internal Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "c"},
             )
             self.set_state(
                 self.prefix + ".external_temp",
-                state=self.dp2(self.external_temperature[0]),
+                state=dp2(self.external_temperature[0]),
                 attributes={"results": external_temp_predict_stamp, "friendly_name": "External Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "c"},
             )
             self.set_state(
-                self.prefix + ".target_temp", state=self.dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "c"}
+                self.prefix + ".target_temp", state=dp2(target_temp_predict_minute[0]), attributes={"results": target_temp_predict_stamp, "friendly_name": "Target Temperature Predicted", "state_class": "measurement", "unit_of_measurement": "c"}
             )
             self.set_state(
-                self.prefix + ".heat_to_temp", state=self.dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "c"}
+                self.prefix + ".heat_to_temp", state=dp2(heat_to_predict_temperature[0]), attributes={"results": heat_to_predict_stamp, "friendly_name": "Predict heating to target", "state_class": "measurement", "unit_of_measurement": "c"}
             )
-            self.set_state(self.prefix + ".internal_temp_h1", state=self.dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "c"})
-            self.set_state(self.prefix + ".internal_temp_h2", state=self.dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "c"})
-            self.set_state(self.prefix + ".internal_temp_h8", state=self.dp2(internal_temp_predict_minute[60 * 8]), attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": "c"})
+            self.set_state(self.prefix + ".internal_temp_h1", state=dp2(internal_temp_predict_minute[60]), attributes={"friendly_name": "Internal Temperature Predicted +1hr", "state_class": "measurement", "unit_of_measurement": "c"})
+            self.set_state(self.prefix + ".internal_temp_h2", state=dp2(internal_temp_predict_minute[60 * 2]), attributes={"friendly_name": "Internal Temperature Predicted +2hr", "state_class": "measurement", "unit_of_measurement": "c"})
+            self.set_state(self.prefix + ".internal_temp_h8", state=dp2(internal_temp_predict_minute[60 * 8]), attributes={"friendly_name": "Internal Temperature Predicted +8hrs", "state_class": "measurement", "unit_of_measurement": "c"})
             self.set_state(
                 self.prefix + ".heat_energy",
                 state=self.heat_energy_today,
@@ -441,11 +428,11 @@ class PredHeat:
             self.set_state(self.prefix + ".heat_energy_h1", state=heat_energy_predict_minute[60], attributes={"friendly_name": "Predict heating energy +1hr", "state_class": "measurement", "unit_of_measurement": "kWh"})
             self.set_state(self.prefix + ".heat_energy_h2", state=heat_energy_predict_minute[60 * 2], attributes={"friendly_name": "Predict heating energy +2hrs", "state_class": "measurement", "unit_of_measurement": "kWh"})
             self.set_state(self.prefix + ".heat_energy_h8", state=heat_energy_predict_minute[60 * 8], attributes={"friendly_name": "Predict heating energy +8hrs", "state_class": "measurement", "unit_of_measurement": "kWh"})
-            self.set_state(self.prefix + ".volume_temp", state=self.dp2(next_volume_temp), attributes={"results": volume_temp_stamp, "friendly_name": "Volume temperature", "state_class": "measurement", "unit_of_measurement": "c"})
-            self.set_state(self.prefix + ".cost", state=self.dp2(cost), attributes={"results": cost_stamp, "friendly_name": "Predicted cost", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h1", state=self.dp2(cost_minute[60]), attributes={"friendly_name": "Predicted cost +1hr", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h2", state=self.dp2(cost_minute[60 * 2]), attributes={"friendly_name": "Predicted cost +2hrs", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h8", state=self.dp2(cost_minute[60 * 8]), attributes={"friendly_name": "Predicted cost +8hrs", "state_class": "measurement", "unit_of_measurement": "p"})
+            self.set_state(self.prefix + ".volume_temp", state=dp2(next_volume_temp), attributes={"results": volume_temp_stamp, "friendly_name": "Volume temperature", "state_class": "measurement", "unit_of_measurement": "c"})
+            self.set_state(self.prefix + ".cost", state=dp2(cost), attributes={"results": cost_stamp, "friendly_name": "Predicted cost", "state_class": "measurement", "unit_of_measurement": "p"})
+            self.set_state(self.prefix + ".cost_h1", state=dp2(cost_minute[60]), attributes={"friendly_name": "Predicted cost +1hr", "state_class": "measurement", "unit_of_measurement": "p"})
+            self.set_state(self.prefix + ".cost_h2", state=dp2(cost_minute[60 * 2]), attributes={"friendly_name": "Predicted cost +2hrs", "state_class": "measurement", "unit_of_measurement": "p"})
+            self.set_state(self.prefix + ".cost_h8", state=dp2(cost_minute[60 * 8]), attributes={"friendly_name": "Predicted cost +8hrs", "state_class": "measurement", "unit_of_measurement": "p"})
         return next_volume_temp, internal_temp_predict_minute
 
     def today_cost(self, import_today):
@@ -473,10 +460,10 @@ class PredHeat:
             if (minute % 10) == 0:
                 minute_timestamp = self.midnight_utc + timedelta(minutes=minute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
-                day_cost_time[stamp] = self.dp2(day_cost)
+                day_cost_time[stamp] = dp2(day_cost)
 
-        self.set_state(self.prefix + ".cost_today", state=self.dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"})
-        self.log("Predheat: Todays energy import {} kwh cost {} p".format(self.dp2(day_energy), self.dp2(day_cost), self.dp2(day_cost_import)))
+        self.set_state(self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"})
+        self.log("Predheat: Todays energy import {} kwh cost {} p".format(dp2(day_energy), dp2(day_cost), dp2(day_cost_import)))
         return day_cost
 
     def update_pred(self, scheduled):
@@ -534,7 +521,7 @@ class PredHeat:
 
         self.log(
             "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(
-                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, self.dp2(self.heat_energy_today), self.dp3(self.next_volume_temp)
+                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp)
             )
         )
         self.get_weather_data(now_utc)
@@ -554,7 +541,7 @@ class PredHeat:
         if scheduled:
             # Update state
             self.next_volume_temp = next_volume_temp
-            self.expose_config("next_volume_temp", self.dp3(self.next_volume_temp))
+            self.expose_config("next_volume_temp", dp3(self.next_volume_temp))
 
         if self.had_errors:
             self.log("Predheat: completed run status {} with Errors reported (check log)".format(status))
