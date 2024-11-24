@@ -1687,7 +1687,10 @@ class Output:
             },
         )
 
-        self.log("Info: record_status {}".format(message + extra))
+        if had_errors:
+            self.log("Warn: record_status {}".format(message + extra))
+        else:
+            self.log("Info: record_status {}".format(message + extra))
 
         self.previous_status = message
         if had_errors:
