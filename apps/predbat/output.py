@@ -1037,7 +1037,11 @@ class Output:
         value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
         value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
-        self.log("Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), dp2(value_increase_day), dp2(rate_forward)))
+        self.log(
+            "Battery level now {} -1hr {} midnight {} battery value change hour {} day {} rate_forward {}".format(
+                dp2(battery_level_now), dp2(battery_level_hour), dp2(battery_level_midnight), dp2(value_increase_hour), dp2(value_increase_day), dp2(rate_forward)
+            )
+        )
 
         for minute_back in range(60):
             minute = self.minutes_now - minute_back

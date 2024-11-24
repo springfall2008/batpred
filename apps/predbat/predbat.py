@@ -75,6 +75,7 @@ from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
 
+
 class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
