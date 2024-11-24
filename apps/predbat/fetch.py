@@ -14,6 +14,7 @@ from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4
 from config import MAX_INCREMENT, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 
+
 class Fetch:
     def get_cloud_factor(self, minutes_now, pv_data, pv_data10):
         """
@@ -257,11 +258,7 @@ class Fetch:
                 else:
                     real_data_percent = ((24 * 60) - num_gaps) / (24 * 60)
                     average_day /= real_data_percent
-                    self.log(
-                        "Warn: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(
-                            days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0)
-                        )
-                    )
+                    self.log("Warn: Historical day {} has {} minutes of gap in the data, filled from {} kWh to make new average {} kWh (percent {}%)".format(days, num_gaps, dp2(sum_days_id[days]), dp2(average_day), dp0(real_data_percent * 100.0)))
 
                 # Do the filling
                 per_minute_increment = average_day / (24 * 60)
@@ -984,7 +981,7 @@ class Fetch:
 
         # Fetch octopus saving sessions and free sessions
         octopus_free_slots, octopus_saving_slots = self.fetch_octopus_sessions()
-    
+
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
         self.log("Standing charge is set to {} p".format(self.metric_standing_charge))
@@ -1352,6 +1349,7 @@ class Fetch:
         if print:
             self.log("Export rates min {} max {} average {}".format(self.rate_export_min, self.rate_export_max, self.rate_export_average))
         return rates
+
     def rate_minmax(self, rates):
         """
         Work out min and max rates

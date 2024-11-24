@@ -20,6 +20,7 @@ from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_pr
 Used to mimic threads when they are disabled
 """
 
+
 class DummyThread:
     def __init__(self, result):
         """
@@ -35,7 +36,6 @@ class DummyThread:
 
 
 class Plan:
-
     def optimise_charge_limit_price_threads(
         self,
         price_set,
@@ -1657,6 +1657,7 @@ class Plan:
                     "icon": "mdi:clock-start",
                 },
             )
+
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
         """
         Clip charge slots that are useless as they don't charge at all
@@ -2219,9 +2220,7 @@ class Plan:
                         self.export_limits_best[window_n] = best_soc
                         self.export_window_best[window_n]["start"] = best_start
                 if (count % 16) == 0:
-                    self.log(
-                        "Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost))
-                    )
+                    self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
                 count += 1
             self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
 
@@ -3048,6 +3047,7 @@ class Plan:
             final_iboost_kwh,
             final_carbon_g,
         )
+
     def plan_iboost_smart(self):
         """
         Smart iboost planning

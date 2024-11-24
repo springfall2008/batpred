@@ -16,6 +16,7 @@ import math
 from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
 
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
@@ -26,11 +27,13 @@ def minutes_since_yesterday(now):
     difference_minutes = int((difference.seconds + 59) / 60)
     return difference_minutes
 
+
 def dp0(value):
     """
     Round to 0 decimal places
     """
     return round(value)
+
 
 def dp1(value):
     """
@@ -38,11 +41,13 @@ def dp1(value):
     """
     return round(value, 1)
 
+
 def dp2(value):
     """
     Round to 2 decimal places
     """
     return round(value, 2)
+
 
 def dp3(value):
     """
@@ -50,11 +55,13 @@ def dp3(value):
     """
     return round(value, 3)
 
+
 def dp4(value):
     """
     Round to 4 decimal places
     """
     return round(value, 4)
+
 
 def minutes_to_time(updated, now):
     """
@@ -64,6 +71,7 @@ def minutes_to_time(updated, now):
     minutes = int(timeday.seconds / 60) + int(timeday.days * 60 * 24)
     return minutes
 
+
 def str2time(str):
     if "." in str:
         tdata = datetime.strptime(str, TIME_FORMAT_SECONDS)
@@ -72,6 +80,7 @@ def str2time(str):
     else:
         tdata = datetime.strptime(str, TIME_FORMAT_OCTOPUS)
     return tdata
+
 
 def calc_percent_limit(charge_limit, soc_max):
     """

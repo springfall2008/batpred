@@ -1,4 +1,3 @@
-
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2024 - All Rights Reserved
@@ -14,10 +13,25 @@ from datetime import datetime, timedelta
 import json
 import yaml
 import re
-from config import TIME_FORMAT, CONFIG_ITEMS, PREDBAT_MODE_OPTIONS, THIS_VERSION, CONFIG_API_OVERRIDE, PREDBAT_MODE_MONITOR, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_SAVE_RESTORE, PREDBAT_UPDATE_OPTIONS, PREDICT_STEP, CONFIG_REFRESH_PERIOD, CONFIG_ROOTS
+from config import (
+    TIME_FORMAT,
+    CONFIG_ITEMS,
+    PREDBAT_MODE_OPTIONS,
+    THIS_VERSION,
+    CONFIG_API_OVERRIDE,
+    PREDBAT_MODE_MONITOR,
+    PREDBAT_MODE_CONTROL_SOC,
+    PREDBAT_MODE_CONTROL_CHARGEDISCHARGE,
+    PREDBAT_MODE_CONTROL_CHARGE,
+    PREDBAT_SAVE_RESTORE,
+    PREDBAT_UPDATE_OPTIONS,
+    PREDICT_STEP,
+    CONFIG_REFRESH_PERIOD,
+    CONFIG_ROOTS,
+)
+
 
 class UserInterface:
-
     def call_notify(self, message):
         """
         Sync wrapper for call_notify

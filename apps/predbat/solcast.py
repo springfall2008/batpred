@@ -21,6 +21,8 @@ from utils import dp1, dp2
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
 """
+
+
 class Solcast:
     def cache_get_url(self, url, params, max_age=8 * 60):
         # Get data from cache
