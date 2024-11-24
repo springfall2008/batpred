@@ -317,15 +317,9 @@ class Inverter:
             if not quiet:
                 self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 10:
-                self.base.log(
-                    "Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    )
-                )
+                self.base.log("Warn: Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(self.inverter_time, now_utc, tdiff))
                 self.base.record_status(
-                    "Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(
-                        self.inverter_time, now_utc, tdiff
-                    ),
+                    "Invertor time is {}, Predbat computer time {}, this is {} minutes skewed, Predbat may not function correctly, please fix this by updating your inverter time, checking HA is synchronising with your inverter, or fixing Predbat computer time zone".format(self.inverter_time, now_utc, tdiff),
                     had_errors=True,
                 )
                 # Trigger restart
@@ -506,26 +500,8 @@ class Inverter:
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SOC just increased above the data point
-                        if (
-                            not discharge
-                            and soc_percent.get(minute - 1, 0) == (data_point + 1)
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") == "Charging"
-                            and predbat_status.get(minute, "") == "Charging"
-                            and predbat_status.get(minute + 1, "") == "Charging"
-                            and charge_rate.get(minute - 1, 0) == max_power
-                            and charge_rate.get(minute, 0) == max_power
-                            and battery_power.get(minute, 0) < 0
-                        ) or (
-                            discharge
-                            and soc_percent.get(minute - 1, 0) == (data_point - 1)
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
-                            and charge_rate.get(minute - 1, 0) == max_power
-                            and charge_rate.get(minute, 0) == max_power
-                            and battery_power.get(minute, 0) > 0
+                        if (not discharge and soc_percent.get(minute - 1, 0) == (data_point + 1) and soc_percent.get(minute, 0) == data_point and predbat_status.get(minute - 1, "") == "Charging" and predbat_status.get(minute, "") == "Charging" and predbat_status.get(minute + 1, "") == "Charging" and charge_rate.get(minute - 1, 0) == max_power and charge_rate.get(minute, 0) == max_power and battery_power.get(minute, 0) < 0) or (
+                            discharge and soc_percent.get(minute - 1, 0) == (data_point - 1) and soc_percent.get(minute, 0) == data_point and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"] and predbat_status.get(minute, "") in ["Exporting", "Discharging"] and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"] and charge_rate.get(minute - 1, 0) == max_power and charge_rate.get(minute, 0) == max_power and battery_power.get(minute, 0) > 0
                         ):
                             total_power = 0
                             total_count = 0

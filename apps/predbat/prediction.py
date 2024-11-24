@@ -173,9 +173,7 @@ class Prediction:
         """
         Run single prediction in a thread
         """
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step
-        )
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step)
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
@@ -190,9 +188,7 @@ class Prediction:
         else:
             try_charge_limit[window_n] = try_soc
 
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
-        )
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record)
         min_soc = 0
         max_soc = self.soc_max
         if not all_n:
@@ -235,9 +231,7 @@ class Prediction:
             start = min(start, window["end"] - 5)
             export_window[window_n]["start"] = start
 
-        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
-        )
+        metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record)
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
     def find_charge_window_optimised(self, charge_windows):

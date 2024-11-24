@@ -368,11 +368,7 @@ class Octopus:
                     else:
                         assumed_price = self.rate_import.get(start_minutes, self.rate_min)
 
-                    self.log(
-                        "Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(
-                            self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), assumed_price, kwh, location, source, octopus_slot_low_rate
-                        )
-                    )
+                    self.log("Octopus Intelligent slot at {}-{} assumed price {} amount {} kWh location {} source {} octopus_slot_low_rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), assumed_price, kwh, location, source, octopus_slot_low_rate))
 
         return rates
 

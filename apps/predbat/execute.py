@@ -168,29 +168,17 @@ class Execute:
                                 self.log("Charge window will be disabled as freeze charging is planned")
                                 inverter.disable_charge_window()
                             else:
-                                self.log(
-                                    "Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(
-                                        inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
-                                    )
-                                )
+                                self.log("Inverter {} configuring charge window now (now {} target set_window_minutes {} charge start time {}".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
-                            self.log(
-                                "Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
-                                    inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
-                                )
-                            )
+                            self.log("Inverter {} disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                             inverter.disable_charge_window()
 
                     # Set configured window minutes for the SoC adjustment routine
                     inverter.charge_start_time_minutes = minutes_start
                     inverter.charge_end_time_minutes = minutes_end
                 else:
-                    self.log(
-                        "Inverter {} Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(
-                            inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)
-                        )
-                    )
+                    self.log("Inverter {} Disabled charge window while waiting for schedule (now {} target set_window_minutes {} charge start time {})".format(inverter.id, self.time_abs_str(self.minutes_now), self.set_window_minutes, self.time_abs_str(minutes_start)))
                     inverter.disable_charge_window()
             elif self.set_charge_window:
                 self.log("Inverter {} No charge window yet, waiting for schedule.".format(inverter.id))
@@ -393,18 +381,10 @@ class Execute:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                         self.log("Setting charging SOC to 0 as we are not within the charge window and inverter doesn't support target soc")
                     elif not self.inverter_hybrid and self.inverter_soc_reset:
-                        self.log(
-                            "Resetting charging SoC as we are not within the window or charge is disabled and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(
-                                self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
-                            )
-                        )
+                        self.log("Resetting charging SoC as we are not within the window or charge is disabled and inverter_soc_reset is enabled (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
                         self.adjust_battery_target_multi(inverter, 100.0, isCharging, isExporting)
                     else:
-                        self.log(
-                            "Not setting charging SoC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(
-                                self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)
-                            )
-                        )
+                        self.log("Not setting charging SoC as we are not within the window (now {} target set_soc_minutes {} charge start time {})".format(self.time_abs_str(self.minutes_now), self.set_soc_minutes, self.time_abs_str(inverter.charge_start_time_minutes)))
                         if not inverter.inv_has_charge_enable_time:
                             self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
 
@@ -440,11 +420,7 @@ class Execute:
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), 0)
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-            self.log(
-                "Inverter {} adjust target soc for charge to {}% ({}kWh/{}kWh {}kWh) based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
-                    inverter.id, soc, target_kwh, self.soc_max, inverter.soc_max, soc_percent, new_soc_percent, dp2(add_kwh), dp2(add_this), dp2(new_soc_kwh)
-                )
-            )
+            self.log("Inverter {} adjust target soc for charge to {}% ({}kWh/{}kWh {}kWh) based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(inverter.id, soc, target_kwh, self.soc_max, inverter.soc_max, soc_percent, new_soc_percent, dp2(add_kwh), dp2(add_this), dp2(new_soc_kwh)))
         inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
 
     def reset_inverter(self):
@@ -702,36 +678,14 @@ class Execute:
             power_enough_discharge.append(battery_powers[id] >= 50.0)
             power_enough_charge.append(inverters[id].battery_power <= -50.0)
 
-        self.log(
-            "BALANCE: out_of_balance {} above_reserve {} below_full {} can_power_house {} can_store_pv {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(
-                out_of_balance, above_reserve, below_full, can_power_house, can_store_pv, power_enough_discharge, power_enough_charge, soc_low, soc_high
-            )
-        )
+        self.log("BALANCE: out_of_balance {} above_reserve {} below_full {} can_power_house {} can_store_pv {} power_enough_discharge {} power_enough_charge {} soc_low {} soc_high {}".format(out_of_balance, above_reserve, below_full, can_power_house, can_store_pv, power_enough_discharge, power_enough_charge, soc_low, soc_high))
         for this_inverter in range(num_inverters):
             other_inverter = (this_inverter + 1) % num_inverters
-            if (
-                self.balance_inverters_discharge
-                and total_discharge_rates > 0
-                and out_of_balance
-                and during_discharge
-                and soc_low[this_inverter]
-                and above_reserve[other_inverter]
-                and can_power_house[this_inverter]
-                and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0)
-            ):
+            if self.balance_inverters_discharge and total_discharge_rates > 0 and out_of_balance and during_discharge and soc_low[this_inverter] and above_reserve[other_inverter] and can_power_house[this_inverter] and (power_enough_discharge[this_inverter] or discharge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance low - during discharge, attempting to balance it using inverter {}".format(this_inverter, other_inverter))
                 balance_reset_discharge[this_inverter] = True
                 inverters[this_inverter].adjust_discharge_rate(0, notify=False)
-            elif (
-                self.balance_inverters_charge
-                and total_charge_rates > 0
-                and out_of_balance
-                and during_charge
-                and soc_high[this_inverter]
-                and below_full[other_inverter]
-                and can_store_pv[this_inverter]
-                and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0)
-            ):
+            elif self.balance_inverters_charge and total_charge_rates > 0 and out_of_balance and during_charge and soc_high[this_inverter] and below_full[other_inverter] and can_store_pv[this_inverter] and (power_enough_charge[this_inverter] or charge_rates[this_inverter] == 0):
                 self.log("BALANCE: Inverter {} is out of balance high - during charge, attempting to balance it".format(this_inverter))
                 balance_reset_charge[this_inverter] = True
                 inverters[this_inverter].adjust_charge_rate(0, notify=False)

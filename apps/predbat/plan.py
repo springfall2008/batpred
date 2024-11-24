@@ -671,9 +671,7 @@ class Plan:
                 self.log("Not using threading as threads is set to 0 in apps.yaml")
 
         # Simulate current settings to get initial data
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, end_record=self.end_record
-        )
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, end_record=self.end_record)
 
         # Try different battery SoC's to get the best result
         if recompute:
@@ -780,9 +778,7 @@ class Plan:
             self.plan_last_updated_minutes = self.minutes_now
 
         # Final simulation of base
-        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base", end_record=self.end_record
-        )
+        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base", end_record=self.end_record)
         (
             metricb10,
             import_kwh_batteryb10,
@@ -1761,13 +1757,7 @@ class Plan:
         for window_n in range(len(export_limits_best)):
             if export_limits_best[window_n] < 100.0:
                 # Also merge contiguous enabled windows
-                if (
-                    new_best
-                    and (export_window_best[window_n]["start"] == new_best[-1]["end"])
-                    and (export_limits_best[window_n] == new_enable[-1])
-                    and (export_window_best[window_n]["start"] not in self.manual_all_times)
-                    and (new_best[-1]["start"] not in self.manual_all_times)
-                ):
+                if new_best and (export_window_best[window_n]["start"] == new_best[-1]["end"]) and (export_limits_best[window_n] == new_enable[-1]) and (export_window_best[window_n]["start"] not in self.manual_all_times) and (new_best[-1]["start"] not in self.manual_all_times):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
                     if self.debug_enable:
                         self.log("Combine export slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
@@ -1972,11 +1962,7 @@ class Plan:
         # First optimise those at or below threshold highest to lowest (to turn down values)
         # then optimise those above the threshold lowest to highest (to turn up values)
         # Do the opposite for export.
-        self.log(
-            "Starting second optimisation end_record {} best_price {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(
-                self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best
-            )
-        )
+        self.log("Starting second optimisation end_record {} best_price {} best_price_export {} lowest_price_charge {} with charge limits {} export limits {}".format(self.time_abs_str(self.end_record + self.minutes_now), best_price, best_price_export, lowest_price_charge, self.charge_limit_best, self.export_limits_best))
         for pass_type in ["freeze", "normal", "low"]:
             start_at_low = False
             if pass_type in ["low"]:
