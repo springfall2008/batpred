@@ -8,9 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 # pyright: reportAttributeAccessIssue=false
-# pylance: reportAttributeAccessIssue=false
-# pylance: disable=reportAttributeAccessIssue
-
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4

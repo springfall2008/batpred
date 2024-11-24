@@ -207,7 +207,7 @@ class Execute:
                     minutes_start = inverter.discharge_start_time_minutes
                     # Don't allow overlap with charge window
                     if minutes_start < inverter.charge_end_time_minutes and minutes_end >= inverter.charge_start_time_minutes:
-                        minutes_start = window["start"]
+                        minutes_start = max(window["start"], self.minutes_now)
                     else:
                         self.log(
                             "Include original export start {} with our start which is {} (charge start {} end {})".format(
@@ -230,6 +230,11 @@ class Execute:
                         minutes_end = 24 * 60 - 1
                     export_adjust = 0
 
+                # Overlap into charge slot if 1 minute was added, then don't add the 1 minute
+                if inverter.charge_start_time_minutes == minutes_end:
+                    export_adjust = 0
+
+                # Turn minutes into time
                 discharge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                 discharge_end_time = self.midnight_utc + timedelta(minutes=(minutes_end + export_adjust))  # Add in 1 minute margin to allow Predbat to restore demand mode
                 discharge_soc = max((self.export_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
