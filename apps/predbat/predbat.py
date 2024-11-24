@@ -3408,7 +3408,7 @@ class PredBat(hass.Hass):
                     if export:
                         self.rate_export[minute] = rate
                     else:
-                        self.rate_import[minute] = rate
+                        self.rate_import[minute] = min( [rate, self.rate_import[minute]] )
                         self.load_scaling_dynamic[minute] = self.load_scaling_free
                     rate_replicate[minute] = "saving"
 
