@@ -370,17 +370,6 @@ class Plan:
             han = DummyThread(self.prediction.thread_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv10, all_n, end_record))
         return han
 
-    def find_charge_window_optimised(self, charge_windows):
-        """
-        Takes in an array of charge windows
-        Returns a dictionary defining for each minute that is in the charge window will contain the window number
-        """
-        charge_window_optimised = {}
-        for window_n in range(len(charge_windows)):
-            for minute in range(charge_windows[window_n]["start"], charge_windows[window_n]["end"], PREDICT_STEP):
-                charge_window_optimised[minute] = window_n
-        return charge_window_optimised
-
     def scenario_summary_title(self, record_time):
         txt = ""
         minute_start = self.minutes_now - self.minutes_now % 30
@@ -2223,6 +2212,8 @@ class Plan:
                     self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
                 count += 1
             self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
+
+        return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def optimise_charge_windows_manual(self):
         """
