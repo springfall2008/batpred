@@ -1,0 +1,3 @@
+rm predbat.log
+cp /Volumes/addon_configs/6adb4f0d_predbat/*.py predbat_debug
+python3 predbat_debug/unit_test.py
