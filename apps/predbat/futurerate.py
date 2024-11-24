@@ -6,6 +6,7 @@ import pytz
 import copy
 
 from config import TIME_FORMAT
+from utils import dp1, dp2
 
 TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 
@@ -13,8 +14,6 @@ TIME_FORMAT_NORD = "%d-%m-%YT%H:%M:%S%z"
 class FutureRate:
     def __init__(self, base):
         self.base = base
-        self.dp1 = base.dp1
-        self.dp2 = base.dp2
         self.record_status = base.record_status
         self.log = base.log
         self.get_arg = base.get_arg
@@ -123,7 +122,7 @@ class FutureRate:
                     best_diff_add_peak = correlate_add
 
         # Print calibration results
-        # self.log("Calibration for {} best diff {} multiply {} add_peak {} add_all {} ".format("import" if is_import else "export", best_diff_diff, best_diff_multiply, best_diff_add_peak, best_diff_add_all))
+        #self.log("Calibration for {} best diff {} multiply {} add_peak {} add_all {} ".format("import" if is_import else "export", best_diff_diff, best_diff_multiply, best_diff_add_peak, best_diff_add_all))
 
         # Perform adjustment
         calibrated_data = {}
@@ -139,7 +138,7 @@ class FutureRate:
             else:
                 rate_nord = max(rate_nord, 0)
 
-            calibrated_data[minute] = self.dp2(rate_nord * vat)
+            calibrated_data[minute] = dp2(rate_nord * vat)
 
         return calibrated_data
 
@@ -214,15 +213,15 @@ class FutureRate:
             item = {}
             item["from"] = time_date_start.strftime(TIME_FORMAT)
             item["to"] = time_date_end.strftime(TIME_FORMAT)
-            item["rate_import"] = self.dp2(rate_import)
-            item["rate_export"] = self.dp2(rate_export)
+            item["rate_import"] = dp2(rate_import)
+            item["rate_export"] = dp2(rate_export)
 
             # Create intermediate 30 minute data points
             if prev_time_date_end == time_date_start and (minutes_end - minutes_start) == 60:
                 time_end_intermediate = time_date_start + timedelta(minutes=30)
                 item["to"] = time_end_intermediate.strftime(TIME_FORMAT)
-                item["rate_import"] = self.dp2((rate_import + prev_rate_import) / 2)
-                item["rate_export"] = self.dp2((rate_export + prev_rate_export) / 2)
+                item["rate_import"] = dp2((rate_import + prev_rate_import) / 2)
+                item["rate_export"] = dp2((rate_export + prev_rate_export) / 2)
                 if time_date_start not in extracted_keys:
                     extracted_keys.append(time_date_start)
                     extracted_data[time_date_start] = item
@@ -230,8 +229,8 @@ class FutureRate:
                 item_intermediate = {}
                 item_intermediate["from"] = time_end_intermediate.strftime(TIME_FORMAT)
                 item_intermediate["to"] = time_date_end.strftime(TIME_FORMAT)
-                item_intermediate["rate_import"] = self.dp2(rate_import)
-                item_intermediate["rate_export"] = self.dp2(rate_export)
+                item_intermediate["rate_import"] = dp2(rate_import)
+                item_intermediate["rate_export"] = dp2(rate_export)
                 if time_end_intermediate not in extracted_keys:
                     extracted_keys.append(time_end_intermediate)
                     extracted_data[time_end_intermediate] = item_intermediate
@@ -315,7 +314,7 @@ class FutureRate:
                 needs_update = True
 
             if not needs_update:
-                self.log("Return cached futurerate data for {} age {} minutes".format(url, self.dp1(age.seconds / 60)))
+                self.log("Return cached futurerate data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
         # Retry up to 3 minutes

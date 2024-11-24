@@ -10,14 +10,12 @@
 
 import copy
 import os
-import re
 import time
-import math
 import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES
-from utils import calc_percent_limit
+from utils import calc_percent_limit, dp0, dp2
 
 
 class Inverter:
@@ -315,7 +313,7 @@ class Inverter:
             now_utc = datetime.now(local_tz)
 
             tdiff = self.inverter_time - now_utc
-            tdiff = self.base.dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
+            tdiff = dp2(tdiff.seconds / 60 + tdiff.days * 60 * 24)
             if not quiet:
                 self.base.log("Invertor time {}, Predbat computer time {}, difference {} minutes".format(self.inverter_time, now_utc, tdiff))
             if abs(tdiff) >= 10:
@@ -340,7 +338,7 @@ class Inverter:
             self.reserve_percent_current = float(self.rest_data["Control"]["Battery_Power_Reserve"])
         else:
             self.reserve_percent_current = max(self.base.get_arg("reserve", default=0.0, index=self.id), self.base.get_arg("battery_min_soc", default=4.0, index=self.id))
-        self.reserve_current = self.base.dp2(self.soc_max * self.reserve_percent_current / 100.0)
+        self.reserve_current = dp2(self.soc_max * self.reserve_percent_current / 100.0)
 
         # Get the expected minimum reserve value
         battery_min_soc = self.base.get_arg("battery_min_soc", default=4.0, index=self.id)
@@ -355,7 +353,7 @@ class Inverter:
             self.reserve_percent = self.reserve_min
         else:
             self.reserve_percent = self.reserve_percent_current
-        self.reserve = self.base.dp2(self.soc_max * self.reserve_percent / 100.0)
+        self.reserve = dp2(self.soc_max * self.reserve_percent / 100.0)
 
         # Max inverter rate override
         if "inverter_limit" in self.base.args:
@@ -370,14 +368,14 @@ class Inverter:
             self.base.log(
                 "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
                     self.id,
-                    self.base.dp2(self.soc_max),
-                    self.base.dp2(self.nominal_capacity),
-                    self.base.dp2(self.battery_rate_max_raw),
-                    self.base.dp2(self.battery_rate_max_charge * 60.0),
-                    self.base.dp2(self.battery_rate_max_discharge * 60.0),
-                    self.base.dp2(self.battery_rate_min * MINUTE_WATT),
-                    self.base.dp2(self.inverter_limit * 60),
-                    self.base.dp2(self.export_limit * 60),
+                    dp2(self.soc_max),
+                    dp2(self.nominal_capacity),
+                    dp2(self.battery_rate_max_raw),
+                    dp2(self.battery_rate_max_charge * 60.0),
+                    dp2(self.battery_rate_max_discharge * 60.0),
+                    dp2(self.battery_rate_min * MINUTE_WATT),
+                    dp2(self.inverter_limit * 60),
+                    dp2(self.export_limit * 60),
                     self.reserve_percent,
                     self.reserve_percent_current,
                 )
@@ -589,7 +587,7 @@ class Inverter:
                     # Average the data points
                     for index in final_curve:
                         if final_curve_count[index] > 0:
-                            final_curve[index] = self.base.dp2(final_curve[index] / final_curve_count[index])
+                            final_curve[index] = dp2(final_curve[index] / final_curve_count[index])
 
                     self.log("{} curve before adjustment is: {}".format(curve_type, final_curve))
 
@@ -786,10 +784,10 @@ class Inverter:
             self.base.log(
                 "Inverter {} SOC: {}kW {}% Current charge rate {}W Current discharge rate {}W Current power {}W Current voltage {}V".format(
                     self.id,
-                    self.base.dp2(self.soc_kw),
+                    dp2(self.soc_kw),
                     self.soc_percent,
-                    self.base.dp0(self.charge_rate_now * MINUTE_WATT),
-                    self.base.dp0(self.discharge_rate_now * MINUTE_WATT),
+                    dp0(self.charge_rate_now * MINUTE_WATT),
+                    dp0(self.discharge_rate_now * MINUTE_WATT),
                     self.battery_power,
                     self.battery_voltage,
                 )
