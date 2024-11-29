@@ -1969,7 +1969,6 @@ def run_window_sort_tests(my_predbat):
 
     return failed
 
-
 def run_optimise_all_windows(
     name,
     my_predbat,
@@ -2018,7 +2017,7 @@ def run_optimise_all_windows(
 
     failed = False
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
+         charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
     )
     best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep)
 
@@ -2041,7 +2040,6 @@ def run_optimise_all_windows(
 
     return failed
 
-
 def run_optimise_all_windows_tests(my_predbat):
     print("**** Running Optimise all windows tests ****")
     reset_inverter(my_predbat)
@@ -2058,14 +2056,14 @@ def run_optimise_all_windows_tests(my_predbat):
         pv_amount=0,
         expect_best_price=10.0 / 0.9,
         inverter_loss=0.9,
-    )
+    )    
     return failed
-
 
 def run_optimise_levels_tests(my_predbat):
     print("**** Running Optimise levels tests ****")
     reset_inverter(my_predbat)
     failed = False
+
 
     # Single charge window
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
@@ -2094,15 +2092,17 @@ def run_optimise_levels_tests(my_predbat):
     failed |= this_failed
 
     # Two windows charge low + high rate
-    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}, {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 240, "average": 5}]
+    charge_window_best = [
+                            {"start": my_predbat.minutes_now,       "end": my_predbat.minutes_now + 60,  "average": 10.0}, 
+                            {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 240, "average": 5}
+                         ]
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual",
-        my_predbat,
-        charge_window_best=charge_window_best,
-        expect_charge_limit=[0, 100],
-        load_amount=0.5,
-        pv_amount=0,
-        expect_best_price=5.0 / 0.9,
+        "dual", 
+        my_predbat, 
+        charge_window_best=charge_window_best, 
+        expect_charge_limit=[0, 100], 
+        load_amount=0.5, pv_amount=0, 
+        expect_best_price=5.0 / 0.9, 
         inverter_loss=0.9,
     )
     failed |= this_failed
@@ -2237,7 +2237,7 @@ def run_optimise_levels(
         my_predbat.log = old_log
         print("Best price: {} Best metric: {} Best cost: {} Best keep: {} Best soc min: {} Best cycle: {} Best carbon: {} Best import: {}".format(best_price, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import))
         print("Charge limit best: {} expected {} Discharge limit best {} expected {}".format(charge_limit_best, expect_charge_limit, export_limits_best, expect_export_limit))
-
+   
     return failed, best_metric, best_keep, charge_limit_best, export_limits_best
 
 
