@@ -2099,7 +2099,7 @@ def run_optimise_all_windows(
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
 
-    # Optimise windows    
+    # Optimise windows
     best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep)
     charge_limit_best = my_predbat.charge_limit_best
     export_limits_best = my_predbat.export_limits_best
@@ -2108,7 +2108,7 @@ def run_optimise_all_windows(
 
     # Predict
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save='best'
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
     )
 
     # Save plan
@@ -2140,7 +2140,6 @@ def run_optimise_all_windows(
         open("plan.html", "w").write(my_predbat.html_plan)
         print("Wrote plan to plan.html")
 
-
     return failed
 
 
@@ -2169,8 +2168,8 @@ def run_optimise_all_windows_tests(my_predbat):
     expect_export_limit = []
     for n in range(0, 48):
         price = 16 - n % 16
-        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n+1), "average": price})
-        expect_charge_limit.append(100 if price / 0.9 <= 5.0 else 0)    
+        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
+        expect_charge_limit.append(100 if price / 0.9 <= 5.0 else 0)
     failed |= run_optimise_all_windows(
         "created2",
         my_predbat,
@@ -2207,7 +2206,7 @@ def run_optimise_levels_tests(my_predbat):
     failed |= this_failed
     if failed:
         return failed
-    
+
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
         "single_pv",
         my_predbat,
@@ -2240,45 +2239,31 @@ def run_optimise_levels_tests(my_predbat):
         return failed
 
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual_pv", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        expect_charge_limit=[0, 0], 
-        load_amount=1.0, 
-        pv_amount=1.0, 
-        expect_best_price=5.0 / 0.9, 
-        inverter_loss=0.9
+        "dual_pv", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 0], load_amount=1.0, pv_amount=1.0, expect_best_price=5.0 / 0.9, inverter_loss=0.9
     )
     failed |= this_failed
     if failed:
         return failed
 
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "dual_pv2", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        expect_charge_limit=[0, 100], 
-        load_amount=2.0, 
-        pv_amount=1.0, 
-        expect_best_price=5.0 / 0.9, 
-        inverter_loss=0.9
+        "dual_pv2", my_predbat, charge_window_best=charge_window_best, expect_charge_limit=[0, 100], load_amount=2.0, pv_amount=1.0, expect_best_price=5.0 / 0.9, inverter_loss=0.9
     )
     failed |= this_failed
     if failed:
         return failed
-
 
     # Discharge
     export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 7.5}]
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "discharge", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        export_window_best=export_window_best, 
-        expect_charge_limit=[0, 100], 
-        expect_export_limit=[0], 
-        load_amount=0, pv_amount=0, 
-        expect_best_price=5.0, 
+        "discharge",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        export_window_best=export_window_best,
+        expect_charge_limit=[0, 100],
+        expect_export_limit=[0],
+        load_amount=0,
+        pv_amount=0,
+        expect_best_price=5.0,
         inverter_loss=1,
     )
     failed |= this_failed
@@ -2288,21 +2273,21 @@ def run_optimise_levels_tests(my_predbat):
     # Discharge
     export_window_best = [{"start": my_predbat.minutes_now + 240, "end": my_predbat.minutes_now + 300, "average": 5}]
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "discharge2", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        export_window_best=export_window_best, 
-        expect_charge_limit=[0, 100], 
-        expect_export_limit=[100], 
-        load_amount=0, 
-        pv_amount=0, 
-        expect_best_price=5.0, 
+        "discharge2",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        export_window_best=export_window_best,
+        expect_charge_limit=[0, 100],
+        expect_export_limit=[100],
+        load_amount=0,
+        pv_amount=0,
+        expect_best_price=5.0,
         inverter_loss=1,
     )
     failed |= this_failed
     if failed:
         return failed
-    
+
     # Created
     charge_window_best = []
     export_window_best = []
@@ -2310,24 +2295,23 @@ def run_optimise_levels_tests(my_predbat):
     expect_export_limit = []
     for n in range(0, 48):
         price = n % 8
-        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n+1), "average": price})
+        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(100 if price / 0.9 <= 5.0 else 0)
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "created1", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        export_window_best=export_window_best, 
-        expect_charge_limit=expect_charge_limit, 
-        expect_export_limit=expect_export_limit, 
-        load_amount=0.5, 
-        pv_amount=0, 
-        expect_best_price=5.0 * 0.9, 
+        "created1",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        export_window_best=export_window_best,
+        expect_charge_limit=expect_charge_limit,
+        expect_export_limit=expect_export_limit,
+        load_amount=0.5,
+        pv_amount=0,
+        expect_best_price=5.0 * 0.9,
         inverter_loss=0.9,
     )
     failed |= this_failed
     if failed:
         return failed
-    
 
     # Created2
     charge_window_best = []
@@ -2336,24 +2320,24 @@ def run_optimise_levels_tests(my_predbat):
     expect_export_limit = []
     for n in range(0, 48):
         price = 16 - n % 16
-        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n+1), "average": price})
+        charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(100 if price / 0.9 <= 5.0 else 0)
     this_failed, best_metric, metric_keep, charge_limit_best, export_limit_best = run_optimise_levels(
-        "created2", 
-        my_predbat, 
-        charge_window_best=charge_window_best, 
-        export_window_best=export_window_best, 
-        expect_charge_limit=expect_charge_limit, 
-        expect_export_limit=expect_export_limit, 
-        load_amount=0.2, 
-        pv_amount=0, 
-        expect_best_price=5.0 * 0.9, 
+        "created2",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        export_window_best=export_window_best,
+        expect_charge_limit=expect_charge_limit,
+        expect_export_limit=expect_export_limit,
+        load_amount=0.2,
+        pv_amount=0,
+        expect_best_price=5.0 * 0.9,
         inverter_loss=0.9,
         best_soc_keep=0.5,
     )
     failed |= this_failed
     if failed:
-        return failed    
+        return failed
 
     return failed
 
@@ -2441,7 +2425,7 @@ def run_optimise_levels(
 
     # Predict
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save='best'
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
     )
 
     # Save plan
