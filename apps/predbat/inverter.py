@@ -95,7 +95,17 @@ class Inverter:
         else:
             self.log("Info: auto_restart not defined in apps.yaml, Predbat can't auto-restart inverter control")
 
+    def create_missing_arg(self, arg, default):
+        """
+        Create a missing inverter argument which will be assigned to a dummy entity
+        """
+        if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
+            self.base.args[arg] = [default, default, default, default]
+
     def __init__(self, base, id=0, quiet=False):
+        """
+        Inverter class
+        """
         self.id = id
         self.base = base
         self.log = self.base.log
@@ -385,39 +395,46 @@ class Inverter:
         # Create some dummy entities if PredBat expects them but they don't exist for this Inverter Type:
         # Args are also set for these so that no entries are needed for the dummies in the config file
         if not self.inv_has_charge_enable_time:
-            if ("scheduled_charge_enable" not in self.base.args) or (not isinstance(self.base.args["scheduled_charge_enable"], list)):
-                self.base.args["scheduled_charge_enable"] = ["on", "on", "on", "on"]
+            self.create_missing_arg("scheduled_charge_enable", "on")
             self.base.args["scheduled_charge_enable"][id] = self.create_entity("scheduled_charge_enable", "on")
 
         if not self.inv_has_discharge_enable_time:
-            if ("scheduled_discharge_enable" not in self.base.args) or (not isinstance(self.base.args["scheduled_discharge_enable"], list)):
-                self.base.args["scheduled_discharge_enable"] = ["on", "on", "on", "on"]
+            self.create_missing_arg("scheduled_discharge_enable", "on")
             self.base.args["scheduled_discharge_enable"][id] = self.create_entity("scheduled_discharge_enable", "on")
 
         if not self.inv_has_reserve_soc:
-            self.base.args["reserve"] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
+            self.create_missing_arg("reserve", self.reserve)
+            self.base.args["reserve"][id] = self.create_entity("reserve", self.reserve, device_class="battery", uom="%")
 
         if not self.inv_has_target_soc:
-            self.base.args["charge_limit"] = self.create_entity("charge_limit", 100, device_class="battery", uom="%")
+            self.create_missing_arg("charge_limit", 100)
+            self.base.args["charge_limit"][id] = self.create_entity("charge_limit", 100, device_class="battery", uom="%")
 
         if self.inv_output_charge_control != "power":
-            self.base.args["charge_rate"] = self.create_entity("charge_rate", int(self.battery_rate_max_charge * MINUTE_WATT), uom="W", device_class="power")
-            self.base.args["discharge_rate"] = self.create_entity("discharge_rate", int(self.battery_rate_max_discharge * MINUTE_WATT), uom="W", device_class="power")
+            max_charge = self.battery_rate_max_charge * MINUTE_WATT
+            max_discharge = self.battery_rate_max_discharge * MINUTE_WATT
+            self.create_missing_arg("charge_rate", max_charge)
+            self.create_missing_arg("discharge_rate", max_discharge)
+            self.base.args["charge_rate"][id] = self.create_entity("charge_rate", max_charge, uom="W", device_class="power")
+            self.base.args["discharge_rate"][id] = self.create_entity("discharge_rate", max_discharge, uom="W", device_class="power")
 
         if not self.inv_has_ge_inverter_mode:
-            if "inverter_mode" not in self.base.args:
-                self.base.args["inverter_mode"] = ["Eco", "Eco", "Eco", "Eco"]
+            self.create_missing_arg("inverter_mode", "Eco")
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
-                    self.base.args[f"{x}_{y}_time"] = self.create_entity(f"{x}_{y}_time", "23:59:00")
+                    entity_name = f"{x}_{y}_time"
+                    self.create_missing_arg(entity_name, "23:59:00")
+                    self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
-            self.base.args["idle_start_time"] = self.create_entity("idle_start_time", "00:00:00")
-            self.base.args["idle_end_time"] = self.create_entity("idle_end_time", "00:00:00")
+            self.create_missing_arg("idle_start_time", "00:00:00")
+            self.create_missing_arg("idle_end_time", "00:00:00")
+            self.base.args["idle_start_time"][id] = self.create_entity("idle_start_time", "00:00:00")
+            self.base.args["idle_end_time"][id] = self.create_entity("idle_end_time", "00:00:00")
 
     def find_charge_curve(self, discharge):
         """
