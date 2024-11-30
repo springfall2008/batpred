@@ -85,8 +85,13 @@ class Execute:
                     if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
                         minutes_end = 24 * 60 - 1
 
+                inExportWindow = False
+                if self.set_export_window and self.export_window_best:
+                    if self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"]:
+                        inExportWindow = True
+
                 # Check if start is within 24 hours of now and end is in the future
-                if ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
+                if ((not inExportWindow) and (minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log("Charge window will be: {} - {} - current soc {} target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
