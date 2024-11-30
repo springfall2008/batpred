@@ -475,6 +475,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.iboost_running_full = False
         self.iboost_running_solar = False
         self.last_service_hash = {}
+        self.count_inverter_writes = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
@@ -573,6 +574,28 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             # Save next iBoost model value
             self.expose_config("iboost_today", self.iboost_next)
             self.log("iBoost model today updated to {}".format(self.iboost_next))
+
+        # Update register writes counter
+        previous_inverter_writes = self.load_previous_value_from_ha(self.prefix + ".inverter_register_writes")
+        try:
+            previous_inverter_writes = int(previous_inverter_writes)
+        except (ValueError, TypeError):
+            previous_inverter_writes = 0
+        for id in self.count_inverter_writes.keys():
+            previous_inverter_writes += self.count_inverter_writes[id]
+            self.count_inverter_writes[id] = 0
+
+        self.dashboard_item(
+            self.prefix + ".inverter_register_writes",
+            state=dp2(previous_inverter_writes),
+            attributes={
+                "friendly_name": "Total register writes (all inverters)",
+                "state_class": "measurement",
+                "unit_of_measurement": "writes",
+                "icon": "mdi:counter",
+            },
+        )
+        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
 
         if self.calculate_savings:
             # Get current totals

@@ -587,6 +587,7 @@ class DummyInverter:
         self.battery_rate_max_charge = 1.0
         self.log = log
         self.id = inverter_id
+        self.count_register_writes = 0
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         self.soc_target = soc
@@ -670,6 +671,7 @@ class ActiveTestInverter:
         self.reserve_max = 100.0
         self.now_utc = now_utc
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        self.count_register_writes = 0
 
     def disable_charge_window(self):
         self.charge_time_enable = False
@@ -1632,7 +1634,7 @@ def run_execute_tests(my_predbat):
         assert_status="Exporting",
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
-        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
     )
     if failed:
         return failed

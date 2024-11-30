@@ -34,6 +34,9 @@ class Execute:
         isCharging = False
         isExporting = False
         for inverter in self.inverters:
+            if inverter.id not in self.count_inverter_writes:
+                self.count_inverter_writes[inverter.id] = 0
+
             # Read-only mode
             if self.set_read_only:
                 status = "Read-Only"
@@ -85,13 +88,14 @@ class Execute:
                     if minutes_start < 24 * 60 and minutes_end >= 24 * 60:
                         minutes_end = 24 * 60 - 1
 
+                # Are we currently in the export window?
                 inExportWindow = False
                 if self.set_export_window and self.export_window_best:
                     if self.minutes_now >= self.export_window_best[0]["start"] and self.minutes_now < self.export_window_best[0]["end"]:
                         inExportWindow = True
 
                 # Check if start is within 24 hours of now and end is in the future
-                if ((not inExportWindow) and (minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
+                if (not inExportWindow) and ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
                     self.log("Charge window will be: {} - {} - current soc {} target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
@@ -419,6 +423,11 @@ class Execute:
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
+
+            # Count register writes
+            self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
+            self.count_inverter_writes[inverter.id] += inverter.count_register_writes
+            inverter.count_register_writes = 0
 
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging and not disabled_charge_window, isExporting and not disabled_export, not (isCharging or isExporting))

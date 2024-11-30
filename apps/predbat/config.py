@@ -525,7 +525,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Calculate Export within charge slots",
         "type": "switch",
         "enable": "expert_mode",
-        "default": True,
+        "default": False,
     },
     {
         "name": "calculate_second_pass",

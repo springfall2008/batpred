@@ -745,6 +745,8 @@ class Plan:
                     False,
                     end_record=self.end_record,
                 )
+                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+
                 # Initial charge slot filter
                 if self.set_charge_window:
                     record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
@@ -752,16 +754,18 @@ class Plan:
 
                 # Charge slot clipping
                 record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
+                self.log("Unclipped charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                 self.charge_window_best, self.charge_limit_best = self.clip_charge_slots(self.minutes_now, self.predict_soc, self.charge_window_best, self.charge_limit_best, record_charge_windows, PREDICT_STEP)
 
                 if self.set_charge_window:
                     # Filter out the windows we disabled during clipping
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                     self.charge_limit_best, self.charge_window_best = self.discard_unused_charge_slots(self.charge_limit_best, self.charge_window_best, self.reserve)
                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
+                    self.log("Filtered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
                 else:
                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, self.charge_limit_percent_best), self.reserve))
+                    self.log("Unfiltered charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
             # Plan is now valid
             self.plan_valid = True
@@ -931,14 +935,14 @@ class Plan:
         resultmid = {}
         result10 = {}
 
-        # For single windows, if the size is 30 minutes or less then use a larger step
         min_improvement_scaled = self.metric_min_improvement
         if not all_n:
             start = charge_window[window_n]["start"]
             end = charge_window[window_n]["end"]
             window_size = end - start
-            if window_size <= 30 and best_soc_step < 1:
-                best_soc_step *= 2
+            # For single windows, if the size is 30 minutes or less then don't explore different SOC options either charge or don't charge
+            if window_size <= 30:
+                best_soc_step = self.soc_max
             min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
 
         # Start the loop at the max soc setting
@@ -1591,6 +1595,8 @@ class Plan:
 
             if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
                 new_window_best[-1]["end"] = end
+                new_window_best[-1]["target"] = window.get("target", limit)
+                new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif limit > 0:
@@ -1650,6 +1656,7 @@ class Plan:
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
         """
         Clip charge slots that are useless as they don't charge at all
+        set the 'target' field in the charge window for HTML reporting
         """
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
@@ -1658,6 +1665,7 @@ class Plan:
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
+            window["target"] = limit
 
             if limit <= 0.0:
                 # Ignore disabled windows
@@ -1665,34 +1673,40 @@ class Plan:
             elif window_length > 0:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
                 predict_minute_end = int((window_end - minutes_now) / 5) * 5
+                predict_minute_end_m1 = max(predict_minute_end - 5, predict_minute_start)
 
                 if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
                     soc_start = predict_soc[predict_minute_start]
                     soc_end = predict_soc[predict_minute_end]
+                    soc_m1 = predict_soc[predict_minute_end_m1]
                     soc_min = min(soc_start, soc_end)
                     soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
                     soc_max = max(soc_start, soc_end)
 
                     if self.debug_enable:
-                        self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
+                        self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end, soc_m1))
 
                     if (soc_min_percent > calc_percent_limit(charge_limit_best[window_n], self.soc_max)) and (charge_limit_best[window_n] != self.reserve):
                         charge_limit_best[window_n] = self.best_soc_min
-                        self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                        window["target"] = self.best_soc_min
+                        if self.debug_enable:
+                            self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
                     elif soc_max < charge_limit_best[window_n]:
-                        # Clip down charge window to what can be achieved in the time
-                        limit_soc = min(self.soc_max, soc_max + 10 * self.battery_rate_max_charge_scaled, charge_limit_best[window_n])
-                        if self.best_soc_max > 0:
-                            limit_soc = min(limit_soc, self.best_soc_max)
-                        new_limit = max(limit_soc, self.best_soc_min)
-                        if new_limit != charge_limit_best[window_n]:
-                            charge_limit_best[window_n] = new_limit
-                            if self.debug_enable:
-                                self.log("Clip down charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
+                        # Work out what can be achieved in the window and set the target to match that
+                        window["target"] = soc_max
+                        charge_limit_best[window_n] = self.soc_max
+                        if self.debug_enable:
+                            self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
+                    elif (soc_max > soc_m1) and soc_max == charge_limit_best[window_n]:
+                        window["target"] = soc_max
+                        charge_limit_best[window_n] = self.soc_max
+                        if self.debug_enable:
+                            self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
 
             else:
                 self.log("Warn: Clip charge window {} as it's already passed".format(window_n))
                 charge_limit_best[window_n] = self.best_soc_min
+                window["target"] = self.best_soc_min
         return charge_window_best, charge_limit_best
 
     def clip_export_slots(self, minutes_now, predict_soc, export_window_best, export_limits_best, record_export_windows, step):
@@ -1706,6 +1720,7 @@ class Plan:
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
+            window["target"] = limit
 
             if limit == 100 or limit == 99:
                 # Ignore disabled windows & export freeze slots
@@ -1725,16 +1740,18 @@ class Plan:
                     # Export level adjustments for safety
                     if soc_min > limit_soc:
                         # Give it 10 minute margin
+                        target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
+                        window["target"] = calc_percent_limit(target_soc, self.soc_max)
                         export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
                         if limit != export_limits_best[window_n] and self.debug_enable:
-                            self.log("Clip up export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
+                            self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
                     elif soc_max < limit_soc:
-                        # Bring down limit to match predicted soc for freeze only mode
-                        # Get it 5 minute margin upwards
-                        limit_soc = min(limit_soc, soc_max + 5 * self.battery_rate_max_discharge_scaled)
-                        export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max)
-                        if limit != export_limits_best[window_n] and self.debug_enable:
+                        # Set target target for freeze only mode
+                        target_soc = min(limit_soc, soc_max)
+                        window["target"] = calc_percent_limit(target_soc, self.soc_max)
+                        export_limits_best[window_n] = 99
+                        if self.debug_enable:
                             self.log("Clip down export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
@@ -1758,6 +1775,7 @@ class Plan:
                     and (new_best[-1]["start"] not in self.manual_all_times)
                 ):
                     new_best[-1]["end"] = export_window_best[window_n]["end"]
+                    new_best[-1]["target"] = export_window_best[window_n].get("target", export_limits_best[window_n])
                     if self.debug_enable:
                         self.log("Combine export slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
                 else:
@@ -1877,7 +1895,7 @@ class Plan:
             )
             if self.calculate_regions:
                 region_size = int(16 * 60)
-                min_region_size = int(2 * 60)
+                min_region_size = int(4 * 60)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record + self.minutes_now, min_region_size):
