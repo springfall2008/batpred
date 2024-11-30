@@ -97,7 +97,7 @@ class Inverter:
 
     def create_missing_arg(self, arg, default):
         """
-        Create a missing inverter arugment which will be assigned to a dummy entity
+        Create a missing inverter argument which will be assigned to a dummy entity
         """
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
