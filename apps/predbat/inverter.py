@@ -130,6 +130,7 @@ class Inverter:
         self.firmware_version = "Unknown"
         self.givtcp_version = "n/a"
         self.rest_v3 = False
+        self.count_register_writes = 0
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
@@ -1268,6 +1269,8 @@ class Inverter:
 
         if current_state == new_value:
             self.base.log("Inverter {} Wrote {} to {} successfully and got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
+            if domain != "sensor":
+                self.count_register_writes += 1
             return True
         else:
             self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id=entity_id)))
@@ -1293,7 +1296,6 @@ class Inverter:
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
-
                 self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
 
             time.sleep(self.inv_write_and_poll_sleep)
@@ -1308,6 +1310,8 @@ class Inverter:
             return True
         elif matched:
             self.base.log(f"Inverter {self.id} Wrote {new_value} to {name}, successfully now {current_state}")
+            if domain != "sensor":
+                self.count_register_writes += 1
             return True
         else:
             self.base.log(f"Warn: Inverter {self.id} Trying to write {new_value} to {name} didn't complete got {current_state}")
@@ -1329,6 +1333,7 @@ class Inverter:
             old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
                 self.base.log("Inverter {} Wrote {} to {} successfully".format(self.id, name, new_value))
+                self.count_register_writes += 1
                 return True
         self.base.log("Warn: Inverter {} Trying to write {} to {} didn't complete got {}".format(self.id, name, new_value, self.base.get_state_wrapper(entity_id, refresh=True)))
         self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
@@ -2154,6 +2159,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
+                self.count_register_writes += 1
                 self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
@@ -2174,6 +2180,7 @@ class Inverter:
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
+                self.count_register_writes += 1
                 self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -2194,6 +2201,7 @@ class Inverter:
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
+                self.count_register_writes += 1
                 self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
                 return True
 
@@ -2213,6 +2221,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
+                self.count_register_writes += 1
                 self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
                 return True
 
@@ -2232,6 +2241,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
+                self.count_register_writes += 1
                 self.base.log("Set inverter {} pause mode {} via REST successful on retry {}".format(self.id, pause_mode, retry))
                 return True
 
@@ -2253,6 +2263,7 @@ class Inverter:
             self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
+                self.count_register_writes += 1
                 self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
                 return True
 
@@ -2278,6 +2289,7 @@ class Inverter:
                 else:
                     new_value = False
             if new_value == enable:
+                self.count_register_writes += 1
                 self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
                 return True
 
@@ -2303,6 +2315,7 @@ class Inverter:
                 else:
                     new_value = False
             if new_value == enable:
+                self.count_register_writes += 1
                 self.base.log("Set inverter {} discharge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
                 return True
 
@@ -2322,6 +2335,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
+                self.count_register_writes += 1
                 self.base.log("Inverter {} set pause slot {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
 
@@ -2341,6 +2355,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
+                self.count_register_writes += 1
                 self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
 
@@ -2360,6 +2375,7 @@ class Inverter:
             # time.sleep(10)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
+                self.count_register_writes += 1
                 self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
 
