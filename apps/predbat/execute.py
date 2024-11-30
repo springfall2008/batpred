@@ -52,7 +52,7 @@ class Execute:
                     inverter.adjust_reserve(0)
                 break
 
-            resetExport = True
+            resetDischarge = True
             resetCharge = True
             resetPause = True
             resetReserve = True
@@ -114,7 +114,7 @@ class Execute:
                         resetCharge = False
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_discharge_rate(0)
-                            resetExport = False
+                            resetDischarge = False
 
                         if self.charge_limit_best[0] == self.reserve:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
@@ -123,10 +123,12 @@ class Execute:
                                 if self.set_reserve_enable:
                                     inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                     resetReserve = False
-                            inverter.adjust_pause_mode(pause_discharge=True)
-                            resetPause = False
-                            inverter.adjust_discharge_rate(0)
-                            resetExport = False
+                            if inverter.inv_has_timed_pause:
+                                inverter.adjust_pause_mode(pause_discharge=True)
+                                resetPause = False
+                            else:
+                                inverter.adjust_discharge_rate(0)
+                                resetDischarge = False
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                             self.log("Freeze charging with soc {}%".format(inverter.soc_percent))
@@ -147,10 +149,12 @@ class Execute:
                                         if self.set_reserve_enable:
                                             inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                             resetReserve = False
-                                    inverter.adjust_pause_mode(pause_discharge=True)
-                                    resetPause = False
-                                    inverter.adjust_discharge_rate(0)
-                                    resetExport = False
+                                    if inverter.inv_has_timed_pause:
+                                        inverter.adjust_pause_mode(pause_discharge=True)
+                                        resetPause = False
+                                    else:
+                                        inverter.adjust_discharge_rate(0)
+                                        resetDischarge = False
                                 inverter.adjust_charge_immediate(self.charge_limit_percent_best[0], freeze=True)
                             else:
                                 status = "Charging"
@@ -160,10 +164,12 @@ class Execute:
 
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
-                            inverter.adjust_discharge_rate(0)
-                            resetExport = False
-                            inverter.adjust_pause_mode(pause_discharge=True)
-                            resetPause = False
+                            if inverter.inv_has_timed_pause:
+                                inverter.adjust_pause_mode(pause_discharge=True)
+                                resetPause = False
+                            else:
+                                inverter.adjust_discharge_rate(0)
+                                resetDischarge = False
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
 
                         isCharging = True
@@ -252,7 +258,7 @@ class Execute:
                     if not self.set_export_freeze_only and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
                         self.log("Exporting now - current SoC {} and target {}".format(self.soc_kw, dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
-                        resetExport = False
+                        resetDischarge = False
                         inverter.adjust_force_export(True, discharge_start_time, discharge_end_time)
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_charge_rate(0)
@@ -272,13 +278,15 @@ class Execute:
                         disabled_export = True
                         if self.export_limits_best[0] == 99:
                             # In export freeze mode we disable charging during export slots
-                            inverter.adjust_charge_rate(0)
-                            resetCharge = False
                             if inverter.inv_charge_discharge_with_rate:
                                 inverter.adjust_charge_rate(0)
-                                resetExport = False
-                            inverter.adjust_pause_mode(pause_charge=True)
-                            resetPause = False
+                                resetCharge = False
+                            if inverter.inv_has_timed_pause:
+                                inverter.adjust_pause_mode(pause_charge=True)
+                                resetPause = False
+                            else:
+                                inverter.adjust_charge_rate(0)
+                                resetCharge = False
                             self.log("Export Freeze as exporting is now at/below target - current SoC {} and target {}".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
                             status_extra = " current SoC {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
@@ -310,10 +318,12 @@ class Execute:
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
                             if not isCharging and not isExporting:
-                                inverter.adjust_discharge_rate(0)
-                                resetExport = False
-                                inverter.adjust_pause_mode(pause_discharge=True)
-                                resetPause = False
+                                if inverter.inv_has_timed_pause:
+                                    inverter.adjust_pause_mode(pause_discharge=True)
+                                    resetPause = False
+                                else:
+                                    inverter.adjust_discharge_rate(0)
+                                    resetDischarge = False
                                 carHolding = True
                                 self.log("Disabling battery discharge while the car {} is charging".format(car_n))
                                 if "Hold for car" not in status:
@@ -326,10 +336,12 @@ class Execute:
             # Iboost running?
             boostHolding = False
             if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
-                inverter.adjust_discharge_rate(0)
-                resetExport = False
-                inverter.adjust_pause_mode(pause_discharge=True)
-                resetPause = False
+                if inverter.inv_has_timed_pause:
+                    inverter.adjust_pause_mode(pause_discharge=True)
+                    resetPause = False
+                else:
+                    inverter.adjust_discharge_rate(0)
+                    resetDischarge = False
                 boostHolding = True
                 self.log("Disabling battery discharge while iBoost is running")
                 if "Hold for iBoost" not in status:
@@ -347,7 +359,7 @@ class Execute:
             # Reset charge/discharge rate
             if resetPause:
                 inverter.adjust_pause_mode()
-            if resetExport:
+            if resetDischarge:
                 inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
             if resetCharge:
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
