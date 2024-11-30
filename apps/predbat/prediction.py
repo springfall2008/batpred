@@ -407,7 +407,10 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * 0.5
+                if minute < 4 * 60:
+                    keep_minute_scaling = 0
+                else:
+                    keep_minute_scaling = min(((minute - 4 * 60)/ (2 * 60)), 1.0) * 0.5
             else:
                 keep_minute_scaling = 0.5
 
