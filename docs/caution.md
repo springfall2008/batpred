@@ -1,6 +1,6 @@
 # Some words of caution
 
-Predbat is a powerful hobbist system that can control many home battery and solar systems. While every attempt has been made to make it as easy to use as possible it does require
+Predbat is a powerful hobbyist system that can control many home battery and solar systems. While every attempt has been made to make it as easy to use as possible it does require
 a certain amount of technical skills.
 
 ## Increased energy costs
@@ -11,7 +11,7 @@ once you have enabled it for the first time.
 ## Flash memory
 
 Some inverters have a flash memory which has a limited lifespan and so depending on the way register writes are managed controller your inverter can act to reduce this lifespan.
-In normal operation this should not be an issue but if you have a setup that performs large number of register writes all the time its possible you could eventualy run into
+In normal operation this should not be an issue but if you have a setup that performs large number of register writes all the time its possible you could eventually run into
 this issue.
 
 - For example on a current GivEnergy inverters its assumed around 1 million register writes could be the current usable limit (although firmware changes may increase this limit)
@@ -25,7 +25,7 @@ Things you can do to have a less complex plan include:
 
 - Keep calculate export during charge off
 - Set metric battery cycle to a small non-zero value e.g. 0.5
-- Ensure inverter losses are set to a representiative value
+- Ensure inverter losses are set to a representative value
 
 **Avoid using balance inverters which can make register changes one or twice a minute unless you are sure this is not an issue**
 
