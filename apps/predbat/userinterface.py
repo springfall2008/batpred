@@ -156,7 +156,7 @@ class UserInterface:
 
         # Resolve locally if no HA config
         if value is None:
-            if (arg not in self.args) and default and (index is not None):
+            if (arg not in self.args) and (default is not None) and (index is not None):
                 # Allow default to apply to all indices if there is not config item set
                 index = None
             if domain:
