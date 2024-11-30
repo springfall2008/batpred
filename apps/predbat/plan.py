@@ -745,7 +745,7 @@ class Plan:
                     False,
                     end_record=self.end_record,
                 )
-                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best, calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
+                self.log("Raw charge windows {} reserve {}".format(self.window_as_text(self.charge_window_best,  calc_percent_limit(self.charge_limit_best, self.soc_max)), self.reserve))
 
                 # Initial charge slot filter
                 if self.set_charge_window:
@@ -1738,7 +1738,7 @@ class Plan:
                         self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
                     # Export level adjustments for safety
-                    if soc_min > limit_soc:
+                    if soc_min > limit_soc:                        
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
@@ -1895,7 +1895,7 @@ class Plan:
             )
             if self.calculate_regions:
                 region_size = int(16 * 60)
-                min_region_size = int(2 * 60)
+                min_region_size = int(4 * 60)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record + self.minutes_now, min_region_size):
