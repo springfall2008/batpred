@@ -1726,7 +1726,7 @@ class Plan:
                         self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
 
                     # Export level adjustments for safety
-                    if soc_min > limit_soc:                        
+                    if soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge_scaled)
