@@ -4,6 +4,7 @@ theme:
 nav:
   - Introduction: index.md
   - 'What does Predbat do?': what-does-predbat-do.md
+  - 'Words of caution': caution.md
   - 'Installing & configuring Predbat':
     - 'Install summary': installation-summary.md
     - 'Install details': install.md
