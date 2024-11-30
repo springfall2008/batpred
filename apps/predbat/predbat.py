@@ -581,10 +581,9 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             previous_inverter_writes = int(previous_inverter_writes)
         except (ValueError, TypeError):
             previous_inverter_writes = 0
-        for inverter in self.inverters:
-            if inverter in self.count_inverter_writes:
-                previous_inverter_writes += self.count_inverter_writes[inverter.id]
-                self.count_inverter_writes[inverter.id] = 0
+        for id in self.count_inverter_writes.keys():
+            previous_inverter_writes += self.count_inverter_writes[id]
+            self.count_inverter_writes[id] = 0
 
         self.dashboard_item(
             self.prefix + ".inverter_register_writes",
@@ -596,6 +595,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
                 "icon": "mdi:counter",
             },
         )
+        self.log("Total inverter register writes now {}".format(previous_inverter_writes))
 
         if self.calculate_savings:
             # Get current totals

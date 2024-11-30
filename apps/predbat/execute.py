@@ -34,6 +34,7 @@ class Execute:
         isCharging = False
         isExporting = False
         for inverter in self.inverters:
+
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
 
@@ -423,8 +424,9 @@ class Execute:
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
-
-            # Count register writes
+            
+            # Count register writes
+            self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
 
