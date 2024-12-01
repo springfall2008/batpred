@@ -116,6 +116,7 @@ class Prediction:
             self.set_discharge_during_charge = base.set_discharge_during_charge
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
+            self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery

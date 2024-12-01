@@ -744,6 +744,7 @@ def run_execute_test(
     set_charge_window=False,
     set_export_window=False,
     set_charge_low_power=False,
+    charge_low_power_margin=10,
     assert_charge_time_enable=False,
     assert_force_export=False,
     assert_pause_charge=False,
@@ -778,6 +779,7 @@ def run_execute_test(
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
     my_predbat.set_charge_low_power = set_charge_low_power
+    my_predbat.charge_low_power_margin = charge_low_power_margin
 
     if assert_immediate_soc_target is None:
         assert_immediate_soc_target = assert_soc_target
@@ -1080,7 +1082,29 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
-        assert_charge_rate=500,
+        assert_charge_rate=600,  # Within 10%
+        battery_max_rate=2000,
+    )
+    if failed:
+        return failed
+
+    # 60 minutes - 30 minute margin = 30 minutes to add 0.4kWh to each battery (x2 inverters)
+    # (60 / 20) * 400 = 1200
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power2c",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=9.2,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        charge_low_power_margin=40,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=1200,
         battery_max_rate=2000,
     )
     if failed:
@@ -1090,7 +1114,7 @@ def run_execute_tests(my_predbat):
     # (60 / 50) * 450 = 540
     failed |= run_execute_test(
         my_predbat,
-        "charge_low_power2c",
+        "charge_low_power2d",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best,
         assert_charge_time_enable=True,

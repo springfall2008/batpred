@@ -116,9 +116,10 @@ class Execute:
                         current_charge_rate = inverter.get_current_charge_rate()
 
                         # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
-                        if abs(new_charge_rate - current_charge_rate) > (0.1 * inverter.battery_rate_max_charge) or (new_charge_rate == inverter.battery_rate_max_charge * MINUTE_WATT):
+                        max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
+                        if abs(new_charge_rate - current_charge_rate) > (0.1 * max_rate) or (new_charge_rate == max_rate):
                             inverter.adjust_charge_rate(new_charge_rate)
-                            resetCharge = False
+                        resetCharge = False
 
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_discharge_rate(0)
