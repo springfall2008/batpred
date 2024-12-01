@@ -1148,7 +1148,7 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) < (self.battery_rate_max_charge * MINUTE_WATT / 24):
+        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 24):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setChargeRate(new_rate)
