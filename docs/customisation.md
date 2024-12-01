@@ -328,6 +328,9 @@ This setting is off by default.
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low power charging works and shows how Predbat automatically creates it.
 
+**input_number.predbat_charge_low_power_margin** Controls how many minutes before the completion time to target finishing charging, this defaults to 10
+but can be changed between 0 and 30.
+
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
 
