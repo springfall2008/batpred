@@ -708,8 +708,8 @@ class Output:
 
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
-                if "target" in self.charge_window_best[charge_window_n]:
-                    limit = self.charge_window_best[charge_window_n]["target"]
+                if 'target' in self.charge_window_best[charge_window_n]:
+                    limit = self.charge_window_best[charge_window_n]['target']
 
                 limit_percent = calc_percent_limit(limit, self.soc_max)
                 if limit > 0.0:
@@ -748,8 +748,8 @@ class Output:
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
-                if "target" in self.export_window_best[export_window_n]:
-                    limit = self.export_window_best[export_window_n]["target"]
+                if 'target' in self.export_window_best[export_window_n]:
+                    limit = self.export_window_best[export_window_n]['target']
 
                 if limit == 99:  # freeze exporting
                     if state == soc_sym:

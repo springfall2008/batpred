@@ -1773,6 +1773,7 @@ class Fetch:
         self.set_export_freeze = self.get_arg("set_export_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
+        self.charge_low_power_margin = self.get_arg("charge_low_power_margin")
         self.calculate_export_first = True
 
         self.set_status_notify = self.get_arg("set_status_notify")

@@ -187,7 +187,9 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
     """
     Find the lowest charge rate that fits the charge slow
     """
-    margin = 10
+    margin = model.charge_low_power_margin
+    target_soc = round(target_soc, 2)
+
     if model.set_charge_low_power:
         minutes_left = window["end"] - minutes_now - margin
 
@@ -208,21 +210,22 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
 
         # What's the lowest we could go?
         min_rate = charge_left / minutes_left
+        min_rate_w = int(min_rate * MINUTE_WATT)
 
         # Apply the curve at each rate to pick one that works
         rate_w = max_rate * MINUTE_WATT
         best_rate = max_rate
         while rate_w >= 400:
             rate = rate_w / MINUTE_WATT
-            if rate >= min_rate:
+            if rate_w >= min_rate_w:
                 charge_now = soc
                 minute = 0
-                # Compute over the time period, include the completion time (margin was already counted)
-                for minute in range(0, minutes_left + PREDICT_STEP, PREDICT_STEP):
+                # Compute over the time period, include the completion time
+                for minute in range(0, minutes_left, PREDICT_STEP):
                     rate_scale = get_charge_rate_curve(model, charge_now, rate)
                     charge_amount = rate_scale * PREDICT_STEP * model.battery_loss
                     charge_now += charge_amount
-                    if charge_now >= target_soc:
+                    if round(charge_now, 2) >= target_soc:
                         best_rate = rate
                         break
             rate_w -= 100.0

@@ -609,6 +609,18 @@ CONFIG_ITEMS = [
         "reset_inverter": True,
     },
     {
+        "name": "charge_low_power_margin",
+        "friendly_name": "Low power mode margin",
+        "type": "input_number",
+        "min": 0,
+        "max": 30,
+        "step": 5,
+        "unit": "minutes",
+        "icon": "mdi:seatbelt",
+        "enable": "set_charge_low_power",
+        "default": 10,
+    },
+    {
         "name": "set_reserve_enable",
         "friendly_name": "Set Reserve Enable",
         "type": "switch",
