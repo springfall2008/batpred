@@ -26,6 +26,7 @@ Things you can do to have a less complex plan include:
 - Keep calculate export during charge off
 - Set metric battery cycle to a small non-zero value e.g. 0.5
 - Ensure inverter losses are set to a representative value
+- Turn off charge_low_power mode
 
 **Avoid using balance inverters which can make register changes one or twice a minute unless you are sure this is not an issue**
 
