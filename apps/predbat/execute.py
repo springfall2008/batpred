@@ -34,6 +34,7 @@ class Execute:
         isCharging = False
         isExporting = False
         for inverter in self.inverters:
+
             if inverter.id not in self.count_inverter_writes:
                 self.count_inverter_writes[inverter.id] = 0
 
@@ -101,7 +102,7 @@ class Execute:
                     self.log("Charge window will be: {} - {} - current soc {} target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        charge_rate = find_charge_rate(
+                        new_charge_rate = int(find_charge_rate(
                             self,
                             self.minutes_now,
                             inverter.soc_kw,
@@ -109,9 +110,14 @@ class Execute:
                             self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
                             inverter.battery_rate_max_charge,
                             quiet=False,
-                        )
-                        inverter.adjust_charge_rate(int(charge_rate * MINUTE_WATT))
-                        resetCharge = False
+                        ) * MINUTE_WATT)
+                        current_charge_rate = inverter.get_current_charge_rate()
+
+                        # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
+                        if abs(new_charge_rate - current_charge_rate) > (0.1 * inverter.battery_rate_max_charge) or (new_charge_rate == inverter.battery_rate_max_charge * MINUTE_WATT):
+                            inverter.adjust_charge_rate(new_charge_rate)
+                            resetCharge = False
+
                         if inverter.inv_charge_discharge_with_rate:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
@@ -120,7 +126,7 @@ class Execute:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
-                                if self.set_reserve_enable:
+                                if self.set_reserve_enable and (not inverter.inv_has_timed_pause):
                                     inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                     resetReserve = False
                             if inverter.inv_has_timed_pause:
@@ -146,7 +152,7 @@ class Execute:
                                     if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                         inverter.disable_charge_window()
                                         disabled_charge_window = True
-                                        if self.set_reserve_enable:
+                                        if self.set_reserve_enable and not inverter.inv_has_timed_pause:
                                             inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                             resetReserve = False
                                     if inverter.inv_has_timed_pause:
@@ -435,8 +441,8 @@ class Execute:
             # Reset reserve as discharge is enable but not running right now
             if self.set_reserve_enable and resetReserve:
                 inverter.adjust_reserve(0)
-
-            # Count register writes
+            
+            # Count register writes
             self.log("Inverter {} count register writes {}".format(inverter.id, inverter.count_register_writes))
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0

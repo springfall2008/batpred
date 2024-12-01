@@ -1114,6 +1114,16 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current reserve is {} already at target".format(self.id, current_reserve))
 
+    def get_current_charge_rate(self):
+        """
+        Get the current charge rate in watts
+        """
+        if self.rest_data:
+            current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
+        else:
+            current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+        return current_rate
+
     def adjust_charge_rate(self, new_rate, notify=True):
         """
         Adjust charging rate
@@ -1136,13 +1146,9 @@ class Inverter:
         """
 
         new_rate = int(new_rate + 0.5)
+        current_rate = self.get_current_charge_rate()
 
-        if self.rest_data:
-            current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
-        else:
-            current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
-
-        if abs(current_rate - new_rate) > 100:
+        if abs(current_rate - new_rate) < (self.battery_rate_max_charge * MINUTE_WATT / 24):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setChargeRate(new_rate)

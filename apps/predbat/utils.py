@@ -217,14 +217,15 @@ def find_charge_rate(model, minutes_now, soc, window, target_soc, max_rate, quie
             if rate >= min_rate:
                 charge_now = soc
                 minute = 0
-                for minute in range(0, minutes_left, PREDICT_STEP):
+                # Compute over the time period, include the completion time (margin was already counted)
+                for minute in range(0, minutes_left + PREDICT_STEP, PREDICT_STEP):
                     rate_scale = get_charge_rate_curve(model, charge_now, rate)
                     charge_amount = rate_scale * PREDICT_STEP * model.battery_loss
                     charge_now += charge_amount
                     if charge_now >= target_soc:
                         best_rate = rate
                         break
-            rate_w -= 125.0
+            rate_w -= 100.0
         return best_rate
     else:
         return max_rate
