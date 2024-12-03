@@ -1645,11 +1645,6 @@ class Inverter:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
             return False
 
-        # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
-        if not self.inv_has_discharge_enable_time and not force_export:
-            new_start_time = self.base.midnight_utc
-            new_end_time = self.base.midnight_utc
-
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
@@ -1663,6 +1658,17 @@ class Inverter:
             new_end = new_end_time.strftime("%H:%M:%S")
         else:
             new_end = None
+
+        # If the inverter doesn't have a discharge enable time then use midnight-midnight as an alternative disable
+        # GE Mode is a special case of timed discharge which we control at the time of export
+        if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode and not force_export:
+            new_start_time = self.base.midnight_utc
+            new_end_time = self.base.midnight_utc
+
+        # For GE Inverter mode as we use immediate controls no point in changing times before we enable export
+        if self.inv_has_ge_inverter_mode and not force_export:
+            new_start_time = None
+            new_end_time = None
 
         # Eco mode, turn it on before we change the discharge window
         if not force_export:
