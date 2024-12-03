@@ -274,10 +274,6 @@ class Execute:
                             resetCharge = False
                         isExporting = True
 
-                        if self.set_reserve_enable:
-                            inverter.adjust_reserve(self.export_limits_best[0])
-                            resetReserve = False
-
                         status = "Exporting"
                         status_extra = " target {}%-{}%".format(inverter.soc_percent, self.export_limits_best[0])
                         # Immediate export mode
