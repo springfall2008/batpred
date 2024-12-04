@@ -1664,11 +1664,13 @@ class Inverter:
         if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode and not force_export:
             new_start_time = self.base.midnight_utc
             new_end_time = self.base.midnight_utc
+            new_start = new_start_time.strftime("%H:%M:%S")
+            new_end = new_end_time.strftime("%H:%M:%S")
 
         # For GE Inverter mode as we use immediate controls no point in changing times before we enable export
         if self.inv_has_ge_inverter_mode and not force_export:
-            new_start_time = None
-            new_end_time = None
+            new_start = None
+            new_end = None
 
         # Eco mode, turn it on before we change the discharge window
         if not force_export:
