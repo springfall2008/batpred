@@ -1479,7 +1479,8 @@ class Plan:
                     average_export = dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_export = 0
-                sort_key = "%04.2f_%04.2f_%03d_c%02d" % (5000 - average, 5000 - average_export, 999 - id, id)
+                window_start = window["start"]
+                sort_key = "%04.2f_%04.2f_%04d_c%02d" % (5000 - average, 5000 - average_export, 9999 - window_start, id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
@@ -1501,7 +1502,8 @@ class Plan:
                     average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_import = 0
-                sort_key = "%04.2f_%04.2f_%03d_d%02d" % (5000 - average, 5000 - average_import, 999 - id, id)
+                window_start = window["start"]
+                sort_key = "%04.2f_%04.2f_%04d_d%02d" % (5000 - average, 5000 - average_import, 9999 - window_start, id)
                 if not self.calculate_export_first:
                     # Push export last if first is not set
                     sort_key = "zz_" + sort_key
