@@ -103,13 +103,19 @@ class Execute:
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         new_charge_rate = int(
                             find_charge_rate(
-                                self,
                                 self.minutes_now,
                                 inverter.soc_kw,
                                 window,
                                 self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
                                 inverter.battery_rate_max_charge,
-                                quiet=False,
+                                inverter.soc_max,
+                                self.battery_charge_power_curve,
+                                self.set_charge_low_power,
+                                self.charge_low_power_margin,
+                                self.battery_rate_min,
+                                self.battery_rate_max_scaling,
+                                self.battery_loss,
+                                self.log,
                             )
                             * MINUTE_WATT
                         )

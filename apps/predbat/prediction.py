@@ -575,8 +575,8 @@ class Prediction:
                 elif abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0:
                     discharge_rate_now = self.battery_rate_min
 
-            charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
-            discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
+            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling
+            discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge
             battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss
             inverter_limit = self.inverter_limit * step
@@ -590,7 +590,7 @@ class Prediction:
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge_scaled  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = get_discharge_rate_curve(self, soc, discharge_rate_now)
+                discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge
 
                 # It's assumed if SOC hits the expected reserve then it's terminated
                 reserve_expected = max((self.soc_max * export_limits[export_window_n]) / 100.0, self.reserve)
@@ -648,12 +648,26 @@ class Prediction:
                 # Charge enable
                 if save in ["best", "best10", "test"]:
                     # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = find_charge_rate(self, minute_absolute, soc, charge_window[charge_window_n], charge_limit_n, self.battery_rate_max_charge) * self.battery_rate_max_scaling
+                    charge_rate_now = find_charge_rate(
+                        minute_absolute,
+                        soc,
+                        charge_window[charge_window_n],
+                        charge_limit_n,
+                        self.battery_rate_max_charge,
+                        self.soc_max,
+                        self.battery_charge_power_curve,
+                        self.set_charge_low_power,
+                        self.charge_low_power_margin,
+                        self.battery_rate_min,
+                        self.battery_rate_max_scaling,
+                        self.battery_loss,
+                        None,
+                    )
                 else:
                     charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
 
                 # Apply the charging curve
-                charge_rate_now_curve = get_charge_rate_curve(self, soc, charge_rate_now)
+                charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling
 
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0, -battery_to_max)
                 battery_state = "f+"
