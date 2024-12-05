@@ -101,7 +101,7 @@ class Execute:
                     self.log("Charge window will be: {} - {} - current soc {} target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        new_charge_rate = int(                         
+                        new_charge_rate = int(
                             find_charge_rate(
                                 self.minutes_now,
                                 inverter.soc_kw,

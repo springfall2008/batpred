@@ -170,7 +170,7 @@ def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_ch
     soc_percent = calc_percent_limit(soc, soc_max)
     max_charge_rate = battery_rate_max_charge * battery_charge_power_curve.get(soc_percent, 1.0)
     if debug:
-        print("Max charge rate: {} SOC: {} Percent {} Rate in: {} rate out: {}".format(max_charge_rate*MINUTE_WATT, soc, soc_percent, charge_rate_setting*MINUTE_WATT, min(charge_rate_setting, max_charge_rate)*MINUTE_WATT))
+        print("Max charge rate: {} SOC: {} Percent {} Rate in: {} rate out: {}".format(max_charge_rate * MINUTE_WATT, soc, soc_percent, charge_rate_setting * MINUTE_WATT, min(charge_rate_setting, max_charge_rate) * MINUTE_WATT))
     return max(min(charge_rate_setting, max_charge_rate), battery_rate_min)
 
 
@@ -181,6 +181,7 @@ def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_
     soc_percent = calc_percent_limit(soc, soc_max)
     max_discharge_rate = battery_rate_max_discharge * battery_discharge_power_curve.get(soc_percent, 1.0)
     return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
+
 
 def find_charge_rate(minutes_now, soc, window, target_soc, max_rate, soc_max, battery_charge_power_curve, set_charge_low_power, charge_low_power_margin, battery_rate_min, battery_rate_max_scaling, battery_loss, log_to):
     """
@@ -239,7 +240,11 @@ def find_charge_rate(minutes_now, soc, window, target_soc, max_rate, soc_max, ba
             rate_w -= 100.0
 
         if log_to:
-            log_to("Low Power mode: minutes left: {} absolute: {} SOC: {} Target SOC: {} Charge left: {} Max rate: {} Min rate: {} Best rate: {}".format(minutes_left, abs_minutes_left, soc, target_soc, charge_left, max_rate*MINUTE_WATT, min_rate*MINUTE_WATT, best_rate*MINUTE_WATT))
+            log_to(
+                "Low Power mode: minutes left: {} absolute: {} SOC: {} Target SOC: {} Charge left: {} Max rate: {} Min rate: {} Best rate: {}".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, best_rate * MINUTE_WATT
+                )
+            )
         return best_rate
     else:
         return max_rate
