@@ -207,11 +207,12 @@ class Inverter:
                 self.rest_data = self.rest_readData()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
-                self.givtcp_version = self.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
-                self.firmware_version = self.rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
-                if self.givtcp_version.startswith("3"):
-                    self.rest_v3 = True
-                self.log("Inverter {} GivTCP Version: {} Firmware: {}".format(self.id, self.givtcp_version, self.firmware_version))
+                else:
+                    self.givtcp_version = self.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
+                    self.firmware_version = self.rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
+                    if self.givtcp_version.startswith("3"):
+                        self.rest_v3 = True
+                    self.log("Inverter {} GivTCP Version: {} Firmware: {}".format(self.id, self.givtcp_version, self.firmware_version))
 
         # Timed pause support?
         if self.inv_has_timed_pause:
