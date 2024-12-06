@@ -222,6 +222,8 @@ def find_charge_rate(minutes_now, soc, window, target_soc, max_rate, soc_max, ba
         # Apply the curve at each rate to pick one that works
         rate_w = max_rate * MINUTE_WATT
         best_rate = max_rate
+        highest_achievable_rate = 0
+
         while rate_w >= 400:
             rate = rate_w / MINUTE_WATT
             if rate_w >= min_rate_w:
@@ -229,15 +231,26 @@ def find_charge_rate(minutes_now, soc, window, target_soc, max_rate, soc_max, ba
                 minute = 0
                 # Compute over the time period, include the completion time
                 for minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve(charge_now, rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min) * battery_rate_max_scaling
+                    rate_scale = get_charge_rate_curve(charge_now, rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min)
+                    highest_achievable_rate = max(highest_achievable_rate, rate_scale)
+                    rate_scale *= battery_rate_max_scaling
                     charge_amount = rate_scale * PREDICT_STEP * battery_loss
                     charge_now += charge_amount
                     if round(charge_now, 2) >= target_soc:
                         best_rate = rate
                         break
+                # if log_to:
+                #    log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SOC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
+                #        rate * MINUTE_WATT, minute, soc, target_soc, charge_left, charge_now, rate_scale * MINUTE_WATT, charge_amount, charge_now, best_rate*MINUTE_WATT, highest_achievable_rate*MINUTE_WATT))
             else:
                 break
             rate_w -= 100.0
+
+        # If we tried to select a rate which is actually faster than the highest achievable (due to being close to 100% SOC) then default to max rate
+        if best_rate < max_rate and best_rate >= highest_achievable_rate:
+            if log_to:
+                log_to("Low Power mode: best rate {} >= highest achievable rate {}, default to max rate".format(best_rate * MINUTE_WATT, highest_achievable_rate * MINUTE_WATT))
+            best_rate = max_rate
 
         if log_to:
             log_to(

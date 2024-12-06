@@ -904,6 +904,7 @@ def run_execute_tests(my_predbat):
     charge_window_best7 = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 23 * 60, "average": 1}]
     charge_window_best8 = [{"start": 0, "end": my_predbat.minutes_now + 12 * 60, "average": 1}]
     charge_window_best9 = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 1}]
+    charge_window_best_short = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 15, "average": 1}]
     charge_limit_best = [10, 10]
     charge_limit_best2 = [5]
     charge_limit_best_frz = [1]
@@ -1138,6 +1139,71 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    my_predbat.battery_charge_power_curve = {
+        100: 0.50,
+        99: 0.50,
+        98: 0.50,
+        97: 0.50,
+        96: 0.50,
+        95: 0.50,
+        94: 1.00,
+        93: 1.00,
+        92: 1.00,
+        91: 1.00,
+        90: 1.00,
+        89: 1.00,
+        88: 1.00,
+        87: 1.00,
+        86: 1.00,
+        85: 1.00,
+    }
+
+    # 60 minutes - 10 minute margin = 50 minutes to add 0.75kWh to each battery (x2 inverters)
+    # (60 / 50) * 750 = 900
+    # But with the low power curve it will go at half rate from 95%
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power3a",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=8.0,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=1300,
+        battery_max_rate=2000,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_short",
+        charge_window_best=charge_window_best_short,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=9.835,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 15,
+        assert_charge_rate=2000,
+        battery_max_rate=2000,
+    )
+    if failed:
+        return failed
+    return 1
+
+    # Reset curve
+    my_predbat.battery_charge_power_curve = {}
 
     failed |= run_execute_test(
         my_predbat,
