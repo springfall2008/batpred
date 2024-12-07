@@ -173,6 +173,7 @@ def reset_inverter(my_predbat):
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
+    my_predbat.car_charging_soc_next = [None for car_n in range(4)]
 
 
 def plot(name, prediction):
@@ -892,20 +893,24 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(my_predbat):
-    print("**** Running debug tests ****\n")
+def run_single_debug(my_predbat, debug_file):
+    print("**** Running debug test {} ****\n".format(debug_file))
 
     reset_inverter(my_predbat)
+    my_predbat.read_debug_yaml(debug_file)
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
     my_predbat.fetch_config_options()
 
-    end_record = my_predbat.forecast_minutes
+    end_record = my_predbat.end_record
+    print("minutes_now {}".format(my_predbat.minutes_now))
     failed = False
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step
     load_step = my_predbat.load_minutes_step
     load10_step = my_predbat.load_minutes_step10
-
+    
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
@@ -916,7 +921,7 @@ def run_single_debug(my_predbat):
 
     failed = False
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
     )
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
@@ -924,6 +929,10 @@ def run_single_debug(my_predbat):
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    # Pre-optimise all plan
+    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
+    open("plan_levels.html", "w").write(my_predbat.html_plan)
 
     # Optimise windows
     best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep)
@@ -943,6 +952,11 @@ def run_single_debug(my_predbat):
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
+    open("plan.html", "w").write(my_predbat.html_plan)
+    print("Wrote plan to plan.html")
+
 
 
 def run_execute_tests(my_predbat):
@@ -1195,22 +1209,22 @@ def run_execute_tests(my_predbat):
         return failed
 
     my_predbat.battery_charge_power_curve = {
-        100: 0.50,
-        99: 0.50,
-        98: 0.50,
-        97: 0.50,
-        96: 0.50,
-        95: 0.50,
-        94: 1.00,
-        93: 1.00,
-        92: 1.00,
-        91: 1.00,
-        90: 1.00,
-        89: 1.00,
-        88: 1.00,
-        87: 1.00,
-        86: 1.00,
-        85: 1.00,
+        100 : 0.50,
+        99 : 0.50,
+        98 : 0.50,
+        97 : 0.50,
+        96 : 0.50,
+        95 : 0.50,
+        94 : 1.00,
+        93 : 1.00,
+        92 : 1.00,
+        91 : 1.00,
+        90 : 1.00,
+        89 : 1.00,
+        88 : 1.00,
+        87 : 1.00,
+        86 : 1.00,
+        85 : 1.00,
     }
 
     # 60 minutes - 10 minute margin = 50 minutes to add 0.75kWh to each battery (x2 inverters)
@@ -2418,7 +2432,6 @@ def run_optimise_all_windows(
         my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
         open("plan.html", "w").write(my_predbat.html_plan)
         print("Wrote plan to plan.html")
-        print("Min rate forward: {}".format(my_predbat.rate_min_forward))
 
     return failed
 
@@ -4032,6 +4045,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     args = parser.parse_args()
+        
 
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
@@ -4050,8 +4064,7 @@ def main():
     failed = False
 
     if args.debug_file:
-        my_predbat.read_debug_yaml(args.debug_file)
-        run_single_debug(my_predbat)
+        run_single_debug(my_predbat, args.debug_file)
         sys.exit(0)
 
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
