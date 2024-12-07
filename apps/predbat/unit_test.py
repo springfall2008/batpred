@@ -173,6 +173,7 @@ def reset_inverter(my_predbat):
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
+    my_predbat.car_charging_soc_next = [None for car_n in range(4)]
 
 
 def plot(name, prediction):
@@ -892,13 +893,17 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(my_predbat):
-    print("**** Running debug tests ****\n")
+def run_single_debug(my_predbat, debug_file):
+    print("**** Running debug test {} ****\n".format(debug_file))
 
     reset_inverter(my_predbat)
+    my_predbat.read_debug_yaml(debug_file)
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
     my_predbat.fetch_config_options()
 
-    end_record = my_predbat.forecast_minutes
+    end_record = my_predbat.end_record
+    print("minutes_now {}".format(my_predbat.minutes_now))
     failed = False
 
     pv_step = my_predbat.pv_forecast_minute_step
@@ -916,7 +921,7 @@ def run_single_debug(my_predbat):
 
     failed = False
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
     )
     # Save plan
     my_predbat.charge_limit_best = charge_limit_best
@@ -924,6 +929,10 @@ def run_single_debug(my_predbat):
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    # Pre-optimise all plan
+    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
+    open("plan_levels.html", "w").write(my_predbat.html_plan)
 
     # Optimise windows
     best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep)
@@ -943,6 +952,10 @@ def run_single_debug(my_predbat):
     my_predbat.export_limits_best = export_limits_best
     my_predbat.charge_window_best = charge_window_best
     my_predbat.export_window_best = export_window_best
+
+    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
+    open("plan.html", "w").write(my_predbat.html_plan)
+    print("Wrote plan to plan.html")
 
 
 def run_execute_tests(my_predbat):
@@ -2418,7 +2431,6 @@ def run_optimise_all_windows(
         my_predbat.publish_html_plan(my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, end_record)
         open("plan.html", "w").write(my_predbat.html_plan)
         print("Wrote plan to plan.html")
-        print("Min rate forward: {}".format(my_predbat.rate_min_forward))
 
     return failed
 
@@ -4050,8 +4062,7 @@ def main():
     failed = False
 
     if args.debug_file:
-        my_predbat.read_debug_yaml(args.debug_file)
-        run_single_debug(my_predbat)
+        run_single_debug(my_predbat, args.debug_file)
         sys.exit(0)
 
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")

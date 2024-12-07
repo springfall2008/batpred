@@ -570,6 +570,29 @@ class UserInterface:
         self.log("Saved Predbat settings to {}".format(filepath_p))
         await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
+    def read_debug_yaml(self, filename):
+        """
+        Read debug yaml - used for debugging scenarios not for the main code
+        """
+        debug = {}
+        if os.path.exists(filename):
+            with open(filename, "r") as file:
+                debug = yaml.safe_load(file)
+        else:
+            self.log("Warn: Debug file {} not found".format(filename))
+            return
+
+        for key in debug:
+            if key != "CONFIG_ITEMS":
+                self.__dict__[key] = debug[key]
+
+        for item in debug["CONFIG_ITEMS"]:
+            current = self.config_index.get(item["name"], None)
+            if current:
+                if current.get("value", None) != item["value"]:
+                    current["value"] = item["value"]
+        self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
+
     def create_debug_yaml(self):
         """
         Write out a debug info yaml
@@ -582,24 +605,15 @@ class UserInterface:
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         debug = {}
-        debug["TIME"] = self.time_now_str()
-        debug["THIS_VERSION"] = THIS_VERSION
-        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-        debug["args"] = self.args
-        debug["charge_window_best"] = self.charge_window_best
-        debug["charge_limit_best"] = self.charge_limit_best
-        debug["export_window_best"] = self.export_window_best
-        debug["export_limits_best"] = self.export_limits_best
-        debug["low_rates"] = self.low_rates
-        debug["high_export_rates"] = self.high_export_rates
-        debug["load_forecast"] = self.load_forecast
-        debug["load_minutes_step"] = self.load_minutes_step
-        debug["load_minutes_step10"] = self.load_minutes_step10
-        debug["pv_forecast_minute_step"] = self.pv_forecast_minute_step
-        debug["pv_forecast_minute10_step"] = self.pv_forecast_minute10_step
-        debug["yesterday_load_step"] = self.yesterday_load_step
-        debug["yesterday_pv_step"] = self.yesterday_pv_step
+        # Store all predbat member variables into debug
+        for key in self.__dict__:
+            if not key.startswith("__") and not callable(getattr(self, key)):
+                if (key.startswith("db")) or ("_key" in key) or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz"]:
+                    pass
+                else:
+                    debug[key] = self.__dict__[key]
 
+        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
         with open(filename, "w") as file:
             yaml.dump(debug, file)
         self.log("Wrote debug yaml to {}".format(filename_p))
