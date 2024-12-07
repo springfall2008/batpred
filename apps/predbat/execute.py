@@ -138,12 +138,16 @@ class Execute:
                                 if self.set_reserve_enable and (not inverter.inv_has_timed_pause):
                                     inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                     resetReserve = False
+                            else:
+                                inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+
                             if inverter.inv_has_timed_pause:
                                 inverter.adjust_pause_mode(pause_discharge=True)
                                 resetPause = False
                             else:
                                 inverter.adjust_discharge_rate(0)
                                 resetDischarge = False
+
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
                             self.log("Freeze charging with soc {}%".format(inverter.soc_percent))
@@ -164,15 +168,22 @@ class Execute:
                                         if self.set_reserve_enable and not inverter.inv_has_timed_pause:
                                             inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                             resetReserve = False
+                                    else:
+                                        inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+
                                     if inverter.inv_has_timed_pause:
                                         inverter.adjust_pause_mode(pause_discharge=True)
                                         resetPause = False
                                     else:
                                         inverter.adjust_discharge_rate(0)
                                         resetDischarge = False
+                                else:
+                                    inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+
                                 inverter.adjust_charge_immediate(self.charge_limit_percent_best[0], freeze=True)
                             else:
                                 status = "Charging"
+                                inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                                 inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
 
                             status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
@@ -188,8 +199,7 @@ class Execute:
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
 
                         isCharging = True
-
-                    if not disabled_charge_window:
+                    else:
                         # Configure the charge window start/end times if in the time window to set them
                         if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes):
                             # We must re-program if we are about to start a new charge window or the currently configured window is about to start or has started
