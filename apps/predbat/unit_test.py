@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timedelta
 import hashlib
 import traceback
+import argparse
 
 import pytz
 import requests
@@ -891,6 +892,59 @@ def run_execute_test(
     return failed
 
 
+def run_single_debug(my_predbat):
+    print("**** Running debug tests ****\n")
+
+    reset_inverter(my_predbat)
+    my_predbat.fetch_config_options()
+
+    end_record = my_predbat.forecast_minutes
+    failed = False
+
+    pv_step = my_predbat.pv_forecast_minute_step
+    pv10_step = my_predbat.pv_forecast_minute10_step
+    load_step = my_predbat.load_minutes_step
+    load10_step = my_predbat.load_minutes_step10
+    
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+    my_predbat.debug_enable = True
+
+    charge_limit_best = my_predbat.charge_limit_best
+    charge_window_best = my_predbat.charge_window_best
+    export_window_best = my_predbat.export_window_best
+    export_limits_best = my_predbat.export_limits_best
+
+    failed = False
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record
+    )
+    # Save plan
+    my_predbat.charge_limit_best = charge_limit_best
+    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
+    my_predbat.export_limits_best = export_limits_best
+    my_predbat.charge_window_best = charge_window_best
+    my_predbat.export_window_best = export_window_best
+
+    # Optimise windows
+    best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep)
+    charge_limit_best = my_predbat.charge_limit_best
+    export_limits_best = my_predbat.export_limits_best
+    charge_window_best = my_predbat.charge_window_best
+    export_window_best = my_predbat.export_window_best
+
+    # Predict
+    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
+    )
+
+    # Save plan
+    my_predbat.charge_limit_best = charge_limit_best
+    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
+    my_predbat.export_limits_best = export_limits_best
+    my_predbat.charge_window_best = charge_window_best
+    my_predbat.export_window_best = export_window_best
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
     reset_inverter(my_predbat)
@@ -1141,22 +1195,22 @@ def run_execute_tests(my_predbat):
         return failed
 
     my_predbat.battery_charge_power_curve = {
-        100: 0.50,
-        99: 0.50,
-        98: 0.50,
-        97: 0.50,
-        96: 0.50,
-        95: 0.50,
-        94: 1.00,
-        93: 1.00,
-        92: 1.00,
-        91: 1.00,
-        90: 1.00,
-        89: 1.00,
-        88: 1.00,
-        87: 1.00,
-        86: 1.00,
-        85: 1.00,
+        100 : 0.50,
+        99 : 0.50,
+        98 : 0.50,
+        97 : 0.50,
+        96 : 0.50,
+        95 : 0.50,
+        94 : 1.00,
+        93 : 1.00,
+        92 : 1.00,
+        91 : 1.00,
+        90 : 1.00,
+        89 : 1.00,
+        88 : 1.00,
+        87 : 1.00,
+        86 : 1.00,
+        85 : 1.00,
     }
 
     # 60 minutes - 10 minute margin = 50 minutes to add 0.75kWh to each battery (x2 inverters)
@@ -1200,7 +1254,6 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
-    return 1
 
     # Reset curve
     my_predbat.battery_charge_power_curve = {}
@@ -3975,6 +4028,12 @@ def run_model_tests(my_predbat):
 
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Predbat unit tests")
+    parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    args = parser.parse_args()
+        
+
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -3991,12 +4050,16 @@ def main():
     print("**** Testing Predbat ****")
     failed = False
 
+    if args.debug_file:
+        my_predbat.read_debug_yaml(args.debug_file)
+        run_single_debug(my_predbat)
+        sys.exit(0)
+
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     if not free_sessions:
         print("**** ERROR: No free sessions found ****")
         failed = 1
-
     if not failed:
         failed |= run_intersect_window_tests(my_predbat)
     if not failed:
