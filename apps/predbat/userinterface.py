@@ -573,7 +573,7 @@ class UserInterface:
     def read_debug_yaml(self, filename):
         """
         Read debug yaml - used for debugging scenarios not for the main code
-        """ 
+        """
         debug = {}
         if os.path.exists(filename):
             with open(filename, "r") as file:
@@ -581,12 +581,12 @@ class UserInterface:
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
-        
+
         for key in debug:
             if key != "CONFIG_ITEMS":
                 self.__dict__[key] = debug[key]
 
-        for item in debug['CONFIG_ITEMS']:
+        for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
                 if current.get("value", None) != item["value"]:
@@ -609,11 +609,11 @@ class UserInterface:
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
                 if (key.startswith("db")) or ("_key" in key) or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz"]:
-                    pass 
+                    pass
                 else:
                     debug[key] = self.__dict__[key]
 
-        debug['CONFIG_ITEMS'] = CONFIG_ITEMS
+        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
         with open(filename, "w") as file:
             yaml.dump(debug, file)
         self.log("Wrote debug yaml to {}".format(filename_p))

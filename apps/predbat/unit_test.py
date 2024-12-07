@@ -910,7 +910,7 @@ def run_single_debug(my_predbat, debug_file):
     pv10_step = my_predbat.pv_forecast_minute10_step
     load_step = my_predbat.load_minutes_step
     load10_step = my_predbat.load_minutes_step10
-    
+
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
@@ -956,7 +956,6 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
     open("plan.html", "w").write(my_predbat.html_plan)
     print("Wrote plan to plan.html")
-
 
 
 def run_execute_tests(my_predbat):
@@ -1209,22 +1208,22 @@ def run_execute_tests(my_predbat):
         return failed
 
     my_predbat.battery_charge_power_curve = {
-        100 : 0.50,
-        99 : 0.50,
-        98 : 0.50,
-        97 : 0.50,
-        96 : 0.50,
-        95 : 0.50,
-        94 : 1.00,
-        93 : 1.00,
-        92 : 1.00,
-        91 : 1.00,
-        90 : 1.00,
-        89 : 1.00,
-        88 : 1.00,
-        87 : 1.00,
-        86 : 1.00,
-        85 : 1.00,
+        100: 0.50,
+        99: 0.50,
+        98: 0.50,
+        97: 0.50,
+        96: 0.50,
+        95: 0.50,
+        94: 1.00,
+        93: 1.00,
+        92: 1.00,
+        91: 1.00,
+        90: 1.00,
+        89: 1.00,
+        88: 1.00,
+        87: 1.00,
+        86: 1.00,
+        85: 1.00,
     }
 
     # 60 minutes - 10 minute margin = 50 minutes to add 0.75kWh to each battery (x2 inverters)
@@ -4045,7 +4044,6 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     args = parser.parse_args()
-        
 
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
