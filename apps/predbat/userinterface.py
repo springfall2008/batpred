@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import json
 import yaml
 import re
+import copy
 from config import (
     TIME_FORMAT,
     CONFIG_ITEMS,
@@ -583,8 +584,12 @@ class UserInterface:
             return
 
         for key in debug:
-            if key != "CONFIG_ITEMS":
-                self.__dict__[key] = debug[key]
+            if key not in ["CONFIG_ITEMS", "inverters"]:
+                self.__dict__[key] = copy.deepcopy(debug[key])
+            if key == "inverters":
+                for inverter in debug[key]:
+                    for key in inverter:
+                        self.inverters[inverter["id"]].__dict__[key] = copy.deepcopy(inverter[key])
 
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
@@ -612,6 +617,17 @@ class UserInterface:
                     pass
                 else:
                     debug[key] = self.__dict__[key]
+        inverters_debug = []
+        for inverter in self.inverters:
+            inverter_debug = {}
+            for key in inverter.__dict__:
+                if not key.startswith("__") and not callable(getattr(inverter, key)):
+                    if key.startswith("base"):
+                        pass
+                    else:
+                        inverter_debug[key] = inverter.__dict__[key]
+            inverters_debug.append(inverter_debug)
+        debug["inverters"] = inverters_debug
 
         debug["CONFIG_ITEMS"] = CONFIG_ITEMS
         with open(filename, "w") as file:

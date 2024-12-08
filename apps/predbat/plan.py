@@ -1786,6 +1786,15 @@ class Plan:
 
         return new_enable, new_best
 
+    def update_target_values(self):
+        """
+        Update target values for HTML plan
+        """
+        for window_n in range(len(self.export_limits_best)):
+            self.export_window_best[window_n]["target"] = self.export_limits_best[window_n]
+        for window_n in range(len(self.charge_limit_best)):
+            self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
+
     def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
@@ -1846,7 +1855,7 @@ class Plan:
 
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
 
-    def optimise_all_windows(self, best_metric, metric_keep):
+    def optimise_all_windows(self, best_metric, metric_keep, debug_mode=False):
         """
         Optimise all windows, both charge and export in rate order
         """
@@ -1895,6 +1904,7 @@ class Plan:
                 fast=fast_mode,
                 quiet=True,
             )
+
             if self.calculate_regions:
                 region_size = int(16 * 60)
                 min_region_size = int(4 * 60)
@@ -1954,6 +1964,20 @@ class Plan:
             for window_n in range(len(ignore_export_limits)):
                 if ignore_export_limits[window_n] == 99.0:
                     self.export_limits_best[window_n] = 99.0
+
+        if debug_mode:
+            print("Levels result charge_window {} charge_limit {}".format(self.charge_window_best, self.charge_limit_best))
+            print("Levels result export_window {} export_limit {}".format(self.export_window_best, self.export_limits_best))
+            metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+            )
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.update_target_values()
+            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            open("plan_levels.html", "w").write(self.html_plan)
+            print("Charge window {} limit {}".format(self.charge_window_best, self.charge_limit_best))
+            print("Export window {} limit {}".format(self.export_window_best, self.export_limits_best))
+            print("Wrote plan to plan_level.html")
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
@@ -2279,6 +2303,15 @@ class Plan:
                         self.charge_limit_best[window_n] = 0.0
                 else:
                     self.charge_limit_best[window_n] = self.soc_max
+
+        if self.export_window_best and self.calculate_best_export:
+            # Set all to max
+            for window_n in range(len(self.export_window_best)):
+                if self.export_window_best[window_n]["start"] < (self.minutes_now + self.end_record):
+                    if reset_all:
+                        self.export_limits_best[window_n] = 100.0
+                else:
+                    self.export_limits_best[window_n] = 100.0
 
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP):
         """
