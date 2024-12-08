@@ -18,12 +18,18 @@ from datetime import datetime, timedelta
 import hashlib
 import traceback
 
+IS_APPDAEMON = False
+
 # Import AppDaemon or our standalone wrapper
 try:
     import adbase as ad
     import appdaemon.plugins.hass.hassapi as hass
+
+    IS_APPDAEMON = True
 except:
     import hass as hass
+
+    IS_APPDAEMON = False
 
 import pytz
 import requests
@@ -32,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.8.3"
+THIS_VERSION = "v8.8.4"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]
@@ -707,7 +713,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
             self.expose_config("holiday_days_left", self.holiday_days_left)
             self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
-        if self.debug_enable:
+        if self.debug_enable and not IS_APPDAEMON:
             self.create_debug_yaml()
 
         if self.had_errors:
