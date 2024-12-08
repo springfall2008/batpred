@@ -648,19 +648,19 @@ class Prediction:
                 if save in ["best", "best10", "test"]:
                     # Only tune charge rate on final plan not every simulation
                     charge_rate_now = find_charge_rate(
-                        minute_absolute,
-                        soc,
-                        charge_window[charge_window_n],
-                        charge_limit_n,
-                        self.battery_rate_max_charge,
-                        self.soc_max,
-                        self.battery_charge_power_curve,
-                        self.set_charge_low_power,
+                        minute_absolute, 
+                        soc, 
+                        charge_window[charge_window_n], 
+                        charge_limit_n, 
+                        self.battery_rate_max_charge, 
+                        self.soc_max, 
+                        self.battery_charge_power_curve, 
+                        self.set_charge_low_power, 
                         self.charge_low_power_margin,
                         self.battery_rate_min,
                         self.battery_rate_max_scaling,
                         self.battery_loss,
-                        None,
+                        None
                     )
                 else:
                     charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
@@ -695,7 +695,7 @@ class Prediction:
                 pv_dc = 0
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
-                required_for_load = load_yesterday / inverter_loss_ac
+                required_for_load = load_yesterday / inverter_loss
                 if inverter_hybrid:
                     potential_to_charge = pv_now
                 else:
