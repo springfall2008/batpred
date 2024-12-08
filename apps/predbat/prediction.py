@@ -583,9 +583,8 @@ class Prediction:
             export_limit = self.export_limit * step
 
             discharge_min = self.reserve
-            use_keep = self.best_soc_keep if four_hour_rule else self.reserve
             if export_window_n >= 0:
-                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
+                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
                 # Discharge enable
@@ -649,19 +648,19 @@ class Prediction:
                 if save in ["best", "best10", "test"]:
                     # Only tune charge rate on final plan not every simulation
                     charge_rate_now = find_charge_rate(
-                        minute_absolute,
-                        soc,
-                        charge_window[charge_window_n],
-                        charge_limit_n,
-                        self.battery_rate_max_charge,
-                        self.soc_max,
-                        self.battery_charge_power_curve,
-                        self.set_charge_low_power,
+                        minute_absolute, 
+                        soc, 
+                        charge_window[charge_window_n], 
+                        charge_limit_n, 
+                        self.battery_rate_max_charge, 
+                        self.soc_max, 
+                        self.battery_charge_power_curve, 
+                        self.set_charge_low_power, 
                         self.charge_low_power_margin,
                         self.battery_rate_min,
                         self.battery_rate_max_scaling,
                         self.battery_loss,
-                        None,
+                        None
                     )
                 else:
                     charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here

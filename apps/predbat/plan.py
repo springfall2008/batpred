@@ -406,6 +406,8 @@ class Plan:
 
     def scenario_summary_state(self, record_time):
         txt = ""
+        self.log("scenario summary charge window {} limits {}".format(self.charge_window_best, self.charge_limit_best))
+        self.log("scenario summary export window {} limits {}".format(self.export_window_best, self.export_limits_best))
         minute_start = self.minutes_now - self.minutes_now % 30
         for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, 30):
             minute_relative_start = max(minute_absolute - self.minutes_now, 0)
@@ -418,12 +420,16 @@ class Plan:
             charge_window_n = -1
             for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
+                if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
+                    charge_window_n = -1
                 if charge_window_n >= 0:
                     break
 
             export_window_n = -1
             for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
+                if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+                    export_window_n = -1
                 if export_window_n >= 0:
                     break
 
@@ -433,7 +439,7 @@ class Plan:
             soc_percent_min = min(soc_percent, soc_percent_end)
 
             if charge_window_n >= 0 and export_window_n >= 0:
-                value = "Chrg/Dis"
+                value = "Chrg/Exp"
             elif charge_window_n >= 0:
                 charge_target = self.charge_limit_best[charge_window_n]
                 if charge_target == self.reserve:
@@ -1371,7 +1377,7 @@ class Plan:
 
             window_size = try_export_window[window_n]["end"] - start
             window_key = str(int(this_export_limit)) + "_" + str(window_size)
-            window_results[window_key] = metric
+            window_results[window_key] = [metric, cost]
 
             if all_n:
                 min_improvement_scaled = self.metric_min_improvement_export
@@ -1794,7 +1800,7 @@ class Plan:
             self.export_window_best[window_n]["target"] = self.export_limits_best[window_n]
         for window_n in range(len(self.charge_limit_best)):
             self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
-
+        
     def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
