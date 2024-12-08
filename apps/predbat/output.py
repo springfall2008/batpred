@@ -544,8 +544,6 @@ class Output:
         """
         Publish the current plan in HTML format
         """
-        self.log("publish html charge window {} limits {}".format(self.charge_window_best, self.charge_limit_best))
-        self.log("publish html export window {} limits {}".format(self.export_window_best, self.export_limits_best))
         plan_debug = self.get_arg("plan_debug")
         html = "<table>"
         html += "<tr>"

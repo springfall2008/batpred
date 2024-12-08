@@ -406,8 +406,6 @@ class Plan:
 
     def scenario_summary_state(self, record_time):
         txt = ""
-        self.log("scenario summary charge window {} limits {}".format(self.charge_window_best, self.charge_limit_best))
-        self.log("scenario summary export window {} limits {}".format(self.export_window_best, self.export_limits_best))
         minute_start = self.minutes_now - self.minutes_now % 30
         for minute_absolute in range(minute_start, self.forecast_minutes + minute_start, 30):
             minute_relative_start = max(minute_absolute - self.minutes_now, 0)
