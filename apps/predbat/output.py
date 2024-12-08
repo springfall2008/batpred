@@ -584,14 +584,14 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
-                if charge_window_n >=0 and self.charge_limit_best[charge_window_n] == 0:
+                if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
                     charge_window_n = -1
                 if charge_window_n >= 0:
                     break
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
-                if export_window_n >=0 and self.export_limits_best[export_window_n] == 100:
+                if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
                     export_window_n = -1
                 if export_window_n >= 0:
                     break
