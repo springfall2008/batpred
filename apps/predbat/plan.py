@@ -418,12 +418,16 @@ class Plan:
             charge_window_n = -1
             for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
+                if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
+                    charge_window_n = -1
                 if charge_window_n >= 0:
                     break
 
             export_window_n = -1
             for try_minute in range(this_minute_absolute, minute_absolute + 30, 5):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
+                if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+                    export_window_n = -1
                 if export_window_n >= 0:
                     break
 
@@ -433,7 +437,7 @@ class Plan:
             soc_percent_min = min(soc_percent, soc_percent_end)
 
             if charge_window_n >= 0 and export_window_n >= 0:
-                value = "Chrg/Dis"
+                value = "Chrg/Exp"
             elif charge_window_n >= 0:
                 charge_target = self.charge_limit_best[charge_window_n]
                 if charge_target == self.reserve:
@@ -1371,7 +1375,7 @@ class Plan:
 
             window_size = try_export_window[window_n]["end"] - start
             window_key = str(int(this_export_limit)) + "_" + str(window_size)
-            window_results[window_key] = metric
+            window_results[window_key] = [metric, cost]
 
             if all_n:
                 min_improvement_scaled = self.metric_min_improvement_export

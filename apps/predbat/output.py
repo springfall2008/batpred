@@ -584,11 +584,15 @@ class Output:
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 charge_window_n = self.in_charge_window(self.charge_window_best, try_minute)
+                if charge_window_n >= 0 and self.charge_limit_best[charge_window_n] == 0:
+                    charge_window_n = -1
                 if charge_window_n >= 0:
                     break
 
             for try_minute in range(minute_start, minute_end, PREDICT_STEP):
                 export_window_n = self.in_charge_window(self.export_window_best, try_minute)
+                if export_window_n >= 0 and self.export_limits_best[export_window_n] == 100:
+                    export_window_n = -1
                 if export_window_n >= 0:
                     break
 
@@ -599,7 +603,18 @@ class Output:
                     in_span = False
 
             if charge_window_n >= 0 and not in_span:
-                rowspan = int((self.charge_window_best[charge_window_n]["end"] - minute) / 30)
+                charge_end_minute = self.charge_window_best[charge_window_n]["end"]
+                discharge_intersect = -1
+                for try_minute in range(minute_start, charge_end_minute, PREDICT_STEP):
+                    discharge_intersect = self.in_charge_window(self.export_window_best, try_minute)
+                    if discharge_intersect >= 0 and self.export_limits_best[discharge_intersect] == 100:
+                        discharge_intersect = -1
+                    if discharge_intersect >= 0:
+                        break
+                if discharge_intersect >= 0:
+                    charge_end_minute = min(charge_end_minute, self.export_window_best[discharge_intersect]["start"])
+
+                rowspan = int((charge_end_minute - minute) / 30)
                 if rowspan > 1 and (export_window_n < 0):
                     in_span = True
                     start_span = True
@@ -608,7 +623,18 @@ class Output:
                     rowspan = 0
 
             if export_window_n >= 0 and not in_span:
-                rowspan = int((self.export_window_best[export_window_n]["end"] - minute) / 30)
+                export_end_minute = self.export_window_best[export_window_n]["end"]
+                charge_intersect = -1
+                for try_minute in range(minute_start, export_end_minute, PREDICT_STEP):
+                    charge_intersect = self.in_charge_window(self.charge_window_best, try_minute)
+                    if charge_intersect >= 0 and self.charge_limit_best[charge_intersect] == 0:
+                        charge_intersect = -1
+                    if charge_intersect >= 0:
+                        break
+                if charge_intersect >= 0:
+                    export_end_minute = min(export_end_minute, self.charge_window_best[charge_intersect]["start"])
+
+                rowspan = int((export_end_minute - minute) / 30)
                 start = self.export_window_best[export_window_n]["start"]
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
                     in_span = True

@@ -896,12 +896,30 @@ def run_execute_test(
 
 def run_single_debug(my_predbat, debug_file):
     print("**** Running debug test {} ****\n".format(debug_file))
+    re_do_rates = True
 
     reset_inverter(my_predbat)
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.fetch_config_options()
+
+    if re_do_rates:
+        my_predbat.combine_export_slots = False  # XXX: This is a hack to make the test pass
+        # Find discharging windows
+        if my_predbat.rate_export:
+            my_predbat.high_export_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
+            # Update threshold automatically
+            if my_predbat.rate_high_threshold == 0 and lowest <= my_predbat.rate_export_max:
+                my_predbat.rate_export_cost_threshold = lowest
+
+        # Find charging windows
+        if my_predbat.rate_import:
+            # Find charging window
+            my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False)
+            # Update threshold automatically
+            if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
+                my_predbat.rate_import_cost_threshold = highest
 
     end_record = my_predbat.end_record
     print("minutes_now {}".format(my_predbat.minutes_now))
@@ -915,18 +933,14 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
-    charge_limit_best = my_predbat.charge_limit_best
-    charge_window_best = my_predbat.charge_window_best
-    export_window_best = my_predbat.export_window_best
-    export_limits_best = my_predbat.export_limits_best
-
     failed = False
+    my_predbat.log("********ORIGINAL PLAN********")
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
+        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
     # Save plan
     # Pre-optimise all plan
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
+    my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
     open("plan_orig.html", "w").write(my_predbat.html_plan)
@@ -956,18 +970,15 @@ def run_single_debug(my_predbat, debug_file):
 
     # Optimise windows
     best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep, debug_mode=True)
-    charge_limit_best = my_predbat.charge_limit_best
-    export_limits_best = my_predbat.export_limits_best
-    charge_window_best = my_predbat.charge_window_best
-    export_window_best = my_predbat.export_window_best
 
     # Predict
+    my_predbat.log("********RAW PLAN********")
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
+        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
 
     # Save plan
-    my_predbat.charge_limit_percent_best = calc_percent_limit(charge_limit_best, my_predbat.soc_max)
+    my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)
     open("plan_raw.html", "w").write(my_predbat.html_plan)
@@ -993,8 +1004,9 @@ def run_single_debug(my_predbat, debug_file):
         my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
 
     # Predict
+    my_predbat.log("********FINAL PLAN*******")
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=end_record, save="best"
+        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
 
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, end_record)

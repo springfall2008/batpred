@@ -583,9 +583,8 @@ class Prediction:
             export_limit = self.export_limit * step
 
             discharge_min = self.reserve
-            use_keep = self.best_soc_keep if four_hour_rule else self.reserve
             if export_window_n >= 0:
-                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, use_keep, self.best_soc_min)
+                discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) > discharge_min:
                 # Discharge enable
