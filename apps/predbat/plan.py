@@ -1794,7 +1794,7 @@ class Plan:
             self.export_window_best[window_n]["target"] = self.export_limits_best[window_n]
         for window_n in range(len(self.charge_limit_best)):
             self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
-        
+
     def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
