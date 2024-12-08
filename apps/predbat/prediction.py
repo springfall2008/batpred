@@ -695,7 +695,7 @@ class Prediction:
                 pv_dc = 0
                 diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
-                required_for_load = load_yesterday / inverter_loss_ac
+                required_for_load = load_yesterday / inverter_loss
                 if inverter_hybrid:
                     potential_to_charge = pv_now
                 else:
