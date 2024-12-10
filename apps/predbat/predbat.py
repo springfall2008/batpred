@@ -24,11 +24,9 @@ IS_APPDAEMON = False
 try:
     import adbase as ad
     import appdaemon.plugins.hass.hassapi as hass
-
     IS_APPDAEMON = True
 except:
     import hass as hass
-
     IS_APPDAEMON = False
 
 import pytz
@@ -38,7 +36,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.8.4"
+THIS_VERSION = "v8.8.5"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]

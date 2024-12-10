@@ -1266,7 +1266,7 @@ class Plan:
         try_export = copy.deepcopy(export_limit)
         best_start = window["start"]
         best_size = window["end"] - best_start
-        export_step = 5
+        export_step = 10
 
         # loop on each export option
         if self.set_export_freeze and freeze_only:
@@ -1798,7 +1798,7 @@ class Plan:
             self.export_window_best[window_n]["target"] = self.export_limits_best[window_n]
         for window_n in range(len(self.charge_limit_best)):
             self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
-
+        
     def tweak_plan(self, end_record, best_metric, metric_keep):
         """
         Tweak existing plan only
@@ -1866,6 +1866,7 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
+            
         best_soc = self.soc_max
         best_cost = best_metric
         best_keep = metric_keep
@@ -1906,7 +1907,7 @@ class Plan:
                 self.export_limits_best,
                 end_record=self.end_record,
                 fast=fast_mode,
-                quiet=True,
+                quiet=False if debug_mode else True,
             )
 
             if self.calculate_regions:
