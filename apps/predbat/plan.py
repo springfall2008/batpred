@@ -1266,7 +1266,7 @@ class Plan:
         try_export = copy.deepcopy(export_limit)
         best_start = window["start"]
         best_size = window["end"] - best_start
-        export_step = 10
+        export_step = 5
 
         # loop on each export option
         if self.set_export_freeze and freeze_only:

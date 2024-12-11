@@ -588,7 +588,7 @@ class Prediction:
 
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) < discharge_min:
                 # Export runs out of battery - give penalty for this case, we might not stop it in time
-                metric_keep += step * self.battery_rate_max_discharge_scaled * rate_import.get(minute_absolute, 0)
+                metric_keep += step * self.battery_rate_max_discharge_scaled * rate_import.get(minute_absolute, 0) * 0.5
 
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) >= discharge_min:
                 # Discharge enable
@@ -812,12 +812,12 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep:
+            if soc < self.best_soc_keep and battery_draw > 0:
                 # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
                 # Weight to 50% chance of the scenario
-                keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
-                if keep_diff > 0:
-                    metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
+                # keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
+                # if keep_diff > 0:
+                metric_keep += rate_import[minute_absolute] * battery_draw * keep_minute_scaling
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
