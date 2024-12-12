@@ -321,7 +321,7 @@ CONFIG_ITEMS = [
         "unit": "p",
         "icon": "mdi:currency-usd",
         "enable": "expert_mode",
-        "default": 2,
+        "default": 5,
     },
     {
         "name": "metric_battery_cycle",
