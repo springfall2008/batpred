@@ -24,11 +24,9 @@ IS_APPDAEMON = False
 try:
     import adbase as ad
     import appdaemon.plugins.hass.hassapi as hass
-
     IS_APPDAEMON = True
 except:
     import hass as hass
-
     IS_APPDAEMON = False
 
 import pytz

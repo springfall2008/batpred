@@ -498,9 +498,11 @@ class Octopus:
                 state = self.get_arg("octopus_saving_session", False)
 
                 joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
+                self.log("Joined events {} = {}".format(entity_id, joined_events))
                 if not joined_events:
                     entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
                     joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
+                    self.log("Joined events {} = {}".format(entity_id, joined_events))
 
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
                 if available_events:
