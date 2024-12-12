@@ -1322,6 +1322,33 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
     },
+        "SA": {
+        "name": "Solar Assistant",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        "output_charge_control": "none",
+        "charge_control_immediate": False,
+        "current_dp": 0,
+        "has_charge_enable_time": False,
+        "has_discharge_enable_time": False,
+        "has_target_soc": False,
+        "has_reserve_soc": False,
+        "has_timed_pause": False,
+        "charge_time_format": "S",
+        "charge_time_entity_is_option": False,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "time_button_press": False,
+        "clock_time_format": "%Y-%m-%dT%H:%M:%S",
+        "write_and_poll_sleep": 5,
+        "has_time_window": False,
+        "support_charge_freeze": False,
+        "support_discharge_freeze": False,
+        "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+    }
 }
 
 # Control modes for Solax inverters
