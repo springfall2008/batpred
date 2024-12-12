@@ -237,6 +237,12 @@ This requires the LuxPython component which integrates with your Lux Power inver
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
 
+## Solar Assistant
+
+You need to have a Solar Assistant instalation ( <https://solar-assistant.io>
+
+Copy the template solar_assistant.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity ids on Home Assistant)
+
 ## Sunsynk
 
 - Copy the Sunsynk apps.yaml template and edit for your system.
