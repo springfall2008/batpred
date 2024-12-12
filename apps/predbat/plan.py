@@ -1283,7 +1283,7 @@ class Plan:
         try_options = []
         for loop_limit in loop_options:
             # Loop on window size
-            loop_start = window["end"] - 10  # Minimum export window size 10 minutes
+            loop_start = window["end"] - 5  # Minimum export window size 5 minutes
             while loop_start >= window["start"]:
                 this_export_limit = loop_limit
                 start = loop_start
