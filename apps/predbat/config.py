@@ -1322,7 +1322,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
     },
-        "SA": {
+    "SA": {
         "name": "Solar Assistant",
         "has_rest_api": False,
         "has_mqtt_api": False,
@@ -1348,7 +1348,7 @@ INVERTER_DEF = {
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
-    }
+    },
 }
 
 # Control modes for Solax inverters

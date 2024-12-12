@@ -71,7 +71,7 @@ pred_bat:
 
   battery_min_soc:
     - number.growatt_spa_grid_first_stop_discharge
-    
+
 #  energy_control_switch:
     - select.growatt_spa_work_mode_priority
 
