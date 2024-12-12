@@ -271,8 +271,9 @@ Do not use if you have multiple charge windows in a given period as it won't lea
 You could even go to something like -0.1 to say you would charge less even if it cost up to 0.1p more (best used with metric10).
 
 **input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets the minimum pence cost improvement it's worth doing a forced export for.
-A value of 0.1 is the default which prevents any marginal exports. If you increase this value (e.g. you only want to force export if definitely very profitable),
-then exports will become less common and shorter. The value is in pence per 30 minutes of export time.
+A value of 5 is the default which prevents any marginal exports as they must be worth at least 5 pence for a 30 minute slot (less for shorter slots.
+If you increase this value (e.g. you only want to force export if definitely very profitable), then exports will become less common.
+The value is in pence per 30 minutes of export time.
 
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
