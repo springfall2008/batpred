@@ -11,6 +11,7 @@ Home battery prediction and automatic charging for Home Assistant supporting mul
 - Fox
 - Sofar
 - LuxPower
+- Solar Assistant
 
 Also known by some as Batpred or Batman!
 

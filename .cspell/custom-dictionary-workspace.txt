@@ -76,6 +76,7 @@ geseriale
 Ginlong
 GivEnergy
 givtcp
+growatt
 HACS
 hadashboard
 hanres

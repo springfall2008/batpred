@@ -15,6 +15,7 @@ PredBat was originally written for GivEnergy inverters using the GivTCP integrat
    | SunSynk | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | Fox | [Foxess](https://github.com/nathanmarlor/foxess_modbus) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | LuxPower | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
+   | Solar Assistant | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [solar_assistant.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on Github.
 
@@ -235,6 +236,12 @@ Template is in the templates area, give it a try
 This requires the LuxPython component which integrates with your Lux Power inverter
 
 - Copy the template luxpower.yaml from templates into your apps.yaml and edit inverter and battery settings as required
+
+## Solar Assistant
+
+You need to have a Solar Assistant installation <https://solar-assistant.io>
+
+Copy the template solar_assistant.yaml from templates into your apps.yaml and edit inverter and battery settings as required (the template has growatt, yours might/will have different entity ids on Home Assistant)
 
 ## Sunsynk
 
