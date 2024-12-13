@@ -121,14 +121,13 @@ A good setting is 0.08 which is 8%.
 
 Sample setup and Predbat automation to use the cheapest charging slots with no/limited Home Assistant Integration.
 
-MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG, and the Hypervolt car charger doesn't understand when an EV is plugged in.
+MG4 EV Vehicle with a Hypervolt Car Charger. There is no 3rd party integration with the MG (so no idea of the car's current SoC), and the Hypervolt car charger doesn't understand when an EV is plugged in.
 
 Yet it can be stopped and started with a 3rd party integration.
 
-In Home Assistant, create two helper entities (Settings / Devices & Services / Helpers) of type 'Number', and for each set 'Unit of Measurement' to 'kWh':
+In Home Assistant, create a helper entity (Settings / Devices & Services / Helpers) of type 'Number' and set 'Unit of Measurement' to 'kWh':
 
 - Car Max Charge - input_number.car_max_charge
-- Car Manual SoC - input_number.car_manual_soc
 
 Create a 'Dropdown' helper entity that has two options 'true' and 'false' (in lower case):
 
@@ -244,7 +243,7 @@ mode: single
 Finally, for simplicity, add the below entities to your HA Dashboard so you can set them when needed:
 
 - Car Max Charge - input_number.car_max_charge
-- Car Manual SoC - input_number.car_manual_soc
+- Car Manual SoC - input_number.predbat_car_charging_manual_soc_kwh
 - Car Charger Plugged in - input_select.car_charger_plugged_in
 
 Annoyingly, you have to calculate the kWh your vehicle has in total by taking the Percentage left in the car / 100 * Total Car Battery capacity.<BR>
