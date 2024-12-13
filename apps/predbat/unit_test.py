@@ -897,7 +897,8 @@ def run_execute_test(
 def run_single_debug(my_predbat, debug_file):
     print("**** Running debug test {} ****\n".format(debug_file))
     re_do_rates = True
-    reset_load_model = False
+    reset_load_model = True
+    load_override = 0.2
 
     reset_inverter(my_predbat)
     my_predbat.read_debug_yaml(debug_file)
@@ -912,6 +913,10 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
+        # Set rate thresholds
+        if my_predbat.rate_import or my_predbat.rate_export:
+            my_predbat.set_rate_thresholds()
+
         # Find discharging windows
         if my_predbat.rate_export:
             my_predbat.high_export_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
@@ -937,7 +942,7 @@ def run_single_debug(my_predbat, debug_file):
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=1.0,
+            scale_fixed=1.0 * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
@@ -948,7 +953,7 @@ def run_single_debug(my_predbat, debug_file):
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling10,
+            scale_fixed=my_predbat.load_scaling10 * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
@@ -986,8 +991,10 @@ def run_single_debug(my_predbat, debug_file):
 
     # Calculate best export windows
     if my_predbat.high_export_rates and my_predbat.calculate_best_export and my_predbat.set_export_window:
+        print("High export rates: {}".format(my_predbat.high_export_rates))
         my_predbat.export_window_best = copy.deepcopy(my_predbat.high_export_rates)
     else:
+        print("export disabled {} {} {}".format(my_predbat.high_export_rates, my_predbat.calculate_best_export, my_predbat.set_export_window))
         my_predbat.export_window_best = copy.deepcopy(my_predbat.export_window)
 
     # Pre-fill best charge limit with the current charge limit
