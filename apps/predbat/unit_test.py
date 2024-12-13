@@ -908,7 +908,8 @@ def run_single_debug(my_predbat, debug_file):
     # Force off combine export XXX:
     print("Combined export slots {}".format(my_predbat.combine_export_slots))
     # my_predbat.combine_export_slots = False
-    my_predbat.best_soc_keep = 1.0
+    # my_predbat.best_soc_keep = 1.0
+    my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Find discharging windows
@@ -2436,7 +2437,7 @@ def run_optimise_all_windows(
     expect_export_limit=[],
     expect_best_price=0.0,
     rate_import=10.0,
-    rate_export=5.0,
+    rate_export=5.5,
     battery_size=100.0,
     battery_soc=0.0,
     hybrid=False,
@@ -3384,7 +3385,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=1 * import_rate * KEEP_SCALE,
         keep=1.0,
     )
     failed |= simple_scenario(
@@ -3397,7 +3398,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=1 * import_rate * KEEP_SCALE,
         keep=1.0,
         save="test",
     )
@@ -3411,7 +3412,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=1 * import_rate * KEEP_SCALE,
         keep=1.0,
         save="none",
     )
@@ -4056,7 +4057,7 @@ def run_model_tests(my_predbat):
         battery_size=10,
         keep=1.0,
         assert_final_iboost=0,
-        assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
+        assert_keep=import_rate * 1 * KEEP_SCALE,
     )
 
     # Alternating high/low rates

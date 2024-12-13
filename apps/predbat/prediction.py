@@ -586,11 +586,7 @@ class Prediction:
             if export_window_n >= 0:
                 discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
-            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) < discharge_min:
-                # Export runs out of battery - give penalty for this case, we might not stop it in time
-                metric_keep += step * self.battery_rate_max_discharge_scaled * rate_import.get(minute_absolute, 0) * 0.5
-
-            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 100.0 and (soc - step * self.battery_rate_max_discharge_scaled) >= discharge_min:
+            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc - step * self.battery_rate_max_discharge_scaled) >= discharge_min:
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
                 discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge
