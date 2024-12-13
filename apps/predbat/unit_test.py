@@ -897,7 +897,8 @@ def run_execute_test(
 def run_single_debug(my_predbat, debug_file):
     print("**** Running debug test {} ****\n".format(debug_file))
     re_do_rates = True
-    reset_load_model = False
+    reset_load_model = True
+    load_override = 0.2
 
     reset_inverter(my_predbat)
     my_predbat.read_debug_yaml(debug_file)
@@ -907,11 +908,15 @@ def run_single_debug(my_predbat, debug_file):
 
     # Force off combine export XXX:
     print("Combined export slots {}".format(my_predbat.combine_export_slots))
-    # my_predbat.combine_export_slots = False
-    # my_predbat.best_soc_keep = 1.0
+    #my_predbat.combine_export_slots = False
+    #my_predbat.best_soc_keep = 1.0
     my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
+        # Set rate thresholds
+        if my_predbat.rate_import or my_predbat.rate_export:
+            my_predbat.set_rate_thresholds()
+
         # Find discharging windows
         if my_predbat.rate_export:
             my_predbat.high_export_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
@@ -937,7 +942,7 @@ def run_single_debug(my_predbat, debug_file):
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=1.0,
+            scale_fixed=1.0 * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
@@ -948,18 +953,18 @@ def run_single_debug(my_predbat, debug_file):
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=my_predbat.load_scaling10,
+            scale_fixed=my_predbat.load_scaling10 * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
-        )
+        )    
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step
     load_step = my_predbat.load_minutes_step
     load10_step = my_predbat.load_minutes_step10
-
+    
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
     my_predbat.debug_enable = True
 
@@ -986,8 +991,10 @@ def run_single_debug(my_predbat, debug_file):
 
     # Calculate best export windows
     if my_predbat.high_export_rates and my_predbat.calculate_best_export and my_predbat.set_export_window:
+        print("High export rates: {}".format(my_predbat.high_export_rates))
         my_predbat.export_window_best = copy.deepcopy(my_predbat.high_export_rates)
     else:
+        print("export disabled {} {} {}".format(my_predbat.high_export_rates, my_predbat.calculate_best_export, my_predbat.set_export_window))
         my_predbat.export_window_best = copy.deepcopy(my_predbat.export_window)
 
     # Pre-fill best charge limit with the current charge limit
@@ -1046,6 +1053,7 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
     open("plan_final.html", "w").write(my_predbat.html_plan)
     print("Wrote plan to plan_final.html")
+
 
 
 def run_execute_tests(my_predbat):
@@ -1298,22 +1306,22 @@ def run_execute_tests(my_predbat):
         return failed
 
     my_predbat.battery_charge_power_curve = {
-        100: 0.50,
-        99: 0.50,
-        98: 0.50,
-        97: 0.50,
-        96: 0.50,
-        95: 0.50,
-        94: 1.00,
-        93: 1.00,
-        92: 1.00,
-        91: 1.00,
-        90: 1.00,
-        89: 1.00,
-        88: 1.00,
-        87: 1.00,
-        86: 1.00,
-        85: 1.00,
+        100 : 0.50,
+        99 : 0.50,
+        98 : 0.50,
+        97 : 0.50,
+        96 : 0.50,
+        95 : 0.50,
+        94 : 1.00,
+        93 : 1.00,
+        92 : 1.00,
+        91 : 1.00,
+        90 : 1.00,
+        89 : 1.00,
+        88 : 1.00,
+        87 : 1.00,
+        86 : 1.00,
+        85 : 1.00,
     }
 
     # 60 minutes - 10 minute margin = 50 minutes to add 0.75kWh to each battery (x2 inverters)
@@ -2940,10 +2948,10 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_only", my_predbat, 1, 0, assert_final_metric=import_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("load_bat_ac", my_predbat, 4, 0, assert_final_metric=import_rate * 24 * 3.2, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8)
     failed |= simple_scenario("load_bat_dc", my_predbat, 4, 0, assert_final_metric=import_rate * 24 * 3.2, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8, hybrid=True)
-    failed |= simple_scenario("load_bat_ac2", my_predbat, 0.5, 0, assert_final_metric=0, assert_final_soc=100 - 12 / 0.8, with_battery=True, battery_soc=100.0, inverter_loss=0.8)
-    failed |= simple_scenario("load_bat_dc2", my_predbat, 0.5, 0, assert_final_metric=0, assert_final_soc=100 - 12 / 0.8, with_battery=True, battery_soc=100.0, inverter_loss=0.8, hybrid=True)
-    failed |= simple_scenario("load_bat_ac3", my_predbat, 1.0, 0, assert_final_metric=import_rate * 0.2 * 24, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8)
-    failed |= simple_scenario("load_bat_dc3", my_predbat, 1.0, 0, assert_final_metric=import_rate * 0.2 * 24, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8, hybrid=True)
+    failed |= simple_scenario("load_bat_ac2", my_predbat, 0.5, 0, assert_final_metric=0, assert_final_soc=100 - 12/0.8, with_battery=True, battery_soc=100.0, inverter_loss=0.8)
+    failed |= simple_scenario("load_bat_dc2", my_predbat, 0.5, 0, assert_final_metric=0, assert_final_soc=100 - 12/0.8, with_battery=True, battery_soc=100.0, inverter_loss=0.8, hybrid=True)
+    failed |= simple_scenario("load_bat_ac3", my_predbat, 1.0, 0, assert_final_metric=import_rate * 0.2*24, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8)
+    failed |= simple_scenario("load_bat_dc3", my_predbat, 1.0, 0, assert_final_metric=import_rate * 0.2*24, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8, hybrid=True)
 
     failed |= simple_scenario(
         "load_bat_dc_pv",
@@ -4139,6 +4147,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     args = parser.parse_args()
+        
 
     print("**** Starting Predbat tests ****")
     my_predbat = PredBat()
