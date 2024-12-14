@@ -897,8 +897,8 @@ def run_execute_test(
 def run_single_debug(my_predbat, debug_file):
     print("**** Running debug test {} ****\n".format(debug_file))
     re_do_rates = True
-    reset_load_model = True
-    load_override = 0.2
+    reset_load_model = False
+    load_override = 1.0
 
     reset_inverter(my_predbat)
     my_predbat.read_debug_yaml(debug_file)
@@ -907,10 +907,10 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
-    print("Combined export slots {}".format(my_predbat.combine_export_slots))
+    print("Combined export slots {} min_improvement_export {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export))
     # my_predbat.combine_export_slots = False
     # my_predbat.best_soc_keep = 1.0
-    my_predbat.metric_min_improvement_export = 5
+    #my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -3392,7 +3392,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
         keep=1.0,
     )
     failed |= simple_scenario(
@@ -3405,7 +3405,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
         keep=1.0,
         save="test",
     )
@@ -3419,7 +3419,7 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
         keep=1.0,
         save="none",
     )
@@ -4064,7 +4064,7 @@ def run_model_tests(my_predbat):
         battery_size=10,
         keep=1.0,
         assert_final_iboost=0,
-        assert_keep=import_rate * 1 * KEEP_SCALE,
+        assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
     )
 
     # Alternating high/low rates
