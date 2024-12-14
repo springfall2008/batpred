@@ -77,7 +77,15 @@ you won't need to create a dedicated MQTT user or enter the details on the MQTT 
 and will automatically create a set of 'givtcp_xxx' entities in Home Assistant for your inverter data, inverter controls and battery data
 - Check the GivTCP Log tab that there aren't any errors; it should end with 'Publishing Home Assistant Discovery messages'
 
-4. Specific Predbat configuration requirements for certain GivEnergy equipment
+4. Before you start using GivTCP to control your inverter
+
+Verify in the GivEnergy portal settings the following inverter settings are set correctly as these are settings that Predbat doesn't control, and if not set correctly could affect your battery activity:
+
+- "Inverter Charge Power Percentage" is set to 100 (Predbat has its own low-rate charge control you can use if you wish)
+- "Inverter Discharge Power Percentage" is set to 100. If you do wish to set a lower discharge rate then its recommended that instead you set [inverter_limit_discharge in apps.yaml](apps-yaml.md#inverter-control-configurations) to the rate
+- "Battery Cutoff % Limit" is set to 4
+
+5. Specific Predbat configuration requirements for certain GivEnergy equipment
 
 The rest of the [Predbat installation instructions](install.md) should now be followed,
 but its worth highlighting that there are a few specific settings that should be set for certain GivEnergy equipment.
