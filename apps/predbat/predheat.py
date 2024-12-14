@@ -75,6 +75,31 @@ class PredHeat:
     The heating prediction class itself
     """
 
+    def fill_table_gaps(self, table):
+        """
+        Fill gaps correction tables
+        """
+        sorted_keys = sorted(table.keys())
+        max_key = max(sorted_keys)
+        min_key = min(sorted_keys)
+        last_key = min_key
+        last_value = table[min_key]
+        new_table = {}
+        for key in range(min_key, max_key + 1):
+            if key not in table:
+                next_value = last_value
+                for next_key in range(key + 1, max_key + 1):
+                    if next_key in table:
+                        next_value = table[next_key]
+                        break
+                interpolated = (next_value - last_value) / (next_key - last_key) * (key - last_key) + last_value
+                new_table[key] = round(interpolated, 4)
+            else:
+                last_key = key
+                last_value = table[key]
+                new_table[key] = last_value
+        return new_table
+
     def __init__(self, base):
         self.base = base
         self.log = base.log
@@ -104,10 +129,16 @@ class PredHeat:
         for key, value in delta_correction.items():
             self.delta_correction[key] = value
 
+        # Fill gaps in tables
+        self.delta_correction = self.fill_table_gaps(self.delta_correction)
+        self.gas_efficiency = self.fill_table_gaps(self.gas_efficiency)
+        self.heat_pump_efficiency = self.fill_table_gaps(self.heat_pump_efficiency)
+
         self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
-        print("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
-        print("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
-        print("Predheat: Heat pump efficiency max {}".format(self.heat_pump_efficiency_max))
+        self.log("Predheat: Delta correction {}".format(self.delta_correction))
+        self.log("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
+        self.log("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
+        self.log("Predheat: Heat pump efficiency max {}".format(self.heat_pump_efficiency_max))
 
     def minutes_to_time(self, updated, now):
         """
@@ -326,44 +357,37 @@ class PredHeat:
                 if volume_temp < flow_temp:
                     flow_temp_diff = min(flow_temp - volume_temp, self.flow_difference_target)
                     power_percent = flow_temp_diff / self.flow_difference_target
-                    heat_power_in = self.heat_max_power * power_percent
-                    heat_power_in = max(self.heat_min_power, heat_power_in)
-                    heat_power_in = min(self.heat_max_power, heat_power_in)
+                    heat_power_out = self.heat_max_power * power_percent
+                    heat_power_out = max(self.heat_min_power, heat_power_out)
+                    heat_power_out = min(self.heat_max_power, heat_power_out)
 
                     # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
 
-                energy_now = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
-                cost += energy_now * self.rate_import.get(minute_absolute, 0)
-
-                heat_energy += energy_now
-                heat_power_out = heat_power_in * self.heat_cop
-
                 if self.mode == "gas":
                     # Gas boiler flow temperature adjustment in efficiency based on flow temp
-                    inlet_temp = int(volume_temp / 10 + 0.5) * 10
+                    inlet_temp = int(volume_temp + 0.5)
+                    inlet_temp = min(max(inlet_temp, 0), 100)
                     condensing = self.gas_efficiency.get(inlet_temp, 0.80)
-                    heat_power_out *= condensing
+                    heat_power_in /= condensing
                 else:
                     # Heat pump efficiency based on outdoor temp
-                    out_temp = int(external_temp / 2 + 0.5) * 2
+                    out_temp = int(external_temp + 0.5)
+                    out_temp = min(max(out_temp, -20), 20)
+                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency_max) / self.heat_pump_efficiency_max
+                    heat_power_in = heat_power_out / (self.heat_cop * cop_adjust)
 
-                    # Filling gaps in COP table
-                    if out_temp < 0:
-                        out_temp_use = -20
-                    else:
-                        out_temp_use = 20
+                energy_now_in = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
+                energy_now_out = heat_power_out * PREDICT_STEP / 60.0 / 1000.0
 
-                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency.get(out_temp_use)) / self.heat_pump_efficiency_max
-                    heat_power_out *= cop_adjust
+                cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
+                heat_energy += energy_now_out
 
                 # 1.16 watts required to raise water by 1 degree in 1 hour
                 volume_temp += (heat_power_out / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
 
             flow_delta = volume_temp - internal_temp
-            flow_delta_rounded = int(flow_delta / 5 + 0.5) * 5
-            flow_delta_rounded = max(flow_delta_rounded, 0)
-            flow_delta_rounded = min(flow_delta_rounded, 75)
-            correction = self.delta_correction.get(flow_delta_rounded, 0)
+            flow_delta_rounded = min(max(int(flow_delta), 0), 75)
+            correction = self.delta_correction.get(flow_delta_rounded, 1.0)
             heat_output = self.heat_output * correction
 
             # Cooling of the radiators

@@ -84,7 +84,8 @@ Now you need to make a list of all your radiators in the house, measure them and
 Add up all the BTUs and divide by 3.41 to gain the heat output in Watts and set that in **heat_output** configuration option.
 Add up all the litres of water, add in some extra for the piping and an expansion vessel if present (e.g. 5-10 litres) and set **heat_volume** accordingly.
 
-Set the **heat_max_power** and **heat_min_power** to the minimum and maximum power output of your boiler/heat-pump in watts.
+Set the **heat_max_power** and **heat_min_power** to the minimum and maximum power output of your boiler/heat-pump in watts. This should be specified as the maximum output power
+and not the maximum input energy. E.g. a heat pump with a COP of 4 might output 7kW but could only consume 1.7kW.
 
 Set **heating_cop** to the nominal COP of your system. For a gas boiler use 1.0 (as the efficiency will be based on flow temperature) or for a heat pump set it to the best value which is likely around 4.0 (it will be scaled down for cold weather).
 
