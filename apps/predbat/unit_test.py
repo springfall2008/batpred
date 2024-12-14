@@ -910,7 +910,7 @@ def run_single_debug(my_predbat, debug_file):
     print("Combined export slots {} min_improvement_export {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export))
     # my_predbat.combine_export_slots = False
     # my_predbat.best_soc_keep = 1.0
-    #my_predbat.metric_min_improvement_export = 5
+    # my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
