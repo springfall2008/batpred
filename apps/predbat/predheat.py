@@ -368,7 +368,7 @@ class PredHeat:
                     inlet_temp = int(volume_temp + 0.5)
                     inlet_temp = min(max(inlet_temp, 0), 100)
                     condensing = self.gas_efficiency.get(inlet_temp, 0.80)
-                    heat_power_in /= condensing
+                    heat_power_in = heat_power_out / (condensing * self.heat_cop)
                 else:
                     # Heat pump efficiency based on outdoor temp
                     out_temp = int(external_temp + 0.5)
