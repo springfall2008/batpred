@@ -527,6 +527,8 @@ class Output:
         else:
             html += "<td><b>PV kWh</b></td>"
             html += "<td><b>Load kWh</b></td>"
+        if plan_debug and self.load_forecast:
+            html += "<td><b>XLoad kWh</b></td>"
         if self.num_cars > 0:
             html += "<td><b>Car kWh</b></td>"
         if self.iboost_enable:
@@ -545,9 +547,14 @@ class Output:
         Publish the current plan in HTML format
         """
         plan_debug = self.get_arg("plan_debug")
+        mode = self.predbat_mode
+        if self.set_read_only:
+            mode += " (read only)"
+        if self.debug_enable:
+            mode += " (debug)"
         html = "<table>"
         html += "<tr>"
-        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status)
+        html += "<td colspan=10> Plan starts: {} last updated: {} version: {} previous status: {} mode: {}</td>".format(self.now_utc.strftime("%Y-%m-%d %H:%M"), self.now_utc_real.strftime("%H:%M:%S"), THIS_VERSION, self.current_status, mode)
         config_str = f"best_soc_min {self.best_soc_min} best_soc_max {self.best_soc_max} best_soc_keep {self.best_soc_keep} carbon_metric {self.carbon_metric} metric_self_sufficiency {self.metric_self_sufficiency} metric_battery_value_scaling {self.metric_battery_value_scaling}"
         html += "</tr><tr>"
         html += "<td colspan=10> {}</td>".format(config_str)
@@ -647,16 +654,20 @@ class Output:
             load_forecast = 0
             pv_forecast10 = 0
             load_forecast10 = 0
+            extra_forecast = 0
             for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
                 pv_forecast += pv_forecast_minute_step.get(offset, 0.0)
                 load_forecast += load_minutes_step.get(offset, 0.0)
                 pv_forecast10 += pv_forecast_minute_step10.get(offset, 0.0)
                 load_forecast10 += load_minutes_step10.get(offset, 0.0)
+                for step in range(PREDICT_STEP):
+                    extra_forecast += self.get_from_incrementing(self.load_forecast, offset + self.minutes_now + step, backwards=False)
 
             pv_forecast = dp2(pv_forecast)
             load_forecast = dp2(load_forecast)
             pv_forecast10 = dp2(pv_forecast10)
             load_forecast10 = dp2(load_forecast10)
+            extra_forecast = dp2(extra_forecast)
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
@@ -685,6 +696,7 @@ class Output:
 
             pv_color = "#BCBCBC"
             load_color = "#FFFFFF"
+            extra_color = "#FFFFFF"
             rate_color_import = "#FFFFAA"
             rate_color_export = "#FFFFFF"
             soc_color = "#3AEE85"
@@ -716,7 +728,16 @@ class Output:
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
+            if extra_forecast >= 0.5:
+                extra_color = "#F18261"
+            elif extra_forecast >= 0.25:
+                extra_color = "#FFFF00"
+            elif extra_forecast > 0.0:
+                extra_color = "#AAFFAA"
+
             load_forecast = str(load_forecast)
+            extra_forecast = str(extra_forecast)
+
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
@@ -940,6 +961,8 @@ class Output:
                 html += "<td bgcolor=#FFFFFF> " + show_limit + "</td>"
             html += "<td bgcolor=" + pv_color + ">" + str(pv_forecast) + pv_symbol + "</td>"
             html += "<td bgcolor=" + load_color + ">" + str(load_forecast) + "</td>"
+            if plan_debug and self.load_forecast:
+                html += "<td bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
                 html += "<td bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
