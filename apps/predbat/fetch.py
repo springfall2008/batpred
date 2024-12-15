@@ -1289,6 +1289,8 @@ class Fetch:
                 # Resolve any sensor links
                 if isinstance(rate, str) and rate[0].isalpha():
                     rate = self.resolve_arg("rate", rate, 0.0)
+                if isinstance(load_scaling, str) and load_scaling[0].isalpha():
+                    load_scaling = self.resolve_arg("load_scaling", load_scaling, 1.0)
 
                 # Ensure the end result is a float
                 try:
@@ -1297,6 +1299,14 @@ class Fetch:
                     self.log("Warn: Bad rate {} provided in energy rates".format(rate))
                     self.record_status("Bad rate {} provided in energy rates".format(rate), had_errors=True)
                     continue
+
+                if load_scaling is not None:
+                    try:
+                        load_scaling = float(load_scaling)
+                    except (ValueError, TypeError):
+                        self.log("Warn: Bad load_scaling {} provided in energy rates".format(load_scaling))
+                        self.record_status("Warn: Bad load_scaling {} provided in energy rates".format(load_scaling), had_errors=True)
+                        continue
 
                 # Time in minutes
                 start_minutes = max(minutes_to_time(start, midnight), 0)
