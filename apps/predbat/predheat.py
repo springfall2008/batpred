@@ -146,7 +146,6 @@ class PredHeat:
         self.weather_compensation = self.fill_table_gaps(self.weather_compensation)
 
         self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
-        self.weather_compensation_max = max(self.weather_compensation.values())
         self.log("Predheat: Delta correction {}".format(self.delta_correction))
         self.log("Predheat: Gas boiler efficiency {}".format(self.gas_efficiency))
         self.log("Predheat: Heat pump efficiency {}".format(self.heat_pump_efficiency))
@@ -154,7 +153,6 @@ class PredHeat:
 
         if self.weather_compensation_enabled:
             self.log("Predheat: Weather compensation {}".format(self.weather_compensation))
-            self.log("Predheat: Weather compensation max {}".format(self.weather_compensation_max))
 
     def minutes_to_time(self, updated, now):
         """
@@ -373,7 +371,7 @@ class PredHeat:
                 if self.weather_compensation_enabled:
                     comp_temp = int(external_temp + 0.5)
                     comp_temp = min(max(comp_temp, -20), 20)
-                    flow_temp = self.weather_compensation.get(comp_temp, self.weather_compensation_max)
+                    flow_temp = self.weather_compensation.get(comp_temp)
 
                 if volume_temp < flow_temp:
                     flow_temp_diff = min(flow_temp - volume_temp, self.flow_difference_target)
