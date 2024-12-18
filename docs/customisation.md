@@ -221,7 +221,7 @@ disable or move charge slots, allowing them to intermix. When False export slots
 **switch.predbat_set_discharge_during_charge** - If turned off disables inverter discharge during charge slots, useful for multi-inverter setups
 to avoid cross charging when batteries are out of balance.
 
-**switch.predbat_inverter_set_charge_before** - (_expert_mode_) When True charge slots will be programmed before their start time, when False they will only be 
+**switch.predbat_inverter_set_charge_before** - (_expert_mode_) When True charge slots will be programmed before their start time, when False they will only be
 configured when the charging time starts.
 
 **switch.predbat_calculate_tweak_plan** (_expert mode_) When True causes Predbat to perform a second pass optimisation
@@ -237,7 +237,7 @@ NOTE: This feature is quite slow and so may need a higher performance machine.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs which you want to force export late.
 
-**switch.predbat_calculate_secondary_order** (_expert_mode_) When True import slots of the same value are sorted by export price and export slots of 
+**switch.predbat_calculate_secondary_order** (_expert_mode_) When True import slots of the same value are sorted by export price and export slots of
 the same value are sorted by import price. When False slots of the same price are sorted by time.
 
 Turning this switch off can be used to push export as late as possible when you have a fixed price export tariff.
@@ -334,7 +334,7 @@ The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_
 explains how the low power charging works and shows how Predbat automatically creates it.
 
 **input_number.predbat_charge_low_power_margin** (_set_charge_low_power_) Controls how many minutes before the completion time to target finishing charging, this defaults to 10
-but can be changed between 0 and 30. 
+but can be changed between 0 and 30.
 
 **switch.predbat_set_reserve_enable** (_expert_mode_) When enabled the reserve setting is used to hold the battery charge level
 once it has been reached or to protect against discharging beyond the set limit. Enabled by default.
