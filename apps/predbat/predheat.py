@@ -88,7 +88,7 @@ class PredHeat:
         for key in range(min_key, max_key + 1):
             if key not in table:
                 next_value = last_value
-                for next_key in range(key + 1, max_key + 1):
+                for next_key in range (key + 1, max_key + 1):
                     if next_key in table:
                         next_value = table[next_key]
                         break
@@ -363,6 +363,7 @@ class PredHeat:
 
                     # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
 
+
                 if self.mode == "gas":
                     # Gas boiler flow temperature adjustment in efficiency based on flow temp
                     inlet_temp = int(volume_temp + 0.5)
@@ -380,7 +381,7 @@ class PredHeat:
                 energy_now_out = heat_power_out * PREDICT_STEP / 60.0 / 1000.0
 
                 cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
-                heat_energy += energy_now_out
+                heat_energy += energy_now_in
 
                 # 1.16 watts required to raise water by 1 degree in 1 hour
                 volume_temp += (heat_power_out / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
