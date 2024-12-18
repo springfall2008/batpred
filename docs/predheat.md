@@ -130,7 +130,7 @@ If your heat source makes use of weather compensation then add the following to 
       -20: 45.0
       -3: 45.0
       15: 25.0
-      20: 30.0
+      20: 25.0
 ```
 
 Predheat will fill in the gaps between the points provided.
