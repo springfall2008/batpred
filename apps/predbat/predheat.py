@@ -138,7 +138,6 @@ class PredHeat:
                 self.weather_compensation[key] = value
             self.weather_compensation_enabled = True
 
-
         # Fill gaps in tables
         self.delta_correction = self.fill_table_gaps(self.delta_correction)
         self.gas_efficiency = self.fill_table_gaps(self.gas_efficiency)
