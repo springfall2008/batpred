@@ -121,3 +121,16 @@ The final figure should be the number of watts your house loses per 1 degree of 
 
 Then you can set **heat_gain_static** to be the static heat output of other things in your house eg. computers and people. You can figure this out by looking at how many degrees of
 temperature difference your house can maintain without any heating and multiply up your heat loss watts figure by this.
+
+### Weather Compensation
+
+If your heat source makes use of weather compensation then add the following to the configuration to map out your heat curve. The example has a flow temp of 45C at -3C outside and 25C at 15C outside:
+
+```yaml   weather_compensation:
+      -20: 45.0
+      -3: 45.0
+      15: 25.0
+      20: 25.0
+```
+
+Predheat will fill in the gaps between the points provided.
