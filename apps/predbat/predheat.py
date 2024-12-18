@@ -380,7 +380,7 @@ class PredHeat:
                 energy_now_out = heat_power_out * PREDICT_STEP / 60.0 / 1000.0
 
                 cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
-                heat_energy += energy_now_out
+                heat_energy += energy_now_in
 
                 # 1.16 watts required to raise water by 1 degree in 1 hour
                 volume_temp += (heat_power_out / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
