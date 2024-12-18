@@ -85,6 +85,10 @@ class PredHeat:
         last_key = min_key
         last_value = table[min_key]
         new_table = {}
+
+        if not table:
+            return table
+
         for key in range(min_key, max_key + 1):
             if key not in table:
                 next_value = last_value
@@ -135,13 +139,13 @@ class PredHeat:
         if weather_compensation:
             for key, value in weather_compensation.items():
                 self.weather_compensation[key] = value
-            self.weather_compensation = self.fill_table_gaps(self.weather_compensation)
             self.weather_compensation_enabled = True
 
         # Fill gaps in tables
         self.delta_correction = self.fill_table_gaps(self.delta_correction)
         self.gas_efficiency = self.fill_table_gaps(self.gas_efficiency)
         self.heat_pump_efficiency = self.fill_table_gaps(self.heat_pump_efficiency)
+        self.weather_compensation = self.fill_table_gaps(self.weather_compensation)
 
         self.heat_pump_efficiency_max = max(self.heat_pump_efficiency.values())
         self.log("Predheat: Delta correction {}".format(self.delta_correction))
