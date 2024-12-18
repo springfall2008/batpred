@@ -85,6 +85,10 @@ class PredHeat:
         last_key = min_key
         last_value = table[min_key]
         new_table = {}
+
+        if not table:
+            return table
+
         for key in range(min_key, max_key + 1):
             if key not in table:
                 next_value = last_value
