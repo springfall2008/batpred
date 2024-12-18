@@ -88,7 +88,7 @@ class PredHeat:
         for key in range(min_key, max_key + 1):
             if key not in table:
                 next_value = last_value
-                for next_key in range (key + 1, max_key + 1):
+                for next_key in range(key + 1, max_key + 1):
                     if next_key in table:
                         next_value = table[next_key]
                         break
@@ -362,7 +362,6 @@ class PredHeat:
                     heat_power_out = min(self.heat_max_power, heat_power_out)
 
                     # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
-
 
                 if self.mode == "gas":
                     # Gas boiler flow temperature adjustment in efficiency based on flow temp
