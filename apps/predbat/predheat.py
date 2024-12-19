@@ -79,15 +79,15 @@ class PredHeat:
         """
         Fill gaps correction tables
         """
+        if not table:
+            return table
+
         sorted_keys = sorted(table.keys())
         max_key = max(sorted_keys)
         min_key = min(sorted_keys)
         last_key = min_key
         last_value = table[min_key]
         new_table = {}
-
-        if not table:
-            return table
 
         for key in range(min_key, max_key + 1):
             if key not in table:
