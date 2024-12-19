@@ -273,12 +273,12 @@ trigger:
     id: predbat_charge_off
   - platform: state
     entity_id:
-      - binary_sensor.predbat_discharging
+      - binary_sensor.predbat_exporting
     to: "on"
     id: predbat_discharge_on
   - platform: state
     entity_id:
-      - binary_sensor.predbat_discharging
+      - binary_sensor.predbat_exporting
     to: "off"
     id: predbat_discharge_off
 condition: []

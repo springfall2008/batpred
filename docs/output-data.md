@@ -415,7 +415,7 @@ Note that if you have configured [battery scaling](apps-yaml.md#battery-size-sca
 The following sensors are set based upon what Predbat is currently controlling the battery to do:
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
-- binary_sensor.predbat_discharging - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
+- binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
 
 These are useful for automations if for example you want to turn off car charging when the battery is being exported.
 

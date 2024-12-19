@@ -998,7 +998,7 @@ If you wish to trigger activities based on Predbat charging or discharging the b
 - **binary_sensor.predbat_charging** - Will be True when the home battery is inside a charge slot (either being charged or being held at a level).
 Note that this does include charge freeze slots where the discharge rate is set to zero without charging the battery.
 
-- **binary_sensor.predbat_discharging** - Will be True when the home battery is inside a force discharge slot. This does not include
+- **binary_sensor.predbat_exporting** - Will be True when the home battery is inside a force discharge slot. This does not include
 discharge freeze slots where the charge rate is set to zero to export excess solar only.
 
 ## Understanding how days_previous works
