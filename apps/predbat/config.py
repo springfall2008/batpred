@@ -542,11 +542,19 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
-        "name": "calculate_secondary_order",
-        "friendly_name": "Calculate secondary order slots",
+        "name": "calculate_import_low_export",
+        "friendly_name": "Calculate import slots on low export rate slots first",
         "type": "switch",
         "enable": "expert_mode",
         "default": True,
+        "oldname": "calculate_secondary_order_slots",
+    },
+    {
+        "name": "calculate_export_low_import",
+        "friendly_name": "Calculate export slots on low import rate slots first",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
     },
     {
         "name": "calculate_inday_adjustment",

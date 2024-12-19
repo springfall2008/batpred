@@ -1827,7 +1827,8 @@ class Fetch:
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_tweak_plan = self.get_arg("calculate_tweak_plan")
         self.calculate_regions = True
-        self.calculate_secondary_order = self.get_arg("calculate_secondary_order")
+        self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
+        self.calculate_export_low_import = self.get_arg("calculate_export_low_import")
 
         self.balance_inverters_enable = self.get_arg("balance_inverters_enable")
         self.balance_inverters_charge = self.get_arg("balance_inverters_charge")
