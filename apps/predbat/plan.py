@@ -1756,12 +1756,11 @@ class Plan:
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
                     elif soc_max < limit_soc:
-                        # Set target target for freeze only mode
-                        target_soc = min(limit_soc, soc_max)
-                        window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = 99
+                        # Clip off the window
+                        window["target"] = 100
+                        export_limits_best[window_n] = 100
                         if self.debug_enable:
-                            self.log("Clip down export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
+                            self.log("Clip off export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
                 export_limits_best[window_n] = 100
@@ -1994,7 +1993,10 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_low_import=self.calculate_export_low_import
+            self.charge_window_best[:record_charge_windows], 
+            self.export_window_best[:record_export_windows], 
+            calculate_import_low_export=self.calculate_import_low_export,
+            calculate_export_low_import=self.calculate_export_low_import
         )
 
         self.rate_best_cost_threshold_charge = best_price
