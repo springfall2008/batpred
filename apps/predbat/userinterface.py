@@ -587,9 +587,13 @@ class UserInterface:
             if key not in ["CONFIG_ITEMS", "inverters"]:
                 self.__dict__[key] = copy.deepcopy(debug[key])
             if key == "inverters":
+                new_inverters = []
                 for inverter in debug[key]:
+                    inverter_obj = copy.deepcopy(self.inverters[0])
                     for key in inverter:
-                        self.inverters[inverter["id"]].__dict__[key] = copy.deepcopy(inverter[key])
+                        inverter_obj.__dict__[key] = copy.deepcopy(inverter[key])
+                    new_inverters.append(inverter_obj)
+                self.inverters = new_inverters
 
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)

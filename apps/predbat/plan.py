@@ -106,7 +106,10 @@ class Plan:
 
         for loop_price in all_prices:
             pred_table = []
-            freeze_options = [True, False]
+            if self.set_export_freeze:
+                freeze_options = [True, False]
+            else:
+                freeze_options = [False]
             for freeze in freeze_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
@@ -1753,12 +1756,11 @@ class Plan:
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
                     elif soc_max < limit_soc:
-                        # Set target target for freeze only mode
-                        target_soc = min(limit_soc, soc_max)
-                        window["target"] = calc_percent_limit(target_soc, self.soc_max)
-                        export_limits_best[window_n] = 99
+                        # Clip off the window
+                        window["target"] = 100
+                        export_limits_best[window_n] = 100
                         if self.debug_enable:
-                            self.log("Clip down export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
+                            self.log("Clip off export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
                 export_limits_best[window_n] = 100
