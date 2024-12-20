@@ -106,7 +106,10 @@ class Plan:
 
         for loop_price in all_prices:
             pred_table = []
-            freeze_options = [True, False]
+            if self.set_export_freeze:
+                freeze_options = [True, False]
+            else:
+                freeze_options = [False]
             for freeze in freeze_options:
                 for modulo in [2, 3, 4, 6, 8, 16, 32]:
                     for divide in [96, 48, 32, 16, 8, 4, 3, 2, 1]:
@@ -1991,7 +1994,10 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_low_import=self.calculate_export_low_import
+            self.charge_window_best[:record_charge_windows], 
+            self.export_window_best[:record_export_windows], 
+            calculate_import_low_export=self.calculate_import_low_export,
+            calculate_export_low_import=self.calculate_export_low_import
         )
 
         self.rate_best_cost_threshold_charge = best_price

@@ -565,7 +565,7 @@ class Prediction:
             if self.set_export_freeze:
                 charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
-                if (export_window_n >= 0) and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only):
+                if (export_window_n >= 0) and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
                     charge_rate_now = self.battery_rate_min  # 0
 
             # Set discharge during charge?
