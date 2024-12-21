@@ -417,6 +417,7 @@ def simple_scenario(
     gas_scale=1.0,
     iboost_charging=False,
     iboost_max_energy=100.0,
+    iboost_smart_min_length=30,
     assert_final_iboost=0.0,
     end_record=None,
     pv10=False,
@@ -470,6 +471,7 @@ def simple_scenario(
     my_predbat.iboost_min_power = 0.0
     my_predbat.iboost_max_power = export_limit / 60.0
     my_predbat.iboost_max_energy = iboost_max_energy
+    my_predbat.iboost_smart_min_length = iboost_smart_min_length
     my_predbat.iboost_on_export = iboost_on_export
     my_predbat.iboost_prevent_discharge = iboost_prevent_discharge
     my_predbat.rate_gas = {n: rate_gas for n in range(my_predbat.forecast_minutes + my_predbat.minutes_now)}
@@ -908,9 +910,9 @@ def run_single_debug(my_predbat, debug_file):
 
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export))
-    # my_predbat.combine_export_slots = False
+    my_predbat.combine_export_slots = False
     # my_predbat.best_soc_keep = 1.0
-    # my_predbat.metric_min_improvement_export = 5
+    my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -4084,6 +4086,57 @@ def run_model_tests(my_predbat):
         assert_iboost_running=True,
         assert_iboost_running_full=True,
     )
+    failed |= simple_scenario(
+        "iboost_smart1",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 120,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_enable=True,
+        iboost_charging=False,
+        iboost_smart=True,
+        assert_final_iboost=120,
+        iboost_max_energy=60,
+        assert_iboost_running=True,
+        assert_iboost_running_full=True,
+    )
+    failed |= simple_scenario(
+        "iboost_smart2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 120 * 1.5,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_enable=True,
+        iboost_charging=False,
+        iboost_smart=True,
+        assert_final_iboost=120,
+        iboost_max_energy=60,
+        iboost_smart_min_length=60,
+        assert_iboost_running=True,
+        assert_iboost_running_full=True,
+    )
+    failed |= simple_scenario(
+        "iboost_smart3",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 120 * 1.5 - 2 * import_rate * 5 * 2,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_enable=True,
+        iboost_charging=False,
+        iboost_smart=True,
+        assert_final_iboost=110,
+        iboost_max_energy=55,
+        iboost_smart_min_length=60,
+        assert_iboost_running=True,
+        assert_iboost_running_full=True,
+    )
+
     failed |= simple_scenario(
         "iboost_rate_pv1",
         my_predbat,

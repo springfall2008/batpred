@@ -3109,13 +3109,24 @@ class Plan:
         iboost_today = self.iboost_today
         iboost_max = self.iboost_max_energy
         iboost_power = self.iboost_max_power * 60
+        iboost_min_length = max(int((self.iboost_smart_min_length + 29) / 30) * 30, 30)
+
+        self.log("Create iBoost smart plan, max {} kWh, power {} kW, min length {} minutes".format(iboost_max, iboost_power, iboost_min_length))
 
         low_rates = []
         start_minute = int(self.minutes_now / 30) * 30
         for minute in range(start_minute, start_minute + self.forecast_minutes, 30):
-            import_rate = self.rate_import.get(minute, self.rate_min)
-            export_rate = self.rate_export.get(minute, 0)
-            low_rates.append({"start": minute, "end": minute + 30, "average": import_rate, "export": export_rate})
+            import_rate = 0
+            export_rate = 0
+            slot_length = 0
+            slot_count = 0
+            for slot_start in range(minute, minute + iboost_min_length, 30):
+                import_rate += self.rate_import.get(minute, self.rate_min)
+                export_rate += self.rate_export.get(minute, 0)
+                slot_length += 30
+                slot_count += 1
+            if slot_count:
+                low_rates.append({"start": minute, "end": minute + slot_length, "average": import_rate / slot_count, "export": export_rate / slot_count})
 
         # Get prices
         if self.iboost_smart:
@@ -3128,6 +3139,7 @@ class Plan:
         iboost_soc = [0 for n in range(total_days)]
         iboost_soc[0] = iboost_today
 
+        used_slots = {}
         for window_n in price_sorted:
             window = low_rates[window_n]
             price = window["average"]
@@ -3140,47 +3152,55 @@ class Plan:
                 day_start_minutes = day * 24 * 60
                 day_end_minutes = day_start_minutes + 24 * 60
 
-                start = max(window["start"], self.minutes_now, day_start_minutes)
-                end = min(window["end"], day_end_minutes)
+                slot_start = max(window["start"], self.minutes_now, day_start_minutes)
+                slot_end = min(window["end"], day_end_minutes)
 
-                if start < end:
+                if slot_start < slot_end:
                     rate_okay = True
 
-                    # Boost on import/export rate
-                    if price > self.iboost_rate_threshold:
-                        rate_okay = False
-                    if export_price > self.iboost_rate_threshold_export:
-                        rate_okay = False
+                    for start in range(slot_start, slot_end, 30):
+                        end = min(start + 30, slot_end)
 
-                    # Boost on gas rate vs import price
-                    if self.iboost_gas and self.rate_gas:
-                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
-                        if price > gas_rate:
+                        # Avoid duplicate slots
+                        if minute in used_slots:
                             rate_okay = False
 
-                    # Boost on gas rate vs export price
-                    if self.iboost_gas_export and self.rate_gas:
-                        gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
-                        if export_price > gas_rate:
+                        # Boost on import/export rate
+                        if price > self.iboost_rate_threshold:
+                            rate_okay = False
+                        if export_price > self.iboost_rate_threshold_export:
                             rate_okay = False
 
-                    if not rate_okay:
-                        continue
+                        # Boost on gas rate vs import price
+                        if self.iboost_gas and self.rate_gas:
+                            gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                            if price > gas_rate:
+                                rate_okay = False
 
-                    # Work out charging amounts
-                    length = end - start
-                    hours = length / 60
-                    kwh = iboost_power * hours
-                    kwh = min(kwh, iboost_max - iboost_soc[day])
-                    if kwh > 0:
-                        new_slot = {}
-                        new_slot["start"] = start
-                        new_slot["end"] = end
-                        new_slot["kwh"] = dp3(kwh)
-                        new_slot["average"] = window["average"]
-                        new_slot["cost"] = dp2(new_slot["average"] * kwh)
-                        plan.append(new_slot)
-                        iboost_soc[day] = dp3(iboost_soc[day] + kwh)
+                        # Boost on gas rate vs export price
+                        if self.iboost_gas_export and self.rate_gas:
+                            gas_rate = self.rate_gas.get(start, 99) * self.iboost_gas_scale
+                            if export_price > gas_rate:
+                                rate_okay = False
+
+                        if not rate_okay:
+                            continue
+
+                        # Work out charging amounts
+                        length = end - start
+                        hours = length / 60
+                        kwh = iboost_power * hours
+                        kwh = min(kwh, iboost_max - iboost_soc[day])
+                        if kwh > 0:
+                            iboost_soc[day] = dp3(iboost_soc[day] + kwh)
+                            new_slot = {}
+                            new_slot["start"] = start
+                            new_slot["end"] = end
+                            new_slot["kwh"] = dp3(kwh)
+                            new_slot["average"] = window["average"]
+                            new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                            plan.append(new_slot)
+                            used_slots[start] = True
 
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
