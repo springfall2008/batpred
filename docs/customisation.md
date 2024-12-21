@@ -243,7 +243,7 @@ When False they are sorted just by price and then time. The default is True.
 By default with this option enabled if there are multiple charge slots of the same price Predbat will try to charge when the export rates are lowest
 thus leaving the higher export slots available.
 
-**switch.calculate_export_low_import** (_expert_mode_) When True export slots of the same value are sorted by import price.
+**switch.calculate_export_high_import** (_expert_mode_) When True export slots of the same value are sorted by import price (to avoid the low import slots for export).
 When False they are sorted just by price and then time. The default is False.
 
 By default with this option disabled the latest export slot of the same value will be picked, this is useful for fixed price export tariffs where
