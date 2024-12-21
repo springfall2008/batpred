@@ -573,7 +573,7 @@ var options = {
 
     async def html_file_load(self, filename):
         """
-        Load a file and servce it up
+        Load a file and serve it up
         """
         data = None
         if os.path.exists(filename):
