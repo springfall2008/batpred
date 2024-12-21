@@ -351,12 +351,13 @@ class HAInterface:
         Update state table for item
         """
         entity_id = entity_id.lower()
-        attributes = item["attributes"]
+        attributes = item.get("attributes", {})
         last_changed = item.get("last_changed", item.get("last_updated", None))
-        state = item["state"]
-        self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
-        if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
-            self.db_mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
+        if "state" in item:
+            state = item["state"]
+            self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
+            if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
+                self.db_mirror_updates.append({"entity_id": entity_id, "state": state, "attributes": attributes, "timestamp": self.base.now_utc_real})
 
     def db_tick(self):
         """
