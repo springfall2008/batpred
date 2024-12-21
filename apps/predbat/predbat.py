@@ -483,6 +483,8 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.iboost_running_solar = False
         self.last_service_hash = {}
         self.count_inverter_writes = {}
+        self.web_interface = None
+        self.web_interface_task = None
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:

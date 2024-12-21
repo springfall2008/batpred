@@ -544,7 +544,7 @@ class Plan:
             window_n += 1
         return -1
 
-    def calculate_plan(self, recompute=True):
+    def calculate_plan(self, recompute=True, debug_mode=False):
         """
         Calculate the new plan (best)
 
@@ -681,7 +681,7 @@ class Plan:
             self.log_option_best()
 
             # Full plan
-            self.optimise_all_windows(metric, metric_keep)
+            self.optimise_all_windows(metric, metric_keep, debug_mode)
 
             # Tweak plan
             if self.calculate_tweak_plan:
@@ -1973,8 +1973,6 @@ class Plan:
                     self.export_limits_best[window_n] = 99.0
 
         if debug_mode:
-            print("Levels result charge_window {} charge_limit {}".format(self.charge_window_best, self.charge_limit_best))
-            print("Levels result export_window {} export_limit {}".format(self.export_window_best, self.export_limits_best))
             metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
             )
@@ -1993,7 +1991,10 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
+            self.charge_window_best[:record_charge_windows], 
+            self.export_window_best[:record_export_windows], 
+            calculate_import_low_export=self.calculate_import_low_export,
+            calculate_export_high_import=self.calculate_export_high_import
         )
 
         self.rate_best_cost_threshold_charge = best_price
@@ -2265,6 +2266,18 @@ class Plan:
                     self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
                 count += 1
             self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
+
+        if debug_mode:
+            metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+            )
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.update_target_values()
+            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            open("plan_raw.html", "w").write(self.html_plan)
+            print("Charge window {} limit {}".format(self.charge_window_best, self.charge_limit_best))
+            print("Export window {} limit {}".format(self.export_window_best, self.export_limits_best))
+            print("Wrote plan to plan_raw.html")
 
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
@@ -3163,7 +3176,7 @@ class Plan:
 
                         # Avoid duplicate slots
                         if minute in used_slots:
-                            rate_okay = False
+                           rate_okay = False
 
                         # Boost on import/export rate
                         if price > self.iboost_rate_threshold:

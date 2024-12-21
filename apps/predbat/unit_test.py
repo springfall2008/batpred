@@ -983,67 +983,8 @@ def run_single_debug(my_predbat, debug_file):
     open("plan_orig.html", "w").write(my_predbat.html_plan)
     print("Wrote plan to plan_orig.html")
 
-    # Calculate best charge windows
-    if my_predbat.low_rates and my_predbat.calculate_best_charge and my_predbat.set_charge_window:
-        # If we are using calculated windows directly then save them
-        my_predbat.charge_window_best = copy.deepcopy(my_predbat.low_rates)
-    else:
-        # Default best charge window as this one
-        my_predbat.charge_window_best = copy.deepcopy(my_predbat.charge_window)
-
-    # Calculate best export windows
-    if my_predbat.high_export_rates and my_predbat.calculate_best_export and my_predbat.set_export_window:
-        print("High export rates: {}".format(my_predbat.high_export_rates))
-        my_predbat.export_window_best = copy.deepcopy(my_predbat.high_export_rates)
-    else:
-        print("export disabled {} {} {}".format(my_predbat.high_export_rates, my_predbat.calculate_best_export, my_predbat.set_export_window))
-        my_predbat.export_window_best = copy.deepcopy(my_predbat.export_window)
-
-    # Pre-fill best charge limit with the current charge limit
-    my_predbat.charge_limit_best = [my_predbat.current_charge_limit * my_predbat.soc_max / 100.0 for i in range(len(my_predbat.charge_window_best))]
-    my_predbat.charge_limit_percent_best = [my_predbat.current_charge_limit for i in range(len(my_predbat.charge_window_best))]
-
-    # Pre-fill best export enable with Off
-    my_predbat.export_limits_best = [100.0 for i in range(len(my_predbat.export_window_best))]
-    my_predbat.end_record = my_predbat.forecast_minutes
-
-    my_predbat.log("Initial charge window {}".format(my_predbat.window_as_text(my_predbat.charge_window_best, calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max))))
-    my_predbat.log("Initial export window {}".format(my_predbat.window_as_text(my_predbat.export_window_best, my_predbat.export_limits_best)))
-
-    # Optimise windows
-    best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_all_windows(metric, metric_keep, debug_mode=True)
-
-    # Predict
-    my_predbat.log("********RAW PLAN********")
-    metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
-        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
-    )
-
-    # Save plan
-    my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
-    my_predbat.update_target_values()
-    my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    open("plan_raw.html", "w").write(my_predbat.html_plan)
-    print("Wrote plan to plan_raw.html")
-
-    if my_predbat.export_window_best:
-        # Work out record windows
-        record_export_windows = max(my_predbat.max_charge_windows(my_predbat.end_record + my_predbat.minutes_now, my_predbat.export_window_best), 1)
-
-        # Export slot clipping
-        my_predbat.export_window_best, my_predbat.export_limits_best = my_predbat.clip_export_slots(my_predbat.minutes_now, my_predbat.predict_soc, my_predbat.export_window_best, my_predbat.export_limits_best, record_export_windows, PREDICT_STEP)
-
-        # Filter out the windows we disabled during clipping
-        my_predbat.export_limits_best, my_predbat.export_window_best = my_predbat.discard_unused_export_slots(my_predbat.export_limits_best, my_predbat.export_window_best)
-
-    record_charge_windows = max(my_predbat.max_charge_windows(my_predbat.end_record + my_predbat.minutes_now, my_predbat.charge_window_best), 1)
-    my_predbat.charge_window_best, my_predbat.charge_limit_best = my_predbat.clip_charge_slots(my_predbat.minutes_now, my_predbat.predict_soc, my_predbat.charge_window_best, my_predbat.charge_limit_best, record_charge_windows, PREDICT_STEP)
-
-    if my_predbat.set_charge_window:
-        # Filter out the windows we disabled during clipping
-        my_predbat.log("Unfiltered charge windows {} reserve {}".format(my_predbat.window_as_text(my_predbat.charge_window_best, calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)), my_predbat.reserve))
-        my_predbat.charge_limit_best, my_predbat.charge_window_best = my_predbat.discard_unused_charge_slots(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.reserve)
-        my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
+    my_predbat.args["threads"] = 0
+    my_predbat.calculate_plan(recompute=True, debug_mode=True)
 
     # Predict
     my_predbat.log("********FINAL PLAN*******")
@@ -4124,7 +4065,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0,
-        assert_final_metric=import_rate * 120 * 1.5 - 2 * import_rate * 5 * 2,
+        assert_final_metric=import_rate * 120 * 1.5 - 2*import_rate*5*2,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
