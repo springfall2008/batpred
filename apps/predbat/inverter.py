@@ -1732,8 +1732,7 @@ class Inverter:
                 self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
         if ((new_end != old_end) or (new_start != old_start)) and self.inv_time_button_press:
-            entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
-            self.press_and_poll_button(entity_id)
+            self.press_and_poll_button()
 
         # REST version of writing slot
         if self.rest_data and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
@@ -2093,8 +2092,7 @@ class Inverter:
 
             # For Solis inverters we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
-                entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
-                self.press_and_poll_button(entity_id)
+                self.press_and_poll_button()
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
@@ -2125,6 +2123,10 @@ class Inverter:
         """
         Call a button press service (Solis) and wait for the data to update
         """
+        entity_id = self.base.get_arg("charge_discharge_update_button", indirect=False, index=self.id)
+        if not entity_id:
+            return False
+
         for retry in range(8):
             self.base.call_service_wrapper("button/press", entity_id=entity_id)
             time.sleep(self.inv_write_and_poll_sleep)
