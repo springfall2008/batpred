@@ -4124,7 +4124,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0,
-        assert_final_metric=import_rate * 120 * 1.5 - 2*import_rate*5*2,
+        assert_final_metric=import_rate * 120 * 1.5 - 2 * import_rate * 5 * 2,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
