@@ -544,7 +544,7 @@ class Plan:
             window_n += 1
         return -1
 
-    def calculate_plan(self, recompute=True):
+    def calculate_plan(self, recompute=True, debug_mode=False):
         """
         Calculate the new plan (best)
 
@@ -681,7 +681,7 @@ class Plan:
             self.log_option_best()
 
             # Full plan
-            self.optimise_all_windows(metric, metric_keep)
+            self.optimise_all_windows(metric, metric_keep, debug_mode)
 
             # Tweak plan
             if self.calculate_tweak_plan:
@@ -1973,8 +1973,6 @@ class Plan:
                     self.export_limits_best[window_n] = 99.0
 
         if debug_mode:
-            print("Levels result charge_window {} charge_limit {}".format(self.charge_window_best, self.charge_limit_best))
-            print("Levels result export_window {} export_limit {}".format(self.export_window_best, self.export_limits_best))
             metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
             )
@@ -2265,6 +2263,18 @@ class Plan:
                     self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
                 count += 1
             self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_carbon)))
+
+        if debug_mode:
+            metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+            )
+            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+            self.update_target_values()
+            self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+            open("plan_raw.html", "w").write(self.html_plan)
+            print("Charge window {} limit {}".format(self.charge_window_best, self.charge_limit_best))
+            print("Export window {} limit {}".format(self.export_window_best, self.export_limits_best))
+            print("Wrote plan to plan_raw.html")
 
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
