@@ -4119,6 +4119,23 @@ def run_model_tests(my_predbat):
         assert_iboost_running=True,
         assert_iboost_running_full=True,
     )
+    failed |= simple_scenario(
+        "iboost_smart3",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * 120 * 1.5 - 2*import_rate*5*2,
+        assert_final_soc=0,
+        with_battery=False,
+        iboost_enable=True,
+        iboost_charging=False,
+        iboost_smart=True,
+        assert_final_iboost=110,
+        iboost_max_energy=55,
+        iboost_smart_min_length=60,
+        assert_iboost_running=True,
+        assert_iboost_running_full=True,
+    )
 
     failed |= simple_scenario(
         "iboost_rate_pv1",
