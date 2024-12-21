@@ -139,10 +139,10 @@ class WebInterface:
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
-        text += "<tr><td colspan=4>Download</td><<td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
-        text += "<tr><td></td><td><a href='./debug_yaml'>predbat_debug.yaml</a></tr>\n"
-        text += "<tr><td></td><<td><a href='./debug_log'>predbat.log</a></td></tr>\n"
-        text += "<tr><td></td><<td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
         text += "<br>\n"
 
@@ -573,7 +573,7 @@ var options = {
         Return the Predbat debug yaml data
         """
         yaml_debug = self.base.create_debug_yaml(write_file=False)
-        return self.html_file("predbat_debug.yaml", yaml_debug)
+        return await self.html_file("predbat_debug.yaml", yaml_debug)
     
     async def html_file_load(self, filename):
         """
@@ -583,19 +583,19 @@ var options = {
         if os.path.exists(filename):
             with open(filename, "r") as f:
                 data = f.read()
-        return self.html_file(filename, data)
+        return await self.html_file(filename, data)
 
     async def html_debug_log(self, request):
-        return self.html_file_load("predbat.log")
+        return await self.html_file_load("predbat.log")
 
     async def html_debug_apps(self, request):
-        return self.html_file_load("apps.yaml")
+        return await self.html_file_load("apps.yaml")
 
     async def html_debug_plan(self, request):
         html_plan = self.base.html_plan
         if not html_plan:
             html_plan = None
-        return self.html_file("predbat_plan.html", html_plan)
+        return await self.html_file("predbat_plan.html", html_plan)
 
     async def html_dash(self, request):
         """
