@@ -562,19 +562,15 @@ var options = {
         if data is None:
             return web.Response(content_type="text/html", text="{} not found".format(filename), status=404)
         else:
-            return web.Response(
-                content_type="application/octet-stream",
-                body=data.encode('utf-8'),  # Convert text to binary if needed
-                headers={'Content-Disposition': 'attachment; filename={}'.format(filename)}
-            )  
-         
+            return web.Response(content_type="application/octet-stream", body=data.encode("utf-8"), headers={"Content-Disposition": "attachment; filename={}".format(filename)})  # Convert text to binary if needed
+
     async def html_debug_yaml(self, request):
         """
         Return the Predbat debug yaml data
         """
         yaml_debug = self.base.create_debug_yaml(write_file=False)
         return await self.html_file("predbat_debug.yaml", yaml_debug)
-    
+
     async def html_file_load(self, filename):
         """
         Load a file and servce it up
