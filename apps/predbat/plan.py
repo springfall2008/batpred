@@ -1460,7 +1460,7 @@ class Plan:
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
-    def sort_window_by_price_combined(self, charge_windows, export_windows, stand_alone=False, calculate_import_low_export=False, calculate_export_low_import=False):
+    def sort_window_by_price_combined(self, charge_windows, export_windows, stand_alone=False, calculate_import_low_export=False, calculate_export_high_import=False):
         """
         Sort windows into price sets
         """
@@ -1505,7 +1505,7 @@ class Plan:
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
                     average += carbon_intensity * self.carbon_metric / 1000.0
-                if calculate_export_low_import:
+                if calculate_export_high_import:
                     average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
                     average_import = 0
@@ -1993,7 +1993,7 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_low_import=self.calculate_export_low_import
+            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
         )
 
         self.rate_best_cost_threshold_charge = best_price
