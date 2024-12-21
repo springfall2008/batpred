@@ -458,6 +458,9 @@ Only slots of at or below the rate threshold will be selected.
 
 Note this option only applies when iboost_solar and iboost battery are both off.
 
+- **input_number.predbat_iboost_smart_min_length** Sets the minimum slot length in minutes to iBoost for (only applies for energy rate only modes).
+The default is 30 minutes but can be set in multiples of 30. Increasing this slot size could increase costs depending on your tariff.
+
 - **switch.predbat_iboost_on_export** If set to on allows iBoost to run even if the battery is force exporting to the grid, otherwise it won't run in these circumstances.
 
 - **switch.iboost_prevent_discharge** When set will stop your battery from discharging when iBoost is active and thus prevent your battery from draining to the diverter.
