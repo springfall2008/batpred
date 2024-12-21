@@ -4118,7 +4118,7 @@ def run_model_tests(my_predbat):
         iboost_smart_min_length=60,
         assert_iboost_running=True,
         assert_iboost_running_full=True,
-    )    
+    )
 
     failed |= simple_scenario(
         "iboost_rate_pv1",
