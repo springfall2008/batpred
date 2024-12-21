@@ -470,6 +470,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.iboost_gas = False
         self.iboost_gas_export = False
         self.iboost_smart = False
+        self.iboost_smart_min_length = 30
         self.iboost_on_export = False
         self.iboost_prevent_discharge = False
         self.iboost_smart_threshold = 0

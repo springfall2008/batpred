@@ -918,6 +918,18 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "iboost_smart_min_length",
+        "friendly_name": "iBoost smart min length",
+        "type": "input_number",
+        "min": 30,
+        "max": 120,
+        "step": 30,
+        "unit": "minutes",
+        "icon": "mdi:currency-usd",
+        "enable": "iboost_enable",
+        "default": 30,
+    },
+    {
         "name": "iboost_on_export",
         "oldname": "iboost_on_export",
         "friendly_name": "iBoost is allowed when battery is force exporting",
