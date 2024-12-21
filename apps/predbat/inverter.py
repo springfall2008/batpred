@@ -141,6 +141,7 @@ class Inverter:
         self.givtcp_version = "n/a"
         self.rest_v3 = False
         self.count_register_writes = 0
+        self.created_attributes = {}
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
@@ -694,16 +695,17 @@ class Inverter:
 
         entity_id = f"sensor.{prefix}_{self.inverter_type}_{self.id}_{entity_name}"
 
+        attributes = {
+            "state_class": "measurement",
+        }
+        if uom is not None:
+            attributes["unit_of_measurement"] = uom
+        if device_class is not None:
+            attributes["device_class"] = device_class
+        
+        self.created_attributes[entity_id] = attributes
+
         if self.base.get_state_wrapper(entity_id) is None:
-            attributes = {
-                "state_class": "measurement",
-            }
-
-            if uom is not None:
-                attributes["unit_of_measurement"] = uom
-            if device_class is not None:
-                attributes["device_class"] = device_class
-
             self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
         return entity_id
 
@@ -1277,9 +1279,9 @@ class Inverter:
             retry += 1
             if domain == "sensor":
                 if new_value:
-                    self.base.set_state_wrapper(state="on", entity_id=entity_id)
+                    self.base.set_state_wrapper(state="on", entity_id=entity_id, attributes=self.created_attributes.get(entity_id, {}))
                 else:
-                    self.base.set_state_wrapper(state="off", entity_id=entity_id)
+                    self.base.set_state_wrapper(state="off", entity_id=entity_id, attributes=self.created_attributes.get(entity_id, {}))
             else:
                 base_entity = entity_id.split(".")[0]
                 service = base_entity + "/turn_" + ("on" if new_value else "off")
@@ -1301,7 +1303,7 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
         domain, entity_name = entity_id.split(".")
@@ -1316,11 +1318,14 @@ class Inverter:
         while (not matched) and (retry < 6):
             retry += 1
             if domain == "sensor":
-                self.base.set_state_wrapper(entity_id, state=new_value)
+                self.base.set_state_wrapper(entity_id, state=new_value, attributes=self.created_attributes.get(entity_id, {}))
             else:
                 entity_base = entity_id.split(".")[0]
                 service = entity_base + "/set_value"
                 self.base.call_service_wrapper(service, value=new_value, entity_id=entity_id)
+
+            if ignore_fail:
+                return True
 
             time.sleep(self.inv_write_and_poll_sleep)
             current_state = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -1342,17 +1347,19 @@ class Inverter:
             self.base.record_status(f"Warn: Inverter {self.id} write to {name} failed", had_errors=True)
             return False
 
-    def write_and_poll_option(self, name, entity_id, new_value):
+    def write_and_poll_option(self, name, entity_id, new_value, ignore_fail=False):
         """
         GivTCP Workaround, keep writing until correct
         """
         entity_base = entity_id.split(".")[0]
         if entity_base not in ["input_select", "select"]:
-            return self.write_and_poll_value(name, entity_id, new_value)
+            return self.write_and_poll_value(name, entity_id, new_value, ignore_fail=ignore_fail)
 
         for retry in range(6):
             service = entity_base + "/select_option"
             self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
+            if ignore_fail:
+                return True
             time.sleep(self.inv_write_and_poll_sleep)
             old_value = self.base.get_state_wrapper(entity_id, refresh=True)
             if old_value == new_value:
@@ -1437,12 +1444,12 @@ class Inverter:
         else:
             if old_start_time and old_start_time != new_start_time:
                 # Don't poll as inverters with no registers will fail
-                self.base.set_state_wrapper(entity_start, state=new_start_time)
+                self.write_and_poll_option("pause_start_time", entity_start, new_start_time, ignore_fail=True)
                 self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
 
             if old_end_time and old_end_time != new_end_time:
                 # Don't poll as inverters with no registers will fail
-                self.base.set_state_wrapper(entity_end, state=new_end_time)
+                self.write_and_poll_option("pause_end_time", entity_end, new_end_time, ignore_fail=True)
                 self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
 
         # Set the mode
