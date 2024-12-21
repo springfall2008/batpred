@@ -86,6 +86,10 @@ class WebInterface:
         app.router.add_get("/config", self.html_config)
         app.router.add_post("/config", self.html_config_post)
         app.router.add_get("/dash", self.html_dash)
+        app.router.add_get("/debug_yaml", self.html_debug_yaml)
+        app.router.add_get("/debug_log", self.html_debug_log)
+        app.router.add_get("/debug_apps", self.html_debug_apps)
+        app.router.add_get("/debug_plan", self.html_debug_plan)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -122,7 +126,7 @@ class WebInterface:
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
-    def get_status_html(self, level, status):
+    def get_status_html(self, level, status, debug_enable, read_only, mode):
         text = ""
         if not self.base.dashboard_index:
             text += "<h2>Loading please wait...</h2>"
@@ -131,7 +135,14 @@ class WebInterface:
         text += "<h2>Status</h2>\n"
         text += "<table>\n"
         text += "<tr><td>Status</td><td>{}</td></tr>\n".format(status)
+        text += "<tr><td>Mode</td><td>{}</td></tr>\n".format(mode)
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
+        text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
+        text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
+        text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
+        text += "<tr><td></td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
         text += "<br>\n"
 
@@ -428,7 +439,8 @@ var options = {
 
         text += '- <a href="./log">All</a> '
         text += '<a href="./log?warnings">Warnings</a> '
-        text += '<a href="./log?errors">Errors</a><br>\n'
+        text += '<a href="./log?errors">Errors</a> '
+        text += '<a href="./debug_log">Download</a><br>\n'
 
         text += "<table width=100%>\n"
 
@@ -546,6 +558,41 @@ var options = {
             text = str(value)
         return text
 
+    async def html_file(self, filename, data):
+        if data is None:
+            return web.Response(content_type="text/html", text="{} not found".format(filename), status=404)
+        else:
+            return web.Response(content_type="application/octet-stream", body=data.encode("utf-8"), headers={"Content-Disposition": "attachment; filename={}".format(filename)})  # Convert text to binary if needed
+
+    async def html_debug_yaml(self, request):
+        """
+        Return the Predbat debug yaml data
+        """
+        yaml_debug = self.base.create_debug_yaml(write_file=False)
+        return await self.html_file("predbat_debug.yaml", yaml_debug)
+
+    async def html_file_load(self, filename):
+        """
+        Load a file and serve it up
+        """
+        data = None
+        if os.path.exists(filename):
+            with open(filename, "r") as f:
+                data = f.read()
+        return await self.html_file(filename, data)
+
+    async def html_debug_log(self, request):
+        return await self.html_file_load("predbat.log")
+
+    async def html_debug_apps(self, request):
+        return await self.html_file_load("apps.yaml")
+
+    async def html_debug_plan(self, request):
+        html_plan = self.base.html_plan
+        if not html_plan:
+            html_plan = None
+        return await self.html_file("predbat_plan.html", html_plan)
+
     async def html_dash(self, request):
         """
         Render apps.yaml as an HTML page
@@ -554,7 +601,7 @@ var options = {
         text = self.get_header("Predbat Dashboard")
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
-        text += self.get_status_html(soc_perc, self.base.current_status)
+        text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
@@ -732,6 +779,7 @@ var options = {
         self.default_page = "./apps"
         text = self.get_header("Predbat Config")
         text += "<body>\n"
+        text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
         text += "<tr><th>Name</th><th>Value</th><td>\n"
 

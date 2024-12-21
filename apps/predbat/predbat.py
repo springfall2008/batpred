@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.8.11"
+THIS_VERSION = "v8.8.12"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]
@@ -264,6 +264,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         """
         reset_prediction_globals()
         self.predheat = None
+        self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
         self.html_plan = "<body><h1>Please wait calculating...</h1></body>"
         self.unmatched_args = {}

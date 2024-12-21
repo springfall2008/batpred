@@ -602,7 +602,7 @@ class UserInterface:
                     current["value"] = item["value"]
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
-    def create_debug_yaml(self):
+    def create_debug_yaml(self, write_file=True):
         """
         Write out a debug info yaml
         """
@@ -634,9 +634,14 @@ class UserInterface:
         debug["inverters"] = inverters_debug
 
         debug["CONFIG_ITEMS"] = CONFIG_ITEMS
-        with open(filename, "w") as file:
-            yaml.dump(debug, file)
-        self.log("Wrote debug yaml to {}".format(filename_p))
+
+        if write_file:
+            with open(filename, "w") as file:
+                yaml.dump(debug, file)
+            self.log("Wrote debug yaml to {}".format(filename_p))
+        else:
+            # Return the debug yaml as a string
+            return yaml.dump(debug)
 
     def create_entity_list(self):
         """
