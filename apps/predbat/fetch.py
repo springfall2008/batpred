@@ -1076,7 +1076,7 @@ class Fetch:
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
             self.iboost_plan = self.plan_iboost_smart()
             self.log(
-                "IBoost iboost_solar {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} min_lenght {} plan is: {}".format(
+                "IBoost iboost_solar {} rate threshold import {} rate threshold  export {} iboost_gas {} iboost_gas_export {} iboost_smart {} min_length {} plan is: {}".format(
                     self.iboost_solar,
                     self.iboost_rate_threshold,
                     self.iboost_rate_threshold_export,
