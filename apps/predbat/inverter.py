@@ -2126,7 +2126,7 @@ class Inverter:
             if old_charge_schedule_enable == "off" or old_charge_schedule_enable == "disable":
                 self.base.log("Inverter {} Turning on scheduled charge".format(self.id))
 
-    def press_and_poll_button(self, entity_id):
+    def press_and_poll_button(self):
         """
         Call a button press service (Solis) and wait for the data to update
         """
