@@ -415,11 +415,13 @@ def run_compute_metric_tests(my_predbat):
     failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
     return failed
 
+
 def dummy_sleep(seconds):
     """
     Dummy sleep function
     """
     pass
+
 
 class DummyRestAPI:
     def __init__(self):
@@ -430,20 +432,21 @@ class DummyRestAPI:
         """
         Dummy rest post command
         """
-        #print("Dummy rest post command {} {}".format(url, json))
+        # print("Dummy rest post command {} {}".format(url, json))
         self.commands.append([url, json])
 
     def dummy_rest_getData(self, url):
         if url == "dummy/runAll":
-            #print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         else:
             return None
-    
+
     def get_commands(self):
         commands = self.commands
         self.commands = []
         return commands
+
 
 def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, expect_rate=None, discharge=False):
     """
@@ -452,7 +455,7 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     failed = False
     if expect_rate is None:
         expect_rate = rate
-    
+
     print("Test: {}".format(test_name))
 
     # Non-REST Mode
@@ -466,13 +469,13 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     if ha.get_state(entity) != expect_rate:
         print("ERROR: Inverter rate should be {} got {}".format(expect_rate, ha.get_state(entity)))
         failed = True
-    
+
     # REST Mode
     rest_entity = "Battery_Discharge_Rate" if discharge else "Battery_Charge_Rate"
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"][rest_entity] =  prev_rate
+    inv.rest_data["Control"][rest_entity] = prev_rate
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"][rest_entity] = expect_rate
 
@@ -484,15 +487,15 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     rest_command = dummy_rest.get_commands()
     if prev_rate != expect_rate:
         if discharge:
-            expect_data = [['dummy/setDischargeRate', {'dischargeRate': expect_rate}]]
+            expect_data = [["dummy/setDischargeRate", {"dischargeRate": expect_rate}]]
         else:
-            expect_data = [['dummy/setChargeRate', {'chargeRate': expect_rate}]]
+            expect_data = [["dummy/setChargeRate", {"chargeRate": expect_rate}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
 
 
@@ -503,7 +506,7 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     failed = False
     if expect_mode is None:
         expect_mode = mode
-    
+
     print("Test: {}".format(test_name))
 
     # Non-REST Mode
@@ -513,26 +516,27 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     if ha.get_state("select.inverter_mode") != expect_mode:
         print("ERROR: Inverter mode should be {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
-    
+
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Mode"] =  prev_mode
+    inv.rest_data["Control"]["Mode"] = prev_mode
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Mode"] = expect_mode
 
     inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
     rest_command = dummy_rest.get_commands()
     if prev_mode != expect_mode:
-        expect_data = [['dummy/setBatteryMode', {'mode': expect_mode}]]
+        expect_data = [["dummy/setBatteryMode", {"mode": expect_mode}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
+
 
 def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None):
     """
@@ -541,7 +545,6 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     failed = False
     if expect_soc is None:
         expect_soc = soc
-
 
     print("Test: {}".format(test_name))
 
@@ -553,29 +556,28 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
         print("ERROR: Charge limit should be {} got {}".format(expect_soc, ha.get_state("number.charge_limit")))
         failed = True
 
-
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Target_SOC"] =  prev_soc
+    inv.rest_data["Control"]["Target_SOC"] = prev_soc
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
 
     inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
     rest_command = dummy_rest.get_commands()
     if soc != prev_soc:
-        expect_data = [['dummy/setChargeTarget', {'chargeToPercent': expect_soc}]]
+        expect_data = [["dummy/setChargeTarget", {"chargeToPercent": expect_soc}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
 
-def run_inverter_tests():
 
+def run_inverter_tests():
     """
     Test the inverter functions
     """
@@ -625,7 +627,7 @@ def run_inverter_tests():
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
     my_predbat.args["givtcp_rest"] = None
-    my_predbat.args['inverter_type'] = ["GE"]
+    my_predbat.args["inverter_type"] = ["GE"]
     for entity_id in dummy_items.keys():
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
@@ -659,8 +661,8 @@ def run_inverter_tests():
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 200, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
 
-
     return failed
+
 
 def simple_scenario(
     name,
@@ -4340,7 +4342,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0,
-        assert_final_metric=import_rate * 120 * 1.5 - 2*import_rate*5*2,
+        assert_final_metric=import_rate * 120 * 1.5 - 2 * import_rate * 5 * 2,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
