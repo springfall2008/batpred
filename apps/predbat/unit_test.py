@@ -69,13 +69,13 @@ class TestHAInterface:
         if not entity_id:
             return {}
         elif entity_id in self.dummy_items:
-            #print("Getting state: {} {}".format(entity_id, self.dummy_items[entity_id]))
+            # print("Getting state: {} {}".format(entity_id, self.dummy_items[entity_id]))
             return self.dummy_items[entity_id]
         else:
             return None
 
     def call_service(self, service, **kwargs):
-        #print("Calling service: {} {}".format(service, kwargs))
+        # print("Calling service: {} {}".format(service, kwargs))
         if self.service_store_enable:
             self.service_store.append([service, kwargs])
             return None
@@ -91,13 +91,13 @@ class TestHAInterface:
             if not entity_id.startswith("switch."):
                 print("Warn: Service for entity {} not a switch".format(entity_id))
             elif entity_id in self.dummy_items:
-                self.dummy_items[entity_id] = 'on'
+                self.dummy_items[entity_id] = "on"
         elif service == "switch/turn_off":
             entity_id = kwargs.get("entity_id", None)
             if not entity_id.startswith("switch."):
                 print("Warn: Service for entity {} not a switch".format(entity_id))
             elif entity_id in self.dummy_items:
-                self.dummy_items[entity_id] = 'off'
+                self.dummy_items[entity_id] = "off"
         elif service == "select/select_option":
             entity_id = kwargs.get("entity_id", None)
             if not entity_id.startswith("select."):
@@ -107,12 +107,12 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        #print("Setting state: {} to {}".format(entity_id, state))
+        # print("Setting state: {} to {}".format(entity_id, state))
         self.dummy_items[entity_id] = state
         return None
 
     def get_history(self, entity_id, now=None, days=30):
-        #print("Getting history for {}".format(entity_id))
+        # print("Getting history for {}".format(entity_id))
         if self.history_enable:
             return [self.history]
         else:
@@ -426,11 +426,13 @@ def run_compute_metric_tests(my_predbat):
     failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
     return failed
 
+
 def dummy_sleep(seconds):
     """
     Dummy sleep function
     """
     pass
+
 
 class DummyRestAPI:
     def __init__(self):
@@ -441,23 +443,24 @@ class DummyRestAPI:
         """
         Dummy rest post command
         """
-        #print("Dummy rest post command {} {}".format(url, json))
+        # print("Dummy rest post command {} {}".format(url, json))
         self.commands.append([url, json])
 
     def dummy_rest_getData(self, url):
         if url == "dummy/runAll":
-            #print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         elif url == "dummy/readData":
-            #print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         else:
             return None
-    
+
     def get_commands(self):
         commands = self.commands
         self.commands = []
         return commands
+
 
 def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now):
     """
@@ -470,7 +473,7 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     inv.rest_data = None
     ha.dummy_items["select.charge_start_time"] = prev_charge_start_time
     ha.dummy_items["select.charge_end_time"] = prev_charge_end_time
-    ha.dummy_items['switch.scheduled_charge_enable'] = 'on' if prev_enable_charge else 'off'
+    ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
     charge_start_time_tm = datetime.strptime(charge_start_time, "%H:%M:%S")
     charge_end_time_tm = datetime.strptime(charge_end_time, "%H:%M:%S")
 
@@ -481,18 +484,18 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     if ha.get_state("select.charge_end_time") != charge_end_time:
         print("ERROR: Charge end time should be {} got {}".format(charge_end_time, ha.get_state("select.charge_end_time")))
         failed = True
-    if ha.get_state("switch.scheduled_charge_enable") != 'on':
+    if ha.get_state("switch.scheduled_charge_enable") != "on":
         print("ERROR: Charge enable should be on got {}".format(ha.get_state("switch.scheduled_charge_enable")))
         failed = True
-    
+
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Timeslots"] = {}
-    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] =  prev_charge_start_time
-    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] =  prev_charge_end_time
+    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
+    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = 'on' if prev_enable_charge else 'off'
+    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "on" if prev_enable_charge else "off"
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = charge_start_time
     dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = charge_end_time
@@ -501,20 +504,21 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
     rest_command = dummy_rest.get_commands()
     if prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time:
-        expect_data = [['dummy/setChargeSlot1', {'start': charge_start_time[0:5], 'finish': charge_end_time[0:5]}]]
+        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
     else:
         expect_data = []
     if prev_enable_charge != True:
-        expect_data.append(['dummy/enableChargeSchedule', {'state' : 'enable'}])
+        expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
 
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
     return failed
-    
+
+
 def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, expect_reserve=None, reserve_min=4, reserve_max=100):
     """
-    Test 
+    Test
        inv.adjust_reserve(self, reserve):
     """
     failed = False
@@ -523,7 +527,7 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
 
     inv.reserve_percent = reserve_min
     inv.reserve_max = reserve_max
-    
+
     print("Test: {}".format(test_name))
 
     # Non-REST Mode
@@ -533,26 +537,27 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
     if ha.get_state("number.reserve") != expect_reserve:
         print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
-    
+
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Battery_Power_Reserve"] =  prev_reserve
+    inv.rest_data["Control"]["Battery_Power_Reserve"] = prev_reserve
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Battery_Power_Reserve"] = expect_reserve
 
     inv.adjust_reserve(reserve)
     rest_command = dummy_rest.get_commands()
     if prev_reserve != expect_reserve:
-        expect_data = [['dummy/setBatteryReserve', {'reservePercent': expect_reserve}]]
+        expect_data = [["dummy/setBatteryReserve", {"reservePercent": expect_reserve}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
+
 
 def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, expect_rate=None, discharge=False):
     """
@@ -561,7 +566,7 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     failed = False
     if expect_rate is None:
         expect_rate = rate
-    
+
     print("Test: {}".format(test_name))
 
     # Non-REST Mode
@@ -575,13 +580,13 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     if ha.get_state(entity) != expect_rate:
         print("ERROR: Inverter rate should be {} got {}".format(expect_rate, ha.get_state(entity)))
         failed = True
-    
+
     # REST Mode
     rest_entity = "Battery_Discharge_Rate" if discharge else "Battery_Charge_Rate"
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"][rest_entity] =  prev_rate
+    inv.rest_data["Control"][rest_entity] = prev_rate
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"][rest_entity] = expect_rate
 
@@ -593,15 +598,15 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     rest_command = dummy_rest.get_commands()
     if prev_rate != expect_rate:
         if discharge:
-            expect_data = [['dummy/setDischargeRate', {'dischargeRate': expect_rate}]]
+            expect_data = [["dummy/setDischargeRate", {"dischargeRate": expect_rate}]]
         else:
-            expect_data = [['dummy/setChargeRate', {'chargeRate': expect_rate}]]
+            expect_data = [["dummy/setChargeRate", {"chargeRate": expect_rate}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
 
 
@@ -612,7 +617,7 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     failed = False
     if expect_mode is None:
         expect_mode = mode
-    
+
     print("Test: {}".format(test_name))
 
     # Non-REST Mode
@@ -622,26 +627,27 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
     if ha.get_state("select.inverter_mode") != expect_mode:
         print("ERROR: Inverter mode should be {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
-    
+
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Mode"] =  prev_mode
+    inv.rest_data["Control"]["Mode"] = prev_mode
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Mode"] = expect_mode
 
     inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
     rest_command = dummy_rest.get_commands()
     if prev_mode != expect_mode:
-        expect_data = [['dummy/setBatteryMode', {'mode': expect_mode}]]
+        expect_data = [["dummy/setBatteryMode", {"mode": expect_mode}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
+
 
 def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, isCharging, isExporting, expect_soc=None):
     """
@@ -650,7 +656,6 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     failed = False
     if expect_soc is None:
         expect_soc = soc
-
 
     print("Test: {}".format(test_name))
 
@@ -662,28 +667,42 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
         print("ERROR: Charge limit should be {} got {}".format(expect_soc, ha.get_state("number.charge_limit")))
         failed = True
 
-
     # REST Mode
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Target_SOC"] =  prev_soc
+    inv.rest_data["Control"]["Target_SOC"] = prev_soc
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
 
     inv.adjust_battery_target(soc, isCharging=True, isExporting=False)
     rest_command = dummy_rest.get_commands()
     if soc != prev_soc:
-        expect_data = [['dummy/setChargeTarget', {'chargeToPercent': expect_soc}]]
+        expect_data = [["dummy/setChargeTarget", {"chargeToPercent": expect_soc}]]
     else:
         expect_data = []
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
-    
+
     return failed
 
-def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start_time, expect_charge_end_time, expect_charge_enable, expect_discharge_start_time, expect_discharge_end_time, expect_discharge_enable, expect_battery_power, expect_pv_power, expect_load_power, expect_soc_kwh):
+
+def test_inverter_update(
+    test_name,
+    my_predbat,
+    dummy_items,
+    expect_charge_start_time,
+    expect_charge_end_time,
+    expect_charge_enable,
+    expect_discharge_start_time,
+    expect_discharge_end_time,
+    expect_discharge_enable,
+    expect_battery_power,
+    expect_pv_power,
+    expect_load_power,
+    expect_soc_kwh,
+):
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
@@ -693,7 +712,7 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
     discharge_start_time_minutes = (datetime.strptime(expect_discharge_start_time, "%H:%M:%S") - midnight).total_seconds() / 60
     discharge_end_time_minutes = (datetime.strptime(expect_discharge_end_time, "%H:%M:%S") - midnight).total_seconds() / 60
 
-    my_predbat.args['givtcp_rest'] = None
+    my_predbat.args["givtcp_rest"] = None
     inv = Inverter(my_predbat, 0)
     inv.sleep = dummy_sleep
 
@@ -710,16 +729,16 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
 
     print("Test: Update Inverter")
 
-    dummy_items['select.charge_start_time'] = expect_charge_start_time
-    dummy_items['select.charge_end_time'] = expect_charge_end_time
-    dummy_items['select.discharge_start_time'] = expect_discharge_start_time
-    dummy_items['select.discharge_end_time'] = expect_discharge_end_time
-    dummy_items['sensor.battery_power'] = expect_battery_power
-    dummy_items['sensor.pv_power'] = expect_pv_power
-    dummy_items['sensor.load_power'] = expect_load_power
-    dummy_items['switch.scheduled_charge_enable'] = 'on' if expect_charge_enable else 'off'
-    dummy_items['switch.scheduled_discharge_enable'] = 'on' if expect_discharge_enable else 'off'
-    dummy_items['sensor.soc_kw'] = expect_soc_kwh
+    dummy_items["select.charge_start_time"] = expect_charge_start_time
+    dummy_items["select.charge_end_time"] = expect_charge_end_time
+    dummy_items["select.discharge_start_time"] = expect_discharge_start_time
+    dummy_items["select.discharge_end_time"] = expect_discharge_end_time
+    dummy_items["sensor.battery_power"] = expect_battery_power
+    dummy_items["sensor.pv_power"] = expect_pv_power
+    dummy_items["sensor.load_power"] = expect_load_power
+    dummy_items["switch.scheduled_charge_enable"] = "on" if expect_charge_enable else "off"
+    dummy_items["switch.scheduled_discharge_enable"] = "on" if expect_discharge_enable else "off"
+    dummy_items["sensor.soc_kw"] = expect_soc_kwh
 
     inv.update_status(my_predbat.minutes_now)
     if not inv.inv_has_discharge_enable_time:
@@ -740,7 +759,7 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
         charge_end_time_minutes += 24 * 60
 
     if inv.charge_start_time_minutes != charge_start_time_minutes:
-        print("ERROR: Charge start time should be {} got {} ({})".format(charge_start_time_minutes, inv.charge_start_time_minutes, dummy_items['select.charge_start_time']))
+        print("ERROR: Charge start time should be {} got {} ({})".format(charge_start_time_minutes, inv.charge_start_time_minutes, dummy_items["select.charge_start_time"]))
         failed = True
     if inv.charge_end_time_minutes != charge_end_time_minutes:
         print("ERROR: Charge end time should be {} got {}".format(charge_end_time_minutes, inv.charge_end_time_minutes))
@@ -773,30 +792,30 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
     # REST Mode
 
     dummy_rest = DummyRestAPI()
-    my_predbat.args['givtcp_rest'] = "dummy"
+    my_predbat.args["givtcp_rest"] = "dummy"
     inv.sleep = dummy_sleep
 
     dummy_rest.rest_data = {}
     dummy_rest.rest_data["Control"] = {}
     dummy_rest.rest_data["Control"]["Target_SOC"] = 99
-    dummy_rest.rest_data["Control"]["Mode"] =  "Eco"
-    dummy_rest.rest_data["Control"]["Battery_Power_Reserve"] =  4.0
-    dummy_rest.rest_data["Control"]["Battery_Charge_Rate"] =  1100
-    dummy_rest.rest_data["Control"]["Battery_Discharge_Rate"] =  1500
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] =  'enable' if expect_charge_enable else 'disable'
-    dummy_rest.rest_data["Control"]["Enable_Discharge_Schedule"] =  'enable' if expect_discharge_enable else 'disable'
+    dummy_rest.rest_data["Control"]["Mode"] = "Eco"
+    dummy_rest.rest_data["Control"]["Battery_Power_Reserve"] = 4.0
+    dummy_rest.rest_data["Control"]["Battery_Charge_Rate"] = 1100
+    dummy_rest.rest_data["Control"]["Battery_Discharge_Rate"] = 1500
+    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if expect_charge_enable else "disable"
+    dummy_rest.rest_data["Control"]["Enable_Discharge_Schedule"] = "enable" if expect_discharge_enable else "disable"
     dummy_rest.rest_data["Timeslots"] = {}
-    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] =  expect_charge_start_time
-    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] =  expect_charge_end_time
-    dummy_rest.rest_data["Timeslots"]["Discharge_start_time_slot_1"] =  expect_discharge_start_time
-    dummy_rest.rest_data["Timeslots"]["Discharge_end_time_slot_1"] =  expect_discharge_end_time
-    dummy_rest.rest_data["Power"] =  {}
+    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = expect_charge_start_time
+    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = expect_charge_end_time
+    dummy_rest.rest_data["Timeslots"]["Discharge_start_time_slot_1"] = expect_discharge_start_time
+    dummy_rest.rest_data["Timeslots"]["Discharge_end_time_slot_1"] = expect_discharge_end_time
+    dummy_rest.rest_data["Power"] = {}
     dummy_rest.rest_data["Power"]["Power"] = {}
     dummy_rest.rest_data["Power"]["Power"]["SOC_kWh"] = expect_soc_kwh
     dummy_rest.rest_data["Power"]["Power"]["Battery_Power"] = expect_battery_power
     dummy_rest.rest_data["Power"]["Power"]["PV_Power"] = expect_pv_power
     dummy_rest.rest_data["Power"]["Power"]["Load_Power"] = expect_load_power
-    dummy_items['sensor.soc_kw'] = -1
+    dummy_items["sensor.soc_kw"] = -1
 
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
 
@@ -804,7 +823,7 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
     inv.update_status(my_predbat.minutes_now)
 
     if inv.charge_start_time_minutes != charge_start_time_minutes:
-        print("ERROR: Charge start time should be {} got {} ({})".format(charge_start_time_minutes, inv.charge_start_time_minutes, dummy_items['select.charge_start_time']))
+        print("ERROR: Charge start time should be {} got {} ({})".format(charge_start_time_minutes, inv.charge_start_time_minutes, dummy_items["select.charge_start_time"]))
         failed = True
     if inv.charge_end_time_minutes != charge_end_time_minutes:
         print("ERROR: Charge end time should be {} got {}".format(charge_end_time_minutes, inv.charge_end_time_minutes))
@@ -836,6 +855,7 @@ def test_inverter_update(test_name, my_predbat, dummy_items, expect_charge_start
 
     return failed
 
+
 def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, stop_discharge=False, charge_start_time="00:00:00", charge_end_time="23:55:00"):
     """
     Tests;
@@ -856,8 +876,8 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     my_predbat.args["discharge_freeze_service"] = "discharge_freeze"
     my_predbat.args["device_id"] = "DID0"
 
-    dummy_items['select.charge_start_time'] = charge_start_time
-    dummy_items['select.charge_end_time'] = charge_end_time
+    dummy_items["select.charge_start_time"] = charge_start_time
+    dummy_items["select.charge_end_time"] = charge_end_time
 
     power = int(inv.battery_rate_max_charge * MINUTE_WATT)
 
@@ -869,20 +889,21 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
         pass
     elif soc == inv.soc_percent or freeze:
         if stop_discharge:
-            expected.append(["discharge_stop", {"device_id" : "DID0"}])
-        expected.append(["charge_freeze", {"device_id" : "DID0", "target_soc": soc, "power": power}])
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
     elif soc > 0:
         if stop_discharge:
-            expected.append(["discharge_stop", {"device_id" : "DID0"}])
-        expected.append(["charge_start", {"device_id" : "DID0", "target_soc": soc, "power": power}])
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        expected.append(["charge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
     else:
-        expected.append(["charge_stop", {"device_id" : "DID0"}])
+        expected.append(["charge_stop", {"device_id": "DID0"}])
     if json.dumps(expected) != json.dumps(result):
         print("ERROR: Adjust charge immediate - charge service should be {} got {}".format(expected, result))
         failed = True
 
     ha.service_store_enable = False
     return failed
+
 
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00"):
     """
@@ -893,7 +914,7 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     ha.service_store_enable = True
     if clear:
         ha.service_store = []
-    
+
     print("**** Running Test: {} ****".format(test_name))
 
     my_predbat.args["charge_start_service"] = "charge_start"
@@ -905,8 +926,8 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     my_predbat.args["device_id"] = "DID0"
     power = int(inv.battery_rate_max_discharge * MINUTE_WATT)
 
-    dummy_items['select.discharge_start_time'] = discharge_start_time
-    dummy_items['select.discharge_end_time'] = discharge_end_time
+    dummy_items["select.discharge_start_time"] = discharge_start_time
+    dummy_items["select.discharge_end_time"] = discharge_end_time
 
     inv.adjust_export_immediate(soc, freeze=freeze)
     result = ha.get_service_store()
@@ -916,20 +937,21 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
         pass
     elif freeze:
         if charge_stop:
-            expected.append(["charge_stop", {"device_id" : "DID0"}])
-        expected.append(["discharge_freeze", {"device_id" : "DID0", "target_soc": soc,  "power": power}])
+            expected.append(["charge_stop", {"device_id": "DID0"}])
+        expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": soc, "power": power}])
     elif soc > 0 and soc < 100:
         if charge_stop:
-            expected.append(["charge_stop", {"device_id" : "DID0"}])
-        expected.append(["discharge_start", {"device_id" : "DID0", "target_soc": soc,  "power": power}])
+            expected.append(["charge_stop", {"device_id": "DID0"}])
+        expected.append(["discharge_start", {"device_id": "DID0", "target_soc": soc, "power": power}])
     else:
-        expected.append(["discharge_stop", {"device_id" : "DID0"}])
+        expected.append(["discharge_stop", {"device_id": "DID0"}])
     if json.dumps(expected) != json.dumps(result):
         print("ERROR: Adjust export immediate - discharge service should be {} got {}".format(expected, result))
         failed = True
 
     ha.service_store_enable = False
     return failed
+
 
 def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None):
     """
@@ -972,8 +994,8 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     ha.service_store_enable = False
     return failed
 
-def run_inverter_tests():
 
+def run_inverter_tests():
     """
     Test the inverter functions
     """
@@ -1012,8 +1034,8 @@ def run_inverter_tests():
         "sensor.pv_power": 1.0,
         "sensor.load_power": 2.0,
         "number.reserve": 4.0,
-        "switch.scheduled_charge_enable": 'off',
-        "switch.scheduled_discharge_enable": 'off',
+        "switch.scheduled_charge_enable": "off",
+        "switch.scheduled_discharge_enable": "off",
         "select.charge_start_time": "01:11:00",
         "select.charge_end_time": "02:22:00",
         "select.discharge_start_time": "03:33:00",
@@ -1022,42 +1044,41 @@ def run_inverter_tests():
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
     my_predbat.args["givtcp_rest"] = None
-    my_predbat.args['inverter_type'] = ["GE"]
+    my_predbat.args["inverter_type"] = ["GE"]
     for entity_id in dummy_items.keys():
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
 
     failed |= test_inverter_update(
         "update1",
-        my_predbat, 
-        dummy_items, 
-        expect_charge_start_time="01:11:00", 
-        expect_charge_end_time="02:22:00", 
-        expect_charge_enable=False, 
-        expect_discharge_start_time="03:33:00", 
-        expect_discharge_end_time="04:44:00", 
-        expect_discharge_enable=True, 
-        expect_battery_power=5.0, 
-        expect_pv_power=1.0, 
+        my_predbat,
+        dummy_items,
+        expect_charge_start_time="01:11:00",
+        expect_charge_end_time="02:22:00",
+        expect_charge_enable=False,
+        expect_discharge_start_time="03:33:00",
+        expect_discharge_end_time="04:44:00",
+        expect_discharge_enable=True,
+        expect_battery_power=5.0,
+        expect_pv_power=1.0,
         expect_load_power=2.0,
         expect_soc_kwh=6.0,
     )
     failed |= test_inverter_update(
         "update2",
-        my_predbat, 
-        dummy_items, 
-        expect_charge_start_time="01:11:00", 
-        expect_charge_end_time="23:22:00", 
-        expect_charge_enable=True, 
-        expect_discharge_start_time="03:33:00", 
-        expect_discharge_end_time="04:44:00", 
-        expect_discharge_enable=False, 
-        expect_battery_power=6.0, 
-        expect_pv_power=1.5, 
+        my_predbat,
+        dummy_items,
+        expect_charge_start_time="01:11:00",
+        expect_charge_end_time="23:22:00",
+        expect_charge_enable=True,
+        expect_discharge_start_time="03:33:00",
+        expect_discharge_end_time="04:44:00",
+        expect_discharge_enable=False,
+        expect_battery_power=6.0,
+        expect_pv_power=1.5,
         expect_load_power=2.5,
         expect_soc_kwh=6.6,
     )
-
 
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
@@ -1084,11 +1105,11 @@ def run_inverter_tests():
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 200, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
 
-    failed |= test_adjust_reserve("adjust_reserve1", ha, inv, dummy_rest, 4, 50, reserve_max = 100)
-    failed |= test_adjust_reserve("adjust_reserve2", ha, inv, dummy_rest, 50, 0, 4, reserve_max = 100)
-    failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max = 100)
-    failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max = 98)
-    failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max = 100)
+    failed |= test_adjust_reserve("adjust_reserve1", ha, inv, dummy_rest, 4, 50, reserve_max=100)
+    failed |= test_adjust_reserve("adjust_reserve2", ha, inv, dummy_rest, 50, 0, 4, reserve_max=100)
+    failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max=100)
+    failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max=98)
+    failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max=100)
 
     failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "00:00:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now)
@@ -1103,28 +1124,19 @@ def run_inverter_tests():
     failed |= test_call_service_template("test_service_simple5", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data2"}, clear=False, repeat=False)
 
     failed |= test_call_service_template(
-        "test_service_complex1", 
-        my_predbat, 
-        inv, 
-        service_name="complex_service", 
-        domain="charge", 
-        data={"test": "data"}, 
-        extra_data={"extra": "extra_data"}, 
-        service_template = {"service" : "funny", "dummy": "22", "extra": "{extra}"},
-        expected_result = [['funny', {'dummy': '22', 'extra': 'extra_data'}]],
-        clear=False
+        "test_service_complex1",
+        my_predbat,
+        inv,
+        service_name="complex_service",
+        domain="charge",
+        data={"test": "data"},
+        extra_data={"extra": "extra_data"},
+        service_template={"service": "funny", "dummy": "22", "extra": "{extra}"},
+        expected_result=[["funny", {"dummy": "22", "extra": "extra_data"}]],
+        clear=False,
     )
     failed |= test_call_service_template(
-        "test_service_complex2", 
-        my_predbat, 
-        inv, 
-        service_name="complex_service", 
-        domain="charge", 
-        data={"test": "data"}, 
-        extra_data={"extra": "extra_data"}, 
-        service_template = {"service" : "funny", "dummy": "22", "extra": "{extra}"},
-        clear=False,
-        repeat=True
+        "test_service_complex2", my_predbat, inv, service_name="complex_service", domain="charge", data={"test": "data"}, extra_data={"extra": "extra_data"}, service_template={"service": "funny", "dummy": "22", "extra": "{extra}"}, clear=False, repeat=True
     )
     inv.soc_percent = 49
     failed |= test_call_adjust_charge_immediate("charge_immediate1", my_predbat, ha, inv, dummy_items, 100, clear=True, stop_discharge=True)
@@ -1145,6 +1157,7 @@ def run_inverter_tests():
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
 
     return failed
+
 
 def simple_scenario(
     name,
@@ -4826,7 +4839,7 @@ def run_model_tests(my_predbat):
         my_predbat,
         0,
         0,
-        assert_final_metric=import_rate * 120 * 1.5 - 2*import_rate*5*2,
+        assert_final_metric=import_rate * 120 * 1.5 - 2 * import_rate * 5 * 2,
         assert_final_soc=0,
         with_battery=False,
         iboost_enable=True,
