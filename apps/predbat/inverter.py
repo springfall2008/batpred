@@ -108,7 +108,7 @@ class Inverter:
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
 
-    def __init__(self, base, id=0, quiet=False):
+    def __init__(self, base, id=0, quiet=False, rest_postCommand=None, rest_getData=None):
         """
         Inverter class
         """
@@ -148,6 +148,17 @@ class Inverter:
         self.rest_v3 = False
         self.count_register_writes = 0
         self.created_attributes = {}
+        self.track_charge_start = "00:00:00"
+        self.track_charge_end = "00:00:00"
+        self.track_discharge_start = "00:00:00"
+        self.track_discharge_end = "00:00:00"
+        self.idle_start_minutes = 0
+        self.idle_end_minutes = 0
+
+        if rest_postCommand:
+            self.rest_postCommand = rest_postCommand
+        if rest_getData:
+            self.rest_getData = rest_getData
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
@@ -708,7 +719,7 @@ class Inverter:
             attributes["unit_of_measurement"] = uom
         if device_class is not None:
             attributes["device_class"] = device_class
-
+        
         self.created_attributes[entity_id] = attributes
 
         if self.base.get_state_wrapper(entity_id) is None:
@@ -1001,7 +1012,7 @@ class Inverter:
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
         except (ValueError, TypeError):
-            print("Warn: Inverter {} unable to read idle start/end time, check your setting of idle_start_time/idle_end_time".format(self.id))
+            self.base.log("Warn: Inverter {} unable to read idle start/end time, check your setting of idle_start_time/idle_end_time".format(self.id))
             self.idle_start_minutes = 0
             self.idle_end_minutes = 0
 
@@ -1904,7 +1915,7 @@ class Inverter:
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
-    def call_service_template(self, service, data, domain="charge"):
+    def call_service_template(self, service, data, domain="charge", extra_data={}):
         """
         Call a service template with data
         """
@@ -1914,10 +1925,10 @@ class Inverter:
 
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
-        this_service_hash = hash(str(service) + "_" + str(data))
+        this_service_hash = hash(str(service) + "_" + str(data) + "_" + str(extra_data))
 
         if last_service_hash == this_service_hash:
-            self.log("Inverter {} Skipping service {} domain {} with data {} as already called".format(self.id, service, domain, data))
+            self.log("Inverter {} Skipping service {} domain {} with data {} extra_data {} as already called".format(self.id, service, domain, data, extra_data))
             return True
         else:
             # Record the last service called
@@ -1935,12 +1946,16 @@ class Inverter:
                 service_name = service_template
                 service_data = data
             else:
+                full_data = {}
+                full_data.update(data)
+                full_data.update(extra_data)
+
                 for key in service_template:
                     if key == "service":
                         service_name = service_template[key]
                     else:
                         value = service_template[key]
-                        value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=data)
+                        value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=full_data)
                         if value:
                             service_data[key] = value
 
@@ -1957,6 +1972,7 @@ class Inverter:
         Adjust from charging or not charging based on passed target soc
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
+        extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
         if target_soc > 0:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
@@ -1970,10 +1986,10 @@ class Inverter:
 
             # Start charge or charge freeze
             if target_soc == self.soc_percent or freeze:
-                if not self.call_service_template("charge_freeze_service", service_data, domain="charge"):
-                    self.call_service_template("charge_start_service", service_data, domain="charge")
+                if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
+                    self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
             else:
-                self.call_service_template("charge_start_service", service_data, domain="charge")
+                self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
         else:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
@@ -1982,7 +1998,8 @@ class Inverter:
         Adjust from exporting or not exporting based on passed target soc
         """
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
-        if target_soc > 0:
+        extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
+        if target_soc > 0 and target_soc < 100:
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": target_soc,
@@ -1994,10 +2011,10 @@ class Inverter:
 
             # Start discharge or discharge freeze
             if freeze:
-                if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge"):
-                    self.call_service_template("discharge_start_service", service_data, domain="discharge")
+                if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge", extra_data=extra_data):
+                    self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
             else:
-                self.call_service_template("discharge_start_service", service_data, domain="discharge")
+                self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
         else:
             if not self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge"):
                 self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
@@ -2210,6 +2227,7 @@ class Inverter:
             return r.json()
         else:
             return None
+
 
     def rest_setChargeTarget(self, target):
         """
