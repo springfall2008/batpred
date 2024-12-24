@@ -154,6 +154,7 @@ class Prediction:
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
             self.best_soc_keep = base.best_soc_keep
+            self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
             self.car_charging_battery_size = base.car_charging_battery_size
             self.rate_import = base.rate_import
@@ -411,9 +412,9 @@ class Prediction:
                 if minute < 4 * 60:
                     keep_minute_scaling = 0
                 else:
-                    keep_minute_scaling = min(((minute - 4 * 60) / (2 * 60)), 1.0) * 0.5
+                    keep_minute_scaling = min(((minute - 4 * 60) / (2 * 60)), 1.0) * self.best_soc_keep_weight
             else:
-                keep_minute_scaling = 0.5
+                keep_minute_scaling = self.best_soc_keep_weight
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -808,12 +809,8 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if soc < self.best_soc_keep:
-                # Apply keep as a percentage of the time in the future so it gets stronger over an 4 hour period
-                # Weight to 50% chance of the scenario
-                keep_diff = max(get_diff(0, 0, pv_now, load_yesterday, inverter_loss), battery_draw)
-                if keep_diff > 0:
-                    metric_keep += rate_import[minute_absolute] * keep_diff * keep_minute_scaling
+            if self.best_soc_keep > 0 and soc <= self.best_soc_keep:
+                metric_keep += (self.best_soc_keep - soc) * rate_import[minute_absolute] * keep_minute_scaling * step / 60.0
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)

@@ -1759,6 +1759,7 @@ class Fetch:
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
         self.best_soc_keep = self.get_arg("best_soc_keep")
+        self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")

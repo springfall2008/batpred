@@ -344,6 +344,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.best_soc_max = 0
         self.best_soc_margin = 0
         self.best_soc_keep = 0
+        self.best_soc_keep_weight = 0.5
         self.rate_min = 0
         self.rate_min_minute = 0
         self.rate_min_forward = {}

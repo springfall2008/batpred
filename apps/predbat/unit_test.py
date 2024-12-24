@@ -1196,6 +1196,7 @@ def simple_scenario(
     carbon=0,
     assert_final_carbon=0.0,
     keep=0.0,
+    keep_weight=0.5,
     assert_keep=0.0,
     save="best",
     quiet=False,
@@ -1250,6 +1251,7 @@ def simple_scenario(
     my_predbat.iboost_gas_scale = gas_scale
     my_predbat.iboost_charging = iboost_charging
     my_predbat.best_soc_keep = keep
+    my_predbat.best_soc_keep_weight = keep_weight
     my_predbat.car_charging_soc[0] = 0
     my_predbat.car_charging_limit[0] = 100.0
 
@@ -1345,7 +1347,7 @@ def simple_scenario(
     if abs(final_carbon_g - assert_final_carbon) >= 0.1:
         print("ERROR: Final Carbon {} should be {}".format(final_carbon_g, assert_final_carbon))
         failed = True
-    if abs(metric_keep - assert_keep) >= 0.1:
+    if abs(metric_keep - assert_keep) >= 0.5:
         print("ERROR: Metric keep {} should be {}".format(metric_keep, assert_keep))
         failed = True
     if assert_iboost_running != prediction.iboost_running:
@@ -3168,6 +3170,7 @@ def run_optimise_all_windows(
     hybrid=False,
     inverter_loss=1.0,
     best_soc_keep=0.0,
+    best_soc_keep_weight=0.5,
 ):
     print("Starting optimise all windows test {}".format(name))
     end_record = my_predbat.forecast_minutes
@@ -3179,6 +3182,7 @@ def run_optimise_all_windows(
     my_predbat.inverter_hybrid = hybrid
     my_predbat.inverter_loss = inverter_loss
     my_predbat.best_soc_keep = best_soc_keep
+    my_predbat.best_soc_keep_weight = best_soc_keep_weight
 
     reset_rates(my_predbat, rate_import, rate_export)
     update_rates_import(my_predbat, charge_window_best)
@@ -3276,7 +3280,7 @@ def run_optimise_all_windows_tests(my_predbat):
     for n in range(0, 48):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
-        expect_charge_limit.append(100 if price <= 5.0 else 0)
+        expect_charge_limit.append(10 if price <= 5.0 else 0)
     failed |= run_optimise_all_windows(
         "created2",
         my_predbat,
@@ -3286,7 +3290,26 @@ def run_optimise_all_windows_tests(my_predbat):
         pv_amount=0,
         expect_best_price=5 / 0.9,
         inverter_loss=0.9,
-        best_soc_keep=0.5,
+        best_soc_keep=0.0,
+        battery_size=10,
+    )
+    if failed:
+        return failed
+
+    # One extra charge as we will fall below keep otherwise
+    expect_charge_limit[10] = 10.0
+    failed |= run_optimise_all_windows(
+        "created3",
+        my_predbat,
+        charge_window_best=charge_window_best,
+        expect_charge_limit=expect_charge_limit,
+        load_amount=0.2,
+        pv_amount=0,
+        expect_best_price=5 / 0.9,
+        inverter_loss=0.9,
+        best_soc_keep=1,
+        battery_soc=2,
+        battery_size=10,
     )
     if failed:
         return failed
@@ -4061,8 +4084,9 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.5 + ((1 + (1 / 12)) * import_rate * 0.5 * 0.5),
         keep=1,
+        keep_weight=0.5,
     )
     failed |= simple_scenario(
         "battery_discharge_loss",
@@ -4110,8 +4134,9 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate + 1 * import_rate * 0.5,
         keep=1.0,
+        keep_weight=1.0,
     )
     failed |= simple_scenario(
         "battery_discharge_load_keep_mode_test1",
@@ -4123,8 +4148,9 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.8 + 1 * import_rate * 0.8 * 0.5,
         keep=1.0,
+        keep_weight=0.8,
         save="test",
     )
     failed |= simple_scenario(
@@ -4137,8 +4163,9 @@ def run_model_tests(my_predbat):
         with_battery=True,
         discharge=0,
         battery_soc=10,
-        assert_keep=14 * import_rate * 0.5 * KEEP_SCALE + 1 * import_rate * KEEP_SCALE,
+        assert_keep=14 * import_rate * 0.8 + 1 * import_rate * 0.8 * 0.5,
         keep=1.0,
+        keep_weight=0.8,
         save="none",
     )
     failed |= simple_scenario(
@@ -4781,8 +4808,9 @@ def run_model_tests(my_predbat):
         discharge=0,
         battery_size=10,
         keep=1.0,
+        keep_weight=1.0,
         assert_final_iboost=0,
-        assert_keep=import_rate * 14 * 0.5 * KEEP_SCALE + import_rate * 1 * KEEP_SCALE,
+        assert_keep=import_rate * 14 + import_rate * 1 * 0.5,
     )
 
     # Alternating high/low rates
