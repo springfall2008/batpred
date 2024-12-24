@@ -341,7 +341,6 @@ class UserInterface:
         """
         item = self.config_index.get(name)
         if item and item["name"] == name:
-            enabled = self.user_config_item_enabled(item)
             value = item.get("value", None)
             if default is None:
                 default = item.get("default", None)
