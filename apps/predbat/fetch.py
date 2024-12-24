@@ -1792,7 +1792,6 @@ class Fetch:
         self.set_status_notify = self.get_arg("set_status_notify")
         self.set_inverter_notify = self.get_arg("set_inverter_notify")
         self.set_export_freeze_only = self.get_arg("set_export_freeze_only")
-        print("Getting set_export_freeze_only", self.set_export_freeze_only)
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
 
         # Mode
