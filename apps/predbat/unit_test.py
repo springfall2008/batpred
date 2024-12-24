@@ -113,8 +113,8 @@ class TestHAInterface:
 
     def get_history(self, entity_id, now=None, days=30):
         # print("Getting history for {}".format(entity_id))
-        if entity_id == 'predbat.status':
-            return [[{'state': 'idle', 'last_changed': datetime.now()}]]
+        if entity_id == "predbat.status":
+            return [[{"state": "idle", "last_changed": datetime.now()}]]
         if self.history_enable:
             return [self.history]
         else:
@@ -1681,17 +1681,17 @@ def run_single_debug(my_predbat, debug_file):
 
     reset_inverter(my_predbat)
     for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == 'mode':
+        if item["name"] == "mode":
             print(item)
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == 'mode':
+        if item["name"] == "mode":
             print(item)
     my_predbat.load_user_config()
     for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == 'mode':
+        if item["name"] == "mode":
             print(item)
     print("Predbat mode {} charge {} export {}".format(my_predbat.predbat_mode, my_predbat.set_charge_window, my_predbat.set_export_window))
     my_predbat.fetch_config_options()
@@ -1702,7 +1702,6 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.combine_export_slots = False
     # my_predbat.best_soc_keep = 1.0
     my_predbat.metric_min_improvement_export = 5
-
 
     if re_do_rates:
         # Set rate thresholds

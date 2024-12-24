@@ -601,7 +601,7 @@ class UserInterface:
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
-                #print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
+                # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item["value"]:
                     current["value"] = item["value"]
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
@@ -621,7 +621,11 @@ class UserInterface:
         # Store all predbat member variables into debug
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
-                if (key.startswith("db")) or ("_key" in key) or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index"]:
+                if (
+                    (key.startswith("db"))
+                    or ("_key" in key)
+                    or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index"]
+                ):
                     pass
                 else:
                     debug[key] = self.__dict__[key]
