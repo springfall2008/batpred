@@ -257,7 +257,7 @@ As this is not used for short-term planning it's possible for your SoC to drop b
 if you want to force all charges to be above a set level.
 It's usually good to have best_soc_keep set to a value above 0 to allow some margin in case you use more energy than planned between charge slots.
 
-**input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply. 
+**input_number.predbat_best_soc_keep_weight** (_expert_mode_) Is used to tune how strongly you want the keep metric to apply.
 A value of 0 would essentially ignore keep while higher values will make it more important to always stay above your keep threshold even if it costs
 more money to do so.
 
