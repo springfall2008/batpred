@@ -414,7 +414,7 @@ class Prediction:
                 else:
                     keep_minute_scaling = min(((minute - 4 * 60) / (2 * 60)), 1.0) * self.best_soc_keep_weight
             else:
-                keep_minute_scaling = self.best_soc_keep_weight
+                keep_minute_scaling =  self.best_soc_keep_weight
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
