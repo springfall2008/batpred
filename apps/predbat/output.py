@@ -2057,9 +2057,8 @@ class Output:
             )
 
         # Save step data for debug
-        if self.debug_enable:
-            self.yesterday_load_step = yesterday_load_step
-            self.yesterday_pv_step = yesterday_pv_step
+        self.yesterday_load_step = yesterday_load_step
+        self.yesterday_pv_step = yesterday_pv_step
 
         # Save state
         minutes_now = self.minutes_now

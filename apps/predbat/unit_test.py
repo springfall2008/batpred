@@ -1670,8 +1670,8 @@ def run_execute_test(
 
 def run_single_debug(my_predbat, debug_file):
     print("**** Running debug test {} ****\n".format(debug_file))
-    re_do_rates = True
-    reset_load_model = False
+    re_do_rates = False
+    reset_load_model = True
     load_override = 1.0
 
     reset_inverter(my_predbat)
@@ -1733,6 +1733,8 @@ def run_single_debug(my_predbat, debug_file):
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
         )
+        my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
+        my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute10, my_predbat.minutes_now, forward=True, cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None)
 
     pv_step = my_predbat.pv_forecast_minute_step
     pv10_step = my_predbat.pv_forecast_minute10_step
