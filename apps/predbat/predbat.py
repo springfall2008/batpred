@@ -292,7 +292,6 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.current_status = None
         self.previous_status = None
         self.had_errors = False
-        self.expert_mode = False
         self.plan_valid = False
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0

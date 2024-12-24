@@ -106,7 +106,9 @@ class Plan:
 
         for loop_price in all_prices:
             pred_table = []
-            if self.set_export_freeze:
+            if self.set_export_freeze and self.set_export_freeze_only:
+                freeze_options = [True]
+            elif self.set_export_freeze:
                 freeze_options = [True, False]
             else:
                 freeze_options = [False]
@@ -1272,7 +1274,7 @@ class Plan:
         export_step = 5
 
         # loop on each export option
-        if self.set_export_freeze and freeze_only:
+        if self.set_export_freeze and (freeze_only or self.set_export_freeze_only):
             loop_options = [100, 99]
         elif self.set_export_freeze and not self.set_export_freeze_only:
             # If we support freeze, try a 99% option which will freeze at any SoC level below this
@@ -1991,7 +1993,10 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(
-            self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows], calculate_import_low_export=self.calculate_import_low_export, calculate_export_high_import=self.calculate_export_high_import
+            self.charge_window_best[:record_charge_windows], 
+            self.export_window_best[:record_export_windows], 
+            calculate_import_low_export=self.calculate_import_low_export,
+            calculate_export_high_import=self.calculate_export_high_import
         )
 
         self.rate_best_cost_threshold_charge = best_price
@@ -3173,7 +3178,7 @@ class Plan:
 
                         # Avoid duplicate slots
                         if minute in used_slots:
-                            rate_okay = False
+                           rate_okay = False
 
                         # Boost on import/export rate
                         if price > self.iboost_rate_threshold:
