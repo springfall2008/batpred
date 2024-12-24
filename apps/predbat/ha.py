@@ -353,7 +353,7 @@ class HAInterface:
         entity_id = entity_id.lower()
         attributes = item.get("attributes", {})
         last_changed = item.get("last_changed", item.get("last_updated", None))
-        if 'state' in item:
+        if "state" in item:
             state = item["state"]
             self.state_data[entity_id] = {"state": state, "attributes": attributes, "last_changed": last_changed}
             if not nodb and self.db_mirror_ha and (entity_id in self.db_mirror_list):
