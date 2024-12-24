@@ -1678,10 +1678,11 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
+    print("Fetch config options")
     my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
-    print("Combined export slots {} min_improvement_export {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export))
+    print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     my_predbat.combine_export_slots = False
     # my_predbat.best_soc_keep = 1.0
     my_predbat.metric_min_improvement_export = 5

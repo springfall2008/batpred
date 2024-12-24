@@ -106,7 +106,9 @@ class Plan:
 
         for loop_price in all_prices:
             pred_table = []
-            if self.set_export_freeze:
+            if self.set_export_freeze and self.set_export_freeze_only:
+                freeze_options = [True]
+            elif self.set_export_freeze:
                 freeze_options = [True, False]
             else:
                 freeze_options = [False]
@@ -1272,7 +1274,7 @@ class Plan:
         export_step = 5
 
         # loop on each export option
-        if self.set_export_freeze and freeze_only:
+        if self.set_export_freeze and (freeze_only or self.set_export_freeze_only):
             loop_options = [100, 99]
         elif self.set_export_freeze and not self.set_export_freeze_only:
             # If we support freeze, try a 99% option which will freeze at any SoC level below this
