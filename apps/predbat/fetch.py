@@ -1759,6 +1759,7 @@ class Fetch:
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
         self.best_soc_keep = self.get_arg("best_soc_keep")
+        self.best_soc_keep_weight = self.get_arg("best_soc_keep_weight")
         self.set_soc_minutes = 30
         self.set_window_minutes = 30
         self.inverter_set_charge_before = self.get_arg("inverter_set_charge_before")
@@ -1791,6 +1792,7 @@ class Fetch:
         self.set_status_notify = self.get_arg("set_status_notify")
         self.set_inverter_notify = self.get_arg("set_inverter_notify")
         self.set_export_freeze_only = self.get_arg("set_export_freeze_only")
+        print("Getting set_export_freeze_only", self.set_export_freeze_only)
         self.set_discharge_during_charge = self.get_arg("set_discharge_during_charge")
 
         # Mode

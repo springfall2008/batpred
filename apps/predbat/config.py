@@ -299,6 +299,18 @@ CONFIG_ITEMS = [
         "default": 0.5,
     },
     {
+        "name": "best_soc_keep_weight",
+        "friendly_name": "Best SOC Keep Weighting",
+        "type": "input_number",
+        "min": 0.1,
+        "max": 5,
+        "step": 0.10,
+        "unit": "*",
+        "icon": "mdi:multiplication",
+        "default": 0.5,
+        "enable": "expert_mode",
+    },
+    {
         "name": "metric_min_improvement",
         "friendly_name": "Metric Min Improvement",
         "type": "input_number",

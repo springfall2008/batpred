@@ -341,7 +341,13 @@ class UserInterface:
         """
         item = self.config_index.get(name)
         if item and item["name"] == name:
-            value = item.get("value", None)
+            enabled = self.user_config_item_enabled(item)
+            if name == "set_export_freeze_only":
+                print("Get HA config {} enabled {} item {}".format(name, enabled, item))
+            if not enabled:
+                value = None
+            else:
+                value = item.get("value", None)
             if default is None:
                 default = item.get("default", None)
             if value is None:
