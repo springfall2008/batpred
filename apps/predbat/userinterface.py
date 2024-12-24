@@ -16,7 +16,6 @@ import re
 import copy
 from config import (
     TIME_FORMAT,
-    CONFIG_ITEMS,
     PREDBAT_MODE_OPTIONS,
     THIS_VERSION,
     CONFIG_API_OVERRIDE,
@@ -221,7 +220,7 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("select_event: {}, {} = {}".format(item["name"], entity, value))
@@ -270,7 +269,7 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 entity = item["entity"]
                 self.log("number_event: {} = {}".format(entity, value))
@@ -310,7 +309,7 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             if ("entity" in item) and (item["entity"] in entities):
                 value = item["value"]
                 entity = item["entity"]
@@ -341,7 +340,11 @@ class UserInterface:
         """
         item = self.config_index.get(name)
         if item and item["name"] == name:
-            value = item.get("value", None)
+            enabled = self.user_config_item_enabled(item)
+            if enabled:
+                value = item.get("value", None)
+            else:
+                value = None
             if default is None:
                 default = item.get("default", None)
             if value is None:
@@ -488,7 +491,7 @@ class UserInterface:
 
         if not filename:
             self.log("Restore settings to default")
-            for item in CONFIG_ITEMS:
+            for item in self.CONFIG_ITEMS:
                 if (item["value"] != item.get("default", None)) and item.get("restore", True):
                     self.log("Restore setting: {} = {} (was {})".format(item["name"], item["default"], item["value"]))
                     await self.async_expose_config(item["name"], item["default"], event=True)
@@ -525,7 +528,7 @@ class UserInterface:
                 for name in settings:
                     current = self.config_index.get(name, None)
                     if not current:
-                        for item in CONFIG_ITEMS:
+                        for item in self.CONFIG_ITEMS:
                             if item.get("oldname", "") == name:
                                 self.log("Restore setting from old name {} to new name {}".format(name, item["name"]))
                                 current = item
@@ -545,7 +548,7 @@ class UserInterface:
         filepath_p = self.config_root_p + "/predbat_config.json"
 
         save_array = {}
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             if item.get("save", True):
                 if item.get("value", None) is not None:
                     save_array[item["name"]] = item["value"]
@@ -567,7 +570,7 @@ class UserInterface:
         filepath_p = filepath_p + "/" + filename
 
         with open(filepath, "w") as file:
-            yaml.dump(CONFIG_ITEMS, file)
+            yaml.dump(self.CONFIG_ITEMS, file)
         self.log("Saved Predbat settings to {}".format(filepath_p))
         await self.async_call_notify("Predbat settings saved to {}".format(filename))
 
@@ -598,6 +601,7 @@ class UserInterface:
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
+                # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
                 if current.get("value", None) != item["value"]:
                     current["value"] = item["value"]
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
@@ -617,7 +621,11 @@ class UserInterface:
         # Store all predbat member variables into debug
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
-                if (key.startswith("db")) or ("_key" in key) or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz"]:
+                if (
+                    (key.startswith("db"))
+                    or ("_key" in key)
+                    or key in ["pool", "ha_interface", "web_interface", "web_interface_task", "prediction", "logfile", "predheat", "inverters", "run_list", "threads", "EVENT_LISTEN_LIST", "local_tz", "CONFIG_ITEMS", "config_index"]
+                ):
                     pass
                 else:
                     debug[key] = self.__dict__[key]
@@ -633,7 +641,7 @@ class UserInterface:
             inverters_debug.append(inverter_debug)
         debug["inverters"] = inverters_debug
 
-        debug["CONFIG_ITEMS"] = CONFIG_ITEMS
+        debug["CONFIG_ITEMS"] = copy.deepcopy(self.CONFIG_ITEMS)
 
         if write_file:
             with open(filename, "w") as file:
@@ -654,13 +662,13 @@ class UserInterface:
         text += "Title: Predbat\n"
         text += "entities:\n"
         enable_list = [None]
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             enable = item.get("enable", None)
             if enable and enable not in enable_list:
                 enable_list.append(enable)
 
         for try_enable in enable_list:
-            for item in CONFIG_ITEMS:
+            for item in self.CONFIG_ITEMS:
                 entity = item.get("entity", None)
                 enable = item.get("enable", None)
 
@@ -764,7 +772,7 @@ class UserInterface:
             self.log("New install detected")
 
         # Build config index
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             name = item["name"]
             self.config_index[name] = item
 
@@ -777,7 +785,7 @@ class UserInterface:
             self.load_current_config()
 
         # Find values and monitor config
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             name = item["name"]
             type = item["type"]
             enabled = self.user_config_item_enabled(item)
@@ -1042,7 +1050,7 @@ class UserInterface:
         self.manual_times(config_item, new_value=item_value)
 
         # Update other drop downs that may need this time excluding
-        for item in CONFIG_ITEMS:
+        for item in self.CONFIG_ITEMS:
             if item["name"] != config_item and item.get("manual"):
                 value = item.get("value", "")
                 if value and value != "reset" and exclude_list:

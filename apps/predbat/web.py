@@ -6,7 +6,6 @@ import os
 import re
 from datetime import datetime, timedelta
 
-from config import CONFIG_ITEMS
 from utils import calc_percent_limit
 from config import TIME_FORMAT, TIME_FORMAT_SECONDS
 
@@ -139,10 +138,13 @@ class WebInterface:
         text += "<tr><td>SOC</td><td>{}%</td></tr>\n".format(level)
         text += "<tr><td>Debug Enable</td><td>{}</td></tr>\n".format(debug_enable)
         text += "<tr><td>Set Read Only</td><td>{}</td></tr>\n".format(read_only)
+        text += "</table>\n"
+        text += "<table>\n"
+        text += "<h2>Debug</h2>\n"
         text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
-        text += "<tr><td></td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
-        text += "<tr><td></td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
-        text += "<tr><td></td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
         text += "</table>\n"
         text += "<br>\n"
 
@@ -491,7 +493,7 @@ var options = {
             elif pitem.startswith("input_number"):
                 new_value = float(new_value)
 
-            for item in CONFIG_ITEMS:
+            for item in self.base.CONFIG_ITEMS:
                 if item.get("entity") == pitem:
                     old_value = item.get("value", "")
                     step = item.get("step", 1)
@@ -814,7 +816,7 @@ var options = {
             <input type="number" id="{}" name="{}" value="{}" min="{}" max="{}" step="{}" onchange="javascript: this.form.submit();">
             """
 
-        for item in CONFIG_ITEMS:
+        for item in self.base.CONFIG_ITEMS:
             if self.base.user_config_item_enabled(item):
                 value = item.get("value", "")
                 if value is None:

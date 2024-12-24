@@ -66,6 +66,7 @@ from config import (
     INVERTER_TEST,
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
+    CONFIG_ITEMS,
 )
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3, dp4
@@ -263,6 +264,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         Init stub
         """
         reset_prediction_globals()
+        self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
