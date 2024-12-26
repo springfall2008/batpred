@@ -997,6 +997,7 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     ha.service_store_enable = False
     return failed
 
+
 def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=8.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=True, plan_time="00:00:00", expect_cost=0, expect_kwh=0):
     """
     Run a car charging smart test
@@ -1030,8 +1031,9 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
         print("ERROR: Car charging total cost should be {} got {}".format(expect_cost, total_cost))
         failed = True
         print(slots)
-    
+
     return failed
+
 
 def run_car_charging_smart_tests(my_predbat):
     """
@@ -1050,11 +1052,12 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_smart_test("smart2", my_predbat, battery_size=12.0, limit=10.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=False, expect_cost=150, expect_kwh=10)
     failed |= run_car_charging_smart_test("smart3", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=1.0, max_price=99, smart=True, expect_cost=80, expect_kwh=8)
     failed |= run_car_charging_smart_test("smart4", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=0.5, max_price=99, smart=True, expect_cost=160, expect_kwh=16)
-    failed |= run_car_charging_smart_test("smart5", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=12*15, expect_kwh=12, plan_time="00:00:00")
-    failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14*15, expect_kwh=14, plan_time="02:00:00")
-    failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7*10, expect_kwh=7, plan_time="02:00:00")
+    failed |= run_car_charging_smart_test("smart5", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=12 * 15, expect_kwh=12, plan_time="00:00:00")
+    failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14 * 15, expect_kwh=14, plan_time="02:00:00")
+    failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
 
     return failed
+
 
 def run_inverter_tests():
     """
@@ -1751,9 +1754,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         pass
-        #my_predbat.combine_export_slots = False
+        # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
-        #my_predbat.metric_min_improvement_export = 5
+        # my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -1843,12 +1846,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Wrote plan to {}".format(filename))
 
     # Expected
-    actual_data = {
-        "charge_limit_best": my_predbat.charge_limit_best, 
-        "charge_window_best": my_predbat.charge_window_best, 
-        "export_window_best": my_predbat.export_window_best, 
-        "export_limits_best": my_predbat.export_limits_best
-    }
+    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))
@@ -1866,6 +1864,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
     return failed
+
 
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
