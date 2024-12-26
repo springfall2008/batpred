@@ -154,7 +154,7 @@ class HAInterface:
                                         response = data.get("result", {}).get("response", None)
                                         success = data.get("success", False)
                                         if not success:
-                                            self.log("Warn: Service call {}/{} failed with response {}".format(domain, service, response))
+                                            self.log("Warn: Service call {}/{} data {} failed with response {}".format(domain, service, service_data, response))
                                         break
 
                             except Exception as e:
