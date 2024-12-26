@@ -1693,9 +1693,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         pass
-        #my_predbat.combine_export_slots = False
+        # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
-        #my_predbat.metric_min_improvement_export = 5
+        # my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -1785,12 +1785,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Wrote plan to {}".format(filename))
 
     # Expected
-    actual_data = {
-        "charge_limit_best": my_predbat.charge_limit_best, 
-        "charge_window_best": my_predbat.charge_window_best, 
-        "export_window_best": my_predbat.export_window_best, 
-        "export_limits_best": my_predbat.export_limits_best
-    }
+    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))
@@ -1808,6 +1803,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
     return failed
+
 
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
