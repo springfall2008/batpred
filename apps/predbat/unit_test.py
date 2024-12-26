@@ -1673,7 +1673,7 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("**** Running debug test {} ****\n".format(debug_file))
     re_do_rates = True
     reset_load_model = True
@@ -1681,7 +1681,7 @@ def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
     my_predbat.load_user_config()
     failed = False
 
-    print("**** Test {} ****".format(testname))
+    print("**** Test {} ****".format(test_name))
     reset_inverter(my_predbat)
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
@@ -1694,7 +1694,7 @@ def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
     if not expected_file:
         my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
-        # my_predbat.metric_min_improvement_export = 5
+        #my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -1763,7 +1763,7 @@ def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    filename = testname + ".plan_orig.html"
+    filename = test_name + ".plan_orig.html"
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
@@ -1778,12 +1778,17 @@ def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    filename = testname + ".plan_final.html"
+    filename = test_name + ".plan_final.html"
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
     # Expected
-    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best, 
+        "charge_window_best": my_predbat.charge_window_best, 
+        "export_window_best": my_predbat.export_window_best, 
+        "export_limits_best": my_predbat.export_limits_best
+    }
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))
@@ -1797,11 +1802,10 @@ def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
                 print("ERROR: Actual plan does not match expected plan")
                 failed = True
     # Write actual plan
-    filename = testname + "_actual.json"
+    filename = test_name + "_actual.json"
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
     return failed
-
 
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
