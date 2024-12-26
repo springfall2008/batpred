@@ -792,7 +792,7 @@ class Inverter:
             self.soc_kw = self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling
         else:
             if "soc_percent" in self.base.args:
-                self.soc_kw = self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max * self.battery_scaling / 100.0
+                self.soc_kw = self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max / 100.0
             else:
                 self.soc_kw = self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.battery_scaling
 
