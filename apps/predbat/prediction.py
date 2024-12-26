@@ -409,10 +409,7 @@ class Prediction:
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
-                if minute < 4 * 60:
-                    keep_minute_scaling = 0
-                else:
-                    keep_minute_scaling = min(((minute - 4 * 60) / (2 * 60)), 1.0) * self.best_soc_keep_weight
+                keep_minute_scaling = min((minute / (4 * 60)), 1.0) * self.best_soc_keep_weight
             else:
                 keep_minute_scaling = self.best_soc_keep_weight
 
@@ -587,7 +584,7 @@ class Prediction:
             if export_window_n >= 0:
                 discharge_min = max(self.soc_max * export_limits[export_window_n] / 100.0, self.reserve, self.best_soc_min)
 
-            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc - step * self.battery_rate_max_discharge_scaled) >= discharge_min:
+            if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
                 discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling_discharge

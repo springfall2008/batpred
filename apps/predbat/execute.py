@@ -280,7 +280,7 @@ class Execute:
                 discharge_soc = max((self.export_limits_best[0] * self.soc_max) / 100.0, self.reserve, self.best_soc_min)
                 self.log("Next export window will be: {} - {} at reserve {}".format(discharge_start_time, discharge_end_time, self.export_limits_best[0]))
                 if (self.minutes_now >= minutes_start) and (self.minutes_now < minutes_end) and (self.export_limits_best[0] < 100.0):
-                    if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and ((self.soc_kw - PREDICT_STEP * inverter.battery_rate_max_discharge_scaled) >= discharge_soc):
+                    if not self.set_export_freeze_only and self.export_limits_best[0] < 99.0 and (self.soc_kw > discharge_soc):
                         self.log("Exporting now - current SoC {} and target {}".format(self.soc_kw, dp2(discharge_soc)))
                         inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                         resetDischarge = False

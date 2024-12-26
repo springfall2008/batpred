@@ -1675,8 +1675,8 @@ def run_execute_test(
 
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("**** Running debug test {} ****\n".format(debug_file))
-    re_do_rates = True
-    reset_load_model = True
+    re_do_rates = False
+    reset_load_model = False
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
@@ -1692,7 +1692,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        my_predbat.combine_export_slots = False
+        pass
+        # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
         # my_predbat.metric_min_improvement_export = 5
 
@@ -1720,6 +1721,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
 
     # Reset load model
     if reset_load_model:
+        print("Reset load model")
         my_predbat.load_minutes_step = my_predbat.step_data_history(
             my_predbat.load_minutes,
             my_predbat.minutes_now,
@@ -1797,7 +1799,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
                 print("ERROR: Actual plan does not match expected plan")
                 failed = True
     # Write actual plan
-    filename = test_name + "_actual.json"
+    filename = test_name + ".actual.json"
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
     return failed
@@ -4117,6 +4119,20 @@ def run_model_tests(my_predbat):
         keep_weight=0.5,
     )
     failed |= simple_scenario(
+        "battery_discharge_keep2",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-export_rate * 1,
+        assert_final_soc=0,
+        with_battery=True,
+        discharge=0,
+        battery_soc=1,
+        assert_keep=23 * import_rate * 0.5 + ((1 + (1 / 12)) * import_rate * 0.5 * 0.5),
+        keep=1,
+        keep_weight=0.5,
+    )
+    failed |= simple_scenario(
         "battery_discharge_loss",
         my_predbat,
         0,
@@ -4164,6 +4180,19 @@ def run_model_tests(my_predbat):
         battery_soc=10,
         assert_keep=14 * import_rate + 1 * import_rate * 0.5,
         keep=1.0,
+        keep_weight=1.0,
+    )
+    failed |= simple_scenario(
+        "battery_load_keep_four_hour",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=import_rate * 20,
+        assert_final_soc=0,
+        with_battery=True,
+        battery_soc=4,
+        assert_keep=20 * import_rate * 4 + 53,
+        keep=4.0,
         keep_weight=1.0,
     )
     failed |= simple_scenario(
