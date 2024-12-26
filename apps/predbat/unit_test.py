@@ -14,6 +14,7 @@ import re
 import time
 import math
 import sys
+import glob
 from datetime import datetime, timedelta
 import hashlib
 import traceback
@@ -1672,36 +1673,28 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(my_predbat, debug_file):
+def run_single_debug(testname, my_predbat, debug_file, expected_file=None):
     print("**** Running debug test {} ****\n".format(debug_file))
-    re_do_rates = False
+    re_do_rates = True
     reset_load_model = True
     load_override = 1.0
     my_predbat.load_user_config()
+    failed = False
 
+    print("**** Test {} ****".format(testname))
     reset_inverter(my_predbat)
-    for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == "mode":
-            print(item)
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
-    for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == "mode":
-            print(item)
     my_predbat.load_user_config()
-    for item in my_predbat.CONFIG_ITEMS:
-        if item["name"] == "mode":
-            print(item)
-    print("Predbat mode {} charge {} export {}".format(my_predbat.predbat_mode, my_predbat.set_charge_window, my_predbat.set_export_window))
     my_predbat.fetch_config_options()
-    print("Predbat mode {} charge {} export {}".format(my_predbat.predbat_mode, my_predbat.set_charge_window, my_predbat.set_export_window))
 
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
-    my_predbat.combine_export_slots = False
-    # my_predbat.best_soc_keep = 1.0
-    my_predbat.metric_min_improvement_export = 5
+    if not expected_file:
+        my_predbat.combine_export_slots = False
+        # my_predbat.best_soc_keep = 1.0
+        #my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -1724,7 +1717,6 @@ def run_single_debug(my_predbat, debug_file):
                 my_predbat.rate_import_cost_threshold = highest
 
     print("minutes_now {} end_record {}".format(my_predbat.minutes_now, my_predbat.end_record))
-    failed = False
 
     # Reset load model
     if reset_load_model:
@@ -1762,7 +1754,7 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.debug_enable = True
 
     failed = False
-    my_predbat.log("********ORIGINAL PLAN********")
+    my_predbat.log("> ORIGINAL PLAN")
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
@@ -1771,23 +1763,49 @@ def run_single_debug(my_predbat, debug_file):
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    open("plan_orig.html", "w").write(my_predbat.html_plan)
-    print("Wrote plan to plan_orig.html")
+    filename = testname + ".plan_orig.html"
+    open(filename, "w").write(my_predbat.html_plan)
+    print("Wrote plan to {}".format(filename))
 
     my_predbat.args["threads"] = 0
     my_predbat.calculate_plan(recompute=True, debug_mode=True)
 
     # Predict
-    my_predbat.log("********FINAL PLAN*******")
+    my_predbat.log("> FINAL PLAN")
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    open("plan_final.html", "w").write(my_predbat.html_plan)
-    print("Wrote plan to plan_final.html")
+    filename = testname + ".plan_final.html"
+    open(filename, "w").write(my_predbat.html_plan)
+    print("Wrote plan to {}".format(filename))
 
+    # Expected
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best, 
+        "charge_window_best": my_predbat.charge_window_best, 
+        "export_window_best": my_predbat.export_window_best, 
+        "export_limits_best": my_predbat.export_limits_best
+    }
+    actual_json = json.dumps(actual_data)
+    if expected_file:
+        print("Compare with {}".format(expected_file))
+        if not os.path.exists(expected_file):
+            failed = True
+            print("ERROR: Expected file {} does not exist".format(expected_file))
+        else:
+            expected_data = json.loads(open(expected_file).read())
+            expected_json = json.dumps(expected_data)
+            if actual_json != expected_json:
+                print("ERROR: Actual plan does not match expected plan")
+                failed = True
+    # Write actual plan
+    filename = testname + "_actual.json"
+    open(filename, "w").write(actual_json)
+    print("Wrote plan json to {}".format(filename))
+    return failed
 
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
@@ -4975,7 +4993,7 @@ def main():
     failed = False
 
     if args.debug_file:
-        run_single_debug(my_predbat, args.debug_file)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file)
         sys.exit(0)
 
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
@@ -5005,6 +5023,13 @@ def main():
         failed |= run_perf_test(my_predbat)
     if not failed:
         failed |= run_nordpool_test(my_predbat)
+
+    if not failed:
+        # Scan .yaml files in cases directory
+        for filename in glob.glob("cases/*.yaml"):
+            basename = os.path.basename(filename)
+            pathname = os.path.dirname(filename)
+            failed |= run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
 
     if failed:
         print("**** ERROR: Some tests failed ****")

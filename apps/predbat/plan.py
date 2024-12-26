@@ -1982,8 +1982,6 @@ class Plan:
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open("plan_levels.html", "w").write(self.html_plan)
-            print("Charge window {} limit {}".format(self.charge_window_best, self.charge_limit_best))
-            print("Export window {} limit {}".format(self.export_window_best, self.export_limits_best))
             print("Wrote plan to plan_level.html")
 
         # Set the new end record and blackout period based on the levelling
@@ -2274,8 +2272,6 @@ class Plan:
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open("plan_raw.html", "w").write(self.html_plan)
-            print("Charge window {} limit {}".format(self.charge_window_best, self.charge_limit_best))
-            print("Export window {} limit {}".format(self.export_window_best, self.export_limits_best))
             print("Wrote plan to plan_raw.html")
 
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
