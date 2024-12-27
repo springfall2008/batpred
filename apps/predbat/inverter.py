@@ -1933,7 +1933,7 @@ class Inverter:
         else:
             # Record the last service called
             self.base.last_service_hash[hash_index] = this_service_hash
-            self.log("Inverter {} Calling service {} domain {} with data {}".format(self.id, service, domain, data))
+            self.log("Inverter {} Calling service {} domain {} with data {} extra_data {}".format(self.id, service, domain, data, extra_data))
 
         if not isinstance(service_list, list):
             service_list = [service_list]
