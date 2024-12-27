@@ -482,12 +482,12 @@ increments during the day and is reset to zero at 11:30pm each night
 ## Carbon data
 
 The following sensors output by Predbat give historic and predicted carbon data.
-They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md):
+They are used in the carbon chart - see [creating the Predbat charts](creating-charts.md).
 
-predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots
-predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
-predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
-predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
+- predbat.carbon - Predicted Carbon energy in g at the end of the plan with attributes giving the breakdown of predicted Carbon impact by half hour time slots
+- predbat.carbon_best - Predicted Carbon intensity in g for your home under the best plan based on grid imports, grid exports and the grid's projected carbon intensity
+- predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
+- predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
 
 ## Energy saving data
 
