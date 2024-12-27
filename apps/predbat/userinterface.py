@@ -98,7 +98,11 @@ class UserInterface:
             if isinstance(value, str) and "{" in value:
                 try:
                     if extra_args:
-                        value = value.format(**self.args, **extra_args)
+                        # Remove duplicates or format will fail
+                        arg_hash = {}
+                        arg_hash.update(self.args)
+                        arg_hash.update(extra_args)
+                        value = value.format(**arg_hash)
                     else:
                         value = value.format(**self.args)
                 except KeyError:
