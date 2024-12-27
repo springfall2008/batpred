@@ -383,6 +383,12 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
+*TIP:* Some of the older inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
+GivTCP does not recognise this provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls but they do not work.
+Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat. There will also be errors reported in the GivTCP log.<BR>
+For these inverters the pause_start_time and pause_end_time entries should be commented out in apps.yaml to stop Predbat trying to use them.
+
+do not have sufficient 
 See section below on [creating the battery charge power curve](#workarounds).
 
 ### REST Interface inverter control
