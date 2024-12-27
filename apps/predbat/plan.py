@@ -1155,11 +1155,8 @@ class Plan:
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
             # if changing it has little impact
-            if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)) and (try_soc != self.reserve):
-                try_percent = calc_percent_limit(try_soc, self.soc_max)
-                compare_with = max(self.current_charge_limit, self.reserve_percent)
-
-                if compare_with == try_percent:
+            if not all_n and self.isCharging and (window_n == self.in_charge_window(charge_window, self.minutes_now)):
+                if self.isCharging_Target == calc_percent_limit(try_soc, self.soc_max):
                     metric -= max(0.1, self.metric_min_improvement)
 
             if try_soc == best_soc_min_setting:
