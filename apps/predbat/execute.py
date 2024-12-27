@@ -199,6 +199,7 @@ class Execute:
                             self.log("Disabling discharge during charge due to set_discharge_during_charge being False")
 
                         isCharging = True
+                        self.isCharging_Target = self.charge_limit_best[0]
                     else:
                         # Configure the charge window start/end times if in the time window to set them
                         if (self.minutes_now < minutes_end) and ((minutes_start - self.minutes_now) <= self.set_window_minutes):
@@ -289,6 +290,7 @@ class Execute:
                             inverter.adjust_charge_rate(0)
                             resetCharge = False
                         isExporting = True
+                        self.isExporting_Target = self.export_limits_best[0]
 
                         status = "Exporting"
                         status_extra = " target {}%-{}%".format(inverter.soc_percent, self.export_limits_best[0])
@@ -312,6 +314,7 @@ class Execute:
                             status = "Freeze exporting"
                             status_extra = " current SoC {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             isExporting = True
+                            self.isExporting_Target = self.export_limits_best[0]
                             inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                         else:
                             status = "Hold exporting"
@@ -536,7 +539,7 @@ class Execute:
         self.charge_window = []
         self.export_window = []
         self.export_limits = []
-        self.current_charge_limit = 0.0
+        self.current_charge_limit_kwh = 0.0
         self.soc_kw = 0.0
         self.soc_max = 0.0
         self.reserve = 0.0
@@ -575,7 +578,6 @@ class Execute:
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
                 found_first = True
-                self.current_charge_limit = inverter.current_charge_limit
                 self.charge_window = inverter.charge_window
                 self.export_window = inverter.export_window
                 self.export_limits = inverter.export_limits
@@ -593,6 +595,7 @@ class Execute:
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
                     self.set_discharge_during_charge = True
+            self.current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
             self.soc_max += inverter.soc_max
             self.soc_kw += inverter.soc_kw
             self.reserve += inverter.reserve
@@ -609,6 +612,7 @@ class Execute:
             self.export_limit += inverter.export_limit
             self.pv_power += inverter.pv_power
             self.load_power += inverter.load_power
+            self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
 
         # Remove extra decimals
         self.soc_max = dp2(self.soc_max)

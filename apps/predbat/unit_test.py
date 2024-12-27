@@ -182,7 +182,7 @@ def reset_inverter(my_predbat):
     my_predbat.reserve = 0.0
     my_predbat.reserve_percent = 0.0
     my_predbat.reserve_current = 0.0
-    my_predbat.reserve_current_percent = 0.0
+    my_predbat.reserve_percent_current = 0.0
     my_predbat.battery_rate_max_charge = 1 / 60.0
     my_predbat.battery_rate_max_discharge = 1 / 60.0
     my_predbat.battery_rate_max_charge_scaled = 1 / 60.0
@@ -1514,7 +1514,6 @@ class ActiveTestInverter:
         self.isExporting = False
         self.pause_charge = False
         self.pause_discharge = False
-        self.reserve = -1
         self.idle_charge_start = -1
         self.idle_charge_end = -1
         self.idle_discharge_start = -1
@@ -1548,6 +1547,33 @@ class ActiveTestInverter:
         self.now_utc = now_utc
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         self.count_register_writes = 0
+        self.charge_window = []
+        self.charge_limits = []
+        self.export_window = []
+        self.export_limits = []
+        self.inv_support_discharge_freeze = True
+        self.inv_support_charge_freeze = True
+        self.inv_has_reserve_soc = True
+        self.current_charge_limit = 0
+        self.charge_rate_now = 1000
+        self.discharge_rate_now = 1000
+        self.battery_rate_min = 0
+        self.inverter_limit = 1000
+        self.export_limit = 1000
+        self.pv_power = 0
+        self.load_power = 0
+        self.reserve_percent = 0
+        self.reserve = 0
+        self.reserve_last = -1
+        self.reserve_current = 0
+        self.reserve_percent = 0
+        self.reserve_percent_current = 0
+
+    def update_status(self, minutes_now):
+        pass
+
+    def find_charge_curve(self, discharge=False):
+        return None
 
     def get_current_charge_rate(self):
         return self.charge_rate
@@ -1590,7 +1616,9 @@ class ActiveTestInverter:
         self.changed_start_end = changed_start_end
 
     def adjust_reserve(self, reserve):
-        self.reserve = reserve
+        self.reserve_last = reserve
+        self.reserve_current = max(reserve, self.reserve)
+        self.reserve_percent_current = calc_percent_limit(self.reserve_current, self.soc_max)
 
     def adjust_pause_mode(self, pause_charge=False, pause_discharge=False):
         self.pause_charge = pause_charge
@@ -1598,14 +1626,17 @@ class ActiveTestInverter:
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         self.soc_target = soc
+        self.current_charge_limit = soc
         self.isCharging = isCharging
         self.isExporting = isExporting
 
     def adjust_charge_rate(self, charge_rate):
         self.charge_rate = charge_rate
+        self.charge_rate_now = charge_rate
 
     def adjust_discharge_rate(self, discharge_rate):
         self.discharge_rate = discharge_rate
+        self.discharge_rate_now = discharge_rate
 
 
 def run_execute_test(
@@ -1617,6 +1648,7 @@ def run_execute_test(
     export_limits_best=[],
     car_slot=[],
     soc_kw=0,
+    soc_max=10,
     read_only=False,
     set_soc_enable=True,
     set_charge_window=False,
@@ -1648,11 +1680,13 @@ def run_execute_test(
     battery_max_rate=1000,
     minutes_now=12 * 60,
     update_plan=False,
+    reserve=1,
 ):
     print("Run scenario {}".format(name))
+    failed = False
     my_predbat.soc_kw = soc_kw
-    my_predbat.soc_max = 10.0
-    my_predbat.reserve = 1
+    my_predbat.soc_max = soc_max
+    my_predbat.reserve = reserve
     my_predbat.soc_percent = calc_percent_limit(soc_kw, my_predbat.soc_max)
     my_predbat.set_read_only = read_only
     my_predbat.car_charging_slots = [car_slot]
@@ -1677,10 +1711,11 @@ def run_execute_test(
     total_inverters = len(my_predbat.inverters)
     my_predbat.battery_rate_max_charge = battery_max_rate / 1000.0 * total_inverters / 60.0
     my_predbat.battery_rate_max_discharge = battery_max_rate / 1000.0 * total_inverters / 60.0
+    my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
         inverter.soc_kw = soc_kw / total_inverters
-        inverter.soc_max = my_predbat.soc_max / total_inverters
+        inverter.soc_max = soc_max / total_inverters
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
         inverter.in_calibration = in_calibration
         inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
@@ -1688,8 +1723,25 @@ def run_execute_test(
         inverter.inv_has_timed_pause = has_timed_pause
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
+        reserve_kwh = reserve / total_inverters
+        reserve_percent = calc_percent_limit(reserve_kwh, inverter.soc_max)
+        inverter.reserve_percent = reserve_percent
+        inverter.reserve_current = reserve_percent
+        inverter.reserve_percent_current = reserve_percent
+        inverter.reserve = reserve_kwh
 
-    failed = False
+    my_predbat.fetch_inverter_data(create=False)
+
+    if my_predbat.soc_kw != soc_kw:
+        print("ERROR: Predbat level SOC should be {} got {}".format(soc_kw, my_predbat.soc_kw))
+        failed = True
+    if my_predbat.soc_percent != calc_percent_limit(my_predbat.soc_kw, my_predbat.soc_max):
+        print("ERROR: Predbat level SOC percent should be {} got {}".format(calc_percent_limit(my_predbat.soc_kw, my_predbat.soc_max), my_predbat.soc_percent))
+        failed = True
+    if my_predbat.soc_max != soc_max:
+        print("ERROR: Predbat level SOC max should be {} got {}".format(soc_max, my_predbat.soc_max))
+        failed = True
+
     my_predbat.charge_window_best = charge_window_best
     my_predbat.charge_limit_best = charge_limit_best
     my_predbat.charge_limit_percent_best = [calc_percent_limit(x, my_predbat.soc_max) for x in charge_limit_best]
@@ -1709,8 +1761,6 @@ def run_execute_test(
         my_predbat.plan_last_updated = my_predbat.now_utc
         my_predbat.args["threads"] = 0
         my_predbat.calculate_plan(recompute=False)
-
-    print("charge_window_best {} charge_limit_best {} export_window_best {} export_limits_best {}".format(charge_window_best, charge_limit_best, export_window_best, export_limits_best))
 
     status, status_extra = my_predbat.execute_plan()
 
@@ -1748,8 +1798,8 @@ def run_execute_test(
         if assert_discharge_rate != inverter.discharge_rate:
             print("ERROR: Inverter {} Discharge rate should be {} got {}".format(inverter.id, assert_discharge_rate, inverter.discharge_rate))
             failed = True
-        if assert_reserve != inverter.reserve:
-            print("ERROR: Inverter {} Reserve should be {} got {}".format(inverter.id, assert_reserve, inverter.reserve))
+        if assert_reserve != inverter.reserve_last:
+            print("ERROR: Inverter {} Reserve should be {} got {}".format(inverter.id, assert_reserve, inverter.reserve_last))
             failed = True
         if assert_soc_target != inverter.soc_target:
             print("ERROR: Inverter {} SOC target should be {} got {}".format(inverter.id, assert_soc_target, inverter.soc_target))
@@ -1870,7 +1920,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
     my_predbat.update_target_values()
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    filename = test_name + ".plan_orig.html"
+    filename = "plan_orig.html"
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
@@ -1885,7 +1935,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.log("Final plan soc_min {} final_soc {}".format(soc_min, soc))
 
     my_predbat.publish_html_plan(pv_step, pv10_step, load_step, load10_step, my_predbat.end_record)
-    filename = test_name + ".plan_final.html"
+    filename = "plan_final.html"
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
@@ -1941,6 +1991,7 @@ def run_execute_tests(my_predbat):
 
     inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
     my_predbat.inverters = inverters
+    my_predbat.args["num_inverters"] = 2
 
     failed = False
     failed |= run_execute_test(my_predbat, "off")
@@ -2534,7 +2585,7 @@ def run_execute_tests(my_predbat):
 
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only")
+    failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
     failed |= run_execute_test(
         my_predbat,
         "charge3",
@@ -2575,6 +2626,7 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         set_reserve_enable=False,
         has_timed_pause=False,
+        reserve=0,
     )
     if failed:
         return failed
@@ -2720,6 +2772,7 @@ def run_execute_tests(my_predbat):
         set_charge_window=True,
         set_export_window=True,
         soc_kw=5,
+        reserve=1,
         assert_pause_discharge=False,
         assert_status="Freeze charging",
         assert_discharge_rate=0,
