@@ -438,7 +438,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
         self.isCharging = False
-        self.isCharging_Target = 0
+        self.isCharging_Target = 0 
         self.isExporting = False
         self.isExporting_Target = 0
         self.savings_today_predbat = 0.0

@@ -426,7 +426,7 @@ class Prediction:
                 else:
                     if self.set_charge_freeze and (charge_limit_n == self.reserve):
                         # Charge freeze via reserve
-                        charge_limit_n = soc
+                        charge_limit_n = max(soc, self.reserve)
 
                     # When set reserve enable is on pretend the reserve is the charge limit minus the
                     # minimum battery rate modelled as it can leak a little
