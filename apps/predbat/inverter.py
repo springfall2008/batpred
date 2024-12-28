@@ -723,6 +723,7 @@ class Inverter:
         self.created_attributes[entity_id] = attributes
 
         if self.base.get_state_wrapper(entity_id) is None:
+            self.log("**** Creating dummy entity {} with value {} and attributes {}".format(entity_id, value, attributes))
             self.base.set_state_wrapper(entity_id, state=value, attributes=attributes)
         return entity_id
 
@@ -944,7 +945,7 @@ class Inverter:
             raise ValueError
 
         # Update simulated discharge enable time to match the discharge window time.
-        if not self.inv_has_discharge_enable_time:
+        if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode:
             if discharge_start == discharge_end:
                 self.discharge_enable_time = False
             else:
