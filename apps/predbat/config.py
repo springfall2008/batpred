@@ -1065,7 +1065,7 @@ CONFIG_ITEMS = [
         "unit": "hours",
         "icon": "mdi:clock-end",
         "enable": "expert_mode",
-        "default": 48,
+        "default": 24,
     },
     {
         "name": "plan_debug",
