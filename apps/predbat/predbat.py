@@ -308,6 +308,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
+        self.soc_percent = 0
         self.soc_max = 10.0
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}

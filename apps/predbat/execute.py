@@ -639,6 +639,7 @@ class Execute:
         # Remove extra decimals
         self.soc_max = dp3(self.soc_max)
         self.soc_kw = dp3(self.soc_kw)
+        self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve = dp3(self.reserve)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current = dp3(self.reserve_current)
