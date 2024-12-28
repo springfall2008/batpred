@@ -11,7 +11,7 @@
 import sys
 from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP
-from utils import dp2, calc_percent_limit, find_charge_rate
+from utils import dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
 
 """
@@ -131,7 +131,7 @@ class Execute:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
-                        if self.charge_limit_best[0] == self.reserve:
+                        if (self.charge_limit_best[0] == self.reserve) and (inverter.soc_percent >= self.reserve):
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
@@ -398,7 +398,7 @@ class Execute:
                 elif self.charge_limit_best and (self.minutes_now < inverter.charge_end_time_minutes) and ((inverter.charge_start_time_minutes - self.minutes_now) <= self.set_soc_minutes) and not (disabled_charge_window):
                     if inverter.inv_has_charge_enable_time or isCharging:
                         # In charge freeze hold the target SoC at the current value
-                        if self.charge_limit_best[0] == self.reserve:
+                        if (self.charge_limit_best[0] == self.reserve) and (inverter.soc_percent >= self.reserve):
                             if isCharging:
                                 self.log("Within charge freeze setting target soc to current soc {}".format(inverter.soc_percent))
                                 self.adjust_battery_target_multi(inverter, inverter.soc_percent, isCharging, isExporting, isFreezeCharge=True)
@@ -527,7 +527,7 @@ class Execute:
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
 
-    def fetch_inverter_data(self):
+    def fetch_inverter_data(self, create=True):
         """
         Fetch data about the inverters
         """
@@ -535,7 +535,6 @@ class Execute:
         self.num_inverters = int(self.get_arg("num_inverters", 1))
         self.inverter_limit = 0.0
         self.export_limit = 0.0
-        self.inverters = []
         self.charge_window = []
         self.export_window = []
         self.export_limits = []
@@ -557,9 +556,16 @@ class Execute:
         self.load_power = 0
         found_first = False
 
+        if create:
+            self.inverters = []
+
         # For each inverter get the details
         for id in range(self.num_inverters):
-            inverter = Inverter(self, id)
+            if create:
+                inverter = Inverter(self, id)
+                self.inverters.append(inverter)
+            else:
+                inverter = self.inverters[id]
             inverter.update_status(self.minutes_now)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
@@ -607,7 +613,6 @@ class Execute:
             self.charge_rate_now += inverter.charge_rate_now
             self.discharge_rate_now += inverter.discharge_rate_now
             self.battery_rate_min += inverter.battery_rate_min
-            self.inverters.append(inverter)
             self.inverter_limit += inverter.inverter_limit
             self.export_limit += inverter.export_limit
             self.pv_power += inverter.pv_power
@@ -615,11 +620,11 @@ class Execute:
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
 
         # Remove extra decimals
-        self.soc_max = dp2(self.soc_max)
-        self.soc_kw = dp2(self.soc_kw)
-        self.reserve = dp2(self.reserve)
+        self.soc_max = dp3(self.soc_max)
+        self.soc_kw = dp3(self.soc_kw)
+        self.reserve = dp3(self.reserve)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
-        self.reserve_current = dp2(self.reserve_current)
+        self.reserve_current = dp3(self.reserve_current)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
 
         self.log(
@@ -632,8 +637,8 @@ class Execute:
                 self.charge_rate_now * 60,
                 self.discharge_rate_now * 60,
                 self.battery_rate_min * MINUTE_WATT,
-                dp2(self.inverter_limit * 60),
-                dp2(self.export_limit * 60),
+                dp3(self.inverter_limit * 60),
+                dp3(self.export_limit * 60),
                 100 - int(self.battery_loss * 100),
                 100 - int(self.battery_loss_discharge * 100),
                 100 - int(self.inverter_loss * 100),
