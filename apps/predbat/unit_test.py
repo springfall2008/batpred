@@ -1684,6 +1684,7 @@ def run_execute_test(
     update_plan=False,
     reserve=1,
     soc_kw_array=None,
+    reserve_max=100,
 ):
     print("Run scenario {}".format(name))
     failed = False
@@ -1735,6 +1736,7 @@ def run_execute_test(
         inverter.reserve_current = reserve_percent
         inverter.reserve_percent_current = reserve_percent
         inverter.reserve = reserve_kwh
+        inverter.reserve_max = reserve_max
 
     my_predbat.fetch_inverter_data(create=False)
 
@@ -1929,14 +1931,15 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     )
 
     # Show setting changes
-    for item in my_predbat.CONFIG_ITEMS:
-        name = item["name"]
-        value = item["value"]
-        default = item["default"]
-        enable = item.get("enable", None)
-        enabled = my_predbat.user_config_item_enabled(item)
-        if enabled and value != default:
-            print("- {} = {} (default {}) - enable {}".format(name, value, default, enable))
+    if not expected_file:
+        for item in my_predbat.CONFIG_ITEMS:
+            name = item["name"]
+            value = item.get("value", None)
+            default = item.get("default", None)
+            enable = item.get("enable", None)
+            enabled = my_predbat.user_config_item_enabled(item)
+            if enabled and value != default:
+                print("- {} = {} (default {}) - enable {}".format(name, value, default, enable))
 
     # Save plan
     # Pre-optimise all plan
@@ -2543,6 +2546,45 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_reserve_max1",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        reserve_max=50,
+        has_timed_pause=False,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_reserve_max2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target_array=[60, 40],
+        assert_immediate_soc_target=50,
+        reserve_max=90,
+        has_timed_pause=False,
+        soc_kw_array=[5, 4],
+    )
 
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
