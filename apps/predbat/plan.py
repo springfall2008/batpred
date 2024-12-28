@@ -487,7 +487,7 @@ class Plan:
             if end_record < self.minutes_now:
                 end_record = charge_window[max_windows]["end"]
 
-        self.log("Calculated end_record as {}".format(self.time_abs_str(end_record)))
+        self.log("Calculated end_record as {} based on best_price {} next_charge_start {} max_windows {}".format(self.time_abs_str(end_record), best_price, self.time_abs_str(next_charge_start), max_windows))
         return end_record - self.minutes_now
 
     def max_charge_windows(self, end_record_abs, charge_window):

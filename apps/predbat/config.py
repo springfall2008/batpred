@@ -1088,6 +1088,7 @@ CONFIG_ITEMS = [
         "max": 40,
         "step": 0.1,
         "unit": "c",
+        "default": 20,
         "enable": "predheat_enable",
     },
 ]
