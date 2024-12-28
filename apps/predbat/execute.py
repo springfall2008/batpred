@@ -133,8 +133,8 @@ class Execute:
 
                         can_freeze_charge = True
                         # Can only freeze charge if all inverters have an SOC above the reserve
-                        for cinv in self.inverters:
-                            if cinv.soc_percent < self.reserve:
+                        for check in self.inverters:
+                            if check.soc_percent < self.reserve:
                                 can_freeze_charge = False
                                 break
                         if (self.charge_limit_best[0] == self.reserve) and can_freeze_charge:
@@ -162,11 +162,11 @@ class Execute:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
                             can_hold_charge = True
-                            for cinv in self.inverters:
-                                if cinv.soc_percent < self.charge_limit_percent_best[0]:
+                            for check in self.inverters:
+                                if check.soc_percent < self.charge_limit_percent_best[0]:
                                     can_hold_charge = False
                                     break
-                                if not cinv.inv_has_timed_pause and cinv.reserve_max < cinv.soc_percent:
+                                if not check.inv_has_timed_pause and check.reserve_max < check.soc_percent:
                                     can_hold_charge = False
                                     break
                             if self.set_soc_enable and can_hold_charge:
@@ -579,7 +579,7 @@ class Execute:
                 inverter = Inverter(self, id)
                 self.inverters.append(inverter)
             else:
-                inverter = self.inverters[id]
+                inverter= self.inverters[id]
             inverter.update_status(self.minutes_now)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
