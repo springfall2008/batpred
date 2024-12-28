@@ -183,7 +183,7 @@ class Inverter:
             raise ValueError("Inverter type {} not defined".format(self.inverter_type))
 
         if self.inverter_type != "GE":
-            self.log("Warn: Inverter {}: Using inverter type {} - not all features are available".format(self.id, self.inverter_type))
+            self.log("Note: Inverter {}: Using inverter type {} - not all features are available on all Inverter types".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
         self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
