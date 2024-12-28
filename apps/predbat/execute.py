@@ -137,6 +137,9 @@ class Execute:
                             if check.soc_kw < inverter.reserve:
                                 can_freeze_charge = False
                                 break
+                            if not check.inv_has_timed_pause and (check.reserve_max < check.soc_percent):
+                                can_freeze_charge = False
+                                break
                         if (self.charge_limit_best[0] == self.reserve) and self.soc_kw >= self.reserve and can_freeze_charge:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
@@ -166,7 +169,7 @@ class Execute:
                                 if check.soc_percent < self.charge_limit_percent_best[0]:
                                     can_hold_charge = False
                                     break
-                                if not check.inv_has_timed_pause and check.reserve_max < check.soc_percent:
+                                if not check.inv_has_timed_pause and (check.reserve_max < check.soc_percent):
                                     can_hold_charge = False
                                     break
                             if self.set_soc_enable and can_hold_charge and self.soc_percent >= self.charge_limit_percent_best[0]:
