@@ -1838,8 +1838,12 @@ def run_execute_test(
 
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("**** Running debug test {} ****\n".format(debug_file))
-    re_do_rates = False
-    reset_load_model = False
+    if not expected_file:
+        re_do_rates = True
+        reset_load_model = True
+    else:
+        reset_load_model = False
+        re_do_rates = False
     load_override = 1.0
     my_predbat.load_user_config()
     failed = False
@@ -1923,6 +1927,17 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record, save="best"
     )
+
+    # Show setting changes
+    for item in my_predbat.CONFIG_ITEMS:
+        name = item["name"]
+        value = item["value"]
+        default = item["default"]
+        enable = item.get("enable", None)
+        enabled = my_predbat.user_config_item_enabled(item)
+        if enabled and value != default:
+            print("- {} = {} (default {}) - enable {}".format(name, value, default, enable))
+
     # Save plan
     # Pre-optimise all plan
     my_predbat.charge_limit_percent_best = calc_percent_limit(my_predbat.charge_limit_best, my_predbat.soc_max)
@@ -1965,6 +1980,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     filename = test_name + ".actual.json"
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
+
+    my_predbat.create_debug_yaml(write_file=True)
+
     return failed
 
 
