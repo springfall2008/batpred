@@ -565,7 +565,7 @@ class Execute:
                 inverter = Inverter(self, id)
                 self.inverters.append(inverter)
             else:
-                inverter= self.inverters[id]
+                inverter = self.inverters[id]
             inverter.update_status(self.minutes_now)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
