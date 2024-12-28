@@ -98,7 +98,7 @@ class Execute:
                 if (not inExportWindow) and ((minutes_start - self.minutes_now) < (24 * 60)) and (minutes_end > self.minutes_now):
                     charge_start_time = self.midnight_utc + timedelta(minutes=minutes_start)
                     charge_end_time = self.midnight_utc + timedelta(minutes=minutes_end)
-                    self.log("Charge window will be: {} - {} - current soc {} target {}".format(charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
+                    self.log("Inverter {} Charge window will be: {} - {} - current soc {} target {}".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         new_charge_rate = int(
@@ -131,7 +131,13 @@ class Execute:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
-                        if (self.charge_limit_best[0] == self.reserve) and (inverter.soc_percent >= self.reserve):
+                        can_freeze_charge = True
+                        # Can only freeze charge if all inverters have an SOC above the reserve
+                        for cinv in self.inverters:
+                            if cinv.soc_percent < self.reserve:
+                                can_freeze_charge = False
+                                break
+                        if (self.charge_limit_best[0] == self.reserve) and can_freeze_charge:
                             if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
                                 inverter.disable_charge_window()
                                 disabled_charge_window = True
@@ -150,12 +156,20 @@ class Execute:
 
                             status = "Freeze charging"
                             status_extra = " target {}%".format(inverter.soc_percent)
-                            self.log("Freeze charging with soc {}%".format(inverter.soc_percent))
+                            self.log("Inverter {} Freeze charging with soc {}%".format(inverter.id, inverter.soc_percent))
                             inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
-                            # and the current charge level is above the target
-                            if self.set_soc_enable and (inverter.soc_percent >= self.charge_limit_percent_best[0]) and ((inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
+                            # and the current charge level is above the target for all inverters
+                            can_hold_charge = True
+                            for cinv in self.inverters:
+                                if cinv.soc_percent < self.charge_limit_percent_best[0]:
+                                    can_hold_charge = False
+                                    break
+                                if not cinv.inv_has_timed_pause and cinv.reserve_max < cinv.soc_percent:
+                                    can_hold_charge = False
+                                    break
+                            if self.set_soc_enable and can_hold_charge:
                                 status = "Hold charging"
                                 self.log("Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.soc_percent, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
 
@@ -565,7 +579,7 @@ class Execute:
                 inverter = Inverter(self, id)
                 self.inverters.append(inverter)
             else:
-                inverter = self.inverters[id]
+                inverter= self.inverters[id]
             inverter.update_status(self.minutes_now)
 
             if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:

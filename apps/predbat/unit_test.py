@@ -998,7 +998,6 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     ha.service_store_enable = False
     return failed
 
-
 def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=8.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=True, plan_time="00:00:00", expect_cost=0, expect_kwh=0):
     """
     Run a car charging smart test
@@ -1037,9 +1036,8 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
         print("ERROR: Car charging total cost should be {} got {}".format(expect_cost, total_cost))
         failed = True
         print(slots)
-
+    
     return failed
-
 
 def run_car_charging_smart_tests(my_predbat):
     """
@@ -1058,13 +1056,12 @@ def run_car_charging_smart_tests(my_predbat):
     failed |= run_car_charging_smart_test("smart2", my_predbat, battery_size=12.0, limit=10.0, soc=0, rate=10.0, loss=1.0, max_price=99, smart=False, expect_cost=150, expect_kwh=10)
     failed |= run_car_charging_smart_test("smart3", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=1.0, max_price=99, smart=True, expect_cost=80, expect_kwh=8)
     failed |= run_car_charging_smart_test("smart4", my_predbat, battery_size=12.0, limit=10.0, soc=2, rate=10.0, loss=0.5, max_price=99, smart=True, expect_cost=160, expect_kwh=16)
-    failed |= run_car_charging_smart_test("smart5", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=12 * 15, expect_kwh=12, plan_time="00:00:00")
-    failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14 * 15, expect_kwh=14, plan_time="02:00:00")
-    failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
-    failed |= run_car_charging_smart_test("smart8", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=False, expect_cost=7 * 10, expect_kwh=7, plan_time="02:00:00")
+    failed |= run_car_charging_smart_test("smart5", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=12*15, expect_kwh=12, plan_time="00:00:00")
+    failed |= run_car_charging_smart_test("smart6", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=99, smart=True, expect_cost=14*15, expect_kwh=14, plan_time="02:00:00")
+    failed |= run_car_charging_smart_test("smart7", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=True, expect_cost=7*10, expect_kwh=7, plan_time="02:00:00")
+    failed |= run_car_charging_smart_test("smart8", my_predbat, battery_size=100.0, limit=100.0, soc=0, rate=1.0, loss=1, max_price=10, smart=False, expect_cost=7*10, expect_kwh=7, plan_time="02:00:00")
 
     return failed
-
 
 def run_inverter_tests():
     """
@@ -1149,7 +1146,7 @@ def run_inverter_tests():
         expect_pv_power=1.5,
         expect_load_power=2.5,
         expect_soc_kwh=6.6,
-    )
+    )    
 
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
@@ -1585,7 +1582,7 @@ class ActiveTestInverter:
         self.charge_start_time_minutes = (charge_start_time - self.midnight_utc).total_seconds() / 60
         self.charge_end_time_minutes = (charge_end_time - self.midnight_utc).total_seconds() / 60
         self.charge_time_enable = True
-        # print("Charge start_time {} charge_end_time {}".format(self.charge_start_time_minutes, self.charge_end_time_minutes))
+        #print("Charge start_time {} charge_end_time {}".format(self.charge_start_time_minutes, self.charge_end_time_minutes))
 
     def adjust_charge_immediate(self, target_soc, freeze=False):
         self.immediate_charge_soc_target = target_soc
@@ -1603,7 +1600,7 @@ class ActiveTestInverter:
         if new_end_time is not None:
             delta = new_end_time - self.midnight_utc
             self.discharge_end_time_minutes = delta.total_seconds() / 60
-        # print("Force export {} start_time {} end_time {}".format(self.force_export, self.discharge_start_time_minutes, self.discharge_end_time_minutes))
+        #print("Force export {} start_time {} end_time {}".format(self.force_export, self.discharge_start_time_minutes, self.discharge_end_time_minutes))
 
     def adjust_idle_time(self, charge_start=None, charge_end=None, discharge_start=None, discharge_end=None):
         self.idle_charge_start = charge_start
@@ -1678,9 +1675,10 @@ def run_execute_test(
     has_charge_enable_time=True,
     inverter_hybrid=False,
     battery_max_rate=1000,
-    minutes_now=12 * 60,
+    minutes_now = 12 * 60,
     update_plan=False,
     reserve=1,
+    soc_kw_array=None,
 ):
     print("Run scenario {}".format(name))
     failed = False
@@ -1714,7 +1712,10 @@ def run_execute_test(
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
-        inverter.soc_kw = soc_kw / total_inverters
+        if soc_kw_array:
+            inverter.soc_kw = soc_kw_array[inverter.id]
+        else:
+            inverter.soc_kw = soc_kw / total_inverters
         inverter.soc_max = soc_max / total_inverters
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
         inverter.in_calibration = in_calibration
@@ -1759,7 +1760,7 @@ def run_execute_test(
     # Shift on plan?
     if update_plan:
         my_predbat.plan_last_updated = my_predbat.now_utc
-        my_predbat.args["threads"] = 0
+        my_predbat.args['threads'] = 0
         my_predbat.calculate_plan(recompute=False)
 
     status, status_extra = my_predbat.execute_plan()
@@ -1848,9 +1849,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         pass
-        # my_predbat.combine_export_slots = False
+        #my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
-        # my_predbat.metric_min_improvement_export = 5
+        #my_predbat.metric_min_improvement_export = 5
 
     if re_do_rates:
         # Set rate thresholds
@@ -1940,7 +1941,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Wrote plan to {}".format(filename))
 
     # Expected
-    actual_data = {"charge_limit_best": my_predbat.charge_limit_best, "charge_window_best": my_predbat.charge_window_best, "export_window_best": my_predbat.export_window_best, "export_limits_best": my_predbat.export_limits_best}
+    actual_data = {
+        "charge_limit_best": my_predbat.charge_limit_best, 
+        "charge_window_best": my_predbat.charge_window_best, 
+        "export_window_best": my_predbat.export_window_best, 
+        "export_limits_best": my_predbat.export_limits_best
+    }
     actual_json = json.dumps(actual_data)
     if expected_file:
         print("Compare with {}".format(expected_file))
@@ -1958,7 +1964,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     open(filename, "w").write(actual_json)
     print("Wrote plan json to {}".format(filename))
     return failed
-
 
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
@@ -2106,6 +2111,40 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw = 9.5,
+        soc_kw_array=[5, 4.5]
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw = 9.5,
+        soc_kw_array=[4.5, 5]
     )
     if failed:
         return failed
@@ -3048,7 +3087,7 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=0,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
-        minutes_now=775,
+        minutes_now = 775,
     )
     if failed:
         return failed
@@ -3069,7 +3108,7 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 90,
         assert_charge_time_enable=True,
-        minutes_now=780,
+        minutes_now = 780,
         update_plan=True,
     )
     if failed:
@@ -3616,15 +3655,11 @@ def run_optimise_all_windows_tests(my_predbat):
         return failed
 
     # Optimise charge limit
-    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(
-        0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
-    )
+    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record)
     before_best_metric = best_metric
     my_predbat.isCharging = True
     my_predbat.isCharging_Target = 100
-    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(
-        0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record
-    )
+    best_soc, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import = my_predbat.optimise_charge_limit(0, len(expect_charge_limit), expect_charge_limit, charge_window_best, export_window_best, expect_export_limit, all_n=None, end_record=my_predbat.end_record)
 
     if (before_best_metric - best_metric) < 0.1:
         print("ERROR: Expected best metric to have 0.1 skew for charging but got {} vs {}".format(best_metric, before_best_metric))
@@ -5298,6 +5333,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--quick", action="store_true", help="Run quick tests")
     args = parser.parse_args()
 
     print("**** Starting Predbat tests ****")
@@ -5345,12 +5381,12 @@ def main():
         failed |= run_optimise_all_windows_tests(my_predbat)
     if not failed:
         failed |= run_compute_metric_tests(my_predbat)
-    if not failed:
+    if not failed and not args.quick:
         failed |= run_perf_test(my_predbat)
     if not failed:
         failed |= run_nordpool_test(my_predbat)
 
-    if not failed:
+    if not failed and not args.quick:
         # Scan .yaml files in cases directory
         for filename in glob.glob("cases/*.yaml"):
             basename = os.path.basename(filename)
