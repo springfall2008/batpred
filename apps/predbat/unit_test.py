@@ -1681,6 +1681,7 @@ def run_execute_test(
     minutes_now=12 * 60,
     update_plan=False,
     reserve=1,
+    soc_kw_array=None,
 ):
     print("Run scenario {}".format(name))
     failed = False
@@ -1714,7 +1715,10 @@ def run_execute_test(
     my_predbat.set_reserve_enable = set_reserve_enable
     for inverter in my_predbat.inverters:
         inverter.charge_start_time_minutes = inverter_charge_time_minutes_start
-        inverter.soc_kw = soc_kw / total_inverters
+        if soc_kw_array:
+            inverter.soc_kw = soc_kw_array[inverter.id]
+        else:
+            inverter.soc_kw = soc_kw / total_inverters
         inverter.soc_max = soc_max / total_inverters
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
         inverter.in_calibration = in_calibration
@@ -2106,6 +2110,40 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw=9.5,
+        soc_kw_array=[5, 4.5],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw=9.5,
+        soc_kw_array=[4.5, 5],
     )
     if failed:
         return failed
@@ -5298,6 +5336,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
+    parser.add_argument("--quick", action="store_true", help="Run quick tests")
     args = parser.parse_args()
 
     print("**** Starting Predbat tests ****")
@@ -5345,12 +5384,12 @@ def main():
         failed |= run_optimise_all_windows_tests(my_predbat)
     if not failed:
         failed |= run_compute_metric_tests(my_predbat)
-    if not failed:
+    if not failed and not args.quick:
         failed |= run_perf_test(my_predbat)
     if not failed:
         failed |= run_nordpool_test(my_predbat)
 
-    if not failed:
+    if not failed and not args.quick:
         # Scan .yaml files in cases directory
         for filename in glob.glob("cases/*.yaml"):
             basename = os.path.basename(filename)
