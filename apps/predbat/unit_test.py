@@ -1973,6 +1973,7 @@ def run_execute_tests(my_predbat):
     reset_inverter(my_predbat)
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+    charge_window_best_soon = [{"start": my_predbat.minutes_now + 5, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best2 = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best3 = [{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now, "average": 1}, {"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best4 = [{"start": my_predbat.minutes_now + 24 * 60, "end": my_predbat.minutes_now + 60 + 24 * 60, "average": 1}]
@@ -2903,7 +2904,39 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    sys.exit(1)
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_soon",
+        charge_window_best=charge_window_best_soon,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        assert_pause_discharge=False,
+        assert_status="Demand",
+        assert_discharge_rate=1000,
+        assert_reserve=0,
+        assert_soc_target=100,
+        assert_immediate_soc_target=100,
+    )
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_soon2",
+        charge_window_best=charge_window_best_soon,
+        charge_limit_best=charge_limit_best_frz,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        has_target_soc=False,
+        assert_pause_discharge=False,
+        assert_status="Demand",
+        assert_discharge_rate=1000,
+        assert_reserve=0,
+        assert_soc_target=0,
+        assert_immediate_soc_target=100,
+    )
 
     failed |= run_execute_test(
         my_predbat,
