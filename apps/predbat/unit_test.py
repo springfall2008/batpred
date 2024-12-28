@@ -1464,6 +1464,7 @@ class DummyInverter:
         self.log = log
         self.id = inverter_id
         self.count_register_writes = 0
+        self.reserve = 0
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         self.soc_target = soc
@@ -1669,6 +1670,7 @@ def run_execute_test(
     assert_discharge_rate=None,
     assert_reserve=0,
     assert_soc_target=100,
+    assert_soc_target_array=None,
     in_calibration=False,
     set_discharge_during_charge=True,
     assert_immediate_soc_target=None,
@@ -1805,6 +1807,8 @@ def run_execute_test(
         if assert_reserve != inverter.reserve_last:
             print("ERROR: Inverter {} Reserve should be {} got {}".format(inverter.id, assert_reserve, inverter.reserve_last))
             failed = True
+        if assert_soc_target_array:
+            assert_soc_target = assert_soc_target_array[inverter.id]
         if assert_soc_target != inverter.soc_target:
             print("ERROR: Inverter {} SOC target should be {} got {}".format(inverter.id, assert_soc_target, inverter.soc_target))
             failed = True
@@ -2778,7 +2782,7 @@ def run_execute_tests(my_predbat):
 
     failed |= run_execute_test(
         my_predbat,
-        "charge_freeze1d",
+        "charge_freeze1d_too_low",
         charge_window_best=charge_window_best,
         charge_limit_best=charge_limit_best_frz,
         set_charge_window=True,
@@ -2795,6 +2799,111 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_imb1",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_charge_time_enable=True,
+        soc_kw=2,
+        assert_pause_discharge=False,
+        assert_status="Charging",
+        assert_reserve=0,
+        assert_soc_target_array=[10, 40],
+        assert_immediate_soc_target=10,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw_array=[0, 2],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_imb2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_charge_time_enable=True,
+        soc_kw=2,
+        assert_pause_discharge=False,
+        assert_status="Charging",
+        assert_reserve=0,
+        assert_soc_target_array=[40, 10],
+        assert_immediate_soc_target=10,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw_array=[2, 0],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_imb3",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_charge_time_enable=True,
+        soc_kw=0.75,
+        assert_pause_discharge=False,
+        assert_status="Charging",
+        assert_reserve=0,
+        assert_soc_target_array=[10, 10],
+        assert_immediate_soc_target=10,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw_array=[0.5, 0.25],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_imb4",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_charge_time_enable=True,
+        soc_kw=1,
+        assert_pause_discharge=False,
+        assert_status="Charging",
+        assert_reserve=0,
+        assert_soc_target_array=[10, 15],
+        assert_immediate_soc_target=10,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw_array=[0.25, 0.75],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_freeze_imb5",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best_frz,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_charge_time_enable=False,
+        soc_kw=1,
+        assert_pause_discharge=True,
+        assert_status="Freeze charging",
+        assert_reserve=0,
+        assert_soc_target_array=[100, 100],
+        assert_immediate_soc_target=10,
+        soc_kw_array=[0.5, 0.5],
+    )
+    if failed:
+        return failed
+
+    sys.exit(1)
 
     failed |= run_execute_test(
         my_predbat,
