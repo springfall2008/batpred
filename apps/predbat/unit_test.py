@@ -2227,7 +2227,6 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-
     failed |= run_execute_test(
         my_predbat,
         "charge_low_power1",
@@ -2637,9 +2636,8 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=50,
         reserve_max=90,
         has_timed_pause=False,
-        soc_kw_array=[5, 4]
+        soc_kw_array=[5, 4],
     )
-
 
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
