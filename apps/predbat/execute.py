@@ -131,7 +131,9 @@ class Execute:
                             inverter.adjust_discharge_rate(0)
                             resetDischarge = False
 
+                        target_soc = max(self.charge_limit_percent_best[0] if self.charge_limit_percent_best[0] != self.reserve else self.soc_percent, self.reserve, self.best_soc_min)
                         can_freeze_charge = True
+
                         # Can only freeze charge if all inverters have an SOC above the reserve
                         for check in self.inverters:
                             if check.soc_kw < inverter.reserve:
@@ -164,19 +166,19 @@ class Execute:
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
-                            can_hold_charge = True
+                            can_hold_charge = self.charge_limit_percent_best[0] != self.reserve
                             for check in self.inverters:
-                                if check.soc_percent < self.charge_limit_percent_best[0]:
+                                if check.soc_percent < target_soc:
                                     can_hold_charge = False
                                     break
                                 if not check.inv_has_timed_pause and (check.reserve_max < check.soc_percent):
                                     can_hold_charge = False
                                     break
-                            if self.set_soc_enable and can_hold_charge and self.soc_percent >= self.charge_limit_percent_best[0]:
+                            if self.set_soc_enable and can_hold_charge and self.soc_percent >= target_soc:
                                 status = "Hold charging"
-                                self.log("Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.soc_percent, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
+                                self.log("Inverter {} Hold charging as soc {}% is above target {}% ({}%) set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, self.charge_limit_percent_best[0], target_soc, self.set_discharge_during_charge))
 
-                                if (self.charge_limit_percent_best[0] < 100.0) and (abs(inverter.soc_percent - self.charge_limit_percent_best[0]) <= 1.0):
+                                if (self.charge_limit_percent_best[0] < 100.0) and (abs(self.soc_percent - self.charge_limit_percent_best[0]) <= 1.0):
                                     # If we are within 1% of the target but not at 100% then we can hold charge
                                     # otherwise keep charging enabled
                                     if self.set_soc_enable and ((self.set_reserve_enable and self.set_reserve_hold and inverter.reserve_max >= inverter.soc_percent) or inverter.inv_has_timed_pause):
@@ -197,13 +199,13 @@ class Execute:
                                 else:
                                     inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
-                                inverter.adjust_charge_immediate(self.charge_limit_percent_best[0], freeze=True)
+                                inverter.adjust_charge_immediate(target_soc, freeze=True)
                             else:
                                 status = "Charging"
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
-                                inverter.adjust_charge_immediate(self.charge_limit_percent_best[0])
+                                inverter.adjust_charge_immediate(target_soc)
 
-                            status_extra = " target {}%-{}%".format(inverter.soc_percent, self.charge_limit_percent_best[0])
+                            status_extra = " target {}%-{}%".format(inverter.soc_percent, target_soc)
 
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
