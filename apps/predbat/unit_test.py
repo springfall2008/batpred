@@ -1688,10 +1688,6 @@ def run_execute_test(
 ):
     print("Run scenario {}".format(name))
     failed = False
-    my_predbat.soc_kw = soc_kw
-    my_predbat.soc_max = soc_max
-    my_predbat.reserve = reserve
-    my_predbat.soc_percent = calc_percent_limit(soc_kw, my_predbat.soc_max)
     my_predbat.set_read_only = read_only
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.num_cars = 1
@@ -2170,6 +2166,63 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw=9.5,
         soc_kw_array=[4.5, 5],
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance3",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw=5,
+        soc_kw_array=[2.0, 3.0],
+        assert_soc_target_array=[40, 60],
+        assert_immediate_soc_target=50,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance4",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw=6,
+        soc_kw_array=[3.0, 3.0],
+        assert_soc_target_array=[50, 50],
+        assert_immediate_soc_target=50,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_imbalance5",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        soc_kw=7,
+        soc_kw_array=[3.0, 4.0],
+        assert_soc_target_array=[40, 60],
+        assert_immediate_soc_target=50,
     )
     if failed:
         return failed
