@@ -176,9 +176,7 @@ class Execute:
                                     break
                             if self.set_soc_enable and can_hold_charge and self.soc_percent >= target_soc:
                                 status = "Hold charging"
-                                self.log(
-                                    "Inverter {} Hold charging as soc {}% is above target {}% ({}%) set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, self.charge_limit_percent_best[0], target_soc, self.set_discharge_during_charge)
-                                )
+                                self.log("Inverter {} Hold charging as soc {}% is above target {}% ({}%) set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, self.charge_limit_percent_best[0], target_soc, self.set_discharge_during_charge))
 
                                 if (self.charge_limit_percent_best[0] < 100.0) and (abs(self.soc_percent - self.charge_limit_percent_best[0]) <= 1.0):
                                     # If we are within 1% of the target but not at 100% then we can hold charge
@@ -358,8 +356,10 @@ class Execute:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
-                        self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
-                        if self.minutes_now >= window["start"] and self.minutes_now < window["end"]:
+                        if self.car_charging_soc[car_n] >= self.car_charging_limit[car_n]:
+                            self.log("Car {} is already charged, ignoring additional charging slot from {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
+                        elif self.minutes_now >= window["start"] and self.minutes_now < window["end"]:
+                            self.log("Car charging from battery is off, next slot for car {} is {} - {}".format(car_n, self.time_abs_str(window["start"]), self.time_abs_str(window["end"])))
                             # Don't disable discharge during force charge/discharge slots but otherwise turn it off to prevent
                             # from draining the battery
                             if not isCharging and not isExporting:

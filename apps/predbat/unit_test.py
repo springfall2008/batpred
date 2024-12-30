@@ -691,10 +691,9 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
 
     return failed
 
-
 def test_inverter_rest_template(
     test_name,
-    my_predbat,
+    my_predbat,    
     filename,
     assert_soc_max=9.52,
     assert_soc=0,
@@ -718,11 +717,11 @@ def test_inverter_rest_template(
     print("**** Running Test: {} ****".format(test_name))
     dummy_rest = DummyRestAPI()
     my_predbat.args["givtcp_rest"] = "dummy"
-
+    
     dummy_rest.rest_data = {}
     with open(filename, "r") as file:
         dummy_rest.rest_data = json.load(file)
-
+    
     my_predbat.restart_active = True
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
     inv.sleep = dummy_sleep
@@ -777,7 +776,6 @@ def test_inverter_rest_template(
         failed = True
 
     return failed
-
 
 def test_inverter_update(
     test_name,
@@ -1248,15 +1246,15 @@ def run_inverter_tests():
         my_predbat,
         filename="cases/rest_v2.json",
         assert_soc_max=9.523,
-        assert_soc=3.333,
-        assert_pv_power=10,
-        assert_load_power=624,
-        assert_charge_start_time_minutes=1410,
-        assert_charge_end_time_minutes=1770,
-        assert_discharge_start_time_minutes=1380,
-        assert_discharge_end_time_minutes=1441,
-        assert_discharge_enable=False,
-        assert_charge_enable=True,
+        assert_soc = 3.333,
+        assert_pv_power = 10,
+        assert_load_power = 624,
+        assert_charge_start_time_minutes = 1410,
+        assert_charge_end_time_minutes = 1770,
+        assert_discharge_start_time_minutes = 1380,
+        assert_discharge_end_time_minutes = 1441,
+        assert_discharge_enable = False,
+        assert_charge_enable = True,
         assert_nominal_capacity=9.5232,
     )
     if failed:
@@ -1428,6 +1426,8 @@ def simple_scenario(
     assert_iboost_running=False,
     assert_iboost_running_solar=False,
     assert_iboost_running_full=False,
+    car_soc=0,
+    car_limit=100,
 ):
     """
     No PV, No Load
@@ -1471,8 +1471,8 @@ def simple_scenario(
     my_predbat.iboost_charging = iboost_charging
     my_predbat.best_soc_keep = keep
     my_predbat.best_soc_keep_weight = keep_weight
-    my_predbat.car_charging_soc[0] = 0
-    my_predbat.car_charging_limit[0] = 100.0
+    my_predbat.car_charging_soc[0] = car_soc
+    my_predbat.car_charging_limit[0] = car_limit
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
         my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
@@ -1780,6 +1780,7 @@ def run_execute_test(
     car_slot=[],
     soc_kw=0,
     soc_max=10,
+    car_charging_from_battery=False,
     read_only=False,
     set_soc_enable=True,
     set_charge_window=False,
@@ -1815,6 +1816,7 @@ def run_execute_test(
     reserve=1,
     soc_kw_array=None,
     reserve_max=100,
+    car_soc=0,
 ):
     print("Run scenario {}".format(name))
     failed = False
@@ -1888,7 +1890,8 @@ def run_execute_test(
     my_predbat.set_reserve_hold = True
     my_predbat.set_export_freeze = True
     my_predbat.set_discharge_during_charge = set_discharge_during_charge
-    my_predbat.car_charging_from_battery = False
+    my_predbat.car_charging_from_battery = car_charging_from_battery
+    my_predbat.car_charging_soc[0] = car_soc
 
     # Shift on plan?
     if update_plan:
@@ -2357,6 +2360,7 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+
     failed |= run_execute_test(
         my_predbat,
         "charge_low_power1",
@@ -2766,8 +2770,9 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=50,
         reserve_max=90,
         has_timed_pause=False,
-        soc_kw_array=[5, 4],
+        soc_kw_array=[5, 4]
     )
+
 
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
@@ -3421,6 +3426,55 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "discharge_car_full_bat",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Exporting",
+        car_slot=charge_window_best,
+        car_charging_from_battery=True,
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_immediate_soc_target=0,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand1",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "no_discharge_car_demand2",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best,
+        car_charging_from_battery=False,
+        car_soc=100,
+    )
+    if failed:
+        return failed
+
 
     failed |= run_execute_test(
         my_predbat,
@@ -4545,6 +4599,19 @@ def run_model_tests(my_predbat):
         assert_final_soc=100.0 - 24,
         with_battery=True,
         charge_car=0,
+        battery_soc=100.0,
+        car_charging_from_battery=False,
+    )
+    failed |= simple_scenario(
+        "load_car_bat_no3",
+        my_predbat,
+        1,
+        0,
+        assert_final_metric=import_rate * 3,
+        assert_final_soc=100.0 - 24,
+        with_battery=True,
+        charge_car=60,
+        car_soc=97.0,
         battery_soc=100.0,
         car_charging_from_battery=False,
     )
