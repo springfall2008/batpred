@@ -173,9 +173,7 @@ class Execute:
                                     break
                             if self.set_soc_enable and can_hold_charge and self.soc_percent >= target_soc:
                                 status = "Hold charging"
-                                self.log(
-                                    "Inverter {} Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, target_soc, self.charge_limit_percent_best[0], self.set_discharge_during_charge)
-                                )
+                                self.log("Inverter {} Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, target_soc, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
 
                                 if (target_soc < 100.0) and (abs(inverter.soc_percent - target_soc) <= 1.0):
                                     # If we are within 1% of the target but not at 100% then we can hold charge
