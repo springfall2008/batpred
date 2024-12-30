@@ -411,7 +411,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.octopus_intelligent_charging = False
-        self.octopus_intelligent_ignore_unplugged = False        
+        self.octopus_intelligent_ignore_unplugged = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.futurerate_url_cache = {}
