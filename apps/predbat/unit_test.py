@@ -691,9 +691,10 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
 
     return failed
 
+
 def test_inverter_rest_template(
     test_name,
-    my_predbat,    
+    my_predbat,
     filename,
     assert_soc_max=9.52,
     assert_soc=0,
@@ -717,11 +718,11 @@ def test_inverter_rest_template(
     print("**** Running Test: {} ****".format(test_name))
     dummy_rest = DummyRestAPI()
     my_predbat.args["givtcp_rest"] = "dummy"
-    
+
     dummy_rest.rest_data = {}
     with open(filename, "r") as file:
         dummy_rest.rest_data = json.load(file)
-    
+
     my_predbat.restart_active = True
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
     inv.sleep = dummy_sleep
@@ -776,6 +777,7 @@ def test_inverter_rest_template(
         failed = True
 
     return failed
+
 
 def test_inverter_update(
     test_name,
@@ -1246,15 +1248,15 @@ def run_inverter_tests():
         my_predbat,
         filename="cases/rest_v2.json",
         assert_soc_max=9.523,
-        assert_soc = 3.333,
-        assert_pv_power = 10,
-        assert_load_power = 624,
-        assert_charge_start_time_minutes = 1410,
-        assert_charge_end_time_minutes = 1770,
-        assert_discharge_start_time_minutes = 1380,
-        assert_discharge_end_time_minutes = 1441,
-        assert_discharge_enable = False,
-        assert_charge_enable = True,
+        assert_soc=3.333,
+        assert_pv_power=10,
+        assert_load_power=624,
+        assert_charge_start_time_minutes=1410,
+        assert_charge_end_time_minutes=1770,
+        assert_discharge_start_time_minutes=1380,
+        assert_discharge_end_time_minutes=1441,
+        assert_discharge_enable=False,
+        assert_charge_enable=True,
         assert_nominal_capacity=9.5232,
     )
     if failed:
@@ -2355,7 +2357,6 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-
     failed |= run_execute_test(
         my_predbat,
         "charge_low_power1",
@@ -2765,9 +2766,8 @@ def run_execute_tests(my_predbat):
         assert_immediate_soc_target=50,
         reserve_max=90,
         has_timed_pause=False,
-        soc_kw_array=[5, 4]
+        soc_kw_array=[5, 4],
     )
-
 
     # Charge/discharge with rate
     for inverter in my_predbat.inverters:
