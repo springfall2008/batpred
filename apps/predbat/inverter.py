@@ -15,7 +15,7 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES
-from utils import calc_percent_limit, dp0, dp2
+from utils import calc_percent_limit, dp0, dp2, dp3
 
 
 class Inverter:
@@ -139,6 +139,7 @@ class Inverter:
         self.battery_rate_max_charge_scaled = 0
         self.battery_rate_max_discharge_scaled = 0
         self.battery_power = 0
+        self.battery_voltage = 52.0
         self.pv_power = 0
         self.load_power = 0
         self.rest_api = None
@@ -146,6 +147,7 @@ class Inverter:
         self.firmware_version = "Unknown"
         self.givtcp_version = "n/a"
         self.rest_v3 = False
+        self.serial_number = "Unknown"
         self.count_register_writes = 0
         self.created_attributes = {}
         self.track_charge_start = "00:00:00"
@@ -228,9 +230,10 @@ class Inverter:
                 else:
                     self.givtcp_version = self.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
                     self.firmware_version = self.rest_data.get("raw", {}).get("invertor", {}).get("firmware_version", "Unknown")
+                    self.serial_number = self.rest_data.get("raw", {}).get("invertor", {}).get("serial_number", "Unknown")
                     if self.givtcp_version.startswith("3"):
                         self.rest_v3 = True
-                    self.log("Inverter {} GivTCP Version: {} Firmware: {}".format(self.id, self.givtcp_version, self.firmware_version))
+                    self.log("Inverter {} GivTCP Version: {} Firmware: {} serial {}".format(self.id, self.givtcp_version, self.firmware_version, self.serial_number))
 
         # Timed pause support?
         if self.inv_has_timed_pause:
@@ -250,31 +253,47 @@ class Inverter:
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
             idetails = self.rest_data["Invertor_Details"]
-            self.soc_max = float(idetails["Battery_Capacity_kWh"])
-            self.nominal_capacity = self.soc_max
-            if "raw" in self.rest_data:
-                raw_data = self.rest_data["raw"]
-                invname = "invertor"
-                if invname not in raw_data:
-                    invname = "inverter"
-                if invname in raw_data and "battery_nominal_capacity" in raw_data[invname]:
-                    self.nominal_capacity = float(raw_data[invname]["battery_nominal_capacity"]) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+            if 'Battery_Capacity_kWh' in idetails:
+                self.soc_max = (float(idetails["Battery_Capacity_kWh"]))
+                self.nominal_capacity = self.soc_max
+                self.soc_max *= self.battery_scaling
+                self.soc_max = dp3(self.soc_max)
+
+        if self.rest_data and ("raw" in self.rest_data):
+            raw_data = self.rest_data["raw"]
+
+            # for V3 the inverter details is now named after the serial number
+            if self.serial_number in self.rest_data:
+                idetails = self.rest_data[self.serial_number]
+                if 'Battery_Capacity_kWh' in idetails:
+                    self.soc_max = float(idetails["Battery_Capacity_kWh"])
+                    self.nominal_capacity = self.soc_max
+                    self.soc_max *= self.battery_scaling
+                    self.soc_max = dp3(self.soc_max)
+                    
+            # Battery capactity nominal
+            battery_capacity_nominal = raw_data.get("invertor", {}).get("battery_nominal_capacity", None)
+            if battery_capacity_nominal:
+                if self.rest_v3:
+                    self.nominal_capacity = float(battery_capacity_nominal)
+                else:
+                    self.nominal_capacity = float(battery_capacity_nominal) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
+
                 if self.base.battery_capacity_nominal:
                     if abs(self.soc_max - self.nominal_capacity) > 1.0:
                         # XXX: Weird workaround for battery reporting wrong capacity issue
                         self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
-                    self.soc_max = self.nominal_capacity
-                if invname in raw_data and "soc_force_adjust" in raw_data[invname]:
-                    soc_force_adjust = raw_data[invname]["soc_force_adjust"]
-                    if soc_force_adjust:
-                        try:
-                            soc_force_adjust = int(soc_force_adjust)
-                        except ValueError:
-                            soc_force_adjust = 0
-                        if (soc_force_adjust > 0) and (soc_force_adjust < 7):
-                            self.in_calibration = True
-                            self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
-            self.soc_max *= self.battery_scaling
+                    self.soc_max = self.nominal_capacity * self.battery_scaling
+
+            soc_force_adjust = raw_data.get("invertor", {}).get("soc_force_adjust", None)
+            if soc_force_adjust:
+                try:
+                    soc_force_adjust = int(soc_force_adjust)
+                except ValueError:
+                    soc_force_adjust = 0
+                if (soc_force_adjust > 0) and (soc_force_adjust < 7):
+                    self.in_calibration = True
+                    self.log("Warn: Inverter is in calibration mode {}, Predbat will not function correctly and will be disabled".format(soc_force_adjust))
 
             # Max battery rate
             if "Invertor_Max_Bat_Rate" in idetails:
@@ -294,10 +313,6 @@ class Inverter:
         else:
             self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
-
-            self.battery_voltage = 52.0
-            if "battery_voltage" in self.base.args:
-                self.base.get_arg("battery_voltage", index=self.id, default=52.0)
 
             if self.inverter_type in ["GE", "GEC", "GEE"]:
                 self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0)
@@ -790,12 +805,12 @@ class Inverter:
         self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
 
         if self.rest_data:
-            self.soc_kw = self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling
+            self.soc_kw = dp3(self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling)
         else:
             if "soc_percent" in self.base.args:
-                self.soc_kw = self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max / 100.0
+                self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id) * self.soc_max / 100.0)
             else:
-                self.soc_kw = self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.battery_scaling
+                self.soc_kw = dp3(self.base.get_arg("soc_kw", default=0.0, index=self.id) * self.battery_scaling)
 
         if self.soc_max <= 0.0:
             self.soc_percent = 0
@@ -809,6 +824,10 @@ class Inverter:
                 self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
                 self.pv_power = float(ppdetails.get("PV_Power", 0.0))
                 self.load_power = float(ppdetails.get("Load_Power", 0.0))
+                if self.rest_v3:
+                    self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
+                else:
+                    self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id)
         else:
             self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id)
             self.pv_power = self.base.get_arg("pv_power", default=0.0, index=self.id)
@@ -817,7 +836,7 @@ class Inverter:
             for i in range(1, self.inv_num_load_entities):
                 self.load_power += self.base.get_arg(f"load_power_{i}", default=0.0, index=self.id)
 
-        self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id)
+            self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id)
 
         if not quiet:
             self.base.log(
