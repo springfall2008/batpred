@@ -253,8 +253,8 @@ class Inverter:
         ivtime = None
         if self.rest_data and ("Invertor_Details" in self.rest_data):
             idetails = self.rest_data["Invertor_Details"]
-            if 'Battery_Capacity_kWh' in idetails:
-                self.soc_max = (float(idetails["Battery_Capacity_kWh"]))
+            if "Battery_Capacity_kWh" in idetails:
+                self.soc_max = float(idetails["Battery_Capacity_kWh"])
                 self.nominal_capacity = self.soc_max
                 self.soc_max *= self.battery_scaling
                 self.soc_max = dp3(self.soc_max)
@@ -265,12 +265,12 @@ class Inverter:
             # for V3 the inverter details is now named after the serial number
             if self.serial_number in self.rest_data:
                 idetails = self.rest_data[self.serial_number]
-                if 'Battery_Capacity_kWh' in idetails:
+                if "Battery_Capacity_kWh" in idetails:
                     self.soc_max = float(idetails["Battery_Capacity_kWh"])
                     self.nominal_capacity = self.soc_max
                     self.soc_max *= self.battery_scaling
                     self.soc_max = dp3(self.soc_max)
-                    
+
             # Battery capactity nominal
             battery_capacity_nominal = raw_data.get("invertor", {}).get("battery_nominal_capacity", None)
             if battery_capacity_nominal:
