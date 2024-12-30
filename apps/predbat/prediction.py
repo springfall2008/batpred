@@ -493,7 +493,7 @@ class Prediction:
                     car_soc[car_n] = car_soc[car_n] + car_load_scale
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
-                    if not self.car_charging_from_battery:
+                    if (car_load_scale > 0) and (not self.car_charging_from_battery):
                         discharge_rate_now = self.battery_rate_min  # 0
                         car_freeze = True
 
