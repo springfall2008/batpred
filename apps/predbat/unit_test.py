@@ -692,6 +692,93 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
     return failed
 
 
+def test_inverter_rest_template(
+    test_name,
+    my_predbat,
+    filename,
+    assert_soc_max=9.52,
+    assert_soc=0,
+    assert_voltage=52,
+    assert_inverter_limit=3600,
+    assert_battery_rate_max=2600,
+    assert_serial_number="Unknown",
+    assert_pv_power=0,
+    assert_load_power=0,
+    assert_charge_start_time_minutes=0,
+    assert_charge_end_time_minutes=0,
+    assert_charge_enable=False,
+    assert_discharge_start_time_minutes=0,
+    assert_discharge_end_time_minutes=0,
+    assert_discharge_enable=False,
+    assert_pause_start_time_minutes=0,
+    assert_pause_end_time_minutes=0,
+    assert_nominal_capacity=9.52,
+):
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+    dummy_rest = DummyRestAPI()
+    my_predbat.args["givtcp_rest"] = "dummy"
+
+    dummy_rest.rest_data = {}
+    with open(filename, "r") as file:
+        dummy_rest.rest_data = json.load(file)
+
+    my_predbat.restart_active = True
+    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
+    inv.sleep = dummy_sleep
+
+    inv.update_status(my_predbat.minutes_now)
+    my_predbat.restart_active = False
+
+    if assert_soc_max != inv.soc_max:
+        print("ERROR: SOC Max should be {} got {}".format(assert_soc_max, inv.soc_max))
+        failed = True
+    if assert_soc != inv.soc_kw:
+        print("ERROR: SOC should be {} got {}".format(assert_soc, inv.soc_kw))
+        failed = True
+    if assert_voltage != inv.battery_voltage:
+        print("ERROR: Voltage should be {} got {}".format(assert_voltage, inv.battery_voltage))
+        failed = True
+    if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
+        print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
+        failed = True
+    if assert_battery_rate_max != inv.battery_rate_max_raw:
+        print("ERROR: Battery rate max should be {} got {}".format(assert_battery_rate_max, inv.battery_rate_max_raw))
+        failed = True
+    if assert_serial_number != inv.serial_number:
+        print("ERROR: Serial number should be {} got {}".format(assert_serial_number, inv.serial_number))
+        failed = True
+    if assert_pv_power != inv.pv_power:
+        print("ERROR: PV power should be {} got {}".format(assert_pv_power, inv.pv_power))
+        failed = True
+    if assert_load_power != inv.load_power:
+        print("ERROR: Load power should be {} got {}".format(assert_load_power, inv.load_power))
+        failed = True
+    if assert_charge_start_time_minutes != inv.charge_start_time_minutes:
+        print("ERROR: Charge start time should be {} got {}".format(assert_charge_start_time_minutes, inv.charge_start_time_minutes))
+        failed = True
+    if assert_charge_end_time_minutes != inv.charge_end_time_minutes:
+        print("ERROR: Discharge end time should be {} got {}".format(assert_charge_end_time_minutes, inv.charge_end_time_minutes))
+        failed = True
+    if assert_charge_enable != inv.charge_enable_time:
+        print("ERROR: Charge enable should be {} got {}".format(assert_charge_enable, inv.charge_enable_time))
+        failed = True
+    if assert_discharge_start_time_minutes != inv.discharge_start_time_minutes:
+        print("ERROR: Discharge start time should be {} got {}".format(assert_discharge_start_time_minutes, inv.discharge_start_time_minutes))
+        failed = True
+    if assert_discharge_end_time_minutes != inv.discharge_end_time_minutes:
+        print("ERROR: Discharge end time should be {} got {}".format(assert_discharge_end_time_minutes, inv.discharge_end_time_minutes))
+        failed = True
+    if assert_discharge_enable != inv.discharge_enable_time:
+        print("ERROR: Discharge enable should be {} got {}".format(assert_discharge_enable, inv.discharge_enable_time))
+        failed = True
+    if assert_nominal_capacity != inv.nominal_capacity:
+        print("ERROR: Nominal capacity should be {} got {}".format(assert_nominal_capacity, inv.nominal_capacity))
+        failed = True
+
+    return failed
+
+
 def test_inverter_update(
     test_name,
     my_predbat,
@@ -1135,6 +1222,9 @@ def run_inverter_tests():
         expect_load_power=2.0,
         expect_soc_kwh=6.0,
     )
+    if failed:
+        return failed
+
     failed |= test_inverter_update(
         "update2",
         my_predbat,
@@ -1150,6 +1240,46 @@ def run_inverter_tests():
         expect_load_power=2.5,
         expect_soc_kwh=6.6,
     )
+    if failed:
+        return failed
+
+    failed |= test_inverter_rest_template(
+        "rest1",
+        my_predbat,
+        filename="cases/rest_v2.json",
+        assert_soc_max=9.523,
+        assert_soc=3.333,
+        assert_pv_power=10,
+        assert_load_power=624,
+        assert_charge_start_time_minutes=1410,
+        assert_charge_end_time_minutes=1770,
+        assert_discharge_start_time_minutes=1380,
+        assert_discharge_end_time_minutes=1441,
+        assert_discharge_enable=False,
+        assert_charge_enable=True,
+        assert_nominal_capacity=9.5232,
+    )
+    if failed:
+        return failed
+    failed |= test_inverter_rest_template(
+        "rest2",
+        my_predbat,
+        filename="cases/rest_v3.json",
+        assert_voltage=53.65,
+        assert_battery_rate_max=3600,
+        assert_serial_number="EA2303G082",
+        assert_soc=7.62,
+        assert_pv_power=247.0,
+        assert_load_power=197.0,
+        assert_charge_start_time_minutes=1440,
+        assert_charge_end_time_minutes=1440,
+        assert_discharge_start_time_minutes=5,
+        assert_discharge_end_time_minutes=91,
+        assert_discharge_enable=True,
+        assert_nominal_capacity=9.52,
+    )
+    if failed:
+        return failed
 
     my_predbat.args["givtcp_rest"] = None
     dummy_rest = DummyRestAPI()
