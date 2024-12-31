@@ -1691,12 +1691,14 @@ class Plan:
                     soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
                     soc_max = max(soc_start, soc_end)
 
+                    print("Compare charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end, soc_m1))
+
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end, soc_m1))
 
                     if (soc_min_percent > calc_percent_limit(charge_limit_best[window_n], self.soc_max)) and (charge_limit_best[window_n] != self.reserve):
-                        charge_limit_best[window_n] = self.best_soc_min
-                        window["target"] = self.best_soc_min
+                        charge_limit_best[window_n] = 0
+                        window["target"] = 0
                         if self.debug_enable:
                             self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
                     elif soc_max < charge_limit_best[window_n]:
