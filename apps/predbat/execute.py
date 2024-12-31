@@ -167,9 +167,7 @@ class Execute:
                             target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
                             if self.set_soc_enable and self.soc_percent >= target_soc:
                                 status = "Hold charging"
-                                self.log(
-                                    "Inverter {} Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, target_soc, self.charge_limit_percent_best[0], self.set_discharge_during_charge)
-                                )
+                                self.log("Inverter {} Hold charging as soc {}% is above target {}% set_discharge_during_charge {}".format(inverter.id, inverter.soc_percent, target_soc, self.charge_limit_percent_best[0], self.set_discharge_during_charge))
 
                                 if (target_soc < 100.0) and (abs(inverter.soc_percent - target_soc) <= 1.0):
                                     # If we are within 1% of the target but not at 100% then we can hold charge
