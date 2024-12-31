@@ -1054,7 +1054,7 @@ class Plan:
                 id += 1
 
         # Assemble list of SoC's to try
-        try_socs = []
+        try_socs = [loop_soc]
         loop_step = max(best_soc_step, 0.1)
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
