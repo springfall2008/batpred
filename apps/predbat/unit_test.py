@@ -1669,6 +1669,7 @@ class ActiveTestInverter:
         self.inv_has_target_soc = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
+        self.inv_has_discharge_enable_time = True
         self.soc_kw = soc_kw
         self.soc_max = soc_max
         self.soc_percent = calc_percent_limit(soc_kw, soc_max)
@@ -1807,6 +1808,7 @@ def run_execute_test(
     in_calibration=False,
     set_discharge_during_charge=True,
     assert_immediate_soc_target=None,
+    assert_immediate_soc_target_array=None,
     set_reserve_enable=True,
     has_timed_pause=True,
     has_target_soc=True,
@@ -1946,13 +1948,16 @@ def run_execute_test(
             print("ERROR: Inverter {} SOC target should be {} got {}".format(inverter.id, assert_soc_target, inverter.soc_target))
             failed = True
 
+        if assert_immediate_soc_target_array:
+            assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
+
         assert_soc_target_force = assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Freeze charging, Hold for iBoost"] else 0
         if not set_charge_window:
             assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
             print("ERROR: Inverter {} Immediate charge SOC target should be {} got {}".format(inverter.id, assert_soc_target_force, inverter.immediate_charge_soc_target))
             failed = True
-        if assert_status in ["Hold charging"] and inverter.immediate_charge_soc_freeze != True:
+        if assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
         assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 0
@@ -3062,7 +3067,7 @@ def run_execute_tests(my_predbat):
         assert_status="Hold charging",
         assert_reserve=0,
         assert_soc_target_array=[10, 40],
-        assert_immediate_soc_target=20,
+        assert_immediate_soc_target_array=[10, 40],
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw_array=[0, 2],
@@ -3083,7 +3088,7 @@ def run_execute_tests(my_predbat):
         assert_status="Hold charging",
         assert_reserve=0,
         assert_soc_target_array=[40, 10],
-        assert_immediate_soc_target=20,
+        assert_immediate_soc_target_array=[40, 10],
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw_array=[2, 0],
@@ -3126,7 +3131,7 @@ def run_execute_tests(my_predbat):
         assert_status="Hold charging",
         assert_reserve=0,
         assert_soc_target_array=[10, 15],
-        assert_immediate_soc_target=10,
+        assert_immediate_soc_target_array=[10, 15],
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw_array=[0.25, 0.75],
