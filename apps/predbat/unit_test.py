@@ -2743,7 +2743,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
-        assert_status="Charging",
+        assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -2761,7 +2761,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
-        assert_status="Charging",
+        assert_status="Hold charging",
         soc_kw=9,
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
@@ -3042,7 +3042,7 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_reserve=0,
         assert_soc_target=10,
-        assert_immediate_soc_target=0.5,
+        assert_immediate_soc_target=10,
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
     )
@@ -3091,6 +3091,7 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Target SOC can not be lower than reserve (which is 1) so it will charge to 1 not freeze
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb3",
@@ -3101,10 +3102,10 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         soc_kw=0.75,
         assert_pause_discharge=False,
-        assert_status="Hold charging",
+        assert_status="Charging",
         assert_reserve=0,
         assert_soc_target_array=[10, 10],
-        assert_immediate_soc_target=8,
+        assert_immediate_soc_target=10,
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw_array=[0.5, 0.25],
