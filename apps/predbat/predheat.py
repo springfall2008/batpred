@@ -121,6 +121,7 @@ class PredHeat:
         self.delta_correction = DELTA_CORRECTION.copy()
         self.weather_compensation = {}
         self.weather_compensation_enabled = False
+        self.hysteresis = self.get_arg("hysteresis", 0.5, domain="predheat")
 
         # Collect predheat settings
         heat_pump_efficiency = self.get_arg("heat_pump_efficiency", {}, domain="predheat")
@@ -248,7 +249,7 @@ class PredHeat:
             index += 24 * 60
         return data.get(index, 0)
 
-    def get_historical(self, data, minute):
+    def get_historical(self, data, minute, default=0):
         """
         Get historical data across N previous days in days_previous array based on current minute
         """
@@ -273,7 +274,7 @@ class PredHeat:
 
         # Zero data?
         if total_weight == 0:
-            return 0
+            return default
         else:
             return total / total_weight
 
@@ -303,9 +304,9 @@ class PredHeat:
         # Find temperature adjustment points (thermostat turned up)
         adjust_ptr = -1
         if last_predict_minute:
-            last_target_temp = self.get_historical(self.target_temperature, 0)
+            last_target_temp = self.get_historical(self.target_temperature, 0, default=20.0)
             for minute in range(0, self.forecast_days * 24 * 60, PREDICT_STEP):
-                target_temp = self.get_historical(self.target_temperature, minute)
+                target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
                 if target_temp > last_target_temp:
                     adjust = {}
                     adjust["from"] = last_target_temp
@@ -330,7 +331,7 @@ class PredHeat:
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
-            target_temp = self.get_historical(self.target_temperature, minute)
+            target_temp = self.get_historical(self.target_temperature, minute, default=20.0)
 
             # Find the next temperature adjustment
             next_adjust = None
@@ -355,10 +356,10 @@ class PredHeat:
             # Thermostat model, override with current state also
             if minute == 0:
                 heating_on = heating_active
-            elif temp_diff_inside >= 0.1:
-                heating_on = True
-            elif temp_diff_inside <= 0:
+            elif heating_on and temp_diff_inside <= -self.hysteresis:
                 heating_on = False
+            elif not heating_on and temp_diff_inside >= self.hysteresis:
+                heating_on = True
 
             heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
             heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
