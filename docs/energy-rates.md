@@ -269,7 +269,7 @@ rates_export_override:
     rate_increment: 10
 ```
 
-You can also use rate_increment with load_scaling, e.g. a rate_increment of 0 can be used to just apply load scaling to certain defined periods.
+You can also define an import_rate_override with start and end times and only load_scaling (without a rate_increment or rate), e.g. if you just want to apply load scaling to certain defined periods.
 
 - **date** is optional and if specified must be in the date format of "YYYY-MM-DD" e.g. "2023-09-09".
 If a date is specified then the rate override applies that specific date, otherwise it applies to all dates
