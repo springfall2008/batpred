@@ -2160,12 +2160,12 @@ def run_execute_tests(my_predbat):
     my_predbat.args["num_inverters"] = 2
 
     failed = False
-    failed |= run_execute_test(my_predbat, "off")
+    failed |= run_execute_test(my_predbat, "off", assert_reserve=-1)
     my_predbat.holiday_days_left = 2
-    failed |= run_execute_test(my_predbat, "off_holiday", assert_status="Demand (Holiday)")
+    failed |= run_execute_test(my_predbat, "off_holiday", assert_status="Demand (Holiday)", assert_reserve=-1)
     my_predbat.holiday_days_left = 0
 
-    failed |= run_execute_test(my_predbat, "no_charge", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best)
+    failed |= run_execute_test(my_predbat, "no_charge", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, assert_reserve=-1)
     failed |= run_execute_test(my_predbat, "no_charge2", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False)
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True, set_discharge_during_charge=False, has_timed_pause=False)
     failed |= run_execute_test(my_predbat, "no_charge_future", set_charge_window=True, set_export_window=True, charge_window_best=charge_window_best4, charge_limit_best=charge_limit_best)
@@ -3384,7 +3384,7 @@ def run_execute_tests(my_predbat):
     inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc), ActiveTestInverter(1, 0, 10.0, my_predbat.now_utc)]
     my_predbat.inverters = inverters
 
-    failed |= run_execute_test(my_predbat, "no_discharge", export_window_best=export_window_best, export_limits_best=export_limits_best)
+    failed |= run_execute_test(my_predbat, "no_discharge", export_window_best=export_window_best, export_limits_best=export_limits_best, assert_reserve=-1)
     if failed:
         return failed
     failed |= run_execute_test(my_predbat, "no_discharge2", export_window_best=export_window_best, export_limits_best=export_limits_best, set_charge_window=True, set_export_window=True, soc_kw=0, assert_status="Hold exporting")

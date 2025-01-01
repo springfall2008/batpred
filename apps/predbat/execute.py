@@ -52,10 +52,10 @@ class Execute:
                     inverter.adjust_reserve(0)
                 break
 
-            resetDischarge = True
-            resetCharge = True
-            resetPause = True
-            resetReserve = True
+            resetDischarge = self.set_charge_window or self.set_export_window
+            resetCharge = self.set_charge_window or self.set_export_window
+            resetPause = self.set_charge_window or self.set_export_window
+            resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
             disabled_export = False
 
