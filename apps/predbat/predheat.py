@@ -563,7 +563,7 @@ class PredHeat:
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
         self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
-        self.log("Predheat: Hysterisis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
+        self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(
             "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {} internal temp {} external temp {}".format(
                 self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp), dp3(self.internal_temperature[0]), dp3(self.external_temperature[0])
