@@ -2034,6 +2034,7 @@ class Output:
             cost_data_car = {}
             cost_yesterday_car = 0
             cost_data_car_per_kwh = 0
+            cost_car_per_kwh = 0
         else:
             cost_data_car = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
             cost_data_car_per_kwh = self.minute_data(cost_today_car_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
