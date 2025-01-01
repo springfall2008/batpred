@@ -52,10 +52,10 @@ class Execute:
                     inverter.adjust_reserve(0)
                 break
 
-            resetDischarge = True
-            resetCharge = True
-            resetPause = True
-            resetReserve = True
+            resetDischarge = self.set_charge_window or self.set_export_window
+            resetCharge = self.set_charge_window or self.set_export_window
+            resetPause = self.set_charge_window or self.set_export_window
+            resetReserve = self.set_charge_window or self.set_export_window
             disabled_charge_window = False
             disabled_export = False
 
@@ -390,6 +390,7 @@ class Execute:
             if resetCharge:
                 inverter.adjust_charge_rate(inverter.battery_rate_max_charge * MINUTE_WATT)
 
+
             if self.charge_limit_best:
                 clm = self.charge_limit_best[0]
             else:
@@ -443,7 +444,7 @@ class Execute:
                                 target_soc = calc_percent_limit(max(self.charge_limit_best[0] if self.charge_limit_best[0] != self.reserve else self.soc_kw, self.reserve), self.soc_max)
                                 self.log("Setting charging SOC to {} as per target".format(target_soc))
                                 self.adjust_battery_target_multi(inverter, target_soc, isCharging, isExporting)
-                                if self.charge_limit_best[0] == self.reserve:
+                                if (self.charge_limit_best[0] == self.reserve):
                                     inverter.adjust_charge_immediate(calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max), freeze=True)
                                 else:
                                     inverter.adjust_charge_immediate(target_soc, freeze=True)
@@ -487,10 +488,10 @@ class Execute:
                         )
                         if not inverter.inv_has_charge_enable_time:
                             self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
-
+                    
                     # Charge immediate
                     if isCharging:
-                        if self.charge_limit_best[0] == self.reserve:
+                        if (self.charge_limit_best[0] == self.reserve):
                             inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                         else:
                             inverter.adjust_charge_immediate(calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), freeze=True)
