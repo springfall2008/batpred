@@ -606,7 +606,7 @@ class UserInterface:
             current = self.config_index.get(item["name"], None)
             if current:
                 # print("Restore setting: {} = {} (was {})".format(item["name"], item["value"], current["value"]))
-                if current.get("value", None) != item["value"]:
+                if current.get("value", None) != item.get("value", None):
                     current["value"] = item["value"]
         self.log("Restored debug settings - minutes now {}".format(self.minutes_now))
 
