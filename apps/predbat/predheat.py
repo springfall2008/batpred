@@ -121,7 +121,8 @@ class PredHeat:
         self.delta_correction = DELTA_CORRECTION.copy()
         self.weather_compensation = {}
         self.weather_compensation_enabled = False
-        self.hysteresis = self.get_arg("hysteresis", 0.5, domain="predheat")
+        self.hysteresis_on = abs(self.get_arg("hysteresis", 0.5, domain="predheat"))
+        self.hysteresis_off = abs(self.get_arg("hysteresis_off", 0.1, domain="predheat"))
 
         # Collect predheat settings
         heat_pump_efficiency = self.get_arg("heat_pump_efficiency", {}, domain="predheat")
@@ -356,9 +357,9 @@ class PredHeat:
             # Thermostat model, override with current state also
             if minute == 0:
                 heating_on = heating_active
-            elif heating_on and temp_diff_inside <= -self.hysteresis:
+            elif heating_on and temp_diff_inside <= -self.hysteresis_on:
                 heating_on = False
-            elif not heating_on and temp_diff_inside >= self.hysteresis:
+            elif not heating_on and temp_diff_inside >= self.hysteresis_off:
                 heating_on = True
 
             heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
@@ -562,9 +563,10 @@ class PredHeat:
         self.heating_active = self.get_arg("heating_active", False, domain="predheat")
         self.next_volume_temp = self.get_arg("volume_temp", self.get_arg("next_volume_temp", self.internal_temperature[0]))
 
+        self.log("Predheat: Hysteresis On {} off {} heat loss {} W heat loss {} W per degree".format(self.hysteresis_on, self.hysteresis_off, self.heat_loss_watts, self.heat_loss_degrees))
         self.log(
-            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {}".format(
-                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp)
+            "Predheat: Mode {} Heating active {} Heat loss watts {} degrees {} watts per degree {} heating energy so far {} volume temp {} internal temp {} external temp {}".format(
+                self.mode, self.heating_active, self.heat_loss_watts, self.heat_loss_degrees, self.watt_per_degree, dp2(self.heat_energy_today), dp3(self.next_volume_temp), dp3(self.internal_temperature[0]), dp3(self.external_temperature[0])
             )
         )
         self.get_weather_data(now_utc)

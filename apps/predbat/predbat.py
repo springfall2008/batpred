@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.8.21"
+THIS_VERSION = "v8.9.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]
@@ -469,6 +469,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.load_minutes = {}
         self.load_minutes_age = 0
         self.load_forecast = {}
+        self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
@@ -493,6 +494,18 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.count_inverter_writes = {}
         self.web_interface = None
         self.web_interface_task = None
+        self.rate_slots = []
+        self.io_adjusted = {}
+        self.low_rates = []
+        self.high_export_rates = []
+        self.octopus_slots = []
+        self.cost_today_sofar = 0
+        self.carbon_today_sofar = 0
+        self.import_today = {}
+        self.export_today = {}
+        self.pv_today = {}
+        self.load_minutes = {}
+        self.load_minutes_age = 0
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
