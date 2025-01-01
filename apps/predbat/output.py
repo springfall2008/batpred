@@ -654,20 +654,30 @@ class Output:
             load_forecast = 0
             pv_forecast10 = 0
             load_forecast10 = 0
-            extra_forecast = 0
+            extra_forecast_array = [0 for i in range(len(self.load_forecast_array))]
             for offset in range(minute_relative_start, minute_relative_slot_end, PREDICT_STEP):
                 pv_forecast += pv_forecast_minute_step.get(offset, 0.0)
                 load_forecast += load_minutes_step.get(offset, 0.0)
                 pv_forecast10 += pv_forecast_minute_step10.get(offset, 0.0)
                 load_forecast10 += load_minutes_step10.get(offset, 0.0)
-                for step in range(PREDICT_STEP):
-                    extra_forecast += self.get_from_incrementing(self.load_forecast, offset + self.minutes_now + step, backwards=False)
+                id = 0
+                for xload in self.load_forecast_array:
+                    for step in range(PREDICT_STEP):
+                        extra_forecast_array[id] += self.get_from_incrementing(xload, offset + self.minutes_now + step, backwards=False)
+                    id += 1
 
             pv_forecast = dp2(pv_forecast)
             load_forecast = dp2(load_forecast)
             pv_forecast10 = dp2(pv_forecast10)
             load_forecast10 = dp2(load_forecast10)
-            extra_forecast = dp2(extra_forecast)
+
+            extra_forecast = ""
+            extra_forecast_total = 0
+            for value in extra_forecast_array:
+                if extra_forecast:
+                    extra_forecast += ", "
+                extra_forecast += str(dp2(value))
+                extra_forecast_total += value
 
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
@@ -728,15 +738,14 @@ class Output:
             elif load_forecast > 0.0:
                 load_color = "#AAFFAA"
 
-            if extra_forecast >= 0.5:
+            if extra_forecast_total >= 0.5:
                 extra_color = "#F18261"
-            elif extra_forecast >= 0.25:
+            elif extra_forecast_total >= 0.25:
                 extra_color = "#FFFF00"
-            elif extra_forecast > 0.0:
+            elif extra_forecast_total > 0.0:
                 extra_color = "#AAFFAA"
 
             load_forecast = str(load_forecast)
-            extra_forecast = str(extra_forecast)
 
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))

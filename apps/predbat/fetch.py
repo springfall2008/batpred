@@ -749,6 +749,7 @@ class Fetch:
         self.load_minutes = {}
         self.load_minutes_age = 0
         self.load_forecast = {}
+        self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.load_scaling_dynamic = {}
@@ -763,7 +764,7 @@ class Fetch:
                 self.log("iBoost energy today from sensor reads {} kWh".format(self.iboost_today))
 
         # Fetch extra load forecast
-        self.load_forecast = self.fetch_extra_load_forecast(self.now_utc)
+        self.load_forecast, self.load_forecast_array = self.fetch_extra_load_forecast(self.now_utc)
 
         # Load previous load data
         if self.get_arg("ge_cloud_data", False):
@@ -1574,7 +1575,9 @@ class Fetch:
         """
         Fetch extra load forecast, this is future load data
         """
-        load_forecast = {}
+        load_forecast_final = {}
+        load_forecast_array = []
+
         if "load_forecast" in self.args:
             entity_ids = self.get_arg("load_forecast", indirect=False)
             if isinstance(entity_ids, str):
@@ -1615,14 +1618,23 @@ class Fetch:
                     divide_by=1.0,
                     scale=self.load_scaling,
                     required_unit="kWh",
-                    accumulate=load_forecast,
                 )
 
                 if load_forecast:
                     self.log("Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
                 else:
                     self.log("Warn: Unable to load load forecast from {}".format(entity_id))
-        return load_forecast
+                
+                load_forecast_array.append(load_forecast)
+        
+        # Add all the load forecasts together
+        for load in load_forecast_array:
+            for minute, value in load.items():
+                if minute in load_forecast_final:
+                    load_forecast_final[minute] += value
+                else:
+                    load_forecast_final[minute] = value
+        return load_forecast_final, load_forecast_array
 
     def fetch_carbon_intensity(self, entity_id):
         """
