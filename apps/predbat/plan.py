@@ -1685,12 +1685,16 @@ class Plan:
                 predict_minute_end_m1 = max(predict_minute_end - 5, predict_minute_start)
 
                 if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
-                    soc_start = predict_soc[predict_minute_start]
-                    soc_end = predict_soc[predict_minute_end]
+                    # Work out min/max soc
+                    soc_min = self.soc_max
+                    soc_max = 0
+                    for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                        if minute in predict_soc:
+                            soc_min = min(soc_min, predict_soc[minute])
+                            soc_max = max(soc_max, predict_soc[minute])
+
                     soc_m1 = predict_soc[predict_minute_end_m1]
-                    soc_min = min(soc_start, soc_end)
                     soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
-                    soc_max = max(soc_start, soc_end)
 
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end, soc_m1))
@@ -1738,10 +1742,12 @@ class Plan:
                 predict_minute_start = max(int((window_start - minutes_now) / 5) * 5, 0)
                 predict_minute_end = int((window_end - minutes_now) / 5) * 5
                 if (predict_minute_start in predict_soc) and (predict_minute_end in predict_soc):
-                    soc_start = predict_soc[predict_minute_start]
-                    soc_end = predict_soc[predict_minute_end]
-                    soc_min = min(soc_start, soc_end)
-                    soc_max = max(soc_start, soc_end)
+                    soc_min = self.soc_max
+                    soc_max = 0
+                    for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                        if minute in predict_soc:
+                            soc_min = min(soc_min, predict_soc[minute])
+                            soc_max = max(soc_max, predict_soc[minute])
 
                     if self.debug_enable:
                         self.log("Examine window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_start, soc_end))
