@@ -1992,12 +1992,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
-    # my_predbat.fetch_config_options()
+    #my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
-        my_predbat.plan_debug = True
+        my_predbat.args["plan_debug"] = True
         pass
         # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
@@ -5853,6 +5853,8 @@ def main():
             basename = os.path.basename(filename)
             pathname = os.path.dirname(filename)
             failed |= run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
+            if failed:
+                break
 
     if failed:
         print("**** ERROR: Some tests failed ****")
