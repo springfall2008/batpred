@@ -517,14 +517,14 @@ solcast_poll_hours: 8
 ```
 
 Note that by default the solcast API will be used to download all sites (up to 2 for hobby accounts), if you want to override this set your sites manually using
-**solcast_sites** as an array of site IDs:
+**solcast_sites** in apps.yaml as an array of site IDs:
 
 ```yaml
 solcast_sites:
    - 'xxxx'
 ```
 
-If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list, i.e.:
+If you have more than 2 array orientations and thus more than one Solcast API key, enter each key in a list:
 
 ```yaml
 api_key:
@@ -532,16 +532,17 @@ api_key:
   - yyyy_API_key_2
 ```
 
-Keep in mind hobbyist accounts only have 10 polls per day so you need to ensure that the solcast_poll_hours refresh period is set so that you do not exceed the 10 poll limit.
-If you have two arrays then each Solcast refresh will consume 2 polls.
-If you use the same Solcast account for other automations the total polls needs to be kept under the limit or you will experience failures.
+Keep in mind that new hobbyist accounts only have 10 polls per day so you need to ensure that the solcast_poll_hours refresh period is set so that you do not exceed the 10 poll limit.
+If you have two arrays then each Solcast refresh will consume 2 polls and its suggested that you set solcast_poll_hours to 4.8 to maximise your polls over a 24 hour period (5 polls a day, 24/5=poll every 4.8 hours).
+
+If you use the same Solcast account for other automations the poll frequency will need to be reduced to ensure the total polls is kept under your account daily poll limit or you will experience failures.
 
 If you have multiple PV arrays connected to hybrid inverters or you have AC-coupled inverters, then ensure your PV configuration in Solcast covers all arrays.
 
 If however you have a mixed PV array setup with some PV that does not feed into the inverters that Predbat is managing
 (e.g. hybrid GE inverters with an older firmware but a separate older FIT array that directly feeds AC into the house),
 then it's recommended that Solcast is only configured for the PV connected to the inverters that Predbat is managing.<BR>
-NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware are able to charge their batteries from excess AC that would be exported,
+NB: Gen2 and Gen3 hybrids and older inverters with the 'fast performance' firmware are able to charge their batteries from excess AC that would be exported,
 so for these inverters you should configure Solcast with your total solar generation capability.
 
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast,
