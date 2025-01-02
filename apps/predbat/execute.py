@@ -446,7 +446,7 @@ class Execute:
                                 if self.charge_limit_best[0] == self.reserve:
                                     inverter.adjust_charge_immediate(calc_percent_limit(max(inverter.soc_kw, inverter.reserve), inverter.soc_max), freeze=True)
                                 else:
-                                    inverter.adjust_charge_immediate(target_soc, freeze=True)
+                                    inverter.adjust_charge_immediate(target_soc)
                             elif not inverter.inv_has_target_soc:
                                 self.log("Setting charging SOC to 0 as we are not charging and inverter doesn't support target soc")
                                 self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
