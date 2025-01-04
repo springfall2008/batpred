@@ -674,14 +674,14 @@ class Output:
             soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
             soc_min = self.soc_max
             soc_max = 0
-            for minute_check in range (minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
+            for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
                 soc_min = min(self.predict_soc_best.get(minute_check, 0), soc_min)
                 soc_max = max(self.predict_soc_best.get(minute_check, 0), soc_max)
             soc_percent_min = calc_percent_limit(soc_min, self.soc_max)
             soc_percent_max = calc_percent_limit(soc_max, self.soc_max)
             soc_min_window = self.soc_max
             soc_max_window = 0
-            for minute_check in range (minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
+            for minute_check in range(minute_relative_start, minute_relative_end + PREDICT_STEP, PREDICT_STEP):
                 soc_min_window = min(self.predict_soc_best.get(minute_check, 0), soc_min_window)
                 soc_max_window = max(self.predict_soc_best.get(minute_check, 0), soc_max_window)
             soc_percent_min_window = calc_percent_limit(soc_min_window, self.soc_max)
