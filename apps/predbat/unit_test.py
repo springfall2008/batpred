@@ -948,7 +948,7 @@ def test_inverter_update(
     return failed
 
 
-def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, stop_discharge=False, charge_start_time="00:00:00", charge_end_time="23:55:00", nofreeze=False):
+def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, stop_discharge=False, charge_start_time="00:00:00", charge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
         def adjust_charge_immediate(self, target_soc, freeze=False)
@@ -962,7 +962,7 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
 
     my_predbat.args["charge_start_service"] = "charge_start"
     my_predbat.args["charge_stop_service"] = "charge_stop"
-    if not nofreeze:
+    if not no_freeze:
         my_predbat.args["charge_freeze_service"] = "charge_freeze"
     else:
         my_predbat.args["charge_freeze_service"] = None
@@ -1000,7 +1000,7 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
-def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", nofreeze=False):
+def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
         def adjust_export_immediate(self, target_soc, freeze=False)
@@ -1017,7 +1017,7 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     my_predbat.args["charge_freeze_service"] = "charge_freeze"
     my_predbat.args["discharge_start_service"] = "discharge_start"
     my_predbat.args["discharge_stop_service"] = "discharge_stop"
-    if not nofreeze:
+    if not no_freeze:
         my_predbat.args["discharge_freeze_service"] = "discharge_freeze"
     else:
         my_predbat.args["discharge_freeze_service"] = None
@@ -1373,7 +1373,7 @@ def run_inverter_tests():
     failed |= test_call_adjust_charge_immediate("charge_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate6", my_predbat, ha, inv, dummy_items, 49, charge_start_time="00:00:00", charge_end_time="11:00:00")
     failed |= test_call_adjust_charge_immediate("charge_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
-    failed |= test_call_adjust_charge_immediate("charge_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, nofreeze=True)
+    failed |= test_call_adjust_charge_immediate("charge_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
 
     failed |= test_call_adjust_export_immediate("export_immediate1", my_predbat, ha, inv, dummy_items, 100, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=True)
@@ -1382,7 +1382,7 @@ def run_inverter_tests():
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00")
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
-    failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, nofreeze=True)
+    failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
 
     return failed
 
@@ -2001,7 +2001,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
-    # my_predbat.fetch_config_options()
+    #my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
@@ -4049,7 +4049,7 @@ def run_optimise_all_windows_tests(my_predbat):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(10 if price <= 5.0 else 0)
-    expect_charge_limit[42] = 0.5  # freeze
+    expect_charge_limit[42] = 0.5 # freeze
     failed |= run_optimise_all_windows(
         "created2",
         my_predbat,
