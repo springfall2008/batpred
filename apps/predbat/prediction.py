@@ -116,6 +116,7 @@ class Prediction:
             self.set_discharge_during_charge = base.set_discharge_during_charge
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
+            self.set_charge_window = base.set_charge_window
             self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
@@ -642,7 +643,7 @@ class Prediction:
                 four_hour_rule = False
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
-                if save in ["best", "best10", "test"]:
+                if self.set_charge_window and (save in ["best", "best10", "test"]):
                     # Only tune charge rate on final plan not every simulation
                     charge_rate_now = find_charge_rate(
                         minute_absolute,
