@@ -924,6 +924,8 @@ class Fetch:
                     self.car_charging_limit[0] = min(self.car_charging_limit[0], octopus_limit)
                 elif self.octopus_intelligent_charging:
                     octopus_ready_time = self.get_arg("octopus_ready_time", None)
+                    if octopus_ready_time is not None and len(octopus_ready_time) == 5:
+                        octopus_ready_time += ":00"
                     octopus_limit = self.get_arg("octopus_charge_limit", None)
                     if octopus_limit:
                         try:
