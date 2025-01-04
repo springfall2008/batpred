@@ -195,16 +195,18 @@ class Prediction:
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
             try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record
         )
-        min_soc = 0
-        max_soc = self.soc_max
+        min_soc = self.soc_max
+        max_soc = 0
         if not all_n:
             window = charge_window[window_n]
             predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
             predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                min_soc = min(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
-            if (predict_minute_start in self.predict_soc) and (predict_minute_end in self.predict_soc):
-                max_soc = max(self.predict_soc[predict_minute_start], self.predict_soc[predict_minute_end])
+            for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+                if minute in self.predict_soc:
+                    min_soc = min(self.predict_soc[minute], min_soc)
+                    max_soc = max(self.predict_soc[minute], max_soc)
+            max_soc = max(max_soc, min_soc)
+            min_soc = min(min_soc, max_soc)
 
         return (
             cost,
@@ -570,7 +572,7 @@ class Prediction:
             if charge_window_n >= 0:
                 if not self.set_discharge_during_charge:
                     discharge_rate_now = self.battery_rate_min
-                elif abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0:
+                elif soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
                     discharge_rate_now = self.battery_rate_min
 
             charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling

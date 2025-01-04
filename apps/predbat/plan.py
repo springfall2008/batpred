@@ -950,9 +950,8 @@ class Plan:
             start = charge_window[window_n]["start"]
             end = charge_window[window_n]["end"]
             window_size = end - start
-            # For single windows, if the size is 30 minutes or less then don't explore different SOC options either charge or don't charge
             if window_size <= 30:
-                best_soc_step = self.soc_max
+                best_soc_step = best_soc_step * 2
             min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
 
         # Start the loop at the max soc setting
@@ -1162,9 +1161,12 @@ class Plan:
 
             if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
+                metric -= 0.003
+            elif try_soc == self.soc_max:
+                # Minor weighting to 100%
                 metric -= 0.002
-            elif try_soc == self.soc_max or try_soc == self.reserve:
-                # Minor weighting to 100% or freeze
+            elif self.set_charge_freeze and try_soc == self.reserve:
+                # Minor weighting to freeze
                 metric -= 0.001
 
             # Round metric to 4 DP
@@ -1340,6 +1342,13 @@ class Plan:
 
             # Compute the metric from simulation results
             metric = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+
+            if this_export_limit == 100:
+                # Minor weighting to off
+                metric -= 0.002
+            elif this_export_limit == 0:
+                # Minor weighting to 0%
+                metric -= 0.001
 
             # Adjust to try to keep existing windows
             if window_n < 2 and this_export_limit < 99.0 and self.export_window and self.isExporting:
@@ -1607,7 +1616,20 @@ class Plan:
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
                 if self.debug_enable:
-                    self.log("Combine charge slot {} with previous - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
+                    self.log("Combine charge slot {} with previous (same target) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
+            elif (
+                new_window_best
+                and (start == new_window_best[-1]["end"])
+                and (limit >= new_limit_best[-1])
+                and (start not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and new_window_best[-1]["average"] == window["average"]
+            ):
+                new_window_best[-1]["end"] = end
+                new_window_best[-1]["target"] = window.get("target", limit)
+                new_limit_best[-1] = limit
+                if self.debug_enable:
+                    self.log("Combine charge slot {} with previous (same price) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif limit > 0:
                 new_limit_best.append(limit)
                 new_window_best.append(window)
@@ -1718,8 +1740,8 @@ class Plan:
 
             else:
                 self.log("Warn: Clip charge window {} as it's already passed".format(window_n))
-                charge_limit_best[window_n] = self.best_soc_min
-                window["target"] = self.best_soc_min
+                charge_limit_best[window_n] = 0
+                window["target"] = 0
         return charge_window_best, charge_limit_best
 
     def clip_export_slots(self, minutes_now, predict_soc, export_window_best, export_limits_best, record_export_windows, step):
