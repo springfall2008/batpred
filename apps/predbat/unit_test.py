@@ -2001,7 +2001,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
-    #my_predbat.fetch_config_options()
+    # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
@@ -4049,7 +4049,7 @@ def run_optimise_all_windows_tests(my_predbat):
         price = 16 - n % 16
         charge_window_best.append({"start": my_predbat.minutes_now + 30 * n, "end": my_predbat.minutes_now + 30 * (n + 1), "average": price})
         expect_charge_limit.append(10 if price <= 5.0 else 0)
-    expect_charge_limit[42] = 0.5 # freeze
+    expect_charge_limit[42] = 0.5  # freeze
     failed |= run_optimise_all_windows(
         "created2",
         my_predbat,

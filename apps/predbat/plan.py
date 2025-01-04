@@ -951,7 +951,7 @@ class Plan:
             end = charge_window[window_n]["end"]
             window_size = end - start
             if window_size <= 30:
-                best_soc_step = best_soc_step *2
+                best_soc_step = best_soc_step * 2
             min_improvement_scaled = self.metric_min_improvement * window_size / 30.0
 
         # Start the loop at the max soc setting
@@ -1617,7 +1617,14 @@ class Plan:
                 new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous (same target) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
-            elif new_window_best and (start == new_window_best[-1]["end"]) and  (limit >= new_limit_best[-1]) and (start not in self.manual_all_times) and  (new_window_best[-1]["start"] not in self.manual_all_times) and new_window_best[-1]["average"] == window["average"]:
+            elif (
+                new_window_best
+                and (start == new_window_best[-1]["end"])
+                and (limit >= new_limit_best[-1])
+                and (start not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and new_window_best[-1]["average"] == window["average"]
+            ):
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_limit_best[-1] = limit
