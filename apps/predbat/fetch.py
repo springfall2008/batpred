@@ -1624,9 +1624,9 @@ class Fetch:
                     self.log("Loaded load forecast from {} load from midnight {} to now {} to midnight {}".format(entity_id, load_forecast.get(0, 0), load_forecast.get(self.minutes_now, 0), load_forecast.get(24 * 60, 0)))
                 else:
                     self.log("Warn: Unable to load load forecast from {}".format(entity_id))
-
+                
                 load_forecast_array.append(load_forecast)
-
+        
         # Add all the load forecasts together
         for load in load_forecast_array:
             for minute, value in load.items():

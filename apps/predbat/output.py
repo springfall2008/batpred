@@ -631,16 +631,6 @@ class Output:
 
             if export_window_n >= 0 and not in_span:
                 export_end_minute = self.export_window_best[export_window_n]["end"]
-                charge_intersect = -1
-                for try_minute in range(minute_start, export_end_minute, PREDICT_STEP):
-                    charge_intersect = self.in_charge_window(self.charge_window_best, try_minute)
-                    if charge_intersect >= 0 and self.charge_limit_best[charge_intersect] == 0:
-                        charge_intersect = -1
-                    if charge_intersect >= 0:
-                        break
-                if charge_intersect >= 0:
-                    export_end_minute = min(export_end_minute, self.charge_window_best[charge_intersect]["start"])
-
                 rowspan = int((export_end_minute - minute) / 30)
                 start = self.export_window_best[export_window_n]["start"]
                 if start <= minute and rowspan > 1 and (charge_window_n < 0):
@@ -682,10 +672,21 @@ class Output:
             soc_percent = calc_percent_limit(self.predict_soc_best.get(minute_relative_start, 0.0), self.soc_max)
             soc_percent_end = calc_percent_limit(self.predict_soc_best.get(minute_relative_slot_end, 0.0), self.soc_max)
             soc_percent_end_window = calc_percent_limit(self.predict_soc_best.get(minute_relative_end, 0.0), self.soc_max)
-            soc_percent_max = max(soc_percent, soc_percent_end)
-            soc_percent_min = min(soc_percent, soc_percent_end)
-            soc_percent_max_window = max(soc_percent, soc_percent_end_window)
-            soc_percent_min_window = min(soc_percent, soc_percent_end_window)
+            soc_min = self.soc_max
+            soc_max = 0
+            for minute_check in range (minute_relative_start, minute_relative_slot_end + PREDICT_STEP, PREDICT_STEP):
+                soc_min = min(self.predict_soc_best.get(minute_check, 0), soc_min)
+                soc_max = max(self.predict_soc_best.get(minute_check, 0), soc_max)
+            soc_percent_min = calc_percent_limit(soc_min, self.soc_max)
+            soc_percent_max = calc_percent_limit(soc_max, self.soc_max)
+            soc_min_window = self.soc_max
+            soc_max_window = 0
+            for minute_check in range (minute_relative_start, minute_relative_slot_end + PREDICT_STEP, PREDICT_STEP):
+                soc_min_window = min(self.predict_soc_best.get(minute_check, 0), soc_min_window)
+                soc_max_window = max(self.predict_soc_best.get(minute_check, 0), soc_max_window)
+            soc_percent_min_window = calc_percent_limit(soc_min_window, self.soc_max)
+            soc_percent_max_window = calc_percent_limit(soc_max_window, self.soc_max)
+
             soc_change = self.predict_soc_best.get(minute_relative_slot_end, 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
             metric_start = self.predict_metric_best.get(minute_relative_start, 0.0)
             metric_end = self.predict_metric_best.get(minute_relative_slot_end, metric_start)
@@ -762,6 +763,8 @@ class Output:
             elif rate_value_export >= export_cost_threshold:
                 rate_color_export = "#FFFFAA"
 
+            had_state = False
+
             if charge_window_n >= 0:
                 limit = self.charge_limit_best[charge_window_n]
                 if "target" in self.charge_window_best[charge_window_n]:
@@ -788,6 +791,7 @@ class Output:
                     elif self.charge_window_best[charge_window_n]["start"] in self.manual_freeze_charge_times:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
+                    had_state = True
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]
@@ -801,6 +805,7 @@ class Output:
                             state = " &rarr;"
                         state_color = "#FFFFFF"
                         show_limit = ""
+                        had_state = True
 
             if export_window_n >= 0:
                 limit = self.export_limits_best[export_window_n]
@@ -808,7 +813,7 @@ class Output:
                     limit = self.export_window_best[export_window_n]["target"]
 
                 if limit == 99:  # freeze exporting
-                    if state == soc_sym:
+                    if not had_state:
                         state = ""
                     if state:
                         state += "</td><td bgcolor=#AAAAAA>"  # charging and freeze exporting in same slot, split the state into two
@@ -818,7 +823,7 @@ class Output:
                     state += "FrzExp&rarr;"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                 elif limit < 100:
-                    if state == soc_sym:
+                    if not had_state:
                         state = ""
                     if state:
                         state += "</td><td bgcolor=#FFFF00>"  # charging and exporting in the same slot, split the state into two
