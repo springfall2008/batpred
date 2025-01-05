@@ -83,17 +83,17 @@ class Inverter:
                 if entity_id:
                     entity_id = self.base.resolve_arg(service, entity_id, indirect=False)
                 if shell:
-                    self.log("Calling restart shell command: {}".format(shell))
+                    self.log("Warn: Calling restart shell command: {}".format(shell))
                     os.system(shell)
                 if service:
                     if addon:
-                        self.log("Calling restart service {} with addon {}".format(service, addon))
+                        self.log("Warn: Calling restart service {} with addon {}".format(service, addon))
                         self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
-                        self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
+                        self.log("Warn: Calling restart service {} with entity_id {}".format(service, entity_id))
                         self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
-                        self.log("Calling restart service {}".format(service))
+                        self.log("Warn: Calling restart service {}".format(service))
                         self.base.call_service_wrapper(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
@@ -794,7 +794,6 @@ class Inverter:
             self.charge_rate_now = self.rest_data["Control"]["Battery_Charge_Rate"] / MINUTE_WATT
             self.discharge_rate_now = self.rest_data["Control"]["Battery_Discharge_Rate"] / MINUTE_WATT
         else:
-            self.log("Inverter {} scheduled_charge_enable {} scheduled_discharge_enable {}".format(self.id, self.base.get_arg("scheduled_charge_enable", "on", index=self.id), self.base.get_arg("scheduled_discharge_enable", "off", index=self.id)))
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
             self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
@@ -872,7 +871,6 @@ class Inverter:
                 else:
                     self.charge_enable_time = True
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
-                self.log("Inverter {} scheduled_charge_enable set to {}".format(self.id, self.charge_enable_time))
 
             # Track charge start/end
             self.track_charge_start = charge_start_time.strftime("%H:%M:%S")
@@ -886,6 +884,13 @@ class Inverter:
             self.charge_start_time_minutes = charge_start_time.hour * 60 + charge_start_time.minute
             self.charge_end_time_minutes = charge_end_time.hour * 60 + charge_end_time.minute
 
+            # Charge is off due to start/end time being same
+            if not self.inv_has_charge_enable_time and not self.charge_enable_time:
+                self.charge_start_time_minutes = self.base.forecast_minutes
+                self.charge_end_time_minutes = self.base.forecast_minutes
+                self.track_charge_start = "00:00:00"
+                self.track_charge_end = "00:00:00"
+
             if self.charge_end_time_minutes < self.charge_start_time_minutes:
                 # As windows wrap, if end is in the future then move start back, otherwise forward
                 if self.charge_end_time_minutes > minutes_now:
@@ -897,7 +902,6 @@ class Inverter:
             if self.charge_end_time_minutes < minutes_now:
                 self.charge_start_time_minutes += 60 * 24
                 self.charge_end_time_minutes += 60 * 24
-
         else:
             # If charging is disabled set a fake window outside
             self.charge_start_time_minutes = self.base.forecast_minutes
@@ -995,6 +999,11 @@ class Inverter:
                 self.discharge_start_time_minutes -= 60 * 24
             else:
                 self.discharge_end_time_minutes += 60 * 24
+
+        # Move forward if the window has passed
+        if self.discharge_end_time_minutes < minutes_now:
+            self.discharge_start_time_minutes += 60 * 24
+            self.discharge_end_time_minutes += 60 * 24
 
         if not quiet:
             self.base.log("Inverter {} scheduled discharge enable is {}".format(self.id, self.discharge_enable_time))

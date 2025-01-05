@@ -244,7 +244,7 @@ By default with this option enabled if there are multiple charge slots of the sa
 thus leaving the higher export slots available.
 
 **switch.calculate_export_high_import** (_expert_mode_) When True export slots of the same value are sorted by import price (to avoid the low import slots for export).
-When False they are sorted just by price and then time. The default is False.
+When False they are sorted just by price and then time. The default is True.
 
 By default with this option disabled the latest export slot of the same value will be picked, this is useful for fixed price export tariffs where
 you want to export as late in the day as you can.
