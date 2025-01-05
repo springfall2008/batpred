@@ -117,6 +117,7 @@ class Prediction:
             self.set_read_only = base.set_read_only
             self.set_charge_low_power = base.set_charge_low_power
             self.set_charge_window = base.set_charge_window
+            self.set_export_window = base.set_export_window
             self.charge_low_power_margin = base.charge_low_power_margin
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
@@ -483,6 +484,11 @@ class Prediction:
             if record:
                 final_pv_kwh = pv_kwh
 
+            # Modelling reset of charge/discharge rate
+            if self.set_charge_window or self.set_export_window:
+                charge_rate_now = self.battery_rate_max_charge
+                discharge_rate_now = self.battery_rate_max_discharge
+
             # Simulate car charging
             car_load = self.in_car_slot(minute_absolute)
 
@@ -557,11 +563,6 @@ class Prediction:
             load_kwh += load_yesterday
             if record:
                 final_load_kwh = load_kwh
-
-            # Modelling reset of charge/discharge rate
-            if self.set_charge_window or self.set_export_window:
-                charge_rate_now = self.battery_rate_max_charge
-                discharge_rate_now = self.battery_rate_max_discharge
 
             # discharge freeze, reset charge rate by default
             if self.set_export_freeze:
