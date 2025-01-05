@@ -83,20 +83,17 @@ class Inverter:
                 if entity_id:
                     entity_id = self.base.resolve_arg(service, entity_id, indirect=False)
                 if shell:
-                    self.log("Calling restart shell command: {}".format(shell))
+                    self.log("Warn: Calling restart shell command: {}".format(shell))
                     os.system(shell)
                 if service:
                     if addon:
-                        print("Calling restart service {} with addon {}".format(service, addon))
-                        self.log("Calling restart service {} with addon {}".format(service, addon))
+                        self.log("Warn: Calling restart service {} with addon {}".format(service, addon))
                         self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:
-                        print("Calling restart service {} with entity_id {}".format(service, entity_id))
-                        self.log("Calling restart service {} with entity_id {}".format(service, entity_id))
+                        self.log("Warn: Calling restart service {} with entity_id {}".format(service, entity_id))
                         self.base.call_service_wrapper(service, entity_id=entity_id)
                     else:
-                        print("Calling restart service {}".format(service))
-                        self.log("Calling restart service {}".format(service))
+                        self.log("Warn: Calling restart service {}".format(service))
                         self.base.call_service_wrapper(service)
                     self.base.call_notify("Auto-restart service {} called due to: {}".format(service, reason))
                     self.sleep(15)
