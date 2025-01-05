@@ -558,13 +558,13 @@ class Prediction:
             if record:
                 final_load_kwh = load_kwh
 
-            # Reset modelled discharge rate if no car is charging
-            if not self.car_charging_from_battery and not car_freeze and not iboost_freeze:
+            # Modelling reset of charge/discharge rate
+            if self.set_charge_window or self.set_export_window:
+                charge_rate_now = self.battery_rate_max_charge
                 discharge_rate_now = self.battery_rate_max_discharge
 
             # discharge freeze, reset charge rate by default
             if self.set_export_freeze:
-                charge_rate_now = self.battery_rate_max_charge
                 # Freeze mode
                 if (export_window_n >= 0) and (self.set_export_freeze and (export_limits[export_window_n] == 99.0 or self.set_export_freeze_only)):
                     charge_rate_now = self.battery_rate_min  # 0
