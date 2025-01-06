@@ -156,7 +156,7 @@ rather than from the normal GivTCP reported 'Battery Capacity kWh' size.
 If your battery size is reported wrongly maybe try turning this on and see if it helps.
 
 **input_number.predbat_load_scaling** is a percentage Scaling factor applied to historical load, increase this if you want to be more pessimistic on future consumption.
-Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load.
+Use 1.0 to use exactly previous load data. A value of 1.1 for example would add 10% to historical load. Note that the output data entity predbat.load_energy_h0 will be scaled accordingly.
 
 **input_number.predbat_load_scaling10** is a percentage Scaling factor applied to historical load only for the PV10% scenario (this is in addition to load_scaling above).
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.

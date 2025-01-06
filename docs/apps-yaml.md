@@ -383,8 +383,8 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
-*TIP:* Some older inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
-GivTCP does not recognise this provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
+*TIP:* Some older GivEnergy inverters such as the Gen 1 hybrid and AC3 inverter that have had firmware upgrades to introduce battery pause functionality do not have sufficient memory on the inverter to provide control of battery pause start and end times.
+GivTCP does not recognise this and so still provides the select.givtcp_xxxx_battery_pause_start_time_slot and end_time_slot controls, but they do not work.<BR>
 Predbat can report an error trying to set them, or they revert back to 00:00:00 after being changed by Predbat and there will also be errors setting these controls reported in the GivTCP log.<BR>
 For these inverters the pause_start_time and pause_end_time entries should be commented out in apps.yaml to stop Predbat trying to use them.
 
@@ -820,7 +820,7 @@ so set battery_scaling to 0.8 to report the correct usable capacity figure to Pr
 *TIP:* Likewise, if you have one or multiple GivEnergy All in One (AIO)'s,
 it will incorrectly report the 13.5kWh usable capacity of each AIO as 15.9kWh, so set battery_scaling to 0.85 to correct this.
 
-If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC
+If you are going chart your battery SoC in Home Assistant then you may want to use **predbat.soc_kw_h0** as your current SoC (as this will be scaled)
 rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lines up.
 
 ### Import export scaling
