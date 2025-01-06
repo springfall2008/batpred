@@ -313,10 +313,19 @@ template:
 If you have an issue with the GivTCP data, Predbat can get the required historical data from the GivEnergy cloud instead. This data is updated every 30 minutes.
 Obviously connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
-- **ge_cloud_data** - When True Predbat will use the [GE Cloud integration](https://github.com/springfall2008/ge_cloud)
-for inverter data rather than GivTCP sensors for load_today, import_today and export_today
+- **ge_cloud_data** - When True Predbat will connect to the GivEnergy cloud rather than GivTCP sensors for historical load_today, import_today and export_today inverter data
 - **ge_cloud_serial** - Set the inverter serial number to use for the cloud data
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+
+If you need to create a ge_cloud_key, in the GivEnergy cloud portal:
+
+- Click 'account settings' in the menu bar (icon of a person overlaid with a cogwheel)
+- Click 'Manage Account Security' then 'Manage API Tokens' then 'Create API Token'
+- Enter a name for the token e.g. 'Predbat'
+- Select 'No expiry' for the token expiry duration, or choose a fixed duration but remember to create a new token before it expires as Predbat's access will stop once the token expires
+- Ensure that 'api:inverter' is ticked
+- Create token
+- Finally, copy/paste the token created into ge_cloud_key within apps.yaml
 
 ## Load filtering
 
