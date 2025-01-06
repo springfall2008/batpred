@@ -282,15 +282,30 @@ See the [Workarounds](#workarounds) section below for configuration settings for
 
 If you have multiple inverters then you may find that the load_today figures are incorrect as the inverters share the house load between them.
 In this circumstance one solution is to create a Home Assistant template helper to calculate house load from {pv generation}+{battery discharge}-{battery charge}+{import}-{export}.
+The example below is defined in configuration.yaml (not the HA user interface) so it only updates every 5 minutes rather than on every underlying sensor state change:
 
 e.g.
 
 ```yaml
-{{ ( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
-  + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
-  - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
-  + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
-  - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) ) | round(1) }}
+# Home consumption sensor, updated every 5 minutes instead of the default of every sensor state change
+template:
+  - trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: "House Load Today"
+        unique_id: "house_load_today"
+        unit_of_measurement: kWh
+        state_class: total
+        device_class: energy
+        state: >
+          {% set x=( states('sensor.givtcp_XXX_pv_energy_today_kwh')|float(0) + <inverter 2>...
+            + states('sensor.givtcp_XXX_battery_discharge_energy_today_kwh')|float(0) + <inverter 2>...
+            - states('sensor.givtcp_XXX_battery_charge_energy_today_kwh')|float(0) - <inverter 2>...
+            + states('sensor.givtcp_XXX_import_energy_today_kwh')|float(0)
+            - states('sensor.givtcp_XXX_export_energy_today_kwh')|float(0) )
+          %}
+          {{ max(x,0)|round(1) }}
 ```
 
 ### GivEnergy Cloud Data
