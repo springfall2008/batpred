@@ -1127,7 +1127,7 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
-def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None):
+def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
     """
     tests
         def call_service_template(self, service, data, domain="charge", extra_data={})
@@ -1152,18 +1152,20 @@ def test_call_service_template(test_name, my_predbat, inv, service_name="test", 
     if repeat:
         expected = []
     else:
-        expected = [[service_call, data]] if not expected_result else expected_result
+        expected = [[service_call, data]] if (expected_result is None) else expected_result
+
     result = ha.get_service_store()
     if json.dumps(expected) != json.dumps(result):
-        print("ERROR: {} service should be {} got {} - 1".format(service_name, expected, result))
+        print("ERROR: {} service should be {} got {} - 1".format(service_name, json.dumps(expected), json.dumps(result)))
         failed = True
 
-    inv.call_service_template(service_name, data, domain=domain, extra_data=extra_data)
-    expected = []
-    result = ha.get_service_store()
-    if json.dumps(expected) != json.dumps(result):
-        print("ERROR: {} service should be {} got {} - 2".format(service_name, expected, result))
-        failed = True
+    if twice:
+        inv.call_service_template(service_name, data, domain=domain, extra_data=extra_data)
+        expected = []
+        result = ha.get_service_store()
+        if json.dumps(expected) != json.dumps(result):
+            print("ERROR: {} service should be {} got {} - 2".format(service_name, expected, result))
+            failed = True
 
     ha.service_store_enable = False
     return failed
@@ -1626,10 +1628,24 @@ def run_inverter_tests():
     failed |= test_call_service_template(
         "test_service_complex2", my_predbat, inv, service_name="complex_service", domain="charge", data={"test": "data"}, extra_data={"extra": "extra_data"}, service_template={"service": "funny", "dummy": "22", "extra": "{extra}"}, clear=False, repeat=True
     )
+    failed |= test_call_service_template(
+        "test_service_complex3",
+        my_predbat,
+        inv,
+        service_name="complex_service",
+        domain="charge",
+        data={"test": "data"},
+        extra_data={"extra": "extra_data"},
+        service_template={"service": "funny", "dummy": "22", "extra": "{extra}", "always": True},
+        expected_result=[["funny", {"dummy": "22", "extra": "extra_data"}]],
+        clear=False,
+        repeat=False,
+        twice=False,
+    )
 
     my_predbat.args["extra"] = "42"
     failed |= test_call_service_template(
-        "test_service_complex3",
+        "test_service_complex4",
         my_predbat,
         inv,
         service_name="complex_service",
@@ -2366,6 +2382,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         my_predbat.args["plan_debug"] = True
+        my_predbat.best_soc_keep = 1
         pass
         # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0

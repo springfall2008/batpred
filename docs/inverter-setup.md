@@ -519,6 +519,18 @@ charge_start_service:
      entity_id: switch.tsunami_charger
 ```
 
+Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
+If however you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
+
+```yaml
+charge_start_service:
+   - service: my_charge_start_service
+     device_id: {device_id}
+     power: {power}
+     soc: {target_soc}
+     repeat: True
+```
+
 #### charge_start_service
 
 Called to start a charge
