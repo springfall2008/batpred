@@ -1952,24 +1952,24 @@ class Inverter:
         if not service_list:
             return False
 
+        if not isinstance(service_list, list):
+            service_list = [service_list]
+
         hash_index = domain
         last_service_hash = self.base.last_service_hash.get(hash_index, "")
         this_service_hash = hash(str(service) + "_" + str(data) + "_" + str(extra_data))
 
         if last_service_hash == this_service_hash:
-            self.log("Inverter {} Skipping service {} domain {} with data {} extra_data {} as already called".format(self.id, service, domain, data, extra_data))
-            return True
+            service_repeat = True
         else:
             # Record the last service called
             self.base.last_service_hash[hash_index] = this_service_hash
-            self.log("Inverter {} Calling service {} domain {} with data {} extra_data {}".format(self.id, service, domain, data, extra_data))
-
-        if not isinstance(service_list, list):
-            service_list = [service_list]
+            service_repeat = False
 
         for service_template in service_list:
             service_data = {}
             service_name = ""
+            service_always = False
 
             if isinstance(service_template, str):
                 service_name = service_template
@@ -1982,14 +1982,19 @@ class Inverter:
                 for key in service_template:
                     if key == "service":
                         service_name = service_template[key]
+                    elif key == "always":
+                        service_always = service_template[key]
                     else:
                         value = service_template[key]
                         value = self.base.resolve_arg(service_template, value, indirect=False, index=self.id, default="", extra_args=full_data)
                         if value:
                             service_data[key] = value
 
-            if service_name:
+            if service_name and service_repeat and not service_always:
+                self.log("Inverter {} Skipped service {} domain {} service_name {} as it was previously called.".format(self.id, service, domain, service_name))
+            elif service_name:
                 service_name = service_name.replace(".", "/")
+                self.log("Inverter {} Calling service {} domain {} service_name {} with data {}".format(self.id, service, domain, service_name, service_data))
                 self.base.call_service_wrapper(service_name, **service_data)
             else:
                 self.log("Warn: Inverter {} unable to find service name for {}".format(self.id, service))
