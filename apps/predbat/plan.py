@@ -2236,8 +2236,6 @@ class Plan:
                     )
                 )
 
-        # Re-compute end record
-        self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
