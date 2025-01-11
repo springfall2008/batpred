@@ -102,22 +102,22 @@ class Execute:
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
                         new_charge_rate, new_charge_rate_real = find_charge_rate(
-                                self.minutes_now,
-                                inverter.soc_kw,
-                                window,
-                                self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
-                                inverter.battery_rate_max_charge,
-                                inverter.soc_max,
-                                self.battery_charge_power_curve,
-                                self.set_charge_low_power,
-                                self.charge_low_power_margin,
-                                self.battery_rate_min,
-                                self.battery_rate_max_scaling,
-                                self.battery_loss,
-                                self.log,
-                                self.battery_temperature,
-                                self.battery_temperature_discharge_curve
-                            )
+                            self.minutes_now,
+                            inverter.soc_kw,
+                            window,
+                            self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
+                            inverter.battery_rate_max_charge,
+                            inverter.soc_max,
+                            self.battery_charge_power_curve,
+                            self.set_charge_low_power,
+                            self.charge_low_power_margin,
+                            self.battery_rate_min,
+                            self.battery_rate_max_scaling,
+                            self.battery_loss,
+                            self.log,
+                            self.battery_temperature,
+                            self.battery_temperature_discharge_curve,
+                        )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
                         current_charge_rate = inverter.get_current_charge_rate()
 
@@ -668,7 +668,6 @@ class Execute:
             self.load_power += inverter.load_power
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
             self.battery_temperature += inverter.battery_temperature
-
 
         # Work out battery temperature
         self.battery_temperature = int(dp0(self.battery_temperature / self.num_inverters))
