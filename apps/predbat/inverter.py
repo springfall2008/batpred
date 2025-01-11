@@ -1982,7 +1982,7 @@ class Inverter:
                 for key in service_template:
                     if key == "service":
                         service_name = service_template[key]
-                    elif key == "always":
+                    elif key in ["always", "repeat"]:
                         service_always = service_template[key]
                     else:
                         value = service_template[key]
