@@ -162,6 +162,42 @@ pred_bat:
    - select.givtcp_{geserial}_battery_pause_end_time_slot
    - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
+  # Battery temperature sensor per inverter, used outside REST mode to get current temperature
+  #
+  #battery_temperature:
+  # - sensor.givtcp_battery_stack_1_bms_temperature
+  # - sensor.givtcp2_battery_stack_1_bms_temperature
+
+  # Battery temperature history, only one for modelling, used to predict future temperature
+  #
+  #battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+
+  # Battery temperature charge adjustment curve
+  # Specific in C which is a multiple of the battery capacity
+  # e.g. 0.33 C is 33% of the battery capacity
+  # values unspecified will be assumed to be 1.0 hence rate is capped by max charge rate
+  #battery_temperature_charge_curve:
+  #  19: 0.33
+  #  18: 0.33
+  #  17: 0.33
+  #  16: 0.33
+  #  15: 0.33
+  #  14: 0.33
+  #  13: 0.33
+  #  12: 0.33
+  #  11: 0.33
+  #  10: 0.25
+  #  9: 0.25
+  #  8: 0.25
+  #  7: 0.25
+  #  6: 0.25
+  #  5: 0.25
+  #  4: 0.25
+  #  3: 0.25
+  #  2: 0.25
+  #  1: 0.15
+  #  0: 0.00
+
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together
   inverter_limit:
