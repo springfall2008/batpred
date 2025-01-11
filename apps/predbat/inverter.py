@@ -259,7 +259,10 @@ class Inverter:
             battery_voltage = 0
             for battery in self.rest_data["Battery_Details"]:
                 battery_details = self.rest_data["Battery_Details"][battery]
-                if "Battery_Temperature" in battery_details:
+                if "BMS_Temperature" in battery_details:
+                    average_temp += float(battery_details["BMS_Temperature"])
+                    battery_count += 1
+                elif "Battery_Temperature" in battery_details:
                     average_temp += float(battery_details["Battery_Temperature"])
                     battery_count += 1
                 else:
@@ -344,6 +347,7 @@ class Inverter:
                 self.battery_rate_max_raw = 2600.0
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
+
 
         # Battery cannot be zero size
         if self.soc_max <= 0:

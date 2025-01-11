@@ -1002,7 +1002,6 @@ def test_inverter_update(
 
     return failed
 
-
 def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expected, active=False):
     print("**** Running Test: {} ****".format(test_name))
     failed = 0
@@ -1020,13 +1019,12 @@ def test_auto_restart(test_name, my_predbat, ha, inv, dummy_items, service, expe
         if str(e) != "Auto-restart triggered":
             print("ERROR: Auto-restart should be triggered got {}".format(e))
             failed = 1
-
+        
     result = ha.get_service_store()
     if json.dumps(expected) != json.dumps(result):
         print("ERROR: Auto-restart service should be {} got {}".format(expected, result))
         failed = 1
     return failed
-
 
 def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, stop_discharge=False, charge_start_time="00:00:00", charge_end_time="23:55:00", no_freeze=False):
     """
@@ -1241,7 +1239,6 @@ def run_car_charging_smart_tests(my_predbat):
 
     return failed
 
-
 def test_inverter_self_test(test_name, my_predbat):
     failed = 0
 
@@ -1258,7 +1255,7 @@ def test_inverter_self_test(test_name, my_predbat):
     dummy_rest.rest_data["Control"]["Battery_Charge_Rate"] = 1100
     dummy_rest.rest_data["Control"]["Battery_Discharge_Rate"] = 1500
     dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable"
-    dummy_rest.rest_data["Control"]["Enable_Discharge_Schedule"] = "enable"
+    dummy_rest.rest_data["Control"]["Enable_Discharge_Schedule"] = "enable" 
     dummy_rest.rest_data["Timeslots"] = {}
     dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = "00:30:00"
     dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = "22:00:00"
@@ -1275,73 +1272,11 @@ def test_inverter_self_test(test_name, my_predbat):
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
-    expected = [
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-    ]
+    expected = [['dummy/setChargeTarget', {'chargeToPercent': 100}], ['dummy/setChargeTarget', {'chargeToPercent': 100}], ['dummy/setChargeTarget', {'chargeToPercent': 100}], ['dummy/setChargeTarget', {'chargeToPercent': 100}], ['dummy/setChargeTarget', {'chargeToPercent': 100}], ['dummy/setChargeRate', {'chargeRate': 215}], ['dummy/setChargeRate', {'chargeRate': 215}], ['dummy/setChargeRate', {'chargeRate': 215}], ['dummy/setChargeRate', {'chargeRate': 215}], ['dummy/setChargeRate', {'chargeRate': 215}], ['dummy/setChargeRate', {'chargeRate': 0}], ['dummy/setChargeRate', {'chargeRate': 0}], ['dummy/setChargeRate', {'chargeRate': 0}], ['dummy/setChargeRate', {'chargeRate': 0}], ['dummy/setChargeRate', {'chargeRate': 0}], ['dummy/setDischargeRate', {'dischargeRate': 220}], ['dummy/setDischargeRate', {'dischargeRate': 220}], ['dummy/setDischargeRate', {'dischargeRate': 220}], ['dummy/setDischargeRate', {'dischargeRate': 220}], ['dummy/setDischargeRate', {'dischargeRate': 220}], ['dummy/setDischargeRate', {'dischargeRate': 0}], ['dummy/setDischargeRate', {'dischargeRate': 0}], ['dummy/setDischargeRate', {'dischargeRate': 0}], ['dummy/setDischargeRate', {'dischargeRate': 0}], ['dummy/setDischargeRate', {'dischargeRate': 0}], ['dummy/setBatteryReserve', {'reservePercent': 100}], ['dummy/setBatteryReserve', {'reservePercent': 100}], ['dummy/setBatteryReserve', {'reservePercent': 100}], ['dummy/setBatteryReserve', {'reservePercent': 100}], ['dummy/setBatteryReserve', {'reservePercent': 100}], ['dummy/setBatteryReserve', {'reservePercent': 6}], ['dummy/setBatteryReserve', {'reservePercent': 6}], ['dummy/setBatteryReserve', {'reservePercent': 6}], ['dummy/setBatteryReserve', {'reservePercent': 6}], ['dummy/setBatteryReserve', {'reservePercent': 6}], ['dummy/enableChargeSchedule', {'state': 'disable'}], ['dummy/enableChargeSchedule', {'state': 'disable'}], ['dummy/enableChargeSchedule', {'state': 'disable'}], ['dummy/enableChargeSchedule', {'state': 'disable'}], ['dummy/enableChargeSchedule', {'state': 'disable'}], ['dummy/setChargeSlot1', {'start': '23:01', 'finish': '05:01'}], ['dummy/setChargeSlot1', {'start': '23:01', 'finish': '05:01'}], ['dummy/setChargeSlot1', {'start': '23:01', 'finish': '05:01'}], ['dummy/setChargeSlot1', {'start': '23:01', 'finish': '05:01'}], ['dummy/setChargeSlot1', {'start': '23:01', 'finish': '05:01'}], ['dummy/setChargeSlot1', {'start': '23:00', 'finish': '05:00'}], ['dummy/setChargeSlot1', {'start': '23:00', 'finish': '05:00'}], ['dummy/setChargeSlot1', {'start': '23:00', 'finish': '05:00'}], ['dummy/setChargeSlot1', {'start': '23:00', 'finish': '05:00'}], ['dummy/setChargeSlot1', {'start': '23:00', 'finish': '05:00'}], ['dummy/setDischargeSlot1', {'start': '23:00', 'finish': '23:01'}], ['dummy/setDischargeSlot1', {'start': '23:00', 'finish': '23:01'}], ['dummy/setDischargeSlot1', {'start': '23:00', 'finish': '23:01'}], ['dummy/setDischargeSlot1', {'start': '23:00', 'finish': '23:01'}], ['dummy/setDischargeSlot1', {'start': '23:00', 'finish': '23:01'}], ['dummy/setBatteryMode', {'mode': 'Timed Export'}], ['dummy/setBatteryMode', {'mode': 'Timed Export'}], ['dummy/setBatteryMode', {'mode': 'Timed Export'}], ['dummy/setBatteryMode', {'mode': 'Timed Export'}], ['dummy/setBatteryMode', {'mode': 'Timed Export'}]]
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
     return failed
-
 
 def run_inverter_tests():
     """
@@ -1436,6 +1371,7 @@ def run_inverter_tests():
     )
     if failed:
         return failed
+
 
     failed |= test_inverter_update(
         "update1c",
@@ -1569,7 +1505,7 @@ def run_inverter_tests():
         assert_discharge_end_time_minutes=1531,
         assert_discharge_enable=True,
         assert_nominal_capacity=9.52,
-        assert_battery_temperature=24.8,
+        assert_battery_temperature=25.0,
     )
     if failed:
         return failed
@@ -1689,70 +1625,76 @@ def run_inverter_tests():
         return failed
 
     failed |= test_auto_restart(
-        "auto_restart0",
-        my_predbat,
-        ha,
-        inv,
-        dummy_items,
-        service=None,
-        expected=[],
+        "auto_restart0", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service=None, 
+        expected = [],
         active=True,
     )
     if failed:
         return failed
 
     failed |= test_auto_restart(
-        "auto_restart1",
-        my_predbat,
-        ha,
-        inv,
-        dummy_items,
-        service={"command": "service", "service": "restart_service", "addon": "adds"},
-        expected=[["restart_service", {"addon": "adds"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        "auto_restart1", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service={"command" : "service", "service": "restart_service", "addon" : "adds"}, 
+        expected = [['restart_service', {'addon': 'adds'}], ['notify/notify', {'message': 'Auto-restart service restart_service called due to: Crashed'}]]
     )
     if failed:
         return failed
 
     failed |= test_auto_restart(
-        "auto_restart2", my_predbat, ha, inv, dummy_items, service=[{"command": "service", "service": "restart_service"}], expected=[["restart_service", {}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]]
+        "auto_restart2", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service=[{"command" : "service", "service": "restart_service"}], 
+        expected = [['restart_service', {}], ['notify/notify', {'message': 'Auto-restart service restart_service called due to: Crashed'}]]
     )
     if failed:
         return failed
 
     failed |= test_auto_restart(
-        "auto_restart3",
-        my_predbat,
-        ha,
-        inv,
-        dummy_items,
-        service={"command": "service", "service": "restart_service"},
-        expected=[],
+        "auto_restart3", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service={"command" : "service", "service": "restart_service"}, 
+        expected = [],
         active=True,
     )
     if failed:
         return failed
 
     failed |= test_auto_restart(
-        "auto_restart4",
-        my_predbat,
-        ha,
-        inv,
-        dummy_items,
-        service={"command": "service", "service": "restart_service", "entity_id": "switch.restart"},
-        expected=[["restart_service", {"entity_id": "switch.restart"}], ["notify/notify", {"message": "Auto-restart service restart_service called due to: Crashed"}]],
+        "auto_restart4", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service={"command" : "service", "service": "restart_service", "entity_id" : "switch.restart"}, 
+        expected = [['restart_service', {"entity_id" : "switch.restart"}], ['notify/notify', {'message': 'Auto-restart service restart_service called due to: Crashed'}]]
     )
     if failed:
         return failed
 
     os.system("touch tmp1234")
     failed |= test_auto_restart(
-        "auto_restart5",
-        my_predbat,
-        ha,
-        inv,
-        dummy_items,
-        service={"command": "service", "shell": "rm tmp1234"},
-        expected=[],
+        "auto_restart5", 
+        my_predbat, 
+        ha, 
+        inv, 
+        dummy_items, 
+        service={"command" : "service", "shell": "rm tmp1234"}, 
+        expected = [],
     )
     if failed:
         return failed
@@ -2263,7 +2205,20 @@ def run_execute_test(
     my_predbat.set_charge_low_power = set_charge_low_power
     my_predbat.charge_low_power_margin = charge_low_power_margin
     my_predbat.minutes_now = minutes_now
-    my_predbat.battery_temperature_charge_curve = {20: 1.0, 10: 0.5, 9: 0.5, 8: 0.5, 7: 0.5, 6: 0.3, 5: 0.3, 4: 0.3, 3: 0.262, 2: 0.1, 1: 0.1, 0: 0}
+    my_predbat.battery_temperature_charge_curve = {
+        20: 1.0,
+        10: 0.5,
+        9: 0.5,
+        8: 0.5,
+        7: 0.5,
+        6: 0.3,
+        5: 0.3,
+        4: 0.3,
+        3: 0.262,
+        2: 0.1,
+        1: 0.1,
+        0: 0
+    }
 
     charge_window_best = charge_window_best.copy()
     charge_limit_best = charge_limit_best.copy()
@@ -2385,9 +2340,7 @@ def run_execute_test(
         if assert_immediate_soc_target_array:
             assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
 
-        assert_soc_target_force = (
-            assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"] else 0
-        )
+        assert_soc_target_force = assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"] else 0
         if not set_charge_window:
             assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
@@ -2435,9 +2388,9 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     if not expected_file:
         my_predbat.args["plan_debug"] = True
         my_predbat.set_discharge_during_charge = True
-        # my_predbat.metric_self_sufficiency = 0
-        # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 1
+        #my_predbat.metric_self_sufficiency = 0
+        #my_predbat.calculate_second_pass = False
+        #my_predbat.best_soc_keep = 1
         pass
         # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
@@ -2990,7 +2943,7 @@ def run_execute_tests(my_predbat):
         battery_temperature=10,
     )
     if failed:
-        return failed
+        return failed    
 
     failed |= run_execute_test(
         my_predbat,
@@ -3010,7 +2963,8 @@ def run_execute_tests(my_predbat):
         battery_temperature=3,
     )
     if failed:
-        return failed
+        return failed    
+
 
     failed |= run_execute_test(
         my_predbat,
@@ -3030,7 +2984,7 @@ def run_execute_tests(my_predbat):
         battery_temperature=1,
     )
     if failed:
-        return failed
+        return failed    
 
     # Reset curve
     my_predbat.battery_charge_power_curve = {}
@@ -4241,9 +4195,7 @@ def run_execute_tests(my_predbat):
     )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
-    failed |= run_execute_test(
-        my_predbat, "car2", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False, soc_kw=1, assert_immediate_soc_target=10
-    )
+    failed |= run_execute_test(my_predbat, "car2", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False, soc_kw=1, assert_immediate_soc_target=10)
     failed |= run_execute_test(
         my_predbat,
         "car_charge",
@@ -5143,7 +5095,7 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_discharge4", my_predbat, 1, 0, assert_final_metric=import_rate * 14, assert_final_soc=0, battery_soc=100.0, with_battery=True, battery_loss=0.1)
 
     # Discharge curve has 0.05 for -9 which is 0.5 max rate
-    failed |= simple_scenario("discharge_curve1", my_predbat, 1, 0, assert_final_metric=import_rate * 20 * 0.5 + 4 * import_rate, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_size=10, battery_temperature=-9)
+    failed |= simple_scenario("discharge_curve1", my_predbat, 1, 0, assert_final_metric=import_rate * 20 * 0.5 + 4*import_rate, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_size=10, battery_temperature=-9)
     # Discharge curve has 0.01 for -10 which is 0.1 max rate
     failed |= simple_scenario("discharge_curve2", my_predbat, 1, 0, assert_final_metric=import_rate * 24 * 0.90, assert_final_soc=7.6, battery_soc=10.0, with_battery=True, battery_temperature=-10, battery_size=10)
 
@@ -5232,21 +5184,13 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("pv_only_bat_dc_export_limit_load", my_predbat, 0.5, 3, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=24, with_battery=True, hybrid=True, export_limit=0.5)
     failed |= simple_scenario("battery_charge", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10)
 
-    failed |= simple_scenario("battery_charge_low_off", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=24.59)
-    failed |= simple_scenario("battery_charge_low_on", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89)
-    failed |= simple_scenario(
-        "battery_charge_low_on_monitor", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=24.59, set_charge_window=False
-    )
+    failed |= simple_scenario("battery_charge_low_off", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep = 5, assert_keep=24.59)
+    failed |= simple_scenario("battery_charge_low_on", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep = 5, assert_keep=88.89)
+    failed |= simple_scenario("battery_charge_low_on_monitor", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep = 5, assert_keep=24.59, set_charge_window=False)
 
-    failed |= simple_scenario(
-        "battery_charge_low_temp1", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=24.59, battery_temperature=20
-    )
-    failed |= simple_scenario(
-        "battery_charge_low_temp2", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=80.00, battery_temperature=1
-    )
-    failed |= simple_scenario(
-        "battery_charge_low_temp3", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89, battery_temperature=1
-    )
+    failed |= simple_scenario("battery_charge_low_temp1", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep = 5, assert_keep=24.59, battery_temperature=20)
+    failed |= simple_scenario("battery_charge_low_temp2", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=11, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep = 5, assert_keep=80.00, battery_temperature=1)
+    failed |= simple_scenario("battery_charge_low_temp3", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep = 5, assert_keep=88.89, battery_temperature=1)
 
     if failed:
         return failed

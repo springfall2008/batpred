@@ -340,6 +340,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
+
             if history:
                 import_today = self.minute_data(
                     history[0],
@@ -630,9 +631,9 @@ class Fetch:
                 if to_time:
                     timed_to = to_time - now
 
-            minutes = int(timed.seconds / 60) + int(timed.days * 60 * 24)
+            minutes = int(timed.total_seconds() / 60)
             if to_time:
-                minutes_to = int(timed_to.seconds / 60) + int(timed_to.days * 60 * 24)
+                minutes_to = int(timed_to.total_seconds() / 60)
 
             if minutes < newest_age:
                 newest_age = minutes
@@ -700,12 +701,37 @@ class Fetch:
 
         # If we only have a start time then fill the gaps with the last values
         if not to_key:
-            state = newest_state
+            # Fill from last sample until now
             for minute in range(60 * 24 * days):
-                rindex = 60 * 24 * days - minute - 1
+                if backwards:
+                    rindex = minute
+                else:
+                    rindex = 60 * 24 * days - minute - 1
+
+                if rindex not in mdata:
+                    mdata[rindex] = newest_state
+                else:
+                    break
+
+            # Fill gaps before the first value
+            state = 0
+            for minute in range(60 * 24 * days):
+                if backwards:
+                    rindex = 60 * 24 * days - minute - 1
+                else:
+                    rindex = minute
+                if rindex in mdata:
+                    state = mdata[rindex]
+                    break
+
+            # Fill gaps in the middle
+            for minute in range(60 * 24 * days):
+                if backwards:
+                    rindex = 60 * 24 * days - minute - 1
+                else:
+                    rindex = minute
                 state = mdata.get(rindex, state)
                 mdata[rindex] = state
-                minute += 1
 
         # Reverse data with smoothing
         if clean_increment:
@@ -745,6 +771,8 @@ class Fetch:
         self.carbon_today_sofar = 0
         self.import_today = {}
         self.export_today = {}
+        self.battery_temperature_history = {}
+        self.battery_temperature_prediction = {}
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
@@ -805,6 +833,15 @@ class Fetch:
                 self.pv_today_now = max(self.pv_today.get(0, 0) - self.pv_today.get(self.minutes_now, 0), 0)
             else:
                 self.log("Warn: You have not set pv_today in apps.yaml, you will have no previous pv data")
+
+        # Battery temperature
+        if "battery_temperature_history" in self.args:
+            self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+            data = []
+            for minute in range(0, 24*60, 5):
+                data.append({minute : self.battery_temperature_history.get(minute, 0)})
+            self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
+            self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
@@ -1108,6 +1145,43 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)
         else:
             self.load_inday_adjustment = 1.0
+
+    def predict_battery_temperature(self, battery_temperature_history, step):
+        """
+        Given historical battery temperature data, predict the future temperature
+
+        For now a fairly simple look back over 24 hours is used, can be improved with outdoor temperature later
+        """
+
+        predicted_temp = {}
+        current_temp = battery_temperature_history.get(0, 20)
+        predict_timestamps = {}
+        orignal_timestamps = {}
+
+        for minute in range(0, self.forecast_minutes, step):
+            timestamp = self.now_utc + timedelta(minutes=minute)
+            timestamp_str = timestamp.strftime(TIME_FORMAT)
+            predicted_temp[minute] = dp2(current_temp)
+            predict_timestamps[timestamp_str] = dp2(current_temp)
+
+            # Look at 30 minute change 24 hours ago to predict the up/down trend
+            minute_previous = (24 * 60 - minute) % (24 * 60)
+            change = battery_temperature_history.get(minute_previous, 20) - battery_temperature_history.get(minute_previous + step, 20)
+            current_temp += change
+            current_temp = max(min(current_temp, 30), -20)
+
+        self.dashboard_item(
+            self.prefix + ".battery_temperature",
+            state=dp2(battery_temperature_history.get(0, 20)),
+            attributes={
+                "results": self.filtered_times(predict_timestamps),
+                "friendly_name": "Battery temperature",
+                "state_class": "measurement",
+                "unit_of_measurement": "c",
+                "icon": "mdi:temperature-celsius",
+            },
+        )
+        return predicted_temp
 
     def rate_replicate(self, rates, rate_io={}, is_import=True, is_gas=False):
         """
@@ -1771,6 +1845,7 @@ class Fetch:
         # Temperature curve charge
         self.battery_temperature_charge_curve = self.args.get("battery_temperature_charge_curve", {})
         if not isinstance(self.battery_temperature_charge_curve, dict):
+            self.log("Data is {}".format(self.battery_temperature_charge_curve))
             self.battery_temperature_charge_curve = {}
             self.log("Warn: battery_temperature_charge_curve is incorrectly configured - ignoring")
             self.record_status("battery_temperature_charge_curve is incorrectly configured - ignoring", had_errors=True)
