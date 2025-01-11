@@ -151,6 +151,8 @@ class Prediction:
             self.battery_rate_max_discharge_scaled = base.battery_rate_max_discharge_scaled
             self.battery_charge_power_curve = base.battery_charge_power_curve
             self.battery_discharge_power_curve = base.battery_discharge_power_curve
+            self.battery_temperature = base.battery_temperature
+            self.battery_temperature_discharge_curve = base.battery_temperature_discharge_curve
             self.battery_rate_max_scaling = base.battery_rate_max_scaling
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
@@ -644,28 +646,25 @@ class Prediction:
                 four_hour_rule = False
             elif (charge_window_n >= 0) and soc < charge_limit_n:
                 # Charge enable
-                if self.set_charge_window and (save in ["best", "best10", "test"]):
-                    # Only tune charge rate on final plan not every simulation
-                    charge_rate_now = find_charge_rate(
-                        minute_absolute,
-                        soc,
-                        charge_window[charge_window_n],
-                        charge_limit_n,
-                        self.battery_rate_max_charge,
-                        self.soc_max,
-                        self.battery_charge_power_curve,
-                        self.set_charge_low_power,
-                        self.charge_low_power_margin,
-                        self.battery_rate_min,
-                        self.battery_rate_max_scaling,
-                        self.battery_loss,
-                        None,
-                    )
-                else:
-                    charge_rate_now = self.battery_rate_max_charge  # Assume charge becomes enabled here
-
-                # Apply the charging curve
-                charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min) * self.battery_rate_max_scaling
+                set_charge_low_power = self.set_charge_window and self.set_charge_low_power and (save in ["best", "best10", "test"])
+                # Only tune charge rate on final plan not every simulation
+                charge_rate_now, charge_rate_now_curve = find_charge_rate(
+                    minute_absolute,
+                    soc,
+                    charge_window[charge_window_n],
+                    charge_limit_n,
+                    self.battery_rate_max_charge,
+                    self.soc_max,
+                    self.battery_charge_power_curve,
+                    set_charge_low_power,
+                    self.charge_low_power_margin,
+                    self.battery_rate_min,
+                    self.battery_rate_max_scaling,
+                    self.battery_loss,
+                    None,
+                    self.battery_temperature,
+                    self.battery_temperature_discharge_curve,
+                )
 
                 battery_draw = -max(min(charge_rate_now_curve * step, charge_limit_n - soc), 0, -battery_to_max)
                 battery_state = "f+"

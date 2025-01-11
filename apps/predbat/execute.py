@@ -11,7 +11,7 @@
 import sys
 from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP
-from utils import dp2, dp3, calc_percent_limit, find_charge_rate
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
 
 """
@@ -101,8 +101,7 @@ class Execute:
                     self.log("Inverter {} Charge window will be: {} - {} - current soc {} target {}".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        new_charge_rate = int(
-                            find_charge_rate(
+                        new_charge_rate, new_charge_rate_real = find_charge_rate(
                                 self.minutes_now,
                                 inverter.soc_kw,
                                 window,
@@ -116,9 +115,10 @@ class Execute:
                                 self.battery_rate_max_scaling,
                                 self.battery_loss,
                                 self.log,
+                                self.battery_temperature,
+                                self.battery_temperature_discharge_curve
                             )
-                            * MINUTE_WATT
-                        )
+                        new_charge_rate = int(new_charge_rate * MINUTE_WATT)
                         current_charge_rate = inverter.get_current_charge_rate()
 
                         # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
@@ -602,6 +602,7 @@ class Execute:
         self.discharge_rate_now = 0.0
         self.pv_power = 0
         self.load_power = 0
+        self.battery_temperature = 0
         found_first = False
 
         if create:
@@ -666,6 +667,11 @@ class Execute:
             self.pv_power += inverter.pv_power
             self.load_power += inverter.load_power
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
+            self.battery_temperature += inverter.battery_temperature
+
+
+        # Work out battery temperature
+        self.battery_temperature = int(dp0(self.battery_temperature / self.num_inverters))
 
         # Remove extra decimals
         self.soc_max = dp3(self.soc_max)

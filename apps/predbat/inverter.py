@@ -138,6 +138,7 @@ class Inverter:
         self.battery_rate_max_discharge = 0
         self.battery_rate_max_charge_scaled = 0
         self.battery_rate_max_discharge_scaled = 0
+        self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
         self.pv_power = 0
@@ -258,6 +259,7 @@ class Inverter:
                 self.nominal_capacity = self.soc_max
                 self.soc_max *= self.battery_scaling
                 self.soc_max = dp3(self.soc_max)
+                self.battery_temperature = idetails.get("Battery_Temperature", 20)
 
         if self.rest_data and ("raw" in self.rest_data):
             raw_data = self.rest_data["raw"]
@@ -270,6 +272,7 @@ class Inverter:
                     self.nominal_capacity = self.soc_max
                     self.soc_max *= self.battery_scaling
                     self.soc_max = dp3(self.soc_max)
+                    self.battery_temperature = idetails.get("Battery_Temperature", 20)
 
             # Battery capacity nominal
             battery_capacity_nominal = raw_data.get("invertor", {}).get("battery_nominal_capacity", None)
@@ -311,6 +314,7 @@ class Inverter:
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
         else:
+            self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id)
             self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
@@ -322,6 +326,7 @@ class Inverter:
                 self.battery_rate_max_raw = 2600.0
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
+
 
         # Battery cannot be zero size
         if self.soc_max <= 0:
