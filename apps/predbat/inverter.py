@@ -252,6 +252,26 @@ class Inverter:
 
         # Battery size, charge and discharge rates
         ivtime = None
+        if self.rest_data and ("Battery_Details" in self.rest_data):
+            average_temp = 0
+            battery_count = 0
+            battery_capacity = 0
+            battery_voltage = 0
+            for battery in self.rest_data["Battery_Details"]:
+                battery_details = self.rest_data["Battery_Details"][battery]
+                if "Battery_Temperature" in battery_details:
+                    average_temp += float(battery_details["Battery_Temperature"])
+                    battery_count += 1
+                else:
+                    for item in battery_details.values():
+                        if type(item) is dict:
+                            if "Battery_Temperature" in item:
+                                average_temp += float(item["Battery_Temperature"])
+                                battery_count += 1
+            if battery_count > 0:
+                average_temp /= battery_count
+                self.battery_temperature = dp2(average_temp)
+
         if self.rest_data and ("Invertor_Details" in self.rest_data):
             idetails = self.rest_data["Invertor_Details"]
             if "Battery_Capacity_kWh" in idetails:
@@ -259,7 +279,6 @@ class Inverter:
                 self.nominal_capacity = self.soc_max
                 self.soc_max *= self.battery_scaling
                 self.soc_max = dp3(self.soc_max)
-                self.battery_temperature = idetails.get("Battery_Temperature", 20)
 
         if self.rest_data and ("raw" in self.rest_data):
             raw_data = self.rest_data["raw"]
@@ -272,7 +291,6 @@ class Inverter:
                     self.nominal_capacity = self.soc_max
                     self.soc_max *= self.battery_scaling
                     self.soc_max = dp3(self.soc_max)
-                    self.battery_temperature = idetails.get("Battery_Temperature", 20)
 
             # Battery capacity nominal
             battery_capacity_nominal = raw_data.get("invertor", {}).get("battery_nominal_capacity", None)
@@ -326,6 +344,7 @@ class Inverter:
                 self.battery_rate_max_raw = 2600.0
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
+
 
         # Battery cannot be zero size
         if self.soc_max <= 0:
