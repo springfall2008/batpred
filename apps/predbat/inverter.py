@@ -327,6 +327,7 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
+
         # Battery cannot be zero size
         if self.soc_max <= 0:
             self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
@@ -415,7 +416,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
+                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} % temperature {} c".format(
                     self.id,
                     dp2(self.soc_max),
                     dp2(self.nominal_capacity),
@@ -427,6 +428,7 @@ class Inverter:
                     dp2(self.export_limit * 60),
                     self.reserve_percent,
                     self.reserve_percent_current,
+                    self.battery_temperature,
                 )
             )
 
