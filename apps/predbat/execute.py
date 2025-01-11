@@ -11,7 +11,7 @@
 import sys
 from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP
-from utils import dp2, dp3, calc_percent_limit, find_charge_rate
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from inverter import Inverter
 
 """
@@ -101,25 +101,34 @@ class Execute:
                     self.log("Inverter {} Charge window will be: {} - {} - current soc {} target {}".format(inverter.id, charge_start_time, charge_end_time, inverter.soc_percent, self.charge_limit_percent_best[0]))
                     # Are we actually charging?
                     if self.minutes_now >= minutes_start and self.minutes_now < minutes_end:
-                        new_charge_rate = int(
-                            find_charge_rate(
-                                self.minutes_now,
-                                inverter.soc_kw,
-                                window,
-                                self.charge_limit_percent_best[0] * inverter.soc_max / 100.0,
-                                inverter.battery_rate_max_charge,
-                                inverter.soc_max,
-                                self.battery_charge_power_curve,
-                                self.set_charge_low_power,
-                                self.charge_low_power_margin,
-                                self.battery_rate_min,
-                                self.battery_rate_max_scaling,
-                                self.battery_loss,
-                                self.log,
-                            )
-                            * MINUTE_WATT
+                        target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best != self.reserve else self.soc_kw
+                        inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
+
+                        new_charge_rate, new_charge_rate_real = find_charge_rate(
+                            self.minutes_now,
+                            inverter.soc_kw,
+                            window,
+                            inv_target_soc * inverter.soc_max / 100.0,
+                            inverter.battery_rate_max_charge,
+                            inverter.soc_max,
+                            self.battery_charge_power_curve,
+                            self.set_charge_low_power,
+                            self.charge_low_power_margin,
+                            self.battery_rate_min,
+                            self.battery_rate_max_scaling,
+                            self.battery_loss,
+                            self.log,
+                            inverter.battery_temperature,
+                            self.battery_temperature_charge_curve,
                         )
+                        new_charge_rate = int(new_charge_rate * MINUTE_WATT)
                         current_charge_rate = inverter.get_current_charge_rate()
+
+                        self.log(
+                            "Inverter {} Target SOC {} (this inverter {}) Battery temperature {} Select charge rate {}w (real {}w) current charge rate {}".format(
+                                inverter.id, target_soc, inv_target_soc, inverter.battery_temperature, new_charge_rate, new_charge_rate_real * MINUTE_WATT, current_charge_rate
+                            )
+                        )
 
                         # Adjust charge rate if we are more than 10% out or we are going back to Max charge rate
                         max_rate = inverter.battery_rate_max_charge * MINUTE_WATT
@@ -519,7 +528,7 @@ class Execute:
         self.isExporting = isExporting
         return status, status_extra
 
-    def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False):
+    def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):
         """
         Adjust target SoC based on the current SoC of all the inverters accounting for their
         charge rates and battery capacities
@@ -529,24 +538,30 @@ class Execute:
 
         if isFreezeCharge:
             new_soc_percent = soc
-            self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+            if not check:
+                self.log("Inverter {} adjust target soc for hold to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         elif soc == 100.0:
             new_soc_percent = 100.0
-            self.log("Inverter {} adjust target soc for charge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+            if not check:
+                self.log("Inverter {} adjust target soc for charge to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         elif soc == 0.0:
             new_soc_percent = 0.0
-            self.log("Inverter {} adjust target soc for export to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
+            if not check:
+                self.log("Inverter {} adjust target soc for export to {}% based on requested all inverter soc {}%".format(inverter.id, new_soc_percent, soc))
         else:
             add_kwh = target_kwh - self.soc_kw
             add_this = add_kwh * (inverter.battery_rate_max_charge / self.battery_rate_max_charge)
             new_soc_kwh = max(min(inverter.soc_kw + add_this, inverter.soc_max), inverter.reserve)
             new_soc_percent = calc_percent_limit(new_soc_kwh, inverter.soc_max)
-            self.log(
-                "Inverter {} adjust target soc for charge to {}% ({}kWh/{}kWh {}kWh) based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
-                    inverter.id, soc, target_kwh, self.soc_max, inverter.soc_max, soc_percent, new_soc_percent, dp2(add_kwh), dp2(add_this), dp2(new_soc_kwh)
+            if not check:
+                self.log(
+                    "Inverter {} adjust target soc for charge to {}% ({}kWh/{}kWh {}kWh) based on going from {}% -> {}% total add is {}kWh and this battery needs to add {}kWh to get to {}kWh".format(
+                        inverter.id, soc, target_kwh, self.soc_max, inverter.soc_max, soc_percent, new_soc_percent, dp2(add_kwh), dp2(add_this), dp2(new_soc_kwh)
+                    )
                 )
-            )
-        inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
+        if not check:
+            inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
+        return new_soc_percent
 
     def reset_inverter(self):
         """
@@ -602,6 +617,7 @@ class Execute:
         self.discharge_rate_now = 0.0
         self.pv_power = 0
         self.load_power = 0
+        self.battery_temperature = 0
         found_first = False
 
         if create:
@@ -666,6 +682,10 @@ class Execute:
             self.pv_power += inverter.pv_power
             self.load_power += inverter.load_power
             self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
+            self.battery_temperature += inverter.battery_temperature
+
+        # Work out battery temperature
+        self.battery_temperature = int(dp0(self.battery_temperature / self.num_inverters))
 
         # Remove extra decimals
         self.soc_max = dp3(self.soc_max)

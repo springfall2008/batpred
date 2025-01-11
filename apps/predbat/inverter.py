@@ -138,6 +138,7 @@ class Inverter:
         self.battery_rate_max_discharge = 0
         self.battery_rate_max_charge_scaled = 0
         self.battery_rate_max_discharge_scaled = 0
+        self.battery_temperature = 20
         self.battery_power = 0
         self.battery_voltage = 52.0
         self.pv_power = 0
@@ -251,6 +252,29 @@ class Inverter:
 
         # Battery size, charge and discharge rates
         ivtime = None
+        if self.rest_data and ("Battery_Details" in self.rest_data):
+            average_temp = 0
+            battery_count = 0
+            battery_capacity = 0
+            battery_voltage = 0
+            for battery in self.rest_data["Battery_Details"]:
+                battery_details = self.rest_data["Battery_Details"][battery]
+                if "BMS_Temperature" in battery_details:
+                    average_temp += float(battery_details["BMS_Temperature"])
+                    battery_count += 1
+                elif "Battery_Temperature" in battery_details:
+                    average_temp += float(battery_details["Battery_Temperature"])
+                    battery_count += 1
+                else:
+                    for item in battery_details.values():
+                        if type(item) is dict:
+                            if "Battery_Temperature" in item:
+                                average_temp += float(item["Battery_Temperature"])
+                                battery_count += 1
+            if battery_count > 0:
+                average_temp /= battery_count
+                self.battery_temperature = dp2(average_temp)
+
         if self.rest_data and ("Invertor_Details" in self.rest_data):
             idetails = self.rest_data["Invertor_Details"]
             if "Battery_Capacity_kWh" in idetails:
@@ -311,6 +335,7 @@ class Inverter:
             if "Invertor_Time" in idetails:
                 ivtime = idetails["Invertor_Time"]
         else:
+            self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id)
             self.soc_max = self.base.get_arg("soc_max", default=10.0, index=self.id) * self.battery_scaling
             self.nominal_capacity = self.soc_max
 
@@ -411,7 +436,7 @@ class Inverter:
         # Log inverter details
         if not quiet:
             self.base.log(
-                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} %".format(
+                "Inverter {} with soc_max {} kWh nominal_capacity {} kWh battery rate raw {} w charge rate {} kW discharge rate {} kW battery_rate_min {} w ac limit {} kW export limit {} kW reserve {} % current_reserve {} % temperature {} c".format(
                     self.id,
                     dp2(self.soc_max),
                     dp2(self.nominal_capacity),
@@ -423,6 +448,7 @@ class Inverter:
                     dp2(self.export_limit * 60),
                     self.reserve_percent,
                     self.reserve_percent_current,
+                    self.battery_temperature,
                 )
             )
 

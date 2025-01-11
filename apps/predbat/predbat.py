@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.10.2"
+THIS_VERSION = "v8.11.0"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py"]
@@ -310,6 +310,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = 10.0
+        self.battery_temperature = 20
         self.end_record = 24 * 60 * 2
         self.predict_soc = {}
         self.predict_soc_best = {}
@@ -506,6 +507,10 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.battery_temperature_charge_curve = {}
+        self.battery_temperature_discharge_curve = {}
+        self.battery_temperature_history = {}
+        self.battery_temperature_prediction = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:

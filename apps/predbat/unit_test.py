@@ -715,6 +715,7 @@ def test_inverter_rest_template(
     assert_pause_start_time_minutes=0,
     assert_pause_end_time_minutes=0,
     assert_nominal_capacity=9.52,
+    assert_battery_temperature=0,
 ):
     failed = False
     print("**** Running Test: {} ****".format(test_name))
@@ -776,6 +777,9 @@ def test_inverter_rest_template(
         failed = True
     if assert_nominal_capacity != inv.nominal_capacity:
         print("ERROR: Nominal capacity should be {} got {}".format(assert_nominal_capacity, inv.nominal_capacity))
+        failed = True
+    if assert_battery_temperature != inv.battery_temperature:
+        print("ERROR: Battery temperature should be {} got {}".format(assert_battery_temperature, inv.battery_temperature))
         failed = True
 
     return failed
@@ -1545,6 +1549,7 @@ def run_inverter_tests():
         assert_discharge_enable=False,
         assert_charge_enable=True,
         assert_nominal_capacity=9.5232,
+        assert_battery_temperature=15.3,
     )
     if failed:
         return failed
@@ -1564,6 +1569,7 @@ def run_inverter_tests():
         assert_discharge_end_time_minutes=1531,
         assert_discharge_enable=True,
         assert_nominal_capacity=9.52,
+        assert_battery_temperature=25.0,
     )
     if failed:
         return failed
@@ -1812,6 +1818,7 @@ def simple_scenario(
     car_limit=100,
     set_charge_low_power=False,
     set_charge_window=True,
+    battery_temperature=20,
 ):
     """
     No PV, No Load
@@ -1824,6 +1831,45 @@ def simple_scenario(
     my_predbat.battery_loss_discharge = battery_loss
     my_predbat.battery_rate_max_scaling = battery_rate
     my_predbat.battery_rate_max_scaling_discharge = battery_rate
+    my_predbat.battery_temperature = battery_temperature
+    my_predbat.battery_temperature_charge_curve = {
+        20: 1.0,
+        10: 0.5,
+        9: 0.5,
+        8: 0.5,
+        7: 0.5,
+        6: 0.3,
+        5: 0.1,
+        4: 0.08,
+        3: 0.07,
+        2: 0.05,
+        1: 0.05,
+        0: 0,
+    }
+    my_predbat.battery_temperature_discharge_curve = {
+        20: 1.0,
+        10: 0.5,
+        9: 0.5,
+        8: 0.5,
+        7: 0.5,
+        6: 0.3,
+        5: 0.3,
+        4: 0.3,
+        3: 0.3,
+        2: 0.3,
+        1: 0.3,
+        0: 0.3,
+        -1: 0.2,
+        -2: 0.2,
+        -3: 0.2,
+        -4: 0.2,
+        -5: 0.2,
+        -6: 0.2,
+        -7: 0.1,
+        -8: 0.1,
+        -9: 0.05,
+        -10: 0.01,
+    }
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
     my_predbat.inverter_hybrid = hybrid
@@ -2086,6 +2132,7 @@ class ActiveTestInverter:
         self.reserve_current = 0
         self.reserve_percent = 0
         self.reserve_percent_current = 0
+        self.battery_temperature = 20
 
     def update_status(self, minutes_now):
         pass
@@ -2205,6 +2252,7 @@ def run_execute_test(
     soc_kw_array=None,
     reserve_max=100,
     car_soc=0,
+    battery_temperature=20,
 ):
     print("Run scenario {}".format(name))
     failed = False
@@ -2215,6 +2263,7 @@ def run_execute_test(
     my_predbat.set_charge_low_power = set_charge_low_power
     my_predbat.charge_low_power_margin = charge_low_power_margin
     my_predbat.minutes_now = minutes_now
+    my_predbat.battery_temperature_charge_curve = {20: 1.0, 10: 0.5, 9: 0.5, 8: 0.5, 7: 0.5, 6: 0.3, 5: 0.3, 4: 0.3, 3: 0.262, 2: 0.1, 1: 0.1, 0: 0}
 
     charge_window_best = charge_window_best.copy()
     charge_limit_best = charge_limit_best.copy()
@@ -2253,6 +2302,7 @@ def run_execute_test(
         inverter.reserve_percent_current = reserve_percent
         inverter.reserve = reserve_kwh
         inverter.reserve_max = reserve_max
+        inverter.battery_temperature = battery_temperature
 
     my_predbat.fetch_inverter_data(create=False)
 
@@ -2917,6 +2967,67 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 15,
         assert_charge_rate=2000,
         battery_max_rate=2000,
+    )
+    if failed:
+        return failed
+
+    # No impact at 10 degrees
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_temp1",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=8.0,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=1300,
+        battery_max_rate=2000,
+        battery_temperature=10,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_temp2",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=8.0,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=1300,
+        battery_max_rate=2000,
+        battery_temperature=3,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_temp3",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=8.0,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=2000,
+        battery_max_rate=2000,
+        battery_temperature=1,
     )
     if failed:
         return failed
@@ -5025,10 +5136,17 @@ def run_model_tests(my_predbat):
         battery_soc=100.0,
         car_charging_from_battery=False,
     )
+
     failed |= simple_scenario("load_discharge", my_predbat, 1, 0, assert_final_metric=import_rate * 14, assert_final_soc=0, battery_soc=10.0, with_battery=True)
     failed |= simple_scenario("load_discharge2", my_predbat, 1, 0, assert_final_metric=0, assert_final_soc=100 - 24, battery_soc=100.0, with_battery=True)
     failed |= simple_scenario("load_discharge3", my_predbat, 1, 0, assert_final_metric=0, assert_final_soc=100 - 48, battery_soc=100.0, with_battery=True, battery_loss=0.5)
     failed |= simple_scenario("load_discharge4", my_predbat, 1, 0, assert_final_metric=import_rate * 14, assert_final_soc=0, battery_soc=100.0, with_battery=True, battery_loss=0.1)
+
+    # Discharge curve has 0.05 for -9 which is 0.5 max rate
+    failed |= simple_scenario("discharge_curve1", my_predbat, 1, 0, assert_final_metric=import_rate * 20 * 0.5 + 4 * import_rate, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_size=10, battery_temperature=-9)
+    # Discharge curve has 0.01 for -10 which is 0.1 max rate
+    failed |= simple_scenario("discharge_curve2", my_predbat, 1, 0, assert_final_metric=import_rate * 24 * 0.90, assert_final_soc=7.6, battery_soc=10.0, with_battery=True, battery_temperature=-10, battery_size=10)
+
     failed |= simple_scenario(
         "load_discharge_car",
         my_predbat,
@@ -5118,6 +5236,16 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("battery_charge_low_on", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89)
     failed |= simple_scenario(
         "battery_charge_low_on_monitor", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=24.59, set_charge_window=False
+    )
+
+    failed |= simple_scenario(
+        "battery_charge_low_temp1", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=24.59, battery_temperature=20
+    )
+    failed |= simple_scenario(
+        "battery_charge_low_temp2", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=80.00, battery_temperature=1
+    )
+    failed |= simple_scenario(
+        "battery_charge_low_temp3", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89, battery_temperature=1
     )
 
     if failed:
