@@ -2335,7 +2335,9 @@ def run_execute_test(
         if assert_immediate_soc_target_array:
             assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
 
-        assert_soc_target_force = assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Freeze charging, Hold for iBoost"] else 0
+        assert_soc_target_force = (
+            assert_immediate_soc_target if assert_status in ["Charging", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"] else 0
+        )
         if not set_charge_window:
             assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
@@ -2382,7 +2384,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         my_predbat.args["plan_debug"] = True
-        my_predbat.best_soc_keep = 1
+        my_predbat.set_discharge_during_charge = True
+        # my_predbat.metric_self_sufficiency = 0
+        # my_predbat.calculate_second_pass = False
+        # my_predbat.best_soc_keep = 1
         pass
         # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
@@ -2601,7 +2606,7 @@ def run_execute_tests(my_predbat):
     my_predbat.iboost_enable = True
     my_predbat.iboost_prevent_discharge = True
     my_predbat.iboost_running_full = True
-    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost")
+    failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost", soc_kw=1, assert_immediate_soc_target=10)
 
     failed |= run_execute_test(
         my_predbat,
@@ -3847,6 +3852,7 @@ def run_execute_tests(my_predbat):
         assert_status="Hold for car",
         assert_pause_discharge=True,
         car_slot=charge_window_best,
+        assert_immediate_soc_target=100,
         car_charging_from_battery=False,
     )
     if failed:
@@ -4123,8 +4129,10 @@ def run_execute_tests(my_predbat):
         has_timed_pause=False,
     )
     failed |= run_execute_test(my_predbat, "no_charge5", set_charge_window=True, set_export_window=True)
-    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000)
-    failed |= run_execute_test(my_predbat, "car2", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False)
+    failed |= run_execute_test(my_predbat, "car", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10)
+    failed |= run_execute_test(
+        my_predbat, "car2", car_slot=charge_window_best, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=False, assert_discharge_rate=0, has_timed_pause=False, soc_kw=1, assert_immediate_soc_target=10
+    )
     failed |= run_execute_test(
         my_predbat,
         "car_charge",

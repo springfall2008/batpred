@@ -497,7 +497,10 @@ class Execute:
 
             # Charging/Discharging off via service
             if not isCharging and self.set_charge_window:
-                inverter.adjust_charge_immediate(0)
+                if carHolding or boostHolding:
+                    inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
+                else:
+                    inverter.adjust_charge_immediate(0)
             if not isExporting and self.set_export_window:
                 inverter.adjust_export_immediate(0)
 
