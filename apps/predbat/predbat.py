@@ -507,6 +507,7 @@ class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output
         self.pv_today = {}
         self.load_minutes = {}
         self.load_minutes_age = 0
+        self.battery_temperature_charge_curve = {}
         self.battery_temperature_discharge_curve = {}
 
         self.config_root = "./"

@@ -1768,7 +1768,14 @@ class Fetch:
                 self.log("Warn: battery_discharge_power_curve is incorrectly configured - ignoring")
                 self.record_status("battery_discharge_power_curve is incorrectly configured - ignoring", had_errors=True)
 
-        # Temperature curve
+        # Temperature curve charge
+        self.battery_temperature_charge_curve = self.args.get("battery_temperature_charge_curve", {})
+        if not isinstance(self.battery_temperature_charge_curve, dict):
+            self.battery_temperature_charge_curve = {}
+            self.log("Warn: battery_temperature_charge_curve is incorrectly configured - ignoring")
+            self.record_status("battery_temperature_charge_curve is incorrectly configured - ignoring", had_errors=True)
+
+        # Temperature curve discharge
         self.battery_temperature_discharge_curve = self.args.get("battery_temperature_discharge_curve", {})
         if not isinstance(self.battery_temperature_discharge_curve, dict):
             self.battery_temperature_discharge_curve = {}
