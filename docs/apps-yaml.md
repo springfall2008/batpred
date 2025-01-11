@@ -380,6 +380,8 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
 - **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
+- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
+
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
@@ -954,6 +956,50 @@ battery_power:
   - sensor.givtcp_{geserial}_battery_power
 soc_kw:
   - sensor.givtcp_{geserial}_soc_kwh
+```
+
+## Battery temperature curves
+
+Your batteries maximum charge and discharge rate can be impacted by cold weather, Predbat can predict this if you provide a temperature sensor and define a curve.
+
+- You must make sure battery_temperature is defined (one per inverter).
+- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on the past changes
+- Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
+- Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
+
+And example for GivEnergy Gen2 battery is below.
+
+_Note_ You must adjust the curve for your own system.
+gaps in the curve above 20 will used 20 degrees, gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
+
+```
+  # Battery temperature charge adjustment curve
+  # Specific in C which is a multiple of the battery capacity
+  # e.g. 0.33 C is 33% of the battery capacity
+  # values unspecified will be assumed to be 1.0 hence rate is capped by max charge rate
+  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_charge_curve:
+    20: 0.50
+    19: 0.33
+    18: 0.33
+    17: 0.33
+    16: 0.33
+    15: 0.33
+    14: 0.33
+    13: 0.33
+    12: 0.33
+    11: 0.33
+    10: 0.25
+    9: 0.25
+    8: 0.25
+    7: 0.25
+    6: 0.25
+    5: 0.25
+    4: 0.25
+    3: 0.25
+    2: 0.25
+    1: 0.15
+    0: 0.00
 ```
 
 ## Triggers
