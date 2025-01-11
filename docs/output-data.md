@@ -462,6 +462,40 @@ These are useful for automations if for example you want to turn off car chargin
 - predbat.ppkwh_today - The cost in pence/kWh of the house load today accounting for the change in battery level
 - predbat.ppkwh_hour - The cost in pence/kWh of the house load averaged over the last hour, accounting for the change in battery level
 
+## Inverter data
+
+Some inverters store inverter settings in [flash memory that can have a limited number of write cycles](caution.md#flash-memory) so Predbat counts the commands that it sends to the inverter so you can keep track of this:
+
+- predbat.inverter_register_writes is the incrementing total number of writes across all inverters
+
+If you want to create a utility meter to record daily inverter register writes, add the following to your `configuration.yaml` (NB: the utility meter has to be defined in YAML, it cannot be configured via the HA User Interface):
+
+```yaml
+utility_meter:
+  # Predbat daily inverter writes utility meter
+  predbat_daily_inverter_writes:
+    source: predbat.inverter_register_writes
+    name: Predbat Daily Inverter Writes
+    unique_id: predbat_daily_inverter_writes
+    cycle: daily
+```
+
+Add a card of type 'markdown' to your dashboard to display a simple dashboard of inverter writes:
+
+```yaml
+type: markdown
+content: >-
+  {% set dd = (as_timestamp(now()) - as_timestamp("2024-12-22 17:20:00")) | timestamp_custom("%j")| int %}
+  {% set tw = (states('predbat.inverter_register_writes') | int) %} 
+  {{ dd }} days, total {{ tw }} inverter writes
+
+  {{ states('sensor.predbat_daily_inverter_writes')|int }} writes today
+
+  Average {{ (tw / dd ) | int }} writes per day
+```
+
+You'll need to change the hard-coded timestamp "2024-12-12..." to the date/time you first started counting Predbat inverter writes from to get the number of days and average writes per day correct.
+
 ## Car data
 
 - binary_sensor.predbat_car_charging_slot - A binary sensor indicating when to charge your car (if car planning is enabled) - which can be used in an automation
@@ -490,7 +524,7 @@ They are used in the carbon chart - see [creating the Predbat charts](creating-c
 - predbat.carbon_now - A sensor that gives the current Grid Carbon intensity in g/kWh
 - predbat.carbon_today - A sensor that tracks your home's Carbon impact today in g based on your grid import minus your grid export
 
-## Energy saving data
+## Cost saving data
 
 The following sensors output by Predbat give cost saving data that Predbat achieved, i.e. the financial benefits of using Predbat.
 They are used in the daily cost saving and total cost savings charts - see [creating the Predbat charts](creating-charts.md):
