@@ -652,8 +652,8 @@ high battery charge levels when the car was charged previously (e.g. last week).
 - **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
 so that Predbat's battery prediction plan is not distorted by previous car charging.
 
-- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the incrementing kWh data for the car charger.
-This has been pre-defined to a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
+- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh energy data for the car charger - note must be an energy sensor in kWh not an instantaneous power sensor (in kW) from the car charger.
+This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
