@@ -857,7 +857,7 @@ series:
       in_chart: false
 ###############################################
 # Battery temperature chart
-###############################################   
+###############################################
 type: custom:apexcharts-card
 header:
   show: true
