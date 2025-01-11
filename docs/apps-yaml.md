@@ -971,7 +971,7 @@ And example for GivEnergy Gen2 battery is below.
 *Note* You must adjust the curve for your own system.
 gaps in the curve above 20 will used 20 degrees, gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
 
-```
+```yaml
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
   # e.g. 0.33 C is 33% of the battery capacity
