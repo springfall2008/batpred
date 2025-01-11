@@ -345,7 +345,6 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-
         # Battery cannot be zero size
         if self.soc_max <= 0:
             self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
