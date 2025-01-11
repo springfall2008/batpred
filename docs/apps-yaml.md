@@ -382,7 +382,6 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
 
-
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
 See section below on [creating the battery charge power curve](#workarounds).
@@ -969,7 +968,7 @@ Your batteries maximum charge and discharge rate can be impacted by cold weather
 
 And example for GivEnergy Gen2 battery is below.
 
-_Note_ You must adjust the curve for your own system.
+*Note* You must adjust the curve for your own system.
 gaps in the curve above 20 will used 20 degrees, gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
 
 ```
