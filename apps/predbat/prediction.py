@@ -583,10 +583,15 @@ class Prediction:
                     discharge_rate_now = self.battery_rate_min
                 elif soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
                     discharge_rate_now = self.battery_rate_min
-                    
+
             # Current real charge rate
-            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
-            discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve) * self.battery_rate_max_scaling_discharge
+            charge_rate_now_curve = (
+                get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            )
+            discharge_rate_now_curve = (
+                get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                * self.battery_rate_max_scaling_discharge
+            )
             battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss
             inverter_limit = self.inverter_limit * step
@@ -599,7 +604,10 @@ class Prediction:
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve) * self.battery_rate_max_scaling_discharge
+                discharge_rate_now_curve = (
+                    get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
+                    * self.battery_rate_max_scaling_discharge
+                )
 
                 battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
 
