@@ -340,6 +340,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
+
             if history:
                 import_today = self.minute_data(
                     history[0],
@@ -837,8 +838,8 @@ class Fetch:
         if "battery_temperature_history" in self.args:
             self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
+            for minute in range(0, 24*60, 5):
+                data.append({minute : self.battery_temperature_history.get(minute, 0)})
             self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
             self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
 
@@ -1155,7 +1156,6 @@ class Fetch:
         predicted_temp = {}
         current_temp = battery_temperature_history.get(0, 20)
         predict_timestamps = {}
-        orignal_timestamps = {}
 
         for minute in range(0, self.forecast_minutes, step):
             timestamp = self.now_utc + timedelta(minutes=minute)
