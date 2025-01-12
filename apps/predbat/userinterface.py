@@ -589,6 +589,7 @@ class UserInterface:
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
+        self.ge_cloud_key = ""
 
         for key in debug:
             if key not in ["CONFIG_ITEMS", "inverters"]:
@@ -622,6 +623,7 @@ class UserInterface:
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         debug = {}
+
         # Store all predbat member variables into debug
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
@@ -632,7 +634,14 @@ class UserInterface:
                 ):
                     pass
                 else:
-                    debug[key] = self.__dict__[key]
+                    if key == 'args':
+                        # Remove keys from args
+                        debug[key] = copy.deepcopy(self.__dict__[key])
+                        for sub_key in debug[key]:
+                            if '_key' in sub_key:
+                                debug[key][sub_key] = "xxx"
+                    else:
+                        debug[key] = self.__dict__[key]
         inverters_debug = []
         for inverter in self.inverters:
             inverter_debug = {}
