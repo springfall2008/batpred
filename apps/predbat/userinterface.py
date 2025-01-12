@@ -633,11 +633,11 @@ class UserInterface:
                 ):
                     pass
                 else:
-                    if key == 'args':
+                    if key == "args":
                         # Remove keys from args
                         debug[key] = copy.deepcopy(self.__dict__[key])
                         for sub_key in debug[key]:
-                            if '_key' in sub_key:
+                            if "_key" in sub_key:
                                 debug[key][sub_key] = "xxx"
                     else:
                         debug[key] = self.__dict__[key]
