@@ -589,7 +589,6 @@ class UserInterface:
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return
-        self.ge_cloud_key = ""
 
         for key in debug:
             if key not in ["CONFIG_ITEMS", "inverters"]:
