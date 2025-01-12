@@ -646,15 +646,18 @@ car_charging_exclusive:
 
 ### Car Charging Filtering
 
-You might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
+Depending upon how the CT clamps and your inverter and electric car charger have been wired, your inverter may 'see' your EV charging as being part of the house load.  This means your house load is artificially raised whenever you charge your car.
+In this circumstance you might want to remove your electric car charging data from the historical house load data so as to not bias the calculations, otherwise you will get
 high battery charge levels when the car was charged previously (e.g. last week).
+
+*TIP:* Check the house load being reported by your inverter when your car is charging. If it doesn't include the car charging load then there is no need to follow these steps below (and if you do, you'll artificially deflate your house load).
 
 - **switch.predbat_car_charging_hold** - A Home Assistant switch that when turned on (True) tells Predbat to remove car charging data from your historical house load
 so that Predbat's battery prediction plan is not distorted by previous car charging.
 
-- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh energy data for the car charger - note must be an energy sensor in kWh not an instantaneous power sensor (in kW) from the car charger.
-This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
-or edit as necessary in `apps.yaml` for your charger sensor.<BR>
+- **car_charging_energy** - Set in `apps.yaml` to point to a Home Assistant entity which is the daily incrementing kWh energy data for the car charger
+- note must be an 'energy today' sensor in kWh not an instantaneous power sensor (in kW) from the car charger.
+This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
 This can be set to a list of car charging energy sensors, one per line if you have multiple EV car chargers.<BR>
 *TIP:* You can also use **car_charging_energy** to remove other house load kWh from the data Predbat uses for the forecast,
 e.g. if you want to remove Mixergy hot water tank heating data from the forecast such as if you sometimes heat on gas, and sometimes electric depending upon import rates.
@@ -662,8 +665,7 @@ e.g. if you want to remove Mixergy hot water tank heating data from the forecast
 - **input_number.predbat_car_charging_energy_scale** - A Home Assistant entity used to define a scaling factor (in the range 0.1 to 1.0)
 to multiply the car_charging_energy sensor data by if required (e.g. set to 0.001 to convert Watts to kW).
 
-If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml`
-and configure the following Home Assistant entity:
+If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the car_charging_energy line out of `apps.yaml` and configure the following Home Assistant entity:
 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
 and **input_number.predbat_car_charging_rate** will be subtracted from the historical load data.
