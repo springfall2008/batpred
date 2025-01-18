@@ -62,6 +62,7 @@ class Plan:
         best_cycle=0,
         best_carbon=0,
         best_import=0,
+        best_battery_value=0,
         tried_list=None,
         test_mode=False,
     ):
@@ -225,7 +226,7 @@ class Plan:
                 loop_price = pred["loop_price"]
                 cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
 
-                metric = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+                metric, battery_value = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
 
                 # Optimise
                 if self.debug_enable:
@@ -275,9 +276,11 @@ class Plan:
                     best_soc_min = soc_min
                     best_cost = cost
                     best_import = import_kwh_battery + import_kwh_house
+                    best_battery_value = battery_value
+                    metric, battery_value = self.compute_metric(end_record, soc, soc, cost, cost, final_iboost, final_iboost, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
                     if 1 or not quiet:
                         self.log(
-                            "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} limits {} export {}".format(
+                            "Optimise all charge found best buy/sell price band {} best price threshold {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} limits {} export {}".format(
                                 loop_price,
                                 best_price_charge,
                                 dp4(best_cost),
@@ -287,6 +290,7 @@ class Plan:
                                 dp0(best_carbon),
                                 dp2(best_import),
                                 dp4(best_cost),
+                                battery_value,
                                 best_limits,
                                 best_export,
                             )
@@ -294,7 +298,7 @@ class Plan:
 
         if self.debug_enable:
             self.log(
-                "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} soc_min {} limits {} export {}".format(
+                "Optimise all charge {} best price threshold {} total simulations {} charges at {} at cost {} metric {} keep {} cycle {} carbon {} import {} cost {} battery_value {} soc_min {} limits {} export {}".format(
                     region_txt,
                     dp4(best_price),
                     len(tried_list),
@@ -306,6 +310,7 @@ class Plan:
                     dp0(best_carbon),
                     dp2(best_import),
                     dp4(best_cost),
+                    dp4(best_battery_value),
                     dp4(best_soc_min),
                     best_limits,
                     best_export,
@@ -338,6 +343,7 @@ class Plan:
             best_cycle,
             best_carbon,
             best_import,
+            best_battery_value,
             tried_list,
         )
 
@@ -902,15 +908,20 @@ class Plan:
 
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-        rate_min = self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_min = (self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min)) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        metric -= (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
-        metric10 -= (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        metric -= battery_value
+        metric10 -= battery_value10
+
         # Metric adjustment based on 10% outcome weighting
         if metric10 > metric:
             metric_diff = metric10 - metric
             metric_diff *= self.pv_metric10_weight
             metric += metric_diff
+        else:
+            metric_diff = 0
 
         # Carbon metric
         if self.carbon_enable:
@@ -922,7 +933,7 @@ class Plan:
         # Adjustment for battery cycles metric
         metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
-        return dp4(metric)
+        return dp4(metric), dp4(battery_value)
 
     def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, export_window, export_limits, all_n=None, end_record=None):
         """
@@ -1150,7 +1161,7 @@ class Plan:
             ) = result10[try_soc]
 
             # Compute the metric from simulation results
-            metric = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+            metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
 
             # Metric adjustment based on current charge limit when inside the window
             # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
@@ -1174,7 +1185,7 @@ class Plan:
 
             if self.debug_enable:
                 self.log(
-                    "Sim: SoC {} soc_min {} @ {} window {} metric {} cost {} cost10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} cycle {} carbon {} import {} export {}".format(
+                    "Sim: SoC {} soc_min {} @ {} window {} metric {} cost {} cost10 {} soc {} soc10 {} final_iboost {} final_iboost10 {} final_carbon_g {} metric_keep {} cycle {} carbon {} import {} export {} battery_value {}".format(
                         try_soc,
                         dp4(soc_min),
                         self.time_abs_str(soc_min_minute),
@@ -1192,6 +1203,7 @@ class Plan:
                         final_carbon_g,
                         import_kwh_battery + import_kwh_house,
                         export_kwh,
+                        battery_value,
                     )
                 )
 
@@ -1341,7 +1353,7 @@ class Plan:
             ) = hanres10
 
             # Compute the metric from simulation results
-            metric = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+            metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
 
             if this_export_limit == 100:
                 # Minor weighting to off
@@ -1362,7 +1374,7 @@ class Plan:
 
             if self.debug_enable:
                 self.log(
-                    "Sim: Export {} window {} start {} end {}, import {} export {} min_soc {} @ {} soc {} soc10 {} cost {} cost10 {} metric {} cycle {} iboost {} iboost10 {} carbon {} keep {} end_record {}".format(
+                    "Sim: Export {} window {} start {} end {}, import {} export {} min_soc {} @ {} soc {} soc10 {} cost {} cost10 {} metric {} cycle {} iboost {} iboost10 {} carbon {} keep {} battery_value {} end_record {}".format(
                         this_export_limit,
                         window_n,
                         self.time_abs_str(start),
@@ -1381,6 +1393,7 @@ class Plan:
                         dp4(final_iboost10),
                         dp4(final_carbon_g),
                         dp4(metric_keep),
+                        battery_value,
                         end_record,
                     )
                 )
@@ -1611,7 +1624,15 @@ class Plan:
             end = window["end"]
             limit = charge_limit_best[window_n]
 
-            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
+            if (
+                new_window_best
+                and (start == new_window_best[-1]["end"])
+                and (limit == new_limit_best[-1])
+                and (start not in self.manual_all_times)
+                and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and (new_window_best[-1]["average"] >= window["average"] or not self.set_charge_low_power)
+            ):
+                # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
@@ -1625,6 +1646,7 @@ class Plan:
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
             ):
+                # Combine two windows of the same price, provided the second charge limit is greater than the first
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_limit_best[-1] = limit
@@ -1924,6 +1946,7 @@ class Plan:
                 best_cycle,
                 best_carbon,
                 best_import,
+                best_battery_value,
                 tried_list,
             ) = self.optimise_charge_limit_price_threads(
                 price_set,
@@ -1940,13 +1963,24 @@ class Plan:
                 quiet=False if debug_mode else True,
             )
 
+            if debug_mode:
+                metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+                )
+                self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                self.update_target_values()
+                self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+                open("plan_pre_levels.html", "w").write(self.html_plan)
+                print("Wrote plan to plan_pre_levels.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
+
             if self.calculate_regions:
                 region_size = int(16 * 60)
                 min_region_size = int(4 * 60)
                 while region_size >= min_region_size:
                     self.log(">> Region optimisation pass width {}".format(region_size))
                     for region in range(0, self.end_record + self.minutes_now, min_region_size):
-                        region_end = min(region + region_size, self.end_record + self.minutes_now)
+                        region_start = max(self.end_record + self.minutes_now - region - region_size, 0)
+                        region_end = min(region_start + region_size, self.end_record + self.minutes_now)
 
                         if region_end < self.minutes_now:
                             continue
@@ -1963,6 +1997,7 @@ class Plan:
                             best_cycle,
                             best_carbon,
                             best_import,
+                            best_battery_value,
                             tried_list,
                         ) = self.optimise_charge_limit_price_threads(
                             price_set,
@@ -1975,7 +2010,7 @@ class Plan:
                             self.export_window_best,
                             ignore_export_limits,
                             end_record=self.end_record,
-                            region_start=region,
+                            region_start=region_start,
                             region_end=region_end,
                             fast=fast_mode,
                             quiet=True,
@@ -1988,11 +2023,27 @@ class Plan:
                             best_cycle=best_cycle,
                             best_import=best_import,
                             best_carbon=best_carbon,
+                            best_battery_value=best_battery_value,
                             tried_list=tried_list,
                         )
                         # Reached the end of the window
-                        if region_end >= self.end_record + self.minutes_now:
+                        if self.end_record + self.minutes_now - region - region_size < 0:
                             break
+
+                    if debug_mode:
+                        metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
+                            self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
+                        )
+                        self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                        self.update_target_values()
+                        self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+                        open("plan_levels_{}.html".format(region_size), "w").write(self.html_plan)
+                        print(
+                            "Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(
+                                region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency
+                            )
+                        )
+
                     region_size = int(region_size / 2)
 
             # Keep the freeze but not the full export as that will be re-introduced later
@@ -2008,7 +2059,7 @@ class Plan:
             self.update_target_values()
             self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
             open("plan_levels.html", "w").write(self.html_plan)
-            print("Wrote plan to plan_level.html")
+            print("Wrote plan to plan_levels.html")
 
         # Set the new end record and blackout period based on the levelling
         self.end_record = self.record_length(self.charge_window_best, self.charge_limit_best, best_price)

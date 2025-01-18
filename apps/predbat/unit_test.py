@@ -301,7 +301,7 @@ def compute_metric_test(
 
     print("Metric Test {}".format(name))
 
-    metric = my_predbat.compute_metric(
+    metric, battery_value = my_predbat.compute_metric(
         end_record,
         soc,
         soc10,
@@ -1663,6 +1663,30 @@ def run_inverter_tests():
         clear=True,
     )
 
+    dummy_yaml = """
+    service: select.select_option
+    entity_id: "select.solaredge_i1_storage_command_mode"
+    option: "Charge from Solar Power and Grid"
+    always: true
+    """
+    decoded_yaml = yaml.safe_load(dummy_yaml)
+
+    for repeat in range(2):
+        failed |= test_call_service_template(
+            "test_service_complex5",
+            my_predbat,
+            inv,
+            service_name="charge_start_service",
+            domain="charge",
+            data={"test": "data"},
+            extra_data={"extra": "extra_data"},
+            service_template=decoded_yaml,
+            expected_result=[["select/select_option", {"entity_id": "select.solaredge_i1_storage_command_mode", "option": "Charge from Solar Power and Grid"}]],
+            clear=False,
+            repeat=False,
+            twice=False,
+        )
+
     inv.soc_percent = 49
 
     failed |= test_call_adjust_charge_immediate("charge_immediate1", my_predbat, ha, inv, dummy_items, 100, clear=True, stop_discharge=True)
@@ -2434,10 +2458,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("Combined export slots {} min_improvement_export {} set_export_freeze_only {}".format(my_predbat.combine_export_slots, my_predbat.metric_min_improvement_export, my_predbat.set_export_freeze_only))
     if not expected_file:
         my_predbat.args["plan_debug"] = True
-        my_predbat.set_discharge_during_charge = True
+        # my_predbat.set_discharge_during_charge = True
         # my_predbat.metric_self_sufficiency = 0
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 1
+        # my_predbat.best_soc_keep = 0
         pass
         # my_predbat.combine_export_slots = False
         # my_predbat.best_soc_keep = 1.0
@@ -4884,6 +4908,7 @@ def run_optimise_levels(
         best_cycle,
         best_carbon,
         best_import,
+        best_battery_value,
         tried_list,
     ) = my_predbat.optimise_charge_limit_price_threads(
         price_set,
