@@ -910,7 +910,7 @@ class Plan:
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = (self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min)) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min , 1.0, rate_export_min)
         battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         metric -= battery_value
         metric10 -= battery_value10
@@ -1624,7 +1624,15 @@ class Plan:
             end = window["end"]
             limit = charge_limit_best[window_n]
 
-            if new_window_best and (start == new_window_best[-1]["end"]) and (limit == new_limit_best[-1]) and (start not in self.manual_all_times) and (new_window_best[-1]["start"] not in self.manual_all_times):
+            if (
+                new_window_best 
+                and (start == new_window_best[-1]["end"]) 
+                and (limit == new_limit_best[-1]) 
+                and (start not in self.manual_all_times) 
+                and (new_window_best[-1]["start"] not in self.manual_all_times)
+                and (new_window_best[-1]["average"] >= window["average"] or not self.set_charge_low_power)
+            ):
+                # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_window_best[-1]["average"] = (new_window_best[-1]["average"] + window["average"]) / 2
@@ -1638,6 +1646,7 @@ class Plan:
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and new_window_best[-1]["average"] == window["average"]
             ):
+                # Combine two windows of the same price, provided the second charge limit is greater than the first
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
                 new_limit_best[-1] = limit
@@ -2029,11 +2038,7 @@ class Plan:
                         self.update_target_values()
                         self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                         open("plan_levels_{}.html".format(region_size), "w").write(self.html_plan)
-                        print(
-                            "Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(
-                                region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency
-                            )
-                        )
+                        print("Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
 
                     region_size = int(region_size / 2)
 
