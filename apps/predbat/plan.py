@@ -2157,7 +2157,15 @@ class Plan:
                                 self.export_limits_best,
                                 end_record=self.end_record,
                             )
-                            self.charge_limit_best[window_n] = best_soc
+                            if best_soc != self.charge_limit_best[window_n]:
+                                self.charge_limit_best[window_n] = best_soc
+                                if debug_mode:
+                                    self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best")
+                                    self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                                    self.update_target_values()
+                                    self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
+                                    open("plan_main_charge_{}.html".format(window_n), "w").write(self.html_plan)
+                                    print("Wrote plan to plan_main_charge_{}.html".format(window_n))
 
                             if self.debug_enable:
                                 self.log(

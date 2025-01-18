@@ -15,7 +15,7 @@ import time
 import math
 from datetime import datetime, timedelta
 from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
-from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit
+from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, dp4
 
 
 # Only assign globals once to avoid re-creating them with processes are forked
@@ -697,10 +697,14 @@ class Prediction:
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
                     # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
                     # won't cover it and it will likely create an import.
+                    # The import could be balanced with potential export for the rest of the period (or battery charging)
                     pv_compare = pv_dc + pv_ac
                     if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
-                        potential_import = min((charge_rate_now_curve * step) - pv_compare, (charge_limit_n - soc))
-                        metric_keep += potential_import * rate_import.get(minute_absolute, 0)
+                        charge_time_remains = (charge_limit_n - soc) / charge_rate_now_curve  # Time in minute periods left
+                        pv_in_period = pv_compare / step * charge_time_remains
+                        potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
+                        potential_export = pv_compare - pv_in_period
+                        metric_keep += max(potential_import * rate_import.get(minute_absolute, 0) - potential_export * rate_export.get(minute_absolute, 0), 0)
             else:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
