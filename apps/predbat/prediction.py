@@ -583,15 +583,10 @@ class Prediction:
                     discharge_rate_now = self.battery_rate_min
                 elif soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
                     discharge_rate_now = self.battery_rate_min
-
+                    
             # Current real charge rate
-            charge_rate_now_curve = (
-                get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
-            )
-            discharge_rate_now_curve = (
-                get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
-                * self.battery_rate_max_scaling_discharge
-            )
+            charge_rate_now_curve = get_charge_rate_curve(soc, charge_rate_now, self.soc_max, self.battery_rate_max_charge, self.battery_charge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_charge_curve) * self.battery_rate_max_scaling
+            discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve) * self.battery_rate_max_scaling_discharge
             battery_to_min = max(soc - reserve_expected, 0) * self.battery_loss_discharge
             battery_to_max = max(self.soc_max - soc, 0) * self.battery_loss
             inverter_limit = self.inverter_limit * step
@@ -604,10 +599,7 @@ class Prediction:
             if not self.set_export_freeze_only and (export_window_n >= 0) and export_limits[export_window_n] < 99.0 and (soc > discharge_min):
                 # Discharge enable
                 discharge_rate_now = self.battery_rate_max_discharge  # Assume discharge becomes enabled here
-                discharge_rate_now_curve = (
-                    get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve)
-                    * self.battery_rate_max_scaling_discharge
-                )
+                discharge_rate_now_curve = get_discharge_rate_curve(soc, discharge_rate_now, self.soc_max, self.battery_rate_max_discharge, self.battery_discharge_power_curve, self.battery_rate_min, battery_temperature, self.battery_temperature_discharge_curve) * self.battery_rate_max_scaling_discharge
 
                 battery_draw = min(discharge_rate_now_curve * step, battery_to_min)
 
@@ -693,14 +685,14 @@ class Prediction:
                 if save == "test" and (minute % 30) == 0:
                     print("minute {} charge_limit {} soc {} pv_now {} charge left {} pv_ac {} pv_dc {} max charge {} pv_compare {}".format(minute, charge_limit_n, soc, pv_now, charge_limit_n - soc, pv_ac, pv_dc, charge_limit_n - soc, pv_ac + pv_dc))
 
-                if dp4(charge_limit_n - soc) < dp4(charge_rate_now_curve * step):
+                if charge_limit_n - soc < charge_rate_now_curve * step:
                     # The battery will hit the charge limit in this period, so if the charge was spread over the period
                     # it could be done from solar, but in reality it will be full rate and then stop meaning the solar
-                    # won't cover it and it will likely create an import.
+                    # won't cover it and it will likely create an import. 
                     # The import could be balanced with potential export for the rest of the period (or battery charging)
                     pv_compare = pv_dc + pv_ac
                     if pv_dc >= (charge_limit_n - soc) and (pv_compare < (charge_rate_now_curve * step)):
-                        charge_time_remains = (charge_limit_n - soc) / charge_rate_now_curve  # Time in minute periods left
+                        charge_time_remains = (charge_limit_n - soc) / charge_rate_now_curve # Time in minute periods left
                         pv_in_period = pv_compare / step * charge_time_remains
                         potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
                         potential_export = pv_compare - pv_in_period
