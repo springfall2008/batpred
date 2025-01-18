@@ -910,7 +910,7 @@ class Plan:
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
         rate_min = (self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min)) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min , 1.0, rate_export_min)
+        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         metric -= battery_value
         metric10 -= battery_value10
@@ -1625,10 +1625,10 @@ class Plan:
             limit = charge_limit_best[window_n]
 
             if (
-                new_window_best 
-                and (start == new_window_best[-1]["end"]) 
-                and (limit == new_limit_best[-1]) 
-                and (start not in self.manual_all_times) 
+                new_window_best
+                and (start == new_window_best[-1]["end"])
+                and (limit == new_limit_best[-1])
+                and (start not in self.manual_all_times)
                 and (new_window_best[-1]["start"] not in self.manual_all_times)
                 and (new_window_best[-1]["average"] >= window["average"] or not self.set_charge_low_power)
             ):
@@ -2038,7 +2038,11 @@ class Plan:
                         self.update_target_values()
                         self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                         open("plan_levels_{}.html".format(region_size), "w").write(self.html_plan)
-                        print("Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency))
+                        print(
+                            "Wrote plan to plan_levels_{}.html - metric {} cost {} battery_value {} keep {} import {} (self {})".format(
+                                region_size, best_metric, best_cost, best_battery_value, best_keep, best_import, best_import * self.metric_self_sufficiency
+                            )
+                        )
 
                     region_size = int(region_size / 2)
 
@@ -2152,19 +2156,16 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                            )                        
+                            )
                             if best_soc != self.charge_limit_best[window_n]:
                                 self.charge_limit_best[window_n] = best_soc
                                 if debug_mode:
-                                    self.run_prediction(
-                                        self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best"
-                                    )
+                                    self.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, end_record=self.end_record, save="best")
                                     self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
                                     self.update_target_values()
                                     self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                                     open("plan_main_charge_{}.html".format(window_n), "w").write(self.html_plan)
                                     print("Wrote plan to plan_main_charge_{}.html".format(window_n))
-
 
                             if self.debug_enable:
                                 self.log(
