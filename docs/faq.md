@@ -55,6 +55,28 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
+## My plan is freeze charging or holding at 100% battery a lot
+
+**Round trip losses**
+
+Round trip losses for charging the battery and then using it for your home are:
+
+**charge loss** x **inverter loss** x **inverter loss** x **discharge loss**
+
+The default is therefore: 0.97 *0.96* 0.96 * 0.97 = ~0.87 (13%)
+
+If you freeze charge or hold at 100% then you will be using the grid which is 13% cheaper than using the battery at the same import rate.
+If you start increasing these losses to say 5% and 6% then you are getting to around 20% round trip losses.
+This means charging the battery at 20p is the same cost as using the grid at 25p.
+
+However if you start setting **metric_self_sufficiency** then you are telling Predbat to try to import *less* when possible.
+If your round trip losses are 20% then using the grid directly will import 20% less energy than charging your battery.
+Therefore a 5p metric self sufficiency will effectively add another 1p to this different i.e. using the grid at 26p is now the same as charging the battery at 20p!
+
+If you set **metric_battery_cycle** to say 2p then that would add another 4p to using the battery so now charging at 20p would equate to using the grid at 30p!
+
+*Bottom line, be careful how you configure things.*
+
 ## When my battery is charging to 100% is fluctuates between 98% and 100%, and/or gives an error setting reserve
 
 Some inverters e.g. GE AIO inverter won't allow the reserve to be set too 100, in which case set in apps.yaml
@@ -108,13 +130,13 @@ Predbat makes cost optimisation decisions so unless the current import rate is m
 If you turn [debug mode on for the Predbat plan](predbat-plan-card.md#debug-mode-for-predbat-plan) then you can see the
 effective import and export rates after losses that Predbat calculates in the Predbat plan.
 
-Predbat also uses **input_number.predbat_metric_battery_cycle** (_expert mode_ setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
+Predbat also uses **input_number.predbat_metric_battery_cycle** (*expert mode* setting) to apply a 'virtual cost' in pence per kWh for charging and discharging the battery.
 The default value is 1p but this this can be changed to a different value to recognise the 'cost of using the battery', or set to zero to disable this feature.
 
 So if metric battery cycle is set to 1p, and continuing the example above, each kWh of battery charge will be costed at 22.7p (21.7p + 1p battery metric to charge),
 and the battery will not be discharged to support the home unless the current import rate is more than 25.6p (23.6p + 1p cost of charging + 1p cost to discharge).
 
-**input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both _expert mode_ settings) also affect Predbat's cost optimisation decisions
+**input_number.predbat_metric_min_improvement** and **input_number.predbat_metric_min_improvement_discharge** (both *expert mode* settings) also affect Predbat's cost optimisation decisions
 as to [whether its cost beneficial to charge or discharge the battery](customisation.md#battery-margins-and-metrics-options)
 so could be tweaked if you feel Predbat is charging or discharging with marginal benefits. The defaults (0p and 0.1p respectively) should however give good results for most users.
 
@@ -125,7 +147,7 @@ or to encourage discharging just before import rates fall overnight.
 ## Predbat is causing warning messages about 'exceed maximum size' in the Home Assistant Core log
 
 If you have a large **input_number.predbat_forecast_plan_hours** then you may see warning messages in the Home Assistant Core log about the size of a number of Predbat entities,
-the message will be "State attributes for predbat._XXXX_ exceed maximum size of 16384 bytes".
+the message will be "State attributes for predbat.*XXXX* exceed maximum size of 16384 bytes".
 
 This is just a warning, the Predbat entity attributes aren't stored in the database anyway,
 but you can suppress these warnings by adding the following to your `configuration.yaml` file:
