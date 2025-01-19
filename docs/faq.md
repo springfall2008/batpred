@@ -55,6 +55,28 @@ especially if you have a small battery. If you set it to zero then predbat may n
 - Perhaps set up the calibration chart and let it run for 24 hours to see how things line up
 - If your export slots are too small compared to expected check your inverter_limit is set correctly (see below)
 
+## My plan is freeze charging or holding at 100% battery a lot
+
+**Round trip losses**
+
+Round trip losses for charging the battery and then using it for your home are:
+
+**charge loss * inverter loss * inverter loss * discharge loss**
+
+The default is therefore: 0.97 * 0.96 * 0.96 * 0.97 = ~0.87 (13%)
+
+If you freeze charge or hold at 100% then you will be using the grid which is 13% cheaper than using the battery at the same import rate.
+If you start increasing these losses to say 5% and 6% then you are getting to around 20% round trip losses. 
+This means charging the battery at 20p is the same cost as using the grid at 25p.
+
+However if you start setting **metric_self_sufficiency** then you are telling Predbat to try to import _less_ when possible. 
+If your round trip losses are 20% then using the grid directly will import 20% less energy than charging your battery. 
+Therefore a 5p metric self sufficiency will effectively add another 1p to this different i.e. using the grid at 26p is now the same as charging the battery at 20p!
+
+If you set **metric_battery_cycle** to say 2p then that would add another 4p to using the battery so now charging at 20p would equate to using the grid at 30p!
+
+_... Bottom line, be careful how you configure things ...._
+
 ## When my battery is charging to 100% is fluctuates between 98% and 100%, and/or gives an error setting reserve
 
 Some inverters e.g. GE AIO inverter won't allow the reserve to be set too 100, in which case set in apps.yaml
