@@ -85,6 +85,7 @@ pred_bat:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
     option: "Charge from Solar Power and Grid"
+    repeat: True
   charge_stop_service:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
@@ -93,6 +94,7 @@ pred_bat:
     service: select.select_option
     entity_id: "select.solaredge_i1_storage_command_mode"
     option: "Discharge to Maximize Export"
+    repeat: True
 
   # Inverter max AC limit (one per inverter)
   # If you have a second inverter for PV only please add the two values together
