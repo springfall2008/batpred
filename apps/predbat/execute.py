@@ -104,6 +104,7 @@ class Execute:
                         target_soc = self.charge_limit_percent_best[0] if self.charge_limit_best != self.reserve else self.soc_kw
                         inv_target_soc = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True)
 
+                        current_charge_rate = inverter.get_current_charge_rate()
                         new_charge_rate, new_charge_rate_real = find_charge_rate(
                             self.minutes_now,
                             inverter.soc_kw,
@@ -120,9 +121,9 @@ class Execute:
                             self.log,
                             inverter.battery_temperature,
                             self.battery_temperature_charge_curve,
+                            current_charge_rate=current_charge_rate / MINUTE_WATT,
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
-                        current_charge_rate = inverter.get_current_charge_rate()
 
                         self.log(
                             "Inverter {} Target SOC {} (this inverter {}) Battery temperature {} Select charge rate {}w (real {}w) current charge rate {}".format(

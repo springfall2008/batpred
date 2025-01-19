@@ -1482,7 +1482,7 @@ class Plan:
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
-    def sort_window_by_price_combined(self, charge_windows, export_windows, stand_alone=False, calculate_import_low_export=False, calculate_export_high_import=False):
+    def sort_window_by_price_combined(self, charge_windows, export_windows, calculate_import_low_export=False, calculate_export_high_import=False):
         """
         Sort windows into price sets
         """
@@ -1492,18 +1492,15 @@ class Plan:
         price_links = {}
 
         # Add charge windows
-        if self.calculate_best_charge or stand_alone:
+        if self.calculate_best_charge:
             id = 0
             for window in charge_windows:
                 # Account for losses in average rate as it makes import higher
-                if stand_alone:
-                    average = dp2(window["average"])
-                else:
-                    average = dp2(window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle)
-                    if self.carbon_enable:
-                        carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                        average += carbon_intensity * self.carbon_metric / 1000.0
-                    average += self.metric_self_sufficiency
+                average = dp2(window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle)
+                if self.carbon_enable:
+                    carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
+                    average += carbon_intensity * self.carbon_metric / 1000.0
+                average += self.metric_self_sufficiency
                 if calculate_import_low_export:
                     average_export = dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
                 else:
@@ -1519,7 +1516,7 @@ class Plan:
                 id += 1
 
         # Add export windows
-        if self.calculate_best_export and not stand_alone:
+        if self.calculate_best_export:
             id = 0
             for window in export_windows:
                 # Account for losses in average rate as it makes export value lower
@@ -1918,6 +1915,17 @@ class Plan:
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
         window_sorted, window_index, price_set, price_links = self.sort_window_by_price_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
+        if debug_mode:
+            price_order = []
+            for price_key in price_set:
+                links = price_links[price_key]
+                for key in links:
+                    typ = window_index[key]["type"]
+                    window_n = window_index[key]["id"]
+                    price = window_index[key]["average"]
+                    if typ == "c":
+                        real_price = self.charge_window_best[window_n]["average"]
+                        price_order.append(real_price)
 
         best_soc = self.soc_max
         best_cost = best_metric
@@ -2165,7 +2173,7 @@ class Plan:
                                     self.update_target_values()
                                     self.publish_html_plan(self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                                     open("plan_main_charge_{}.html".format(window_n), "w").write(self.html_plan)
-                                    print("Wrote plan to plan_main_charge_{}.html".format(window_n))
+                                    print("Wrote plan to plan_main_charge_{}.html - metric {} cost {} keep {} cycle {} import {}".format(window_n, best_metric, best_cost, best_keep, best_cycle, best_import))
 
                             if self.debug_enable:
                                 self.log(

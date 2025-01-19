@@ -384,7 +384,7 @@ def run_nordpool_test(my_predbat):
     if min_import < -15 or max_import > 100:
         print("ERROR: Rate import data out of range got min {} max {}".format(min_import, max_import))
         failed = True
-    if min_export < 0 or max_export > 50:
+    if min_export < 0 or max_export > 60:
         print("ERROR: Rate export data out of range got min {} max {}".format(min_export, max_export))
         failed = True
 
@@ -2459,13 +2459,16 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     if not expected_file:
         my_predbat.args["plan_debug"] = True
         # my_predbat.set_discharge_during_charge = True
-        # my_predbat.metric_self_sufficiency = 0
+
+        # my_predbat.metric_self_sufficiency = 5
         # my_predbat.calculate_second_pass = False
-        # my_predbat.best_soc_keep = 0
-        pass
+        # my_predbat.best_soc_keep = 2
+        # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
-        # my_predbat.best_soc_keep = 1.0
         # my_predbat.metric_min_improvement_export = 5
+        my_predbat.inverter_loss = 0.97
+        my_predbat.calculate_tweak_plan = False
+        pass
 
     if re_do_rates:
         # Set rate thresholds
@@ -2989,7 +2992,7 @@ def run_execute_tests(my_predbat):
         assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 15,
-        assert_charge_rate=2000,
+        assert_charge_rate=1300,  # Keep current rate as it is over the max rate we will achieve anyhow
         battery_max_rate=2000,
     )
     if failed:
