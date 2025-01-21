@@ -860,6 +860,14 @@ class Fetch:
                 self.log("Error: metric_octopus_import is not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
+        elif "metric_energidataservice_import" in self.args:
+            # Octopus import rates
+            entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
+            self.rate_import = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if not self.rate_import:
+                self.log("Error: metric_energidataservice_import is not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_import not set correctly or no energy rates can be read", had_errors=True)
+                raise ValueError
         else:
             # Basic rates defined by user over time
             self.rate_import = self.basic_rates(self.get_arg("rates_import", [], indirect=False), "rates_import")
@@ -1015,6 +1023,13 @@ class Fetch:
             if not self.rate_export:
                 self.log("Warning: metric_octopus_export is not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly or no energy rates can be read", had_errors=True)
+        elif "metric_energidataservice_export" in self.args:
+            # Octopus export rates
+            entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
+            self.rate_export = self.fetch_energidataservice_rates(entity_id)
+            if not self.rate_export:
+                self.log("Warning: metric_energidataservice_export is not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_export not set correctly or no energy rates can be read", had_errors=True)
         else:
             # Basic rates defined by user over time
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
