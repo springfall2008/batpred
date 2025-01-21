@@ -14,7 +14,7 @@ import re
 import time
 import math
 from datetime import datetime, timedelta
-from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
+from config import PREDICT_STEP, RUN_EVERY, TIME_FORMAT, MINUTE_WATT
 from utils import remove_intersecting_windows, get_charge_rate_curve, get_discharge_rate_curve, find_charge_rate, calc_percent_limit, dp4
 
 
@@ -441,8 +441,8 @@ class Prediction:
 
                     # When set reserve enable is on pretend the reserve is the charge limit minus the
                     # minimum battery rate modelled as it can leak a little
-                    if self.set_reserve_enable:
-                        reserve_expected = max(charge_limit_n - self.battery_rate_min * step, self.reserve)
+                    if self.set_reserve_enable and (soc >= charge_limit_n):
+                        reserve_expected = max(charge_limit_n, self.reserve)
 
             # Outside the recording window?
             if minute >= end_record and record:

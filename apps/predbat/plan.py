@@ -1711,7 +1711,7 @@ class Plan:
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
-            limit_soc = self.soc_max * limit / 100.0
+            limit_percent = calc_percent_limit(limit, self.soc_max)
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
@@ -1740,18 +1740,18 @@ class Plan:
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - min soc {} max soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max, soc_m1))
 
-                    if (soc_min_percent > calc_percent_limit(charge_limit_best[window_n], self.soc_max)) and (charge_limit_best[window_n] != self.reserve):
+                    if (soc_min_percent > (limit_percent + 1)) and (limit != self.reserve):
                         charge_limit_best[window_n] = 0
                         window["target"] = 0
                         if self.debug_enable:
-                            self.log("Clip off charge window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n]))
-                    elif soc_max < charge_limit_best[window_n]:
+                            self.log("Clip off charge window {} from {} - {} from limit {} to new limit {} min percent {} limit percent {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], soc_min_percent, limit_percent))
+                    elif soc_max < limit:
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
-                    elif (soc_max > soc_m1) and soc_max == charge_limit_best[window_n]:
+                    elif (soc_max > soc_m1) and soc_max == limit:
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
