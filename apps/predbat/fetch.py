@@ -340,6 +340,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
+
             if history:
                 import_today = self.minute_data(
                     history[0],
@@ -837,8 +838,8 @@ class Fetch:
         if "battery_temperature_history" in self.args:
             self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
+            for minute in range(0, 24*60, 5):
+                data.append({minute : self.battery_temperature_history.get(minute, 0)})
             self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
             self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
 
@@ -1173,6 +1174,9 @@ class Fetch:
             state=dp2(battery_temperature_history.get(0, 20)),
             attributes={
                 "results": self.filtered_times(predict_timestamps),
+                "temperature_h1": battery_temperature_history.get(60, 20),
+                "temperature_h2": battery_temperature_history.get(60*2, 20),
+                "temperature_h8": battery_temperature_history.get(60*8, 20),
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "c",
@@ -1530,7 +1534,7 @@ class Fetch:
         else:
             # In automatic mode select the only rate or everything but the most expensive
             if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max):
-                self.rate_import_cost_threshold = self.rate_max
+                self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
 
@@ -1540,7 +1544,7 @@ class Fetch:
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min):
-                self.rate_export_cost_threshold = self.rate_export_min
+                self.rate_export_cost_threshold = self.rate_export_min - 0.1
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
 
