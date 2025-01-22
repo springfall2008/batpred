@@ -90,7 +90,7 @@ The following configuration item in apps.yaml defaults to obtaining the standing
 You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from apps.yaml, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
 
-## Octopus Saving sessions
+## Octopus Saving Sessions
 
 Predbat is able to automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
 
@@ -100,6 +100,9 @@ Like the electricity rates this is set in the apps.yaml template to a regular ex
 - **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor binary_sensor.octopus_energy_ACCOUNT_ID_octoplus_saving_sessions.
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
+
+NOTE: Predbat automatically joining the saving session relies upon the event being enabled and Predbat being able to find the saving session event as 'event.octopus_energy_ACCOUNT_ID_octoplus_saving_session_events' - there have been occasions
+with some Octopus Integration installations where the event name is different.  If this is the case then the event must be renamed to the correct format that Predbat can function correctly.
 
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
