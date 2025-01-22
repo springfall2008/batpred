@@ -574,7 +574,39 @@ _CAUTION: If you leave Predbat turned off for a long period of time then the ove
 
 ## Debug
 
-**switch.predbat_debug_enable** when on prints lots of debug, leave off by default
+**switch.predbat_debug_enable** when on will create debugging information to aid diagnosis of Predbat issues.  By default this is turned off and its recommended that its only switched on when debug logs are requested. With the switch on:
+
+- Firstly Predbat prints lots of extra debug information in the predbat logfile which means the logfile will fill and swap to a new file more rapidly
+- Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
+This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
+
+The following automation might be useful to automatically turn off Predbat debug mode after turning it on to capture the debug logs:
+
+```yaml
+alias: "Predbat: Auto turn-off debug mode"
+description: ""
+triggers:
+  - trigger: state
+    entity_id:
+      - switch.predbat_debug_enable
+    to: "on"
+    for:
+      minutes: 10
+conditions: []
+actions:
+  - action: script.notify_all_devices
+    metadata: {}
+    data:
+      title: "INFO: Turned off Predbat debug after 10 minutes"
+      critical: "N"
+      url: ""
+      message: switch.predbat_debug_enable turned off
+  - action: switch.turn_off
+    target:
+      entity_id: switch.predbat_debug_enable
+    data: {}
+mode: single
+```
 
 **switch.predbat_plan_debug** (_expert mode_) when enabled adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan)
 for more details.
