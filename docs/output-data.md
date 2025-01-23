@@ -65,7 +65,7 @@ Installation steps:
 - Click the HACS icon on the left-hand side panel
 - Click 'Frontend'
 - Click the three dots in the top right corner then 'Custom Repositories'
-- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose Category of 'Lovelace', and click Add
+- Paste (or type) in the following repository name `https://github.com/RossMcMillan92/lovelace-collapsable-cards`, choose the Type 'Dashboard', and click Add
 - Close the Custom repositories dialogue
 - Click 'Explore & Download Repositories'
 - Search for 'collapsable cards', click the name of it, check it's the right one, click 'Download', 'Download' again, then 'Reload'
