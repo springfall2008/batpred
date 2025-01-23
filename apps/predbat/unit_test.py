@@ -33,7 +33,7 @@ import numpy as np
 from predbat import PredBat
 from prediction import Prediction
 from prediction import wrapped_run_prediction_single
-from utils import calc_percent_limit, remove_intersecting_windows
+from utils import calc_percent_limit, remove_intersecting_windows, find_charge_rate
 from futurerate import FutureRate
 from config import PREDICT_STEP, MINUTE_WATT
 from inverter import Inverter
@@ -135,8 +135,8 @@ def reset_rates(my_predbat, ir, xr):
         my_predbat.rate_import[minute] = ir
         my_predbat.rate_export[minute] = xr
     my_predbat.rate_export_min = xr
-    my_predbat.rate_import = my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_export = my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_scan(my_predbat.rate_export, print=False)
 
 
 def reset_rates2(my_predbat, ir, xr):
@@ -149,24 +149,24 @@ def reset_rates2(my_predbat, ir, xr):
             my_predbat.rate_import[minute] = ir * 2
             my_predbat.rate_export[minute] = xr * 2
     my_predbat.rate_export_min = xr
-    my_predbat.rate_import = my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_export = my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_scan(my_predbat.rate_export, print=False)
 
 
 def update_rates_import(my_predbat, charge_window_best):
     for window in charge_window_best:
         for minute in range(window["start"], window["end"]):
             my_predbat.rate_import[minute] = window["average"]
-    my_predbat.rate_import = my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_export = my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_scan(my_predbat.rate_export, print=False)
 
 
 def update_rates_export(my_predbat, export_window_best):
     for window in export_window_best:
         for minute in range(window["start"], window["end"]):
             my_predbat.rate_export[minute] = window["average"]
-    my_predbat.rate_import = my_predbat.rate_scan(my_predbat.rate_import, print=False)
-    my_predbat.rate_export = my_predbat.rate_scan(my_predbat.rate_export, print=False)
+    my_predbat.rate_scan(my_predbat.rate_import, print=False)
+    my_predbat.rate_scan(my_predbat.rate_export, print=False)
 
 
 def reset_inverter(my_predbat):
@@ -326,6 +326,7 @@ def run_nordpool_test(my_predbat):
     """
     Test the compute metric function
     """
+
     print("**** Running Nordpool tests ****")
     my_predbat.args["futurerate_url"] = "https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP"
     my_predbat.args["futurerate_adjust_import"] = False
@@ -338,8 +339,19 @@ def run_nordpool_test(my_predbat):
     my_predbat.args["futurerate_adjust_export"] = True
     failed = False
 
+    fixed = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/OUTGOING-FIX-12M-BB-23-02-09/electricity-tariffs/E-1R-OUTGOING-FIX-12M-BB-23-02-09-A/standard-unit-rates/")
+    if max(fixed.values()) <= 0:
+        print("ERROR: Fixed rates can not be zero")
+        failed = True
+    if min(fixed.values()) != max(fixed.values()):
+        print("ERROR: Fixed rates can can change")
+        failed = True
+    if len(fixed) > 5 * 24 * 60:
+        print("ERROR: Fixed rates too long got {}".format(len(fixed)))
+        failed = True
+
     # Obtain Agile octopus data
-    rates_agile = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates")
+    rates_agile = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/")
     if not rates_agile:
         print("ERROR: No import rate data from Octopus url {}".format(url))
         failed = True
@@ -384,7 +396,7 @@ def run_nordpool_test(my_predbat):
     if min_import < -15 or max_import > 100:
         print("ERROR: Rate import data out of range got min {} max {}".format(min_import, max_import))
         failed = True
-    if min_export < 0 or max_export > 60:
+    if min_export < 0 or max_export > 100:
         print("ERROR: Rate export data out of range got min {} max {}".format(min_export, max_export))
         failed = True
 
@@ -2437,7 +2449,7 @@ def run_execute_test(
 def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     print("**** Running debug test {} ****\n".format(debug_file))
     if not expected_file:
-        re_do_rates = False
+        re_do_rates = True
         reset_load_model = True
     else:
         reset_load_model = False
@@ -2466,29 +2478,39 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
         # my_predbat.set_charge_freeze = True
         # my_predbat.combine_export_slots = False
         # my_predbat.metric_min_improvement_export = 5
-        my_predbat.inverter_loss = 0.97
+        # my_predbat.inverter_loss = 0.97
         my_predbat.calculate_tweak_plan = False
+
+        # my_predbat.inverter_loss = 0.97
+        # my_predbat.calculate_second_pass = False
+        # my_predbat.metric_battery_cycle = 0
         pass
 
     if re_do_rates:
         # Set rate thresholds
         if my_predbat.rate_import or my_predbat.rate_export:
+            print("Set rate thresholds")
             my_predbat.set_rate_thresholds()
+            print("Result export {} import {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_import_cost_threshold))
 
         # Find discharging windows
         if my_predbat.rate_export:
-            my_predbat.high_export_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
+            my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True)
             # Update threshold automatically
-            if my_predbat.rate_high_threshold == 0 and lowest <= my_predbat.rate_export_max:
-                my_predbat.rate_export_cost_threshold = lowest
+            if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
+                my_predbat.rate_export_cost_threshold = export_lowest
 
         # Find charging windows
         if my_predbat.rate_import:
             # Find charging window
+            print("rate scan window import threshold rate {}".format(my_predbat.rate_import_cost_threshold))
             my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False)
+            print("Low Import rate found rates in range {} to {} based on threshold {}".format(lowest, highest, my_predbat.rate_import_cost_threshold))
             # Update threshold automatically
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
+
+        print("Lowest rate {} highest rate {} rates {}".format(lowest, highest, my_predbat.low_rates))
 
     print("minutes_now {} end_record {}".format(my_predbat.minutes_now, my_predbat.end_record))
 
@@ -6359,6 +6381,60 @@ def run_model_tests(my_predbat):
     return failed
 
 
+def test_find_charge_rate(my_predbat):
+    failed = 0
+
+    # 2025-01-20 04:41:34.362134: Inverter 0 Charge window will be: 2025-01-19 23:30:00+00:00 - 2025-01-20 05:30:00+00:00 - current soc 95 target 100
+    # 2025-01-20 04:41:34.364437: Low Power mode: minutes left: 40 absolute: 50 SOC: 9.04 Target SOC: 9.52 Charge left: 0.48 Max rate: 2600.0 Min rate: 576.0 Best rate: 2600.0 Best rate real: 1274.0 Battery temp 17.0
+    # 2025-01-20 04:41:34.364497: Inverter 0 Target SOC 100 (this inverter 100.0) Battery temperature 17.0 Select charge rate 2600w (real 1274.0w) current charge rate 952
+    # 2025-01-20 04:41:34.364549: Inverter 0 current charge rate is 952W and new target is 2600W
+    # 2025-01-20 04:41:34.695878: Inverter 0 set charge rate 2600 via REST successful on retry 0
+
+    current_charge_rate = 952
+    soc = 9.04
+    soc_max = 9.52
+    log_to = print  # my_predbat.log
+    minutes_now = my_predbat.minutes_now
+    window = {"start": minutes_now - 60, "end": minutes_now + 50}
+    target_soc = soc_max
+    battery_charge_power_curve = {100: 0.15, 99: 0.15, 98: 0.23, 97: 0.3, 96: 0.42, 95: 0.49, 94: 0.55, 93: 0.69, 92: 0.79, 91: 0.89, 90: 0.96}
+    set_charge_low_power = True
+    charge_low_power_margin = my_predbat.charge_low_power_margin
+    battery_rate_min = 0
+    battery_rate_max_scaling = 1
+    battery_loss = 0.96
+    battery_temperature = 17.0
+    battery_temperature_curve = {19: 0.33, 18: 0.33, 17: 0.33, 16: 0.33, 15: 0.33, 14: 0.33, 13: 0.33, 12: 0.33, 11: 0.33, 10: 0.25, 9: 0.25, 8: 0.25, 7: 0.25, 6: 0.25, 5: 0.25, 4: 0.25, 3: 0.25, 2: 0.25, 1: 0.15, 0: 0.00}
+    max_rate = 2500
+
+    best_rate, best_rate_real = find_charge_rate(
+        minutes_now,
+        soc,
+        window,
+        target_soc,
+        max_rate / MINUTE_WATT,
+        soc_max,
+        battery_charge_power_curve,
+        set_charge_low_power,
+        charge_low_power_margin,
+        battery_rate_min / MINUTE_WATT,
+        battery_rate_max_scaling,
+        battery_loss,
+        log_to,
+        battery_temperature=battery_temperature,
+        battery_temperature_curve=battery_temperature_curve,
+        current_charge_rate=current_charge_rate / MINUTE_WATT,
+    )
+    print("Best_rate {} Best_rate_real {}".format(best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT))
+    if best_rate * MINUTE_WATT != 2500:
+        print("**** ERROR: Best rate should be 2500 ****")
+        failed = 1
+    if best_rate_real * MINUTE_WATT != 1225:
+        print("**** ERROR: Best real rate should be 1225 ****")
+        failed = 1
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -6386,11 +6462,16 @@ def main():
         run_single_debug(args.debug_file, my_predbat, args.debug_file)
         sys.exit(0)
 
+    if not failed:
+        failed |= test_find_charge_rate(my_predbat)
+
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     if not free_sessions:
         print("**** ERROR: No free sessions found ****")
         failed = 1
+    if not failed:
+        failed |= run_nordpool_test(my_predbat)
     if not failed:
         failed |= run_inverter_tests()
     if not failed:
@@ -6413,8 +6494,6 @@ def main():
         failed |= run_compute_metric_tests(my_predbat)
     if not failed and not args.quick:
         failed |= run_perf_test(my_predbat)
-    if not failed:
-        failed |= run_nordpool_test(my_predbat)
 
     if not failed and not args.quick:
         # Scan .yaml files in cases directory

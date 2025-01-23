@@ -143,7 +143,7 @@ class Octopus:
 
         # Download failed?
         if not pdata:
-            self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+            self.log("Warn: Unable to download Octopus data from URL {} (data empty)".format(url))
             self.record_status("Warn: Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
                 pdata = self.octopus_url_cache[url]["data"]
@@ -176,17 +176,18 @@ class Octopus:
             try:
                 data = r.json()
             except requests.exceptions.JSONDecodeError:
-                self.log("Warn: Error downloading Octopus data from URL {}".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {} (JSONDecodeError)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             if "results" in data:
                 mdata += data["results"]
             else:
-                self.log("Warn: Error downloading Octopus data from URL {}".format(url))
+                self.log("Warn: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
             url = data.get("next", None)
             pages += 1
+
         pdata = self.minute_data(mdata, self.forecast_days + 1, self.midnight_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return pdata
 

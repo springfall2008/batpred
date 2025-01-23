@@ -503,6 +503,10 @@ class Fetch:
         newest_age = 999999
         max_increment = MAX_INCREMENT
 
+        # Bounds on the data we store
+        minute_min = -days * 24 * 60
+        minute_max = days * 24 * 60
+
         # Check history is valid
         if not history:
             self.log("Warning, empty history passed to minute_data, ignoring (check your settings)...")
@@ -652,7 +656,8 @@ class Fetch:
                         # Reset to zero, sometimes not exactly zero
                         if clean_increment and (state < last_state) and ((last_state - state) >= 1.0):
                             while minute < minutes_to:
-                                mdata[minute] = state
+                                if minute >= minute_min and minute <= minute_max:
+                                    mdata[minute] = state
                                 minute += 1
                         else:
                             # Incrementing data can't go backwards
@@ -668,28 +673,32 @@ class Fetch:
 
                             index = 0
                             while minute < minutes_to:
-                                if backwards:
-                                    mdata[minute] = state - diff * index
-                                else:
-                                    mdata[minute] = last_state + diff * index
+                                if minute >= minute_min and minute <= minute_max:
+                                    if backwards:
+                                        mdata[minute] = state - diff * index
+                                    else:
+                                        mdata[minute] = last_state + diff * index
                                 minute += 1
                                 index += 1
                     else:
                         while minute < minutes_to:
-                            if backwards:
-                                mdata[minute] = last_state
-                            else:
-                                mdata[minute] = state
+                            if minute >= minute_min and minute <= minute_max:
+                                if backwards:
+                                    mdata[minute] = last_state
+                                else:
+                                    mdata[minute] = state
 
-                            if adjusted:
-                                adata[minute] = True
+                                if adjusted:
+                                    adata[minute] = True
                             minute += 1
             else:
                 if spreading:
                     for minute in range(minutes, minutes + spreading):
-                        mdata[minute] = state
+                        if minute >= minute_min and minute <= minute_max:
+                            mdata[minute] = state
                 else:
-                    mdata[minutes] = state
+                    if minutes >= minute_min and minute <= minute_max:
+                        mdata[minutes] = state
 
             # Store previous time & state
             if to_time and not backwards:
@@ -873,11 +882,11 @@ class Fetch:
                 self.record_status(message="Error: rate_import_gas not set correctly or no energy rates can be read", had_errors=True)
                 raise ValueError
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
-            self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
+            self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
             self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
             self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
-            self.rate_gas = self.rate_scan_gas(self.rate_gas, print=True)
+            self.rate_scan_gas(self.rate_gas, print=True)
 
         # Carbon intensity data
         if self.carbon_enable and ("carbon_intensity" in self.args):
@@ -929,7 +938,7 @@ class Fetch:
 
             # Get rate for import to compute charging costs
             if self.rate_import:
-                self.rate_import = self.rate_scan(self.rate_import, print=False)
+                self.rate_scan(self.rate_import, print=False)
 
             if self.num_cars >= 1:
                 # Extract vehicle data if we can get it
@@ -1032,26 +1041,26 @@ class Fetch:
 
         # Replicate and scan import rates
         if self.rate_import:
-            self.rate_import = self.rate_scan(self.rate_import, print=False)
+            self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
             self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
-            self.rate_import = self.rate_scan(self.rate_import, print=True)
+            self.rate_scan(self.rate_import, print=True)
         else:
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error: No import rate data provided", had_errors=True)
 
         # Replicate and scan export rates
         if self.rate_export:
-            self.rate_export = self.rate_scan_export(self.rate_export, print=False)
+            self.rate_scan_export(self.rate_export, print=False)
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
-            self.rate_export = self.rate_scan_export(self.rate_export, print=True)
+            self.rate_scan_export(self.rate_export, print=True)
         else:
             self.log("Warning: No export rate data provided")
             self.record_status(message="Error: No export rate data provided", had_errors=True)
@@ -1392,8 +1401,6 @@ class Fetch:
                 start_minutes = max(minutes_to_time(start, midnight), 0)
                 end_minutes = min(minutes_to_time(end, midnight), 24 * 60 - 1)
 
-                self.log("Adding rate {}: {} => {} to {} @ {} date {} increment {}".format(rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment))
-
                 # Make end > start
                 if end_minutes <= start_minutes:
                     end_minutes += 24 * 60
@@ -1403,6 +1410,8 @@ class Fetch:
                     delta_minutes = minutes_to_time(date, self.midnight)
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
+
+                self.log("Adding rate {}: {} => {} to {} @ {} date {} increment {}".format(rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment))
 
                 # Store rates against range
                 if end_minutes >= (-24 * 60) and start_minutes < max_minute:
@@ -1438,7 +1447,6 @@ class Fetch:
         self.rate_export_min, self.rate_export_max, self.rate_export_average, self.rate_export_min_minute, self.rate_export_max_minute = self.rate_minmax(rates)
         if print:
             self.log("Export rates min {} max {} average {}".format(self.rate_export_min, self.rate_export_max, self.rate_export_average))
-        return rates
 
     def rate_minmax(self, rates):
         """
@@ -1557,16 +1565,12 @@ class Fetch:
         """
         Scan the rates and work out min/max
         """
-        self.low_rates = []
-
         self.rate_min, self.rate_max, self.rate_average, self.rate_min_minute, self.rate_max_minute = self.rate_minmax(rates)
 
         if print:
             # Calculate minimum forward rates only once rate replicate has run (when print is True)
             self.rate_min_forward = self.rate_min_forward_calc(self.rate_import)
             self.log("Import rates min {} max {} average {}".format(self.rate_min, self.rate_max, self.rate_average))
-
-        return rates
 
     def rate_scan_gas(self, rates, print=True):
         """
@@ -1576,8 +1580,6 @@ class Fetch:
 
         if print:
             self.log("Gas rates min {} max {} average {}".format(self.rate_gas_min, self.rate_gas_max, self.rate_gas_average))
-
-        return rates
 
     def get_car_charging_planned(self):
         """
