@@ -401,7 +401,7 @@ pred_bat:
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
   # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-FLEX-BB-23-02-08/electricity-tariffs/E-1R-AGILE-FLEX-BB-23-02-08-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-BB-24-10-01/electricity-tariffs/E-1R-AGILE-BB-24-10-01-A/standard-unit-rates/"
 
   # Overrides metric_octopus_export and rates_export
   # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-BB-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-BB-23-02-14-A/standard-unit-rates"
