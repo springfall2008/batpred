@@ -6,10 +6,9 @@ from utils import str2time, minutes_to_time, dp1, dp2
 
 
 class Energidataservice:
-        
     def fetch_energidataservice_rates(self, entity_id, adjust_key=None):
         """
-        Fetch the Energi Data Service rates from the sensor, add tariffs from attributes, 
+        Fetch the Energi Data Service rates from the sensor, add tariffs from attributes,
         and convert to 30-minute intervals.
 
         :param entity_id: The entity_id of the sensor
@@ -51,15 +50,7 @@ class Energidataservice:
                 entry["price_with_tariff"] = entry.get("price", 0) + tariff
 
             # Convert hourly data to 30-minute intervals
-            rate_data = self.hourly_to_half_hourly(
-                data_all,
-                self.forecast_days + 1,
-                self.midnight_utc,
-                rate_key="price_with_tariff",
-                from_key="hour",
-                adjust_key=adjust_key,
-                scale=1.0
-            )
+            rate_data = self.hourly_to_half_hourly(data_all, self.forecast_days + 1, self.midnight_utc, rate_key="price_with_tariff", from_key="hour", adjust_key=adjust_key, scale=1.0)
 
         return rate_data
 

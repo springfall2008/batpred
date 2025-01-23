@@ -177,17 +177,18 @@ Similarly rates_export_octopus_url takes precedence over metric_octopus_export o
 Configuring the Octopus rates URL is an expert feature and for most users the Octopus Energy integration is a simpler solution to use.
 
 ## Energidataservice Integration
+
 If your electricity supplier provides data through the Energi Data Service, you can use the Energidataservice integration to fetch real-time and future electricity pricing data. This integration allows you to automatically retrieve rates and apply them within your energy management system, including optional tariff adjustments for greater accuracy.
 
 The integration processes hourly pricing data and converts it into 30-minute intervals, making it ideal for scheduling and optimizing energy usage.
 
 ## Configuring Predbat to Use the Energidataservice Integration
+
 The following configuration items in apps.yaml are used to configure Predbat to use the Energidataservice integration. These items must be set explicitly to ensure that Predbat retrieves the correct import and export rates.
 
 metric_energidataservice_import - Import rates from the Energidataservice integration. This should point to the sensor that provides hourly import rates, such as sensor.energi_data_service.
 
 metric_energidataservice_export - Export rates from the Energidataservice integration. This should point to the sensor that provides hourly export rates (e.g., solar feed-in rates), such as sensor.energi_data_service_export.
-
 
 ## Rate Bands to manually configure Energy Rates
 
