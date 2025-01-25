@@ -1824,10 +1824,16 @@ class Inverter:
         if self.rest_data:
             if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                 current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
-                if current != 0:
-                    self.rest_setExportTarget(0)
+                if current > 4:
+                    self.rest_setExportTarget(4)
                 else:
-                    self.log("Inverter {} Current export target is 0 already".format(self.id))
+                    self.log("Inverter {} Current export target is already set to {}".format(self.id, current))
+        elif "discharge_target_soc" in self.base.args:
+            current = self.base.get_arg("discharge_target_soc", index=self.id)
+            if current > 4:
+                self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id), 4)
+            else:
+                self.log("Inverter {} Current export target is already set to {}".format(self.id, current))
 
         # REST version of writing slot
         if self.rest_data and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
