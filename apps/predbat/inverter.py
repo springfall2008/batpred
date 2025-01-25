@@ -348,7 +348,6 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-
         # Battery cannot be zero size
         if self.soc_max <= 0:
             self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
@@ -2526,7 +2525,7 @@ class Inverter:
         Configure charge slot via REST
         """
         url = self.rest_api + "/setExportTarget"
-        data = {'exportToPercent': target, 'slot': 1}
+        data = {"exportToPercent": target, "slot": 1}
 
         for retry in range(5):
             r = self.rest_postCommand(url, json=data)

@@ -340,7 +340,6 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
-
             if history:
                 import_today = self.minute_data(
                     history[0],
@@ -608,7 +607,6 @@ class Fetch:
             else:
                 adjusted = False
 
-
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
             if to_key:
@@ -635,7 +633,6 @@ class Fetch:
                 timed = last_updated_time - now
                 if to_time:
                     timed_to = to_time - now
-
 
             minutes = int(timed.total_seconds() / 60)
             if to_time:
@@ -851,8 +848,8 @@ class Fetch:
         if "battery_temperature_history" in self.args:
             self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
-            for minute in range(0, 24*60, 5):
-                data.append({minute : self.battery_temperature_history.get(minute, 0)})
+            for minute in range(0, 24 * 60, 5):
+                data.append({minute: self.battery_temperature_history.get(minute, 0)})
             self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
             self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
 
@@ -1188,8 +1185,8 @@ class Fetch:
             attributes={
                 "results": self.filtered_times(predict_timestamps),
                 "temperature_h1": battery_temperature_history.get(60, 20),
-                "temperature_h2": battery_temperature_history.get(60*2, 20),
-                "temperature_h8": battery_temperature_history.get(60*8, 20),
+                "temperature_h2": battery_temperature_history.get(60 * 2, 20),
+                "temperature_h8": battery_temperature_history.get(60 * 8, 20),
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "c",
