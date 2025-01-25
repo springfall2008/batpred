@@ -1821,7 +1821,7 @@ class Inverter:
             self.press_and_poll_button()
 
         # REST export target, always set to minimum
-        if force_export or 1:
+        if force_export:
             if self.rest_data:
                 if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                     current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
@@ -2533,26 +2533,6 @@ class Inverter:
         """
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
-
-        for retry in range(5):
-            r = self.rest_postCommand(url, json=data)
-            # self.sleep(10)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if self.rest_data["raw"]["invertor"]["discharge_target_soc_1"] == target:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
-                return True
-
-        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn: Inverter {} REST failed to setExportTarget".format(self.id), had_errors=True)
-        return False
-
-    def rest_setExportTarget(self, target):
-        """
-        Configure export to percent via REST
-        """
-        url = self.rest_api + "/setExportTarget"
-        data = {"exportToPercent": target, "slot": 1}
 
         for retry in range(5):
             r = self.rest_postCommand(url, json=data)
