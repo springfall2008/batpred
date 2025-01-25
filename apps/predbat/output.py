@@ -792,6 +792,8 @@ class Output:
                         state += " &#8526;"
                     show_limit = str(limit_percent)
                     had_state = True
+                    if plan_debug:
+                        show_limit += " ({})".format(str(calc_percent_limit(self.charge_limit_best[charge_window_n], self.soc_max)))
             else:
                 if export_window_n >= 0:
                     start = self.export_window_best[export_window_n]["start"]

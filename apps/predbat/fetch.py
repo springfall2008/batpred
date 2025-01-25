@@ -791,6 +791,8 @@ class Fetch:
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
+        self.octopus_free_slots = {}
+        self.octopus_saving_slots = {}
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
@@ -1029,7 +1031,7 @@ class Fetch:
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
         # Fetch octopus saving sessions and free sessions
-        octopus_free_slots, octopus_saving_slots = self.fetch_octopus_sessions()
+        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -1044,8 +1046,8 @@ class Fetch:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
-            self.load_free_slot(octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
         else:
@@ -1058,7 +1060,7 @@ class Fetch:
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
+                self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
             self.rate_scan_export(self.rate_export, print=True)
         else:

@@ -282,6 +282,13 @@ def find_charge_rate(
         best_rate_real = max_rate_real
         highest_achievable_rate = 0
 
+        if log_to:
+            log_to(
+                "Find charge rate for low power mode: soc: {} target_soc: {} charge_left: {} minutes_left: {} abs_minutes_left: {} max_rate: {} min_rate: {} min_rate_w: {}".format(
+                    soc, target_soc, charge_left, minutes_left, abs_minutes_left, max_rate * MINUTE_WATT, min_rate * MINUTE_WATT, min_rate_w
+                )
+            )
+
         while rate_w >= 400:
             rate = rate_w / MINUTE_WATT
             if rate_w >= min_rate_w:
@@ -301,8 +308,8 @@ def find_charge_rate(
                         best_rate_real = rate_scale_max
                         break
                 # if log_to:
-                #    log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SOC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
-                #        rate * MINUTE_WATT, minute, soc, target_soc, charge_left, charge_now, rate_scale * MINUTE_WATT, charge_amount, charge_now, best_rate*MINUTE_WATT, highest_achievable_rate*MINUTE_WATT))
+                #   log_to("Low Power mode: rate: {} minutes: {} SOC: {} Target SOC: {} Charge left: {} Charge now: {} Rate scale: {} Charge amount: {} Charge now: {} best rate: {} highest achievable_rate {}".format(
+                #        rate * MINUTE_WATT, minute, soc, target_soc, charge_left, charge_now, rate_scale * MINUTE_WATT, charge_amount, round(charge_now, 2), best_rate*MINUTE_WATT, highest_achievable_rate*MINUTE_WATT))
             else:
                 break
             rate_w -= 100.0
@@ -311,7 +318,7 @@ def find_charge_rate(
         if best_rate >= highest_achievable_rate and current_charge_rate >= highest_achievable_rate:
             best_rate = current_charge_rate
             if log_to:
-                log_to("Low Power mode: best rate {} is less than highest achievable rate {} and current rate {} so sticking with current rate".format(best_rate * MINUTE_WATT, highest_achievable_rate * MINUTE_WATT, current_charge_rate * MINUTE_WATT))
+                log_to("Low Power mode: best rate {} is greater than highest achievable rate {} and current rate {} so sticking with current rate".format(best_rate * MINUTE_WATT, highest_achievable_rate * MINUTE_WATT, current_charge_rate * MINUTE_WATT))
 
         best_rate_real = get_charge_rate_curve(soc, best_rate, soc_max, max_rate, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve) * battery_rate_max_scaling
         if log_to:

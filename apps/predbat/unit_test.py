@@ -71,10 +71,20 @@ class TestHAInterface:
         if not entity_id:
             return {}
         elif entity_id in self.dummy_items:
-            print("Getting state: {} {}".format(entity_id, self.dummy_items[entity_id]))
-            return self.dummy_items[entity_id]
+            result = self.dummy_items[entity_id]
+            if isinstance(result, dict):
+                if attribute:
+                    result = result.get("attributes", {}).get(attribute, default)
+                else:
+                    result = result.get("state", default)
+            else:
+                if attribute:
+                    result = default
+            print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            return result
         else:
-            return None
+            print("Getting state: {} attribute {} => default".format(entity_id, default))
+            return default
 
     def call_service(self, service, **kwargs):
         # print("Calling service: {} {}".format(service, kwargs))
@@ -589,8 +599,10 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
 
     # Non-REST Mode
     inv.rest_data = None
+    inv.rest_api = None
     entity = "number.discharge_rate" if discharge else "number.charge_rate"
     ha.dummy_items[entity] = prev_rate
+    print("Set {} to {}".format(entity, prev_rate))
     if discharge:
         inv.adjust_discharge_rate(rate)
     else:
@@ -608,6 +620,11 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"][rest_entity] = expect_rate
 
+    rest_command = dummy_rest.get_commands()
+    if rest_command:
+        print("ERROR Previous was command was not cleared, started with:".format(rest_command))
+        failed = True
+
     if discharge:
         inv.adjust_discharge_rate(rate)
     else:
@@ -615,6 +632,7 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
 
     rest_command = dummy_rest.get_commands()
     if prev_rate != expect_rate:
+        print("Prev_rate {} expect_rate {}".format(prev_rate, expect_rate))
         if discharge:
             expect_data = [["dummy/setDischargeRate", {"dischargeRate": expect_rate}]]
         else:
@@ -1596,40 +1614,59 @@ def run_inverter_tests():
     failed |= test_adjust_battery_target("adjust_target0", ha, inv, dummy_rest, 10, 0, True, False, 4)
     failed |= test_adjust_battery_target("adjust_target100", ha, inv, dummy_rest, 99, 100, True, False, 100)
     failed |= test_adjust_battery_target("adjust_target100r", ha, inv, dummy_rest, 100, 100, True, False, 100)
+    if failed:
+        return failed
 
     failed |= test_adjust_inverter_mode("adjust_mode_eco1", ha, inv, dummy_rest, "Timed Export", "Eco", "Eco")
     failed |= test_adjust_inverter_mode("adjust_mode_eco2", ha, inv, dummy_rest, "Eco", "Eco", "Eco")
     failed |= test_adjust_inverter_mode("adjust_mode_eco3", ha, inv, dummy_rest, "Eco (Paused)", "Eco", "Eco (Paused)")
     failed |= test_adjust_inverter_mode("adjust_mode_export1", ha, inv, dummy_rest, "Eco (Paused)", "Timed Export", "Timed Export")
     failed |= test_adjust_inverter_mode("adjust_mode_export2", ha, inv, dummy_rest, "Timed Export", "Timed Export", "Timed Export")
+    if failed:
+        return failed
 
     failed |= test_adjust_charge_rate("adjust_charge_rate1", ha, inv, dummy_rest, 0, 200.1, 200)
-    failed |= test_adjust_charge_rate("adjust_charge_rate2", ha, inv, dummy_rest, 200, 0, 0)
-    failed |= test_adjust_charge_rate("adjust_charge_rate3", ha, inv, dummy_rest, 200, 210, 200)
+    if failed:
+        return failed
+    failed |= test_adjust_charge_rate("adjust_charge_rate2", ha, inv, dummy_rest, 0, 100, 0)
+    if failed:
+        return failed
+    failed |= test_adjust_charge_rate("adjust_charge_rate3", ha, inv, dummy_rest, 200, 0, 0)
+    failed |= test_adjust_charge_rate("adjust_charge_rate4", ha, inv, dummy_rest, 100, 0, 100)
+    failed |= test_adjust_charge_rate("adjust_charge_rate5", ha, inv, dummy_rest, 200, 210, 200)
+    if failed:
+        return failed
 
-    failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 200.1, 200, discharge=True)
-    failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 200, 0, 0, discharge=True)
+    failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
+    failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    if failed:
+        return failed
 
     failed |= test_adjust_reserve("adjust_reserve1", ha, inv, dummy_rest, 4, 50, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve2", ha, inv, dummy_rest, 50, 0, 4, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max=98)
     failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max=100)
+    if failed:
+        return failed
 
     failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "00:00:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now)
+    if failed:
+        return failed
 
     failed |= test_call_service_template("test_service_simple1", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"})
     failed |= test_call_service_template("test_service_simple2", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple3", my_predbat, inv, service_name="test_service", domain="discharge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False)
     failed |= test_call_service_template("test_service_simple4", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data"}, clear=False, repeat=True)
     failed |= test_call_service_template("test_service_simple5", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra": "data2"}, clear=False, repeat=False)
-
     failed |= test_call_service_template("test_service_simple6", my_predbat, inv, service_name="test_service", domain="charge", data={"test": "data"}, extra_data={"extra_dummy": "data2"}, clear=False, repeat=False)
+    if failed:
+        return failed
 
     failed |= test_call_service_template(
         "test_service_complex1",
@@ -1700,6 +1737,9 @@ def run_inverter_tests():
         )
 
     inv.soc_percent = 49
+
+    if failed:
+        return failed
 
     failed |= test_call_adjust_charge_immediate("charge_immediate1", my_predbat, ha, inv, dummy_items, 100, clear=True, stop_discharge=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate2", my_predbat, ha, inv, dummy_items, 0)
@@ -6435,6 +6475,106 @@ def test_find_charge_rate(my_predbat):
     return failed
 
 
+def test_saving_session(my_predbat):
+    """
+    Test the octopus saving session
+    """
+    print("Test saving session")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_last_year = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    date_yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    session_binary = f"""
+state: off
+current_joined_event_start: '{date_today}T16:30:00+00:00'
+current_joined_event_end: '{date_today}T17:30:00+00:00'
+current_joined_event_duration_in_minutes: 60
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session (A-4DD6C5EE)
+""".format(
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today
+    )
+
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+00:00'
+attributes:
+    event_types: octopus_energy_all_octoplus_saving_sessions
+    event_type: octopus_energy_all_octoplus_saving_sessions
+    account_id: A-4DD6C5EE
+    available_events:
+      - id: 1336
+        start: '{date_today}T18:30:00+00:00'
+        end: '{date_today}T19:30:00+00:00'
+        duration_in_minutes: 60
+        rewarded_octopoints: null
+        octopoints_per_kwh: 500
+        code: 987654
+    joined_events:
+      - id: 1327
+        start: '{date_last_year}T17:00:00+00:00'
+        end: '{date_last_year}T18:00:00+00:00'
+        duration_in_minutes: 60
+        rewarded_octopoints: 936
+        octopoints_per_kwh: 576
+      - id: 1334
+        start: '{date_yesterday}T17:30:00+00:00'
+        end: '{date_yesterday}T18:30:00+00:00'
+        duration_in_minutes: 60
+        rewarded_octopoints: null
+        octopoints_per_kwh: 192
+      - id: 1335
+        start: '{date_today}T16:30:00+00:00'
+        end: '{date_today}T17:30:00+00:00'
+        duration_in_minutes: 60
+        rewarded_octopoints: null
+        octopoints_per_kwh: 448
+friendly_name: Octoplus Saving Session Events (A-12345678)
+""".format(
+        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today
+    )
+    ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_events"] = yaml.safe_load(session_sensor)
+    ha.dummy_items["sensor.octopus_free_session"] = {}
+    my_predbat.args["octopus_saving_session"] = "binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"
+    my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+    if "octopus_free_url" in my_predbat.args:
+        del my_predbat.args["octopus_free_url"]
+    my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+
+    ha.service_store_enable = True
+    octopus_free_slots, octopus_saving_slots = my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    expected_saving = [
+        {"start": "{}T17:30:00+00:00".format(date_yesterday), "end": "{}T18:30:00+00:00".format(date_yesterday), "rate": 19.2, "state": False},
+        {"start": "{}T16:30:00+00:00".format(date_today), "end": "{}T17:30:00+00:00".format(date_today), "rate": 44.8, "state": False},
+    ]
+
+    # Example format Sat 25/01
+    date_today_service = datetime.now().strftime("%a %d/%m")
+    expected_service = [
+        ["octopus_energy/join_octoplus_saving_session_event", {"event_code": 987654, "entity_id": "event.octopus_energy_a_12345678_octoplus_saving_session_events"}],
+        ["notify/notify", {"message": "Predbat: Joined Octopus saving event {} 18:30-19:30, 50.0 p/kWh".format(date_today_service)}],
+    ]
+
+    if json.dumps(octopus_saving_slots) != json.dumps(expected_saving):
+        print("ERROR: Expecting saving slots should be {} got {}".format(expected_saving, octopus_saving_slots))
+        failed = 1
+    if json.dumps(service_result) != json.dumps(expected_service):
+        print("ERROR: Expecting service store should be {} got {}".format(expected_service, service_result))
+        failed = 1
+    if octopus_free_slots:
+        print("ERROR: Expecting no free slots")
+        failed = 1
+
+    return failed
+
+
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Predbat unit tests")
@@ -6464,6 +6604,8 @@ def main():
 
     if not failed:
         failed |= test_find_charge_rate(my_predbat)
+    if not failed:
+        failed |= test_saving_session(my_predbat)
 
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
