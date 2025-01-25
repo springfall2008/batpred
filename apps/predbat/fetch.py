@@ -340,6 +340,7 @@ class Fetch:
             except (ValueError, TypeError):
                 history = []
 
+
             if history:
                 import_today = self.minute_data(
                     history[0],
@@ -607,6 +608,7 @@ class Fetch:
             else:
                 adjusted = False
 
+
             # Work out end of time period
             # If we don't get it assume it's to the previous update, this is for historical data only (backwards)
             if to_key:
@@ -633,6 +635,7 @@ class Fetch:
                 timed = last_updated_time - now
                 if to_time:
                     timed_to = to_time - now
+
 
             minutes = int(timed.total_seconds() / 60)
             if to_time:
@@ -791,6 +794,8 @@ class Fetch:
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
+        self.octopus_free_slots = {}
+        self.octopus_saving_slots = {}
 
         # iBoost load data
         if "iboost_energy_today" in self.args:
@@ -846,8 +851,8 @@ class Fetch:
         if "battery_temperature_history" in self.args:
             self.battery_temperature_history = self.minute_data_import_export(self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
             data = []
-            for minute in range(0, 24 * 60, 5):
-                data.append({minute: self.battery_temperature_history.get(minute, 0)})
+            for minute in range(0, 24*60, 5):
+                data.append({minute : self.battery_temperature_history.get(minute, 0)})
             self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
             self.log("Fetched battery temperature history data, current temperature {}".format(self.battery_temperature_history.get(0, None)))
 
@@ -1029,7 +1034,7 @@ class Fetch:
             self.rate_export = self.basic_rates(self.get_arg("rates_export", [], indirect=False), "rates_export")
 
         # Fetch octopus saving sessions and free sessions
-        octopus_free_slots, octopus_saving_slots = self.fetch_octopus_sessions()
+        self.octopus_free_slots, self.octopus_saving_slots = self.fetch_octopus_sessions()
 
         # Standing charge
         self.metric_standing_charge = self.get_arg("metric_standing_charge", 0.0) * 100.0
@@ -1044,8 +1049,8 @@ class Fetch:
             self.rate_scan(self.rate_import, print=False)
             self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
             self.rate_import = self.rate_add_io_slots(self.rate_import, self.octopus_slots)
-            self.load_saving_slot(octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
-            self.load_free_slot(octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
             self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
             self.rate_scan(self.rate_import, print=True)
         else:
@@ -1058,7 +1063,7 @@ class Fetch:
             self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
+                self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
             self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
             self.rate_scan_export(self.rate_export, print=True)
         else:
@@ -1183,8 +1188,8 @@ class Fetch:
             attributes={
                 "results": self.filtered_times(predict_timestamps),
                 "temperature_h1": battery_temperature_history.get(60, 20),
-                "temperature_h2": battery_temperature_history.get(60 * 2, 20),
-                "temperature_h8": battery_temperature_history.get(60 * 8, 20),
+                "temperature_h2": battery_temperature_history.get(60*2, 20),
+                "temperature_h8": battery_temperature_history.get(60*8, 20),
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "c",

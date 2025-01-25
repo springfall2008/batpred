@@ -348,6 +348,7 @@ class Inverter:
 
             ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
+
         # Battery cannot be zero size
         if self.soc_max <= 0:
             self.base.log("Error: Reported battery size from REST is {}, but it must be >0".format(self.soc_max))
@@ -1197,6 +1198,13 @@ class Inverter:
             current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
         else:
             current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+
+        try:
+            current_rate = int(current_rate)
+        except (ValueError, TypeError) as e:
+            self.base.log("Error: Inverter {} charge rate {} is not a number, setting to 2600W".format(current_rate, self.id))
+            current_rate = 2600
+
         return current_rate
 
     def adjust_charge_rate(self, new_rate, notify=True):
@@ -1223,13 +1231,13 @@ class Inverter:
         new_rate = int(new_rate + 0.5)
         current_rate = self.get_current_charge_rate()
 
-        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 24):
+        if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setChargeRate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
-                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 12))
+                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1263,7 +1271,7 @@ class Inverter:
         else:
             current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
 
-        if abs(current_rate - new_rate) > 100:
+        if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
                 self.rest_setDischargeRate(new_rate)
@@ -1273,7 +1281,7 @@ class Inverter:
                         "discharge_rate",
                         self.base.get_arg("discharge_rate", indirect=False, index=self.id),
                         new_rate,
-                        fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 25),
+                        fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
                     )
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
@@ -1343,7 +1351,7 @@ class Inverter:
             current_state = current_state.lower() in ["on", "enable", "true"]
 
         if current_state == new_value:
-            self.base.log("Inverter {} No write needed for {} as {} == {}".format(self.id, name, new_value, current_state))
+            self.base.log("Inverter {} write_and_poll_switch: No write needed for {} as {} == {}".format(self.id, name, new_value, current_state))
             return True
 
         retry = 0
@@ -1407,10 +1415,10 @@ class Inverter:
                 matched = abs(float(current_state) - new_value) <= fuzzy
 
         if retry == 0:
-            self.base.log(f"Inverter {self.id} No write needed for {name}: {new_value} == {current_state}")
+            self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
             return True
         elif matched:
-            self.base.log(f"Inverter {self.id} Wrote {new_value} to {name}, successfully now {current_state}")
+            self.base.log(f"Inverter {self.id} write_and_poll_value: Wrote {new_value} to {name}, successfully now {current_state}")
             if domain != "sensor":
                 self.count_register_writes += 1
             return True
@@ -1812,6 +1820,15 @@ class Inverter:
 
         if ((new_end != old_end) or (new_start != old_start)) and self.inv_time_button_press:
             self.press_and_poll_button()
+
+        # REST export target, always set to 0
+        if self.rest_data:
+            if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
+                current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
+                if current != 0:
+                    self.rest_setExportTarget(0)
+                else:
+                    self.log("Inverter {} Current export target is 0 already".format(self.id))
 
         # REST version of writing slot
         if self.rest_data and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
@@ -2502,6 +2519,26 @@ class Inverter:
 
         self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
+        return False
+
+    def rest_setExportTarget(self, target):
+        """
+        Configure charge slot via REST
+        """
+        url = self.rest_api + "/setExportTarget"
+        data = {'exportToPercent': target, 'slot': 1}
+
+        for retry in range(5):
+            r = self.rest_postCommand(url, json=data)
+            # self.sleep(10)
+            self.rest_data = self.rest_runAll(self.rest_data)
+            if self.rest_data["raw"]["invertor"]["discharge_target_soc_1"] == target:
+                self.count_register_writes += 1
+                self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
+                return True
+
+        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed".format(self.id, data))
+        self.base.record_status("Warn: Inverter {} REST failed to setExportTarget".format(self.id), had_errors=True)
         return False
 
     def rest_setDischargeSlot1(self, start, finish):

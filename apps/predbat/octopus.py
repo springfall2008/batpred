@@ -272,7 +272,7 @@ class Octopus:
                 start_minutes = minutes_to_time(start, self.midnight_utc)
                 end_minutes = min(minutes_to_time(end, self.midnight_utc), self.forecast_minutes)
 
-            if start_minutes >= 0 and end_minutes != start_minutes and start_minutes < self.forecast_minutes:
+            if start_minutes < self.forecast_minutes and ((export and (start_minutes in self.rate_export)) or (not export and (start_minutes in self.rate_import))):
                 self.log("Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
@@ -486,7 +486,8 @@ class Octopus:
                             octopus_free_slots.append(octopus_free_slot)
         # Direct Octopus URL
         if "octopus_free_url" in self.args:
-            octopus_free_slots.extend(self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False)))
+            free_online = self.download_octopus_free(self.get_arg("octopus_free_url", indirect=False))
+            octopus_free_slots.extend(free_online)
 
         # Octopus saving session
         octopus_saving_slots = []
