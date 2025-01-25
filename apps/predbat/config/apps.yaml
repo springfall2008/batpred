@@ -162,6 +162,11 @@ pred_bat:
    - select.givtcp_{geserial}_battery_pause_end_time_slot
    - select.givtcp2_{geserial2}_battery_pause_end_time_slot
 
+  # Only gen3 supports discharge target SOC, will be ignored if not present
+  discharge_target_soc:
+    - number.givtcp_{geserial}_discharge_target_soc_1
+    - number.givtcp2_{geserial2}_discharge_target_soc_1
+
   # Battery temperature sensor per inverter, used outside REST mode to get current temperature
   #
   #battery_temperature:
