@@ -1559,7 +1559,7 @@ class Fetch:
         Set the high and low rate thresholds
         """
 
-        have_alerts = len(self.alerts) > 0
+        have_alerts = len(self.alert_active_keep) > 0
 
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
