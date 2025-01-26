@@ -4,6 +4,7 @@ adbase
 AIO
 AIO's
 aiohttp
+Alertfeed
 Anson
 apexcharts
 appdaemon
