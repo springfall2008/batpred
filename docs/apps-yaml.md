@@ -381,6 +381,7 @@ The **givtcp_rest** line should be commented out/deleted on anything but GivTCP 
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
 - **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
 - **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
+- **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
