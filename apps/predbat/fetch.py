@@ -1165,6 +1165,9 @@ class Fetch:
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
+        # Alert feed if enabled
+        self.process_alerts()
+
         # Load today vs actual
         if self.load_minutes:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now)

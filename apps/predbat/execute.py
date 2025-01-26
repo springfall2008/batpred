@@ -23,6 +23,8 @@ class Execute:
     def execute_plan(self):
         status_extra = ""
 
+        in_alert = self.alert_active_keep.get(self.minutes_now, 0)
+
         if self.holiday_days_left > 0:
             status = "Demand (Holiday)"
         else:
@@ -527,6 +529,10 @@ class Execute:
         self.set_charge_export_status(isCharging and not disabled_charge_window, isExporting and not disabled_export, not (isCharging or isExporting))
         self.isCharging = isCharging
         self.isExporting = isExporting
+
+        if in_alert > 0:
+            status += " [Alert]"
+
         return status, status_extra
 
     def adjust_battery_target_multi(self, inverter, soc, is_charging, is_exporting, isFreezeCharge=False, check=False):

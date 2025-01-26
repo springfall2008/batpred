@@ -170,6 +170,7 @@ class Prediction:
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
             self.carbon_intensity = base.carbon_intensity
+            self.alert_active_keep = base.alert_active_keep
             self.iboost_running = False
             self.iboost_running_solar = False
             self.iboost_running_full = False
@@ -415,6 +416,9 @@ class Prediction:
             prev_soc = soc
             reserve_expected = self.reserve
 
+            # Alert?
+            alert_keep = self.alert_active_keep.get(minute_absolute, 0)
+
             # Project battery temperature
             battery_temperature = self.battery_temperature_prediction.get(minute, self.battery_temperature)
 
@@ -423,6 +427,14 @@ class Prediction:
                 keep_minute_scaling = min((minute / (4 * 60)), 1.0) * self.best_soc_keep_weight
             else:
                 keep_minute_scaling = self.best_soc_keep_weight
+
+            # Get soc keep value
+            best_soc_keep = self.best_soc_keep
+
+            # Alert keep - force scaling to 1 and set new keep value
+            if alert_keep > 0:
+                keep_minute_scaling = max(keep_minute_scaling, 1.0)
+                best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * self.soc_max, self.soc_max))
 
             # Find charge & discharge windows
             charge_window_n = charge_window_optimised.get(minute_absolute, -1)
@@ -825,8 +837,8 @@ class Prediction:
             diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss)
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
-            if self.best_soc_keep > 0 and soc <= self.best_soc_keep:
-                metric_keep += (self.best_soc_keep - soc) * rate_import[minute_absolute] * keep_minute_scaling * step / 60.0
+            if best_soc_keep > 0 and soc <= best_soc_keep:
+                metric_keep += (best_soc_keep - soc) * rate_import[minute_absolute] * keep_minute_scaling * step / 60.0
             if diff > 0:
                 # Import
                 # All imports must go to home (no inverter loss) or to the battery (inverter loss accounted before above)
