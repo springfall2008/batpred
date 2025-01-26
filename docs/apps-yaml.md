@@ -1011,8 +1011,8 @@ Please look at their web site for more details. The apps.yaml must be configured
 The area, event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
 Any unset values are ignored.
 
-Events that match the given critera will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
-This works by using a much stronger verison of best_soc_keep but only for that time period.
+Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
+This works by using a much stronger version of best_soc_keep but only for that time period.
 
 Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period
 of the alert.
