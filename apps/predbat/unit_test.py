@@ -80,10 +80,10 @@ class TestHAInterface:
             else:
                 if attribute:
                     result = default
-            # print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            #print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            # print("Getting state: {} attribute {} => default".format(entity_id, default))
+            #print("Getting state: {} attribute {} => default".format(entity_id, default))
             return default
 
     def call_service(self, service, **kwargs):
@@ -119,7 +119,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        # print("Setting state: {} to {}".format(entity_id, state))
+        #print("Setting state: {} to {}".format(entity_id, state))
         self.dummy_items[entity_id] = state
         return None
 
@@ -469,7 +469,7 @@ class DummyRestAPI:
         self.queued_rest = []
 
     def queue_rest_data(self, data):
-        # print("Queue rest data {}".format(data))
+        #print("Queue rest data {}".format(data))
         self.queued_rest.append(copy.deepcopy(data))
 
     def clear_queue(self):
@@ -479,17 +479,18 @@ class DummyRestAPI:
         """
         Dummy rest post command
         """
-        # print("Dummy rest post command {} {}".format(url, json))
+        #print("Dummy rest post command {} {}".format(url, json))
         self.commands.append([url, json])
 
     def dummy_rest_getData(self, url):
+
         if url == "dummy/runAll":
             if self.queued_rest:
                 self.rest_data = self.queued_rest.pop(0)
-            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            #print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         elif url == "dummy/readData":
-            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            #print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         else:
             return None
@@ -596,7 +597,6 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
 
     return failed
 
-
 def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export):
     """
     Test
@@ -621,8 +621,9 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.reserve_precent = 4
     inv.inv_has_charge_enable_time = False
     inv.ge_inverter_mode = True
+    inv.rest_v3 = True
 
-    if inv.ge_inverter_mode and not new_force_export:
+    if (inv.ge_inverter_mode and not new_force_export):
         expect_start = prev_start
         expect_end = prev_end
     else:
@@ -634,8 +635,8 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     ha.dummy_items["select.discharge_start_time"] = prev_start
     ha.dummy_items["select.discharge_end_time"] = prev_end
     ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = prev_force_export
-    ha.dummy_items["number.discharge_target_soc"] = prev_discharge_target
-    ha.dummy_items["select.inverter_mode"] = prev_mode
+    ha.dummy_items['number.discharge_target_soc'] = prev_discharge_target
+    ha.dummy_items['select.inverter_mode'] = prev_mode
 
     new_start_timestamp = datetime.strptime(new_start, "%H:%M:%S")
     new_end_timestamp = datetime.strptime(new_end, "%H:%M:%S")
@@ -711,6 +712,7 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
 
     if prev_mode != new_mode:
         expect_data.append(["dummy/setBatteryMode", {"mode": new_mode}])
+
 
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
@@ -1747,6 +1749,7 @@ def run_inverter_tests():
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
     my_predbat.inv = inv
+
 
     failed |= test_adjust_force_export("adjust_force_export1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", False)
     if failed:
