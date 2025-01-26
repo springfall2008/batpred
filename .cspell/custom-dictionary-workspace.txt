@@ -60,6 +60,8 @@ elif
 emszzzz
 enctype
 endt
+Energi
+Energidataservice
 evse
 feedin
 fentry
