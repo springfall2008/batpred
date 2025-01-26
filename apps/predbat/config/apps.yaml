@@ -492,6 +492,15 @@ pred_bat:
   #futurerate_peak_premium_import: 14
   #futurerate_peak_premium_export: 6.5
 
+  # Alert feeds - customise to your region and desired risk/events
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  area: "North West England"
+  #  event: "Amber|Yellow|Orange|Red"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 100
+
   # Watch list, a list of sensors to watch for changes and then update the plan if they change
   # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in
   # Only uncomment the items you actually have set up above in apps.yaml, of course you can add your own as well
