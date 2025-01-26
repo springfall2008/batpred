@@ -389,6 +389,10 @@ pred_bat:
   # If you don't want to show the standing charge then just delete this line or set to zero
   metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
 
+  # Energy data service (https://github.com/MTrab/energidataservice)
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+
   # Or set your actual rates across time for import and export
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
