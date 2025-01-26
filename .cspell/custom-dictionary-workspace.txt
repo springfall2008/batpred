@@ -62,6 +62,7 @@ enctype
 endt
 Energi
 Energidataservice
+energydataservice
 evse
 feedin
 fentry
