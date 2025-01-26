@@ -4,6 +4,7 @@ adbase
 AIO
 AIO's
 aiohttp
+Alertfeed
 Anson
 apexcharts
 appdaemon
@@ -118,6 +119,8 @@ markdownlint
 matplotlib
 maximise
 mdlrc
+Meteo
+Meteoalarm
 metricb
 metricmid
 minb

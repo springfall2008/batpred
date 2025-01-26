@@ -38,10 +38,10 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.12.0"
+THIS_VERSION = "v8.12.1"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -82,9 +82,10 @@ from plan import Plan
 from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
+from alertfeed import Alertfeed
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """
@@ -512,6 +513,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Fetch, Pl
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
+        self.alerts = []
+        self.alert_active_keep = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:

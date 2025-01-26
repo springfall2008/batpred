@@ -1002,6 +1002,33 @@ gaps in the curve above 20 will used 20 degrees, gaps below 0 will use 0 degrees
     0: 0.00
 ```
 
+## Alert System
+
+Predbat can take data directly from Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.
+
+Please look at their web site for more details. The apps.yaml must be configured to select the URL for your country.
+
+The area, event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
+Any unset values are ignored.
+
+Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
+This works by using a much stronger version of best_soc_keep but only for that time period.
+
+Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period
+of the alert.
+
+```yaml
+  alerts:
+    url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+    area: "South West England"
+    event: "Yellow|Orange|Red"
+    severity: "Severe|Extreme"
+    certainty: "Likely|Expected"
+    keep: 100
+```
+
+![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
+
 ## Triggers
 
 - **export_triggers** - The export trigger feature is useful to help trigger your own automations based on Predbat predicting in the plan
