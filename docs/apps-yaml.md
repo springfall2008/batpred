@@ -1029,7 +1029,6 @@ of the alert.
 
 ![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
 
-
 ## Triggers
 
 - **export_triggers** - The export trigger feature is useful to help trigger your own automations based on Predbat predicting in the plan
