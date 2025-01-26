@@ -80,10 +80,10 @@ class TestHAInterface:
             else:
                 if attribute:
                     result = default
-            print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
+            #print("Getting state: {} attribute {} => {}".format(entity_id, attribute, result))
             return result
         else:
-            print("Getting state: {} attribute {} => default".format(entity_id, default))
+            #print("Getting state: {} attribute {} => default".format(entity_id, default))
             return default
 
     def call_service(self, service, **kwargs):
@@ -119,7 +119,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        # print("Setting state: {} to {}".format(entity_id, state))
+        #print("Setting state: {} to {}".format(entity_id, state))
         self.dummy_items[entity_id] = state
         return None
 
@@ -466,20 +466,31 @@ class DummyRestAPI:
     def __init__(self):
         self.commands = []
         self.rest_data = {}
+        self.queued_rest = []
+
+    def queue_rest_data(self, data):
+        #print("Queue rest data {}".format(data))
+        self.queued_rest.append(copy.deepcopy(data))
+
+    def clear_queue(self):
+        self.queued_rest = []
 
     def dummy_rest_postCommand(self, url, json):
         """
         Dummy rest post command
         """
-        # print("Dummy rest post command {} {}".format(url, json))
+        #print("Dummy rest post command {} {}".format(url, json))
         self.commands.append([url, json])
 
     def dummy_rest_getData(self, url):
+
         if url == "dummy/runAll":
-            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            if self.queued_rest:
+                self.rest_data = self.queued_rest.pop(0)
+            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         elif url == "dummy/readData":
-            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         else:
             return None
@@ -580,6 +591,128 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         expect_data = [["dummy/setBatteryReserve", {"reservePercent": expect_reserve}]]
     else:
         expect_data = []
+    if json.dumps(expect_data) != json.dumps(rest_command):
+        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+
+    return failed
+
+def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export):
+    """
+    Test
+       inv.adjust_reserve(self, reserve):
+    """
+    failed = False
+
+    print("Test: {} - non-REST".format(test_name))
+
+    if new_start is None:
+        new_start = prev_start
+    if new_end is None:
+        new_end = prev_end
+
+    prev_mode = "Timed Export" if prev_force_export else "Eco"
+    new_mode = "Timed Export" if new_force_export else "Eco"
+    prev_force_export = "on" if prev_force_export else "off"
+    export_schedule_discharge = "on" if new_force_export else "off"
+
+    # Non-REST Mode
+    inv.rest_data = None
+    inv.reserve_precent = 4
+    inv.inv_has_charge_enable_time = False
+    inv.ge_inverter_mode = True
+
+    if (inv.ge_inverter_mode and not new_force_export):
+        expect_start = prev_start
+        expect_end = prev_end
+    else:
+        expect_start = new_start
+        expect_end = new_end
+
+    new_discharge_target = inv.reserve_precent if new_force_export else prev_discharge_target
+
+    ha.dummy_items["select.discharge_start_time"] = prev_start
+    ha.dummy_items["select.discharge_end_time"] = prev_end
+    ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = prev_force_export
+    ha.dummy_items['number.discharge_target_soc'] = prev_discharge_target
+    ha.dummy_items['select.inverter_mode'] = prev_mode
+
+    new_start_timestamp = datetime.strptime(new_start, "%H:%M:%S")
+    new_end_timestamp = datetime.strptime(new_end, "%H:%M:%S")
+    inv.adjust_force_export(new_force_export, new_start_timestamp, new_end_timestamp)
+
+    if ha.get_state("sensor.predbat_GE_0_scheduled_discharge_enable") != export_schedule_discharge:
+        print("ERROR: scheduled discharge enable should be {} got {}".format(export_schedule_discharge, ha.get_state("sensor.predbat_GE_0_scheduled_discharge_enable")))
+        failed = True
+    if ha.get_state("select.discharge_start_time") != expect_start:
+        print("ERROR: Discharge start time should be {} got {}".format(new_start, ha.get_state("select.discharge_start_time")))
+        failed = True
+    if ha.get_state("select.discharge_end_time") != expect_end:
+        print("ERROR: Discharge end time should be {} got {}".format(new_end, ha.get_state("select.discharge_end_time")))
+        failed = True
+    if ha.get_state("number.discharge_target_soc") != new_discharge_target:
+        print("ERROR: Discharge target soc should be {} got {}".format(new_discharge_target, ha.get_state("number.discharge_target_soc")))
+        failed = True
+    if ha.get_state("select.inverter_mode") != new_mode:
+        print("ERROR: Inverter mode should be {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
+        failed = True
+
+    print("Test: {} - REST".format(test_name))
+    # REST Mode
+    inv.rest_api = "dummy"
+    inv.reserve_precent = 4
+    inv.inv_has_charge_enable_time = False
+
+    inv.rest_data = {}
+    inv.rest_data["Control"] = {}
+    inv.rest_data["Control"]["Enable_Discharge_Schedule"] = prev_force_export
+    inv.rest_data["Control"]["Mode"] = prev_mode
+    inv.rest_data["Timeslots"] = {}
+    inv.rest_data["Timeslots"]["Discharge_start_time_slot_1"] = prev_start
+    inv.rest_data["Timeslots"]["Discharge_end_time_slot_1"] = prev_end
+    inv.rest_data["raw"] = {}
+    inv.rest_data["raw"]["invertor"] = {}
+    inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"] = prev_discharge_target
+
+    dummy_rest.clear_queue()
+    dummy1 = copy.deepcopy(inv.rest_data)
+
+    dummy1["raw"]["invertor"]["discharge_target_soc_1"] = inv.reserve_precent if new_force_export else prev_discharge_target
+    if new_discharge_target != prev_discharge_target:
+        dummy_rest.queue_rest_data(dummy1)
+
+    dummy1["Timeslots"]["Discharge_start_time_slot_1"] = new_start
+    dummy1["Timeslots"]["Discharge_end_time_slot_1"] = new_end
+    if prev_start != expect_start or prev_end != expect_end:
+        dummy_rest.queue_rest_data(dummy1)
+
+    dummy1["Control"]["Mode"] = new_mode
+    dummy1["Control"]["Enable_Discharge_Schedule"] = export_schedule_discharge
+    if prev_mode != new_mode:
+        dummy_rest.queue_rest_data(dummy1)
+
+    dummy_rest.rest_data = copy.deepcopy(dummy1)
+
+    new_start_timestamp = datetime.strptime(new_start, "%H:%M:%S")
+    new_end_timestamp = datetime.strptime(new_end, "%H:%M:%S")
+
+    print("Inv prev mode {} new mode {}".format(prev_mode, new_mode))
+    print(dummy_rest.rest_data)
+    print(inv.rest_data)
+    inv.adjust_force_export(new_force_export, new_start_timestamp, new_end_timestamp)
+
+    rest_command = dummy_rest.get_commands()
+    expect_data = []
+    if new_discharge_target != prev_discharge_target:
+        expect_data.append(["dummy/setDischargeTarget", {"dischargeToPercent": int(new_discharge_target), "slot": 1}])
+
+    if prev_start != expect_start or prev_end != expect_end:
+        expect_data.append(["dummy/setDischargeSlot1", {"start": expect_start[0:5], "finish": expect_end[0:5]}])
+
+    if prev_mode != new_mode:
+        expect_data.append(["dummy/setBatteryMode", {"mode": new_mode}])
+
+
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
@@ -883,6 +1016,7 @@ def test_inverter_update(
     dummy_items["sensor.load_power"] = expect_load_power
     dummy_items["switch.scheduled_charge_enable"] = "on" if expect_charge_enable else "off"
     dummy_items["switch.scheduled_discharge_enable"] = "on" if expect_discharge_enable else "off"
+    dummy_items["number.discharge_target_soc"] = 4
     dummy_items["sensor.battery_capacity"] = expect_battery_capacity
     dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "on" if expect_discharge_enable else "off"
     print("sensor.predbat_GE_0_scheduled_discharge_enable = {}".format(dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"]))
@@ -985,6 +1119,9 @@ def test_inverter_update(
     dummy_rest.rest_data["Power"]["Power"]["Load_Power"] = expect_load_power
     dummy_rest.rest_data["Invertor_Details"] = {}
     dummy_rest.rest_data["Invertor_Details"]["Battery_Capacity_kWh"] = expect_battery_capacity
+    dummy_rest.rest_data["raw"] = {}
+    dummy_rest.rest_data["raw"]["invertor"] = {}
+    dummy_rest.rest_data["raw"]["invertor"]["discharge_target_soc_1"] = 4
     dummy_items["sensor.soc_kw"] = -1
     dummy_items["sensor.battery_capacity"] = -1
 
@@ -1403,7 +1540,7 @@ def run_inverter_tests():
         "sensor.battery_soc": 0.0,
         "sensor.soc_max": 10.0,
         "sensor.soc_kw": 1.0,
-        "select.inverter_mode": "eco",
+        "select.inverter_mode": "Eco",
         "sensor.inverter_time": time_now,
         "switch.restart": False,
         "select.idle_start_time": "00:00",
@@ -1419,6 +1556,7 @@ def run_inverter_tests():
         "select.discharge_start_time": "03:33:00",
         "select.discharge_end_time": "04:44:00",
         "sensor.predbat_GE_0_scheduled_discharge_enable": "off",
+        "number.discharge_target_soc": 4,
     }
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
@@ -1609,6 +1747,24 @@ def run_inverter_tests():
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
     inv.sleep = dummy_sleep
     inv.update_status(my_predbat.minutes_now)
+    my_predbat.inv = inv
+
+
+    failed |= test_adjust_force_export("adjust_force_export1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", False)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 4, "11:00:00", "11:30:00", True)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export3", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, 10, "11:00:00", "11:30:00", True)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export4", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 10, "11:00:00", "11:30:00", True)
+    if failed:
+        return failed
+    failed |= test_adjust_force_export("adjust_force_export5", ha, inv, dummy_rest, "00:11:00", "01:12:12", True, 4, "11:00:00", "11:30:00", False)
+    if failed:
+        return failed
 
     failed |= test_adjust_battery_target("adjust_target50", ha, inv, dummy_rest, 0, 50, True, False, 50)
     failed |= test_adjust_battery_target("adjust_target0", ha, inv, dummy_rest, 10, 0, True, False, 4)
@@ -6606,7 +6762,6 @@ def main():
         failed |= test_find_charge_rate(my_predbat)
     if not failed:
         failed |= test_saving_session(my_predbat)
-
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     free_sessions = my_predbat.download_octopus_free("http://octopus.energy/free-electricity")
     if not free_sessions:

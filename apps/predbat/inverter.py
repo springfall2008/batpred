@@ -1826,13 +1826,13 @@ class Inverter:
                 if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                     current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
                     if current > self.reserve_percent:
-                        self.rest_setDischargeTarget(self.reserve_percent)
+                        self.rest_setDischargeTarget(int(self.reserve_percent))
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id)
                 if current > self.reserve_percent:
-                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id), self.reserve_percent)
+                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id), int(self.reserve_percent))
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
 
@@ -2531,6 +2531,7 @@ class Inverter:
         """
         Configure discharge to percent via REST
         """
+        target = int(target)
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
 
