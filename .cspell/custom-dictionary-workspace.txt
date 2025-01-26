@@ -120,6 +120,8 @@ maximise
 mdlrc
 metricb
 metricmid
+Meteo
+Meteoalarm
 minb
 minmax
 minuteb
