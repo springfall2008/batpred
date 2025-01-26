@@ -2,7 +2,7 @@ import requests
 import re
 from datetime import datetime, timedelta
 from config import TIME_FORMAT, TIME_FORMAT_OCTOPUS
-from utils import str2time, minutes_to_time, dp1, dp2
+from utils import str2time, minutes_to_time, dp1, dp2, dp4
 
 
 class Energidataservice:
@@ -21,6 +21,8 @@ class Energidataservice:
         if entity_id:
             if self.debug_enable:
                 self.log("Fetch Energi Data Service rates from {}".format(entity_id))
+
+            use_cent = self.get_state_wrapper(entity_id=entity_id, attribute="use_cent")
 
             # Fetch raw rates for today
             data_import_today = self.get_state_wrapper(entity_id=entity_id, attribute="raw_today")
@@ -49,12 +51,12 @@ class Energidataservice:
                 tariff = tariffs.get(hour, 0)  # Default to 0 if no tariff is found for the hour
                 entry["price_with_tariff"] = entry.get("price", 0) + tariff
 
-            # Convert hourly data to 30-minute intervals
-            rate_data = self.hourly_to_half_hourly(data_all, self.forecast_days + 1, self.midnight_utc, rate_key="price_with_tariff", from_key="hour", adjust_key=adjust_key, scale=1.0)
+            # Convert hourly data to minute intervals
+            rate_data = self.minute_data_hourly_rates(data_all, self.forecast_days + 1, self.midnight_utc, rate_key="price_with_tariff", from_key="hour", adjust_key=adjust_key, scale=1.0, use_cent=use_cent)
 
         return rate_data
 
-    def hourly_to_half_hourly(self, data, forecast_days, midnight_utc, rate_key, from_key, adjust_key=None, scale=1.0):
+    def minute_data_hourly_rates(self, data, forecast_days, midnight_utc, rate_key, from_key, adjust_key=None, scale=1.0, use_cent=False):
         """
         Convert hourly rate data into 30-minute rate data.
 
@@ -68,9 +70,14 @@ class Energidataservice:
         :return: Dictionary with 30-minute rates.
         """
         rate_data = {}
+        min_minute = -forecast_days * 24 * 60
+        max_minute = forecast_days * 24 * 60
+
         for entry in data:
             start_time_str = entry.get(from_key)
-            rate = entry.get(rate_key, 0) / scale  # Apply scaling
+            rate = entry.get(rate_key, 0) * scale  # Apply scaling
+            if not use_cent:
+                rate = rate / 100.0
 
             # Parse the start time
             try:
@@ -79,30 +86,13 @@ class Energidataservice:
                 self.log(f"Warn: Invalid time format '{start_time_str}' in data")
                 continue
 
-            # Determine the two 30-minute slots within the hour
-            slot1_start = start_time
-            slot1_end = start_time + timedelta(minutes=30)
-            slot2_start = slot1_end
-            slot2_end = start_time + timedelta(hours=1)
+            start_minute = int((start_time - midnight_utc).total_seconds() / 60)
+            end_minute = start_minute + 60
 
-            # Calculate minutes since midnight for each slot
-            slot1_start_min = int((slot1_start - midnight_utc).total_seconds() / 60)
-            slot1_end_min = int((slot1_end - midnight_utc).total_seconds() / 60)
-            slot2_start_min = slot1_end_min
-            slot2_end_min = int((slot2_end - midnight_utc).total_seconds() / 60)
-
-            # Assign the rate to each 30-minute slot
-            for slot_start_min, slot_end_min in [(slot1_start_min, slot1_end_min), (slot2_start_min, slot2_end_min)]:
-                # Ensure minutes are within forecast range
-                if slot_start_min < 0:
-                    slot_start_min = 0
-                if slot_end_min > self.forecast_minutes:
-                    slot_end_min = self.forecast_minutes
-
-                # Assign the rate to each minute within the 30-minute slot
-                for minute in range(slot_start_min, slot_end_min):
-                    if 0 <= minute < self.forecast_minutes:
-                        rate_data[minute] = rate
+            # Assign the rate to each minute within the 30-minute slot
+            for minute in range(start_minute, end_minute):
+                if minute >= min_minute and minute < max_minute:
+                    rate_data[minute] = dp4(rate)
 
         # Apply intelligent adjustments if needed
         if adjust_key:

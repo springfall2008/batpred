@@ -178,6 +178,8 @@ Configuring the Octopus rates URL is an expert feature and for most users the Oc
 
 ## Energidataservice Integration
 
+<https://github.com/MTrab/energidataservice>
+
 If your electricity supplier provides data through the Energi Data Service, you can use the Energidataservice integration to fetch real-time and future electricity pricing data.
 This integration allows you to automatically retrieve rates and apply them within your energy management system, including optional tariff adjustments for greater accuracy.
 
