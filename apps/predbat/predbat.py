@@ -74,6 +74,7 @@ from ha import HAInterface
 from web import WebInterface
 from predheat import PredHeat
 from octopus import Octopus
+from energydataservice import Energidataservice
 from solcast import Solcast
 from gecloud import GECloud
 from execute import Execute
@@ -83,7 +84,7 @@ from output import Output
 from userinterface import UserInterface
 
 
-class PredBat(hass.Hass, Octopus, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
     """
