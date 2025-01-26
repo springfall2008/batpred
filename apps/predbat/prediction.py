@@ -433,7 +433,7 @@ class Prediction:
 
             # Alert keep - force scaling to 1 and set new keep value
             if alert_keep > 0:
-                keep_minute_scaling = max(keep_minute_scaling, 1.0)
+                keep_minute_scaling = max(keep_minute_scaling, 2.0)
                 best_soc_keep = max(best_soc_keep, min(alert_keep / 100.0 * self.soc_max, self.soc_max))
 
             # Find charge & discharge windows
