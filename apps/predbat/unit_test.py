@@ -486,10 +486,10 @@ class DummyRestAPI:
         if url == "dummy/runAll":
             if self.queued_rest:
                 self.rest_data = self.queued_rest.pop(0)
-            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         elif url == "dummy/readData":
-            print("Dummy rest get data {} returns {}".format(url, self.rest_data))
+            # print("Dummy rest get data {} returns {}".format(url, self.rest_data))
             return self.rest_data
         else:
             return None
@@ -621,6 +621,7 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.reserve_precent = 4
     inv.inv_has_charge_enable_time = False
     inv.ge_inverter_mode = True
+    inv.rest_v3 = True
 
     if inv.ge_inverter_mode and not new_force_export:
         expect_start = prev_start
