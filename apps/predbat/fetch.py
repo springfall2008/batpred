@@ -794,6 +794,9 @@ class Fetch:
         self.octopus_free_slots = {}
         self.octopus_saving_slots = {}
 
+        # Alert feed if enabled
+        self.process_alerts()
+
         # iBoost load data
         if "iboost_energy_today" in self.args:
             self.iboost_energy_today, iboost_energy_age = self.minute_data_load(self.now_utc, "iboost_energy_today", self.max_days_previous, required_unit="kWh")
@@ -1164,9 +1167,6 @@ class Fetch:
         if self.load_minutes and not self.load_forecast_only:
             self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
-
-        # Alert feed if enabled
-        self.process_alerts()
 
         # Load today vs actual
         if self.load_minutes:
@@ -1558,11 +1558,14 @@ class Fetch:
         """
         Set the high and low rate thresholds
         """
+
+        have_alerts = len(self.alerts) > 0
+
         if self.rate_low_threshold > 0:
             self.rate_import_cost_threshold = dp2(self.rate_average * self.rate_low_threshold)
         else:
             # In automatic mode select the only rate or everything but the most expensive
-            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max):
+            if (self.rate_max == self.rate_min) or (self.rate_export_max > self.rate_max) or have_alerts:
                 self.rate_import_cost_threshold = self.rate_max + 0.1
             else:
                 self.rate_import_cost_threshold = self.rate_max - 0.5
@@ -1572,7 +1575,7 @@ class Fetch:
             self.rate_export_cost_threshold = dp2(self.rate_export_average * self.rate_high_threshold)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
-            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min):
+            if (self.rate_export_max == self.rate_export_min) or (self.rate_export_min > self.rate_min) or have_alerts:
                 self.rate_export_cost_threshold = self.rate_export_min - 0.1
             else:
                 self.rate_export_cost_threshold = self.rate_export_min + 0.5
