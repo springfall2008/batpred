@@ -1209,7 +1209,9 @@ class Fetch:
             if minute not in rates:
                 adjust_type = "copy"
                 # Take 24-hours previous if missing rate
-                if (minute >= 24 * 60) and ((minute - 24 * 60) in rates):
+                if ((minute - 24 * 60) in rates):
+                    minute_mod = minute - 24 * 60
+                elif (minute >= 24 * 60) and ((minute - 24 * 60) in rates):
                     minute_mod = minute - 24 * 60
                 else:
                     minute_mod = minute % (24 * 60)
