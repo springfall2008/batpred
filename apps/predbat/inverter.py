@@ -1836,6 +1836,10 @@ class Inverter:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id)
+                try:
+                    current = float(current)
+                except (ValueError, TypeError) as e:
+                    current = 0
                 if current > self.reserve_percent:
                     self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id), int(self.reserve_percent))
                 else:
