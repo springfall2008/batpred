@@ -84,7 +84,6 @@ from output import Output
 from userinterface import UserInterface
 from alertfeed import Alertfeed
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -515,6 +514,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.battery_temperature_prediction = {}
         self.alerts = []
         self.alert_active_keep = {}
+        self.alert_cache = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:

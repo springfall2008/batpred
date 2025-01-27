@@ -844,10 +844,11 @@ class Output:
                 elif self.export_window_best[export_window_n]["start"] in self.manual_freeze_export_times:
                     state += " &#8526;"
 
+
             # Alert
             if in_alert:
                 state = "&#9888;" + state
-
+                
             # Import and export rates -> to string
             adjust_type = self.rate_import_replicated.get(minute, None)
             adjust_symbol = self.adjust_symbol(adjust_type)

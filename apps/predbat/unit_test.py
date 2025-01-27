@@ -6632,7 +6632,6 @@ def test_find_charge_rate(my_predbat):
         failed = 1
     return failed
 
-
 def test_energydataservice(my_predbat):
     """
     Test the energy data service
@@ -6657,7 +6656,7 @@ tomorrow_valid: true
 next_data_update: 13:39:54
 today: 1.242, 1.242, 1.242, 1.242, 1.243, 1.243, 1.243, 1.243, 1.243, 1.243, 1.244, 1.245, 1.246, 1.246, 1.261, 1.271, 1.286, 1.295, 1.295, 1.288, 1.296, 1.284, 1.273, 1.289
 tomorrow: 1.284, 1.273, 1.263, 1.283, 1.309, 1.333, 1.385, 1.389, 1.366, 1.336, 1.323, 1.316, 1.318, 1.338, 1.338, 1.314, 1.299, 1.299, 1.297, 1.286, 1.281, 1.277, 1.268
-raw_today:
+raw_today: 
     - hour: '{today}T00:00:00+00:00'
       price: 1.242
     - hour: '{today}T01:00:00+00:00'
@@ -6706,7 +6705,7 @@ raw_today:
       price: 1.273
     - hour: '{today}T23:00:00+00:00'
       price: 1.289
-raw_tomorrow:
+raw_tomorrow: 
     - hour: '{tomorrow}T00:00:00+00:00'
       price: 1.284
     - hour: '{tomorrow}T01:00:00+00:00'
@@ -6755,17 +6754,17 @@ raw_tomorrow:
       price: 1.268
     - hour: '{tomorrow}T23:00:00+00:00'
       price: 1.268
-today_min:
+today_min: 
     hour: '{today}T00:00:00+00:00'
     price: 1.242
-today_max:
+today_max: 
     hour: '{today}T20:00:00+00:00'
     price: 1.296
 today_mean: 1.26
-tomorrow_min:
+tomorrow_min: 
     hour: '{tomorrow}T02:00:00+00:00'
     price: 1.263
-tomorrow_max:
+tomorrow_max: 
     hour: '{tomorrow}T07:00:00+00:00'
     price: 1.389
 tomorrow_mean: 1.312
@@ -6783,218 +6782,30 @@ friendly_name: Energi Data Service
     rates = my_predbat.fetch_energidataservice_rates("sensor.energi_data_service")
 
     show = []
-    for minute in range(0, 48 * 60, 15):
+    for minute in range(0, 48*60, 15):
         show.append(rates[minute])
 
-    expected_show = [
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0124,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0125,
-        0.0126,
-        0.0126,
-        0.0126,
-        0.0126,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0126,
-        0.0126,
-        0.0126,
-        0.0126,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0131,
-        0.0131,
-        0.0131,
-        0.0131,
-        0.0133,
-        0.0133,
-        0.0133,
-        0.0133,
-        0.0138,
-        0.0138,
-        0.0138,
-        0.0138,
-        0.0139,
-        0.0139,
-        0.0139,
-        0.0139,
-        0.0137,
-        0.0137,
-        0.0137,
-        0.0137,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0132,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0134,
-        0.0131,
-        0.0131,
-        0.0131,
-        0.0131,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.013,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0129,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0128,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-        0.0127,
-    ]
+    expected_show = [0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0124, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0125, 0.0126, 0.0126, 0.0126, 0.0126, 0.0127, 0.0127, 0.0127, 0.0127, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.0129, 0.013, 0.013, 0.013, 0.013, 0.0128, 0.0128, 0.0128, 0.0128, 0.0127, 0.0127, 0.0127, 0.0127, 0.0129, 0.0129, 0.0129, 0.0129, 0.0128, 0.0128, 0.0128, 0.0128, 0.0127, 0.0127, 0.0127, 0.0127, 0.0126, 0.0126, 0.0126, 0.0126, 0.0128, 0.0128, 0.0128, 0.0128, 0.0131, 0.0131, 0.0131, 0.0131, 0.0133, 0.0133, 0.0133, 0.0133, 0.0138, 0.0138, 0.0138, 0.0138, 0.0139, 0.0139, 0.0139, 0.0139, 0.0137, 0.0137, 0.0137, 0.0137, 0.0134, 0.0134, 0.0134, 0.0134, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0132, 0.0134, 0.0134, 0.0134, 0.0134, 0.0134, 0.0134, 0.0134, 0.0134, 0.0131, 0.0131, 0.0131, 0.0131, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.013, 0.0129, 0.0129, 0.0129, 0.0129, 0.0128, 0.0128, 0.0128, 0.0128, 0.0128, 0.0128, 0.0128, 0.0128, 0.0127, 0.0127, 0.0127, 0.0127, 0.0127, 0.0127, 0.0127, 0.0127]
     if json.dumps(show) != json.dumps(expected_show):
         print("ERROR: Expecting show should be {} got {}".format(expected_show, show))
-        failed = 1
+        failed = 1    
 
     return failed
-
 
 def test_alert_feed(my_predbat):
     """
     Test the alert feed
     """
     failed = 0
+    ha = my_predbat.ha_interface
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    birmingham = [52.4823, -1.8900]
+    bristol = [51.4545, -2.5879]
+    manchester = [53.4808, -2.2426]
+    fife = [56.2082, -3.1495]
 
     alert_data = f"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
@@ -7065,11 +6876,11 @@ def test_alert_feed(my_predbat):
     <id>https://feeds.meteoalarm.org/api/v1/warnings/feeds-united-kingdom/05f2a1ec-58ec-4b6e-b05b-21ddac714680?index_info=0&amp;index_area=0&amp;index_polygon=0</id>
     <title>Orange Wind Warning issued for United Kingdom - Central, Tayside &amp; Fife | Grampian | Highlands &amp; Eilean Siar | Orkney &amp; Shetland | Strathclyde</title>
     <updated>2025-01-23T10:42:05Z</updated>
-  </entry>
+  </entry>  
 </feed>
 """
     print("Test alert feed")
-
+    
     result = my_predbat.parse_alert_data(alert_data)
     if not result:
         print("ERROR: Could not parse stored alert data")
@@ -7081,10 +6892,22 @@ def test_alert_feed(my_predbat):
         print("ERROR: Expecting 1 alert for North West England got {}".format(len(filter)))
         failed = 1
         return failed
-
+    
     filter = my_predbat.filter_alerts(result, area="South West England")
     if len(filter) != 0:
         print("ERROR: Expecting 0 alert for South West England got {}".format(len(filter)))
+        failed = 1
+        return failed
+
+    filter = my_predbat.filter_alerts(result, latitude=birmingham[0], longitude=birmingham[1])
+    if len(filter) != 0:
+        print("ERROR: Expecting 0 alert for Birmingham got {}".format(len(filter)))
+        failed = 1
+        return failed
+
+    filter = my_predbat.filter_alerts(result, latitude=fife[0], longitude=fife[1])
+    if len(filter) != 1:
+        print("ERROR: Expecting 1 alert for Fife got {}".format(len(filter)))
         failed = 1
         return failed
 
@@ -7094,7 +6917,7 @@ def test_alert_feed(my_predbat):
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, event="Yellow|Amber")
+    filter = my_predbat.filter_alerts(result, event="(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)")
     if len(filter) != 2:
         print("ERROR: Expecting 2 alerts for Yellow|Amber but got {}".format(len(filter)))
         failed = 1
@@ -7102,202 +6925,9 @@ def test_alert_feed(my_predbat):
 
     alert_active_keep = my_predbat.apply_alerts(result, 1.0)
     show = []
-    for minute in range(0, 48 * 60, 15):
+    for minute in range(0, 48*60, 15):
         show.append(alert_active_keep.get(minute, 0))
-    expect_show = [
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    ]
+    expect_show = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     if json.dumps(show) != json.dumps(expect_show):
         print("ERROR: Expecting show should be {} got {}".format(expect_show, show))
         failed = 1
@@ -7317,215 +6947,27 @@ def test_alert_feed(my_predbat):
     }
     original_download_alert_data = my_predbat.download_alert_data
     my_predbat.download_alert_data = MagicMock(return_value=alert_data)
-    my_predbat.args["alerts"] = alert_config
+    my_predbat.args['alerts'] = alert_config
     my_predbat.process_alerts()
     my_predbat.download_alert_data = original_download_alert_data
     alert_active_keep = my_predbat.alert_active_keep
     my_predbat.alert_active_keep = {}
     show = []
-    for minute in range(0, 48 * 60, 15):
+    for minute in range(0, 48*60, 15):
         show.append(alert_active_keep.get(minute, 0))
 
-    expect_show = [
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0.5,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-    ]
+    expect_show = [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     if json.dumps(show) != json.dumps(expect_show):
         print("ERROR: Expecting show should be {} got {}".format(expect_show, show))
         failed = 1
 
-    return failed
+    alert_text = ha.get_state(my_predbat.prefix + ".alerts")
+    expect_text = "Yellow wind warning until " + today + " 23:59:59+00:00"
+    if alert_text != expect_text:
+        print("ERROR: Expecting alert text to be '{}' got '{}'".format(expect_text, alert_text))
+        failed = 1
 
+    return failed
 
 def test_saving_session(my_predbat):
     """
