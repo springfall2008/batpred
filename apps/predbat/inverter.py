@@ -1825,6 +1825,11 @@ class Inverter:
             if self.rest_data and self.rest_v3:
                 if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                     current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
+                    try:
+                        current = float(current)
+                    except (ValueError, TypeError) as e:
+                        current = 0
+
                     if current > self.reserve_percent:
                         self.rest_setDischargeTarget(int(self.reserve_percent))
                     else:
