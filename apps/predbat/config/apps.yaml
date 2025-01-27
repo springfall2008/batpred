@@ -492,14 +492,13 @@ pred_bat:
   #futurerate_peak_premium_import: 14
   #futurerate_peak_premium_export: 6.5
 
-  # Alert feeds - customise to your region and desired risk/events
+  # Alert feeds - customise to your country and the alert types, severity and keep value
   #alerts:
   #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
-  #  area: "North West England"
-  #  event: "Amber|Yellow|Orange|Red"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
   #  severity: "Moderate|Severe|Extreme"
-  #  certainty: "Possible|Likely|Expected"
-  #  keep: 100
+  #  certainty: "Likely|Expected"
+  #  keep: 40
 
   # Watch list, a list of sensors to watch for changes and then update the plan if they change
   # This is useful for things like the Octopus Intelligent Slot sensor so that the plan update as soon as you plugin in
