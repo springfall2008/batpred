@@ -1008,8 +1008,10 @@ Predbat can take data directly from Meteo-Alarm feed and use it to trigger keepi
 
 Please look at their web site for more details. The apps.yaml must be configured to select the URL for your country.
 
-The area, event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
+The event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
 Any unset values are ignored.
+
+Your location (from Home Assistant) is used to filter on alerts that apply only to your area.
 
 Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
 This works by using a much stronger version of best_soc_keep but only for that time period.
@@ -1018,13 +1020,14 @@ Your Predbat status will also have [Alert] in it during the alert time period an
 of the alert.
 
 ```yaml
+  # Alert feeds - customise to your country and the alert types, severity and keep value
+  # customise to your needs, delete the ones you don't want to trigger on - e.g. remove Amber, Moderate and Possible.
   alerts:
     url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
-    area: "South West England"
-    event: "Yellow|Orange|Red"
-    severity: "Severe|Extreme"
-    certainty: "Likely|Expected"
-    keep: 100
+    event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+    severity: "Moderate|Severe|Extreme"
+    certainty: "Possible|Likely|Expected"
+    keep: 40
 ```
 
 ![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
