@@ -187,7 +187,7 @@ class Alertfeed:
             pdata = self.alert_cache[url]["data"]
             age = now - stamp
             if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                self.log("Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
                 return pdata
 
         r = requests.get(url)

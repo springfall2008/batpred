@@ -497,7 +497,7 @@ pred_bat:
   #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
   #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
   #  severity: "Moderate|Severe|Extreme"
-  #  certainty: "Likely|Expected"
+  #  certainty: "Possible|Likely|Expected"
   #  keep: 40
 
   # Watch list, a list of sensors to watch for changes and then update the plan if they change
