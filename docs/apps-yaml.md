@@ -1011,20 +1011,24 @@ Please look at their web site for more details. The apps.yaml must be configured
 The area, event severity and certainty are all regular expressions and can be set to one or multiple values using regular expression syntax.
 Any unset values are ignored.
 
+Your geolocation from your Home Assistant install will be used to filter alerts that are for your location, others will be ignored.
+
 Events that match the given criteria will try to keep your battery at the percentage level specified by keep (default 100%) during the entire event period.
 This works by using a much stronger version of best_soc_keep but only for that time period.
 
 Your Predbat status will also have [Alert] in it during the alert time period and the triangle alert symbol will show on your HTML plan for the time period
 of the alert.
 
+Below is an example configuration, but delete the types are severity you want to ignore, e.g. most people ignore Amber, Possible and Rain.
+
 ```yaml
+  # Alert feeds
   alerts:
     url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
-    area: "South West England"
-    event: "Yellow|Orange|Red"
-    severity: "Severe|Extreme"
-    certainty: "Likely|Expected"
-    keep: 100
+    event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+    severity: "Moderate|Severe|Extreme"
+    certainty: "Possible|Likely|Expected"
+    keep: 40
 ```
 
 ![image](https://github.com/user-attachments/assets/4d1e0a59-c6f8-4fb1-9c89-51aedfa77755)
