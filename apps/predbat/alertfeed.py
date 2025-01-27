@@ -17,6 +17,7 @@ import xml.etree.ElementTree as etree
 
 
 class Alertfeed:
+
     def process_alerts(self):
         """
         Process the alerts from the alert feed
@@ -31,11 +32,12 @@ class Alertfeed:
         if not isinstance(alerts, dict):
             self.log("Warn: Alerts must be a dictionary, ignoring")
             return
-
+        
         latitude = self.get_state_wrapper("zone.home", attribute="latitude")
         longitude = self.get_state_wrapper("zone.home", attribute="longitude")
-        self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
-
+        if latitude and longitude:
+            self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
+        
         alert_url = alerts.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
         area = alerts.get("area", "")
         event = alerts.get("event", "")
@@ -72,7 +74,7 @@ class Alertfeed:
                     onset_minutes = int((onset - self.midnight_utc).total_seconds() / 60)
                     expires_minutes = int((expires - self.midnight_utc).total_seconds() / 60)
                     if expires_minutes >= self.minutes_now:
-                        self.log("Info: Active alert: {} severity {} certaintly {} urgency {} from {} to {} applying keep {}".format(alert.get("event"), severity, certainty, urgency, onset, expires, keep))
+                        self.log("Info: Active alert: {} severity {} certainty {} urgency {} from {} to {} applying keep {}".format(alert.get("event"), severity, certainty, urgency, onset, expires, keep))
                         for minute in range(onset_minutes, expires_minutes):
                             if minute not in alert_active_keep:
                                 alert_active_keep[minute] = keep
@@ -83,7 +85,20 @@ class Alertfeed:
                                 active_alert = True
 
         alert_keep = alert_active_keep.get(self.minutes_now, 0)
-        self.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alerts})
+        alert_show = []
+        for alert in alerts:
+            item = {}
+            item["event"] = alert.get("event", "")
+            item["severity"] = alert.get("severity", "")
+            item["certainty"] = alert.get("certainty", "")
+            item["urgency"] = alert.get("urgency", "")
+            item["area"] = alert.get("areaDesc", "")
+            item['onset'] = str(alert.get("onset", ""))
+            item['expires'] = str(alert.get("expires", ""))
+            item['title'] = alert.get("title", "")
+            item['status'] = alert.get("status", "")
+            alert_show.append(item)
+        self.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts" : alert_show})
 
         return alert_active_keep
 
@@ -102,6 +117,7 @@ class Alertfeed:
         num_vertices = len(polygon)
         inside = False
 
+
         # Loop through each edge of the polygon
         for i in range(num_vertices):
             lat1, lon1 = polygon[i]
@@ -112,10 +128,13 @@ class Alertfeed:
                 return True
 
             # Check if the edge crosses the ray
-            if ((lon > lon1) != (lon > lon2)) and (lat < (lat2 - lat1) * (lon - lon1) / (lon2 - lon1) + lat1):
+            if ((lon > lon1) != (lon > lon2)) and (
+                lat < (lat2 - lat1) * (lon - lon1) / (lon2 - lon1) + lat1
+            ):
                 inside = not inside
 
         return inside
+        
 
     def filter_alerts(self, alerts, area=None, event=None, severity=None, certainty=None, urgency=None, latitude=None, longitude=None):
         # Filter alerts by area, event, severity, certainty, and urgency
@@ -162,31 +181,32 @@ class Alertfeed:
             result.append(alert)
         return result
 
+
     def download_alert_data(self, url):
-        """
-        Download octopus free session data directly from a URL
-        """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.alert_cache:
-            stamp = self.alert_cache[url]["stamp"]
-            pdata = self.alert_cache[url]["data"]
-            age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                return pdata
+            """
+            Download octopus free session data directly from a URL
+            """
+            # Check the cache first
+            now = datetime.now()
+            if url in self.alert_cache:
+                stamp = self.alert_cache[url]["stamp"]
+                pdata = self.alert_cache[url]["data"]
+                age = now - stamp
+                if age.seconds < (30 * 60):
+                    self.log("Return cached octopus data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                    return pdata
 
-        r = requests.get(url)
-        if r.status_code not in [200, 201]:
-            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-            self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
-            return None
+            r = requests.get(url)
+            if r.status_code not in [200, 201]:
+                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
+                self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
+                return None
 
-        # Return new data
-        self.alert_cache[url] = {}
-        self.alert_cache[url]["stamp"] = now
-        self.alert_cache[url]["data"] = r.text
-        return r.text
+            # Return new data
+            self.alert_cache[url] = {}
+            self.alert_cache[url]["stamp"] = now
+            self.alert_cache[url]["data"] = r.text
+            return r.text
 
     def parse_alert_data(self, xml):
         """
@@ -206,13 +226,13 @@ class Alertfeed:
                 alert = {}
                 if entry.tag == f"{namespace}entry":
                     for child in entry:
-                        tagname = child.tag.replace(namespace, "").replace(namespace2, "")
-                        tagvalue = child.text
-                        if tagname in ["effective", "expires", "onset", "sent", "published", "updated"]:
+                        tag_name = child.tag.replace(namespace, "").replace(namespace2, "")
+                        tag_value = child.text
+                        if tag_name in ["effective", "expires", "onset", "sent", "published", "updated"]:
                             try:
-                                tagvalue = str2time(tagvalue)
+                                tag_value = str2time(tag_value)
                             except (ValueError, TypeError):
-                                tagvalue = None
-                        alert[tagname] = tagvalue
+                                tag_value = None
+                        alert[tag_name] = tag_value
                     alerts.append(alert)
         return alerts
