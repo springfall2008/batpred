@@ -516,6 +516,10 @@ but if you are using the Solcast integration then the Predbat sensors mirror the
 - sensor.predbat_pv_d3 - PV forecast for two days after tomorrow
 - sensor.predbat_pv_forecast_h0 - Tracks the PV 'power now' forecast in Watts, attributes give the 10% and 90% power now forecast
 
+## Alert data
+
+- predbat.alerts - Gives you data on the currently active weather alert (if configured) and in the attributes a list of all active alerts with their details
+
 ## Predbat Logfile
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,
