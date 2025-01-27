@@ -17,7 +17,6 @@ import xml.etree.ElementTree as etree
 
 
 class Alertfeed:
-
     def process_alerts(self):
         """
         Process the alerts from the alert feed
@@ -32,12 +31,12 @@ class Alertfeed:
         if not isinstance(alerts, dict):
             self.log("Warn: Alerts must be a dictionary, ignoring")
             return
-        
+
         latitude = self.get_state_wrapper("zone.home", attribute="latitude")
         longitude = self.get_state_wrapper("zone.home", attribute="longitude")
         if latitude and longitude:
             self.log("Processing alerts for approx position latitude {} longitude {}".format(dp1(latitude), dp1(longitude)))
-        
+
         alert_url = alerts.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
         area = alerts.get("area", "")
         event = alerts.get("event", "")
@@ -93,12 +92,12 @@ class Alertfeed:
             item["certainty"] = alert.get("certainty", "")
             item["urgency"] = alert.get("urgency", "")
             item["area"] = alert.get("areaDesc", "")
-            item['onset'] = str(alert.get("onset", ""))
-            item['expires'] = str(alert.get("expires", ""))
-            item['title'] = alert.get("title", "")
-            item['status'] = alert.get("status", "")
+            item["onset"] = str(alert.get("onset", ""))
+            item["expires"] = str(alert.get("expires", ""))
+            item["title"] = alert.get("title", "")
+            item["status"] = alert.get("status", "")
             alert_show.append(item)
-        self.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts" : alert_show})
+        self.dashboard_item(self.prefix + ".alerts", state=active_alert_text, attributes={"friendly_name": "Weather alerts", "icon": "mdi:alert-outline", "keep": alert_keep, "alerts": alert_show})
 
         return alert_active_keep
 
@@ -117,7 +116,6 @@ class Alertfeed:
         num_vertices = len(polygon)
         inside = False
 
-
         # Loop through each edge of the polygon
         for i in range(num_vertices):
             lat1, lon1 = polygon[i]
@@ -128,13 +126,10 @@ class Alertfeed:
                 return True
 
             # Check if the edge crosses the ray
-            if ((lon > lon1) != (lon > lon2)) and (
-                lat < (lat2 - lat1) * (lon - lon1) / (lon2 - lon1) + lat1
-            ):
+            if ((lon > lon1) != (lon > lon2)) and (lat < (lat2 - lat1) * (lon - lon1) / (lon2 - lon1) + lat1):
                 inside = not inside
 
         return inside
-        
 
     def filter_alerts(self, alerts, area=None, event=None, severity=None, certainty=None, urgency=None, latitude=None, longitude=None):
         # Filter alerts by area, event, severity, certainty, and urgency
@@ -181,32 +176,31 @@ class Alertfeed:
             result.append(alert)
         return result
 
-
     def download_alert_data(self, url):
-            """
-            Download octopus free session data directly from a URL
-            """
-            # Check the cache first
-            now = datetime.now()
-            if url in self.alert_cache:
-                stamp = self.alert_cache[url]["stamp"]
-                pdata = self.alert_cache[url]["data"]
-                age = now - stamp
-                if age.seconds < (30 * 60):
-                    self.log("Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                    return pdata
+        """
+        Download octopus free session data directly from a URL
+        """
+        # Check the cache first
+        now = datetime.now()
+        if url in self.alert_cache:
+            stamp = self.alert_cache[url]["stamp"]
+            pdata = self.alert_cache[url]["data"]
+            age = now - stamp
+            if age.seconds < (30 * 60):
+                self.log("Return cached alert data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
+                return pdata
 
-            r = requests.get(url)
-            if r.status_code not in [200, 201]:
-                self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
-                self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
-                return None
+        r = requests.get(url)
+        if r.status_code not in [200, 201]:
+            self.log("Warn: Error downloading Octopus data from URL {}, code {}".format(url, r.status_code))
+            self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
+            return None
 
-            # Return new data
-            self.alert_cache[url] = {}
-            self.alert_cache[url]["stamp"] = now
-            self.alert_cache[url]["data"] = r.text
-            return r.text
+        # Return new data
+        self.alert_cache[url] = {}
+        self.alert_cache[url]["stamp"] = now
+        self.alert_cache[url]["data"] = r.text
+        return r.text
 
     def parse_alert_data(self, xml):
         """
