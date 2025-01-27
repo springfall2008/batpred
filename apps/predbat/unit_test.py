@@ -6992,9 +6992,15 @@ def test_alert_feed(my_predbat):
     Test the alert feed
     """
     failed = 0
+    ha = my_predbat.ha_interface
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    birmingham = [52.4823, -1.8900]
+    bristol = [51.4545, -2.5879]
+    manchester = [53.4808, -2.2426]
+    fife = [56.2082, -3.1495]
 
     alert_data = f"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
@@ -7088,13 +7094,25 @@ def test_alert_feed(my_predbat):
         failed = 1
         return failed
 
+    filter = my_predbat.filter_alerts(result, latitude=birmingham[0], longitude=birmingham[1])
+    if len(filter) != 0:
+        print("ERROR: Expecting 0 alert for Birmingham got {}".format(len(filter)))
+        failed = 1
+        return failed
+
+    filter = my_predbat.filter_alerts(result, latitude=fife[0], longitude=fife[1])
+    if len(filter) != 1:
+        print("ERROR: Expecting 1 alert for Fife got {}".format(len(filter)))
+        failed = 1
+        return failed
+
     filter = my_predbat.filter_alerts(result, area="Grampian", severity="Moderate|Severe", certainty="Likely")
     if len(filter) != 1:
         print("ERROR: Expecting 1 alert for Grampian got {}".format(len(filter)))
         failed = 1
         return failed
 
-    filter = my_predbat.filter_alerts(result, event="Yellow|Amber")
+    filter = my_predbat.filter_alerts(result, event="(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)")
     if len(filter) != 2:
         print("ERROR: Expecting 2 alerts for Yellow|Amber but got {}".format(len(filter)))
         failed = 1
@@ -7522,6 +7540,12 @@ def test_alert_feed(my_predbat):
     ]
     if json.dumps(show) != json.dumps(expect_show):
         print("ERROR: Expecting show should be {} got {}".format(expect_show, show))
+        failed = 1
+
+    alert_text = ha.get_state(my_predbat.prefix + ".alerts")
+    expect_text = "Yellow wind warning until " + today + " 23:59:59+00:00"
+    if alert_text != expect_text:
+        print("ERROR: Expecting alert text to be '{}' got '{}'".format(expect_text, alert_text))
         failed = 1
 
     return failed

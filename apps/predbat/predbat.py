@@ -515,6 +515,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.battery_temperature_prediction = {}
         self.alerts = []
         self.alert_active_keep = {}
+        self.alert_cache = {}
 
         self.config_root = "./"
         for root in CONFIG_ROOTS:
