@@ -593,7 +593,7 @@ class Prediction:
             if charge_window_n >= 0:
                 if not self.set_discharge_during_charge:
                     discharge_rate_now = self.battery_rate_min
-                elif soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
+                elif self.set_charge_window and soc >= charge_limit_n and (abs(calc_percent_limit(soc, self.soc_max) - calc_percent_limit(charge_limit_n, self.soc_max)) <= 1.0):
                     discharge_rate_now = self.battery_rate_min
 
             # Current real charge rate
