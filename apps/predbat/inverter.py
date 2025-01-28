@@ -19,7 +19,6 @@ from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
-
 class Inverter:
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
@@ -1239,6 +1238,8 @@ class Inverter:
             else:
                 if "charge_rate" in self.base.args:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
+                if "charge_rate_percent" in self.base.args:
+                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), int(new_rate / battery_rate_max_charge * 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1283,6 +1284,13 @@ class Inverter:
                         self.base.get_arg("discharge_rate", indirect=False, index=self.id),
                         new_rate,
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
+                    )
+                if "discharge_rate_percent" in self.base.args:
+                    self.write_and_poll_value(
+                        "discharge_rate_percent",
+                        self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id),
+                        int(new_rate / self.battery_rate_max_discharge * 100),
+                        fuzzy=5
                     )
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
@@ -1438,8 +1446,8 @@ class Inverter:
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
 
-        # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
-        if old_value and (":" in old_value) and (":" in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
+        # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
+        if old_value and (':' in old_value) and (':' in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
             new_value = new_value[:5]
 
         for retry in range(6):
