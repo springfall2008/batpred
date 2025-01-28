@@ -503,7 +503,7 @@ class DummyRestAPI:
         return commands
 
 
-def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now):
+def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_time, prev_charge_end_time, prev_enable_charge, charge_start_time, charge_end_time, minutes_now, short=False):
     """
     test:
         inv.adjust_charge_window(self, charge_start_time, charge_end_time, minutes_now):
@@ -512,18 +512,26 @@ def test_adjust_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start_
     print("Test: {}".format(test_name))
 
     inv.rest_data = None
-    ha.dummy_items["select.charge_start_time"] = prev_charge_start_time
-    ha.dummy_items["select.charge_end_time"] = prev_charge_end_time
+    ha.dummy_items["select.charge_start_time"] = prev_charge_start_time[:5] if short else prev_charge_start_time
+    ha.dummy_items["select.charge_end_time"] = prev_charge_end_time[:5] if short else prev_charge_end_time
     ha.dummy_items["switch.scheduled_charge_enable"] = "on" if prev_enable_charge else "off"
     charge_start_time_tm = datetime.strptime(charge_start_time, "%H:%M:%S")
     charge_end_time_tm = datetime.strptime(charge_end_time, "%H:%M:%S")
 
     inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
-    if ha.get_state("select.charge_start_time") != charge_start_time:
-        print("ERROR: Charge start time should be {} got {}".format(charge_start_time, ha.get_state("select.charge_start_time")))
+
+    if short:
+        expect_charge_start_time = charge_start_time[:5]
+        expect_charge_end_time = charge_end_time[:5]
+    else:
+        expect_charge_start_time = charge_start_time
+        expect_charge_end_time = charge_end_time
+
+    if ha.get_state("select.charge_start_time") != expect_charge_start_time:
+        print("ERROR: Charge start time should be {} got {}".format(expect_charge_start_time, ha.get_state("select.charge_start_time")))
         failed = True
-    if ha.get_state("select.charge_end_time") != charge_end_time:
-        print("ERROR: Charge end time should be {} got {}".format(charge_end_time, ha.get_state("select.charge_end_time")))
+    if ha.get_state("select.charge_end_time") != expect_charge_end_time:
+        print("ERROR: Charge end time should be {} got {}".format(expect_charge_end_time, ha.get_state("select.charge_end_time")))
         failed = True
     if ha.get_state("switch.scheduled_charge_enable") != "on":
         print("ERROR: Charge enable should be on got {}".format(ha.get_state("switch.scheduled_charge_enable")))
@@ -1811,9 +1819,10 @@ def run_inverter_tests():
 
     failed |= test_adjust_charge_window("adjust_charge_window1", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "00:00:00", my_predbat.minutes_now)
     failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "00:00:00", "23:00:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window2", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now)
-    failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now)
+    failed |= test_adjust_charge_window("adjust_charge_window3", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "00:00:00", "23:00:00", my_predbat.minutes_now)
+    failed |= test_adjust_charge_window("adjust_charge_window4", ha, inv, dummy_rest, "00:00:00", "00:00:00", False, "01:12:00", "23:12:00", my_predbat.minutes_now)
+    failed |= test_adjust_charge_window("adjust_charge_window5", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now)
+    failed |= test_adjust_charge_window("adjust_charge_window6", ha, inv, dummy_rest, "00:00:00", "00:00:00", True, "01:12:00", "23:12:00", my_predbat.minutes_now, short=True)
     if failed:
         return failed
 
