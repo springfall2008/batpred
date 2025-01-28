@@ -19,6 +19,7 @@ from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+
 class Inverter:
     def self_test(self, minutes_now):
         self.base.log(f"======= INVERTER CONTROL SELF TEST START - REST={self.rest_api} ========")
@@ -1437,8 +1438,8 @@ class Inverter:
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
 
-        # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
-        if ':' in old_value and ':' in new_value and len(old_value) == 5 and len(new_value) == 8:
+        # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
+        if ":" in old_value and ":" in new_value and len(old_value) == 5 and len(new_value) == 8:
             new_value = new_value[:5]
 
         for retry in range(6):
