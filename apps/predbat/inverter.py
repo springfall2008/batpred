@@ -824,8 +824,20 @@ class Inverter:
         else:
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
-            self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
-            self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0) / MINUTE_WATT
+
+            if "charge_rate" in self.base.args:
+                self.charge_rate_now = self.base.get_arg("charge_rate", index=self.id, default=2600.0) / MINUTE_WATT
+            elif "charge_rate_percent" in self.base.args:
+                self.charge_rate_now = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
+            else:
+                self.charge_rate_now = self.battery_rate_max_raw
+
+            if "discharge_rate" in self.base.args:
+                self.discharge_rate_now = self.base.get_arg("discharge_rate", index=self.id, default=2600.0) / MINUTE_WATT
+            elif "discharge_rate_percent" in self.base.args:
+                self.discharge_rate_now = self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100.0 / MINUTE_WATT
+            else:
+                self.discharge_rate_now = self.battery_rate_max_raw
 
         # Scale charge and discharge rates with battery scaling
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
