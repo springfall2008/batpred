@@ -351,7 +351,7 @@ class Execute:
 
             # Car charging from battery disable?
             carHolding = False
-            if not self.car_charging_from_battery:
+            if self.set_charge_window and not self.car_charging_from_battery:
                 for car_n in range(self.num_cars):
                     if self.car_charging_slots[car_n]:
                         window = self.car_charging_slots[car_n][0]
@@ -379,7 +379,7 @@ class Execute:
 
             # Iboost running?
             boostHolding = False
-            if self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
+            if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
                 if inverter.inv_has_timed_pause:
                     inverter.adjust_pause_mode(pause_discharge=True)
                     resetPause = False
