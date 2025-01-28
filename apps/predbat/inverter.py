@@ -1449,7 +1449,8 @@ class Inverter:
         GivTCP Workaround, keep writing until correct
         """
         entity_base = entity_id.split(".")[0]
-        if entity_base not in ["input_select", "select"]:
+
+        if entity_base not in ["input_select", "select", "time"]:
             return self.write_and_poll_value(name, entity_id, new_value, ignore_fail=ignore_fail)
 
         old_value = self.base.get_state_wrapper(entity_id, refresh=True)
@@ -1459,7 +1460,10 @@ class Inverter:
             new_value = new_value[:5]
 
         for retry in range(6):
-            service = entity_base + "/select_option"
+            if entity_base == "time":
+                service = entity_base + "/set_value"
+            else:
+                service = entity_base + "/select_option"
             self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
             if ignore_fail:
                 return True
