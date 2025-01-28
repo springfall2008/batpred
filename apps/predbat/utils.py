@@ -17,6 +17,16 @@ from datetime import datetime, timedelta
 from config import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS
 
 
+def time_string_to_stamp(time_string):
+    """
+    Convert a time string to a timestamp
+    """
+    if len(time_string) == 5:
+        time_string += ":00"
+
+    return datetime.strptime(time_string, "%H:%M:%S")
+
+
 def minutes_since_yesterday(now):
     """
     Calculate the number of minutes since 23:59 yesterday
