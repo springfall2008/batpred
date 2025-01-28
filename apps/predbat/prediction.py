@@ -521,7 +521,7 @@ class Prediction:
                     car_soc[car_n] = car_soc[car_n] + car_load_scale
                     load_yesterday += car_load_scale / self.car_charging_loss
                     # Model not allowing the car to charge from the battery
-                    if (car_load_scale > 0) and (not self.car_charging_from_battery):
+                    if (car_load_scale > 0) and (not self.car_charging_from_battery) and self.set_charge_window:
                         discharge_rate_now = self.battery_rate_min  # 0
                         car_freeze = True
 
@@ -567,7 +567,7 @@ class Prediction:
                         iboost_amount = min(self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
                 # Freeze discharge on iboost
-                if iboost_amount > 0 and self.iboost_prevent_discharge:
+                if iboost_amount > 0 and self.iboost_prevent_discharge and self.set_charge_window:
                     iboost_freeze = True
                     discharge_rate_now = self.battery_rate_min  # 0
 
