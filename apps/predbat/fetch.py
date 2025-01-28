@@ -10,7 +10,7 @@
 # pyright: reportAttributeAccessIssue=false
 
 from datetime import datetime, timedelta
-from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4
+from utils import minutes_to_time, str2time, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp
 from config import MAX_INCREMENT, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR
 from futurerate import FutureRate
 
@@ -1348,7 +1348,7 @@ class Fetch:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
         max_minute = max(rates) + 1
-        midnight = datetime.strptime("00:00:00", "%H:%M:%S")
+        midnight = time_string_to_stamp("00:00:00")
         for this_rate in info + manual_items:
             if this_rate:
                 start_str = this_rate.get("start", "00:00:00")
@@ -1363,14 +1363,14 @@ class Fetch:
                     end_str += ":00"
 
                 try:
-                    start = datetime.strptime(start_str, "%H:%M:%S")
+                    start = time_string_to_stamp(start_str)
                 except (ValueError, TypeError):
                     self.log("Warn: Bad start time {} provided in energy rates".format(start_str))
                     self.record_status("Bad start time {} provided in energy rates".format(start_str), had_errors=True)
                     continue
 
                 try:
-                    end = datetime.strptime(end_str, "%H:%M:%S")
+                    end = time_string_to_stamp(end_str)
                 except (ValueError, TypeError):
                     self.log("Warn: Bad end time {} provided in energy rates".format(end_str))
                     self.record_status("Bad end time {} provided in energy rates".format(end_str), had_errors=True)

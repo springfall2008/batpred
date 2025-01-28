@@ -15,8 +15,9 @@ import pytz
 import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, SOLAX_SOLIS_MODES_NEW, TIME_FORMAT_SECONDS, SOLAX_SOLIS_MODES
-from utils import calc_percent_limit, dp0, dp2, dp3
+from utils import calc_percent_limit, dp0, dp2, dp3, time_string_to_stamp
 
+TIME_FORMAT_HMS = "%H:%M:%S"
 
 class Inverter:
     def self_test(self, minutes_now):
@@ -35,10 +36,10 @@ class Inverter:
         self.adjust_pause_mode(pause_charge=True, pause_discharge=True)
         self.adjust_pause_mode()
         self.disable_charge_window()
-        timea = datetime.strptime("23:00:00", "%H:%M:%S")
-        timeb = datetime.strptime("23:01:00", "%H:%M:%S")
-        timec = datetime.strptime("05:00:00", "%H:%M:%S")
-        timed = datetime.strptime("05:01:00", "%H:%M:%S")
+        timea = time_string_to_stamp("23:00:00")
+        timeb = time_string_to_stamp("23:01:00")
+        timec = time_string_to_stamp("05:00:00")
+        timed = time_string_to_stamp("05:01:00")
         self.adjust_charge_window(timeb, timed, minutes_now)
         self.adjust_charge_window(timea, timec, minutes_now)
         self.adjust_force_export(False, timec, timed)
@@ -880,11 +881,11 @@ class Inverter:
         if self.charge_enable_time or not self.inv_has_charge_enable_time:
             # Find current charge window
             if self.rest_data:
-                charge_start_time = datetime.strptime(self.rest_data["Timeslots"]["Charge_start_time_slot_1"], "%H:%M:%S")
-                charge_end_time = datetime.strptime(self.rest_data["Timeslots"]["Charge_end_time_slot_1"], "%H:%M:%S")
+                charge_start_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_start_time_slot_1"])
+                charge_end_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_end_time_slot_1"])
             elif "charge_start_time" in self.base.args:
-                charge_start_time = datetime.strptime(self.base.get_arg("charge_start_time", index=self.id), "%H:%M:%S")
-                charge_end_time = datetime.strptime(self.base.get_arg("charge_end_time", index=self.id), "%H:%M:%S")
+                charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
+                charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
             else:
                 self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
                 self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
@@ -899,8 +900,8 @@ class Inverter:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), self.charge_enable_time)
 
             # Track charge start/end
-            self.track_charge_start = charge_start_time.strftime("%H:%M:%S")
-            self.track_charge_end = charge_end_time.strftime("%H:%M:%S")
+            self.track_charge_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+            self.track_charge_end = charge_end_time.strftime(TIME_FORMAT_HMS)
 
             # Reverse clock skew
             charge_start_time -= timedelta(seconds=self.base.inverter_clock_skew_start * 60)
@@ -983,11 +984,11 @@ class Inverter:
         self.export_window = []
 
         if self.rest_data:
-            discharge_start = datetime.strptime(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"], "%H:%M:%S")
-            discharge_end = datetime.strptime(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"], "%H:%M:%S")
+            discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
+            discharge_end = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"])
         elif "discharge_start_time" in self.base.args:
-            discharge_start = datetime.strptime(self.base.get_arg("discharge_start_time", index=self.id), "%H:%M:%S")
-            discharge_end = datetime.strptime(self.base.get_arg("discharge_end_time", index=self.id), "%H:%M:%S")
+            discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
+            discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
         else:
             self.log("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id))
             self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
@@ -1005,8 +1006,8 @@ class Inverter:
 
         # Tracking for idle time
         if self.discharge_enable_time:
-            self.track_discharge_start = discharge_start.strftime("%H:%M:%S")
-            self.track_discharge_end = discharge_end.strftime("%H:%M:%S")
+            self.track_discharge_start = discharge_start.strftime(TIME_FORMAT_HMS)
+            self.track_discharge_end = discharge_end.strftime(TIME_FORMAT_HMS)
         else:
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
@@ -1061,8 +1062,8 @@ class Inverter:
         # Convert to minutes
         try:
             # Get time
-            idle_start_time = datetime.strptime(idle_start, "%H:%M:%S")
-            idle_end_time = datetime.strptime(idle_end, "%H:%M:%S")
+            idle_start_time = time_string_to_stamp(idle_start)
+            idle_end_time = time_string_to_stamp(idle_end)
             # Change to minutes
             self.idle_start_minutes = idle_start_time.hour * 60 + idle_start_time.minute
             self.idle_end_minutes = idle_end_time.hour * 60 + idle_end_time.minute
@@ -1434,6 +1435,12 @@ class Inverter:
         if entity_base not in ["input_select", "select"]:
             return self.write_and_poll_value(name, entity_id, new_value, ignore_fail=ignore_fail)
 
+        old_value = self.base.get_state_wrapper(entity_id, refresh=True)
+
+        # If time format of the selector is %H:%M and we pass in %H:%M:%S then we need to strip the seconds
+        if ':' in old_value and ':' in new_value and len(old_value) == 5 and len(new_value) == 8:
+            new_value = new_value[:5]
+
         for retry in range(6):
             service = entity_base + "/select_option"
             self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
@@ -1610,8 +1617,8 @@ class Inverter:
         self.log("Adjust idle time, charge {}-{} discharge {}-{}".format(self.track_charge_start, self.track_charge_end, self.track_discharge_start, self.track_discharge_end))
 
         minutes_now = self.base.minutes_now
-        charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, "%H:%M:%S", minutes_now)
-        discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, "%H:%M:%S", minutes_now)
+        charge_start_minutes, charge_end_minutes = self.window2minutes(self.track_charge_start, self.track_charge_end, minutes_now)
+        discharge_start_minutes, discharge_end_minutes = self.window2minutes(self.track_discharge_start, self.track_discharge_end, minutes_now)
 
         # Idle from now (or previous idle time) until midnight
         idle_start_minutes = max(min(minutes_now, self.idle_start_minutes), 0)
@@ -1651,8 +1658,8 @@ class Inverter:
         # Work out new idle start/end time
         idle_start_time = self.base.midnight_utc + timedelta(minutes=idle_start_minutes)
         idle_end_time = self.base.midnight_utc + timedelta(minutes=idle_end_minutes)
-        idle_start = idle_start_time.strftime("%H:%M:%S")
-        idle_end = idle_end_time.strftime("%H:%M:%S")
+        idle_start = idle_start_time.strftime(TIME_FORMAT_HMS)
+        idle_end = idle_end_time.strftime(TIME_FORMAT_HMS)
 
         self.base.log("Adjust demand (idle) time computed is {}-{}".format(idle_start, idle_end))
 
@@ -1674,12 +1681,12 @@ class Inverter:
                 self.write_and_poll_option("idle_end_time", idle_end_time_id, idle_end)
                 self.idle_end_minutes = idle_end_minutes
 
-    def window2minutes(self, start, end, format, minutes_now):
+    def window2minutes(self, start, end, minutes_now):
         """
         Convert time start/end window string into minutes
         """
-        start = datetime.strptime(start, format)
-        end = datetime.strptime(end, format)
+        start = time_string_to_stamp(start)
+        end = time_string_to_stamp(end)
         start_minute = start.hour * 60 + start.minute
         end_minute = end.hour * 60 + end.minute
 
@@ -1735,14 +1742,14 @@ class Inverter:
         # Start time to correct format
         if new_start_time:
             new_start_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_start * 60)
-            new_start = new_start_time.strftime("%H:%M:%S")
+            new_start = new_start_time.strftime(TIME_FORMAT_HMS)
         else:
             new_start = None
 
         # End time to correct format
         if new_end_time:
             new_end_time += timedelta(seconds=self.base.inverter_clock_skew_discharge_end * 60)
-            new_end = new_end_time.strftime("%H:%M:%S")
+            new_end = new_end_time.strftime(TIME_FORMAT_HMS)
         else:
             new_end = None
 
@@ -1751,8 +1758,8 @@ class Inverter:
         if not self.inv_has_discharge_enable_time and not self.inv_has_ge_inverter_mode and not force_export:
             new_start_time = self.base.midnight_utc
             new_end_time = self.base.midnight_utc
-            new_start = new_start_time.strftime("%H:%M:%S")
-            new_end = new_end_time.strftime("%H:%M:%S")
+            new_start = new_start_time.strftime(TIME_FORMAT_HMS)
+            new_end = new_end_time.strftime(TIME_FORMAT_HMS)
 
         # For GE Inverter mode as we use immediate controls no point in changing times before we enable export
         if self.inv_has_ge_inverter_mode and not force_export:
@@ -2155,8 +2162,8 @@ class Inverter:
         charge_end_time += timedelta(seconds=self.base.inverter_clock_skew_end * 60)
 
         # Convert to string
-        new_start = charge_start_time.strftime("%H:%M:%S")
-        new_end = charge_end_time.strftime("%H:%M:%S")
+        new_start = charge_start_time.strftime(TIME_FORMAT_HMS)
+        new_end = charge_end_time.strftime(TIME_FORMAT_HMS)
 
         # Disable scheduled charge during change of window to avoid a blip in charging if not required
         have_disabled = False
