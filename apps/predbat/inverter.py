@@ -1762,6 +1762,10 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             old_start = self.base.get_arg("discharge_start_time", index=self.id)
             old_end = self.base.get_arg("discharge_end_time", index=self.id)
+            if len(old_start) == 5:
+                old_start += ":00"
+            if len(old_end) == 5:
+                old_end += ":00"
             old_discharge_enable = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
         else:
             self.log("Warn: Inverter {} unable read discharge window as neither REST, discharge_start_time or discharge_start_hour are set".format(self.id))
@@ -2181,6 +2185,10 @@ class Inverter:
         elif "charge_start_time" in self.base.args:
             old_start = self.base.get_arg("charge_start_time", index=self.id)
             old_end = self.base.get_arg("charge_end_time", index=self.id)
+            if len(old_start) == 5:
+                old_start += ":00"
+            if len(old_end) == 5:
+                old_end += ":00"
             old_charge_schedule_enable = self.base.get_arg("scheduled_charge_enable", "on", index=self.id)
         else:
             self.log("Warn: Inverter {} unable read charge window as neither REST or discharge_start_time".format(self.id))
