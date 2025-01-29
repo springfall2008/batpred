@@ -1210,7 +1210,10 @@ class Inverter:
         if self.rest_data:
             current_rate = int(self.rest_data["Control"]["Battery_Charge_Rate"])
         else:
-            current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
+            if "charge_rate_percent" in self.base.args:
+                current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100
+            else:
+                current_rate = self.base.get_arg("charge_rate", index=self.id, default=2600.0)
 
         try:
             current_rate = int(current_rate)
@@ -1284,7 +1287,10 @@ class Inverter:
         if self.rest_data:
             current_rate = self.rest_data["Control"]["Battery_Discharge_Rate"]
         else:
-            current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
+            if "discharge_rate_percent" in self.base.args:
+                current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0) * self.battery_rate_max_raw / 100)
+            else:
+                current_rate = self.base.get_arg("discharge_rate", index=self.id, default=2600.0)
 
         if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))

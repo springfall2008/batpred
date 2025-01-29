@@ -355,33 +355,59 @@ If you only have a single inverter then the second inverter lines can be comment
 
 The **givtcp_rest** line should be commented out/deleted on anything but GivTCP REST mode.
 
+#### Charge/Discharge rate
+
 - **charge_rate** - Battery charge rate entity in watts
 - **discharge_rate** - Battery discharge max rate entity in watts
+
+or
+
+- **charge_rate_percent** - Battery charge rate entity in percent of maximum rate (0-100)
+- **discharge_rate_percent** - Battery discharge max rate entity in percent of maximum rate (0-100)
+
+#### battery information
+
 - **battery_power** - Current battery power in watts
 - **battery_voltage** - Current battery voltage (only needed for inverters controlled via amps)
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 2500)
-- **pv_power** - Current PV power in watts
-- **load_power** - Current load power in watts
-- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
-- **soc_max** - Entity name for the maximum charge level for the battery
+- **soc_max** - Entity name for the maximum charge level for the battery in kWh
 - **battery_min_soc** - When set limits the target SOC% setting for charge and discharge to a minimum percentage value
 - **reserve** - sensor name for the reserve setting in %
+- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
+
+#### Power data
+
+- **pv_power** - Current PV power in watts
+- **load_power** - Current load power in watts
+
+#### Battery soc
+
+- **soc_kw** - Entity name of the battery SOC in kWh, should be the inverter one not an individual battery
+
+or
+
+- **soc_percent** Entity name of the battery SOC in percent of the maximum battery size, should be the inverter one not an individual battery
+
+#### Inverter info  
+
 - **inverter_reserve_max** - When set defines the maximum reserve setting in % (default is 100)
 - **inverter_mode** - Givenergy inverter mode control
 - **inverter_time** - Inverter timestamp, used to track the last update of the inverter data
-- **charge_start_time** - Battery charge start time entity
-- **charge_end_time** - Battery charge end time entity
+- **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
+
+#### Schedule
+
+- **charge_start_time** - Battery charge start time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
+- **charge_end_time** - Battery charge end time entity - can be a HA select entity in format HH:MM or HH:MM:SS or a HA time entity.
 - **charge_limit** - Entity name for used to set the SOC target for the battery in percentage (AC charge target)
 - **scheduled_charge_enable** - Scheduled charge enable config
 - **scheduled_discharge_enable** - Scheduled discharge enable config
 - **discharge_start_time** - scheduled discharge slot_1 start time
 - **discharge_end_time** - scheduled discharge slot_1 end time
+- **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
 - **pause_mode** - Givenergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)
 - **pause_end_time** - scheduled pause start time (only if supported by your inverter)
-- **inverter_battery_rate_min** - Defines the minimum discharge/charge rate of the battery in watts (default is 0)
-- **battery_temperature** - Defined the temperature of the battery in degrees C (default is 20 if not set)
-- **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
 
 If you are using REST control the configuration items should still be kept as not all controls work with REST.
 
