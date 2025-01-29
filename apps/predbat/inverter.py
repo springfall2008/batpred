@@ -1252,7 +1252,7 @@ class Inverter:
                 if "charge_rate" in self.base.args:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
                 if "charge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), int(new_rate / (self.battery_rate_max_charge * MINUTE_WATT) * 100), fuzzy=5)
+                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1299,7 +1299,7 @@ class Inverter:
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
                     )
                 if "discharge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id), int(new_rate / (self.battery_rate_max_discharge * MINUTE_WATT) * 100), fuzzy=5)
+                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
 
