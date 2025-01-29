@@ -1252,7 +1252,7 @@ class Inverter:
                 if "charge_rate" in self.base.args:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20))
                 if "charge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), int(new_rate / self.battery_rate_max_charge * 100), fuzzy=5)
+                    self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id), int(new_rate / (self.battery_rate_max_charge * MINUTE_WATT) * 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", new_rate)
 
@@ -1299,7 +1299,7 @@ class Inverter:
                         fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20),
                     )
                 if "discharge_rate_percent" in self.base.args:
-                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id), int(new_rate / self.battery_rate_max_discharge * 100), fuzzy=5)
+                    self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id), int(new_rate / (self.battery_rate_max_discharge * MINUTE_WATT) * 100), fuzzy=5)
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("discharge", new_rate)
 
@@ -1462,9 +1462,10 @@ class Inverter:
         for retry in range(6):
             if entity_base == "time":
                 service = entity_base + "/set_value"
+                self.base.call_service_wrapper(service, time=new_value, entity_id=entity_id)
             else:
                 service = entity_base + "/select_option"
-            self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
+                self.base.call_service_wrapper(service, option=new_value, entity_id=entity_id)
             if ignore_fail:
                 return True
             self.sleep(self.inv_write_and_poll_sleep)
