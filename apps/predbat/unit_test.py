@@ -90,7 +90,7 @@ class TestHAInterface:
             return default
 
     def call_service(self, service, **kwargs):
-        # print("Calling service: {} {}".format(service, kwargs))
+        print("Calling service: {} {}".format(service, kwargs))
         if self.service_store_enable:
             self.service_store.append([service, kwargs])
             return None
@@ -100,7 +100,10 @@ class TestHAInterface:
             if not entity_id.startswith("number."):
                 print("Warn: Service for entity {} not a number".format(entity_id))
             elif entity_id in self.dummy_items:
+                print("Setting state: {} to {}".format(entity_id, kwargs.get("value", 0)))
                 self.dummy_items[entity_id] = kwargs.get("value", 0)
+            else:
+                print("Warn: Service for entity {} not found".format(entity_id))
         elif service == "switch/turn_on":
             entity_id = kwargs.get("entity_id", None)
             if not entity_id.startswith("switch."):
@@ -122,7 +125,7 @@ class TestHAInterface:
         return None
 
     def set_state(self, entity_id, state, attributes=None):
-        # print("Setting state: {} to {}".format(entity_id, state))
+        print("Setting state: {} to {}".format(entity_id, state))
         self.dummy_items[entity_id] = state
         return None
 
@@ -739,20 +742,25 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     if expect_rate is None:
         expect_rate = rate
 
-    print("Test: {}".format(test_name))
+    print("Test: {} prev_rate {} rate {} expect_rate {}".format(test_name, prev_rate, rate, expect_rate))
 
     # Non-REST Mode
     inv.rest_data = None
     inv.rest_api = None
     entity = "number.discharge_rate" if discharge else "number.charge_rate"
+    entity_percent = "number.discharge_rate_percent" if discharge else "number.charge_rate_percent"
+    expect_percent = int(expect_rate * 100 / inv.battery_rate_max_raw)
     ha.dummy_items[entity] = prev_rate
-    print("Set {} to {}".format(entity, prev_rate))
+    ha.dummy_items[entity_percent] = int(prev_rate * 100 / inv.battery_rate_max_raw)
     if discharge:
         inv.adjust_discharge_rate(rate)
     else:
         inv.adjust_charge_rate(rate)
     if ha.get_state(entity) != expect_rate:
         print("ERROR: Inverter rate should be {} got {}".format(expect_rate, ha.get_state(entity)))
+        failed = True
+    if ha.get_state(entity_percent) != expect_percent:
+        print("ERROR: Inverter rate percent should be {} got {} - rate {} max_rate_raw {}".format(expect_percent, ha.get_state(entity_percent), rate, inv.battery_rate_max_raw))
         failed = True
 
     # REST Mode
@@ -1545,6 +1553,8 @@ def run_inverter_tests():
     dummy_items = {
         "number.charge_rate": 1100,
         "number.discharge_rate": 1500,
+        "number.charge_rate_percent": 100,
+        "number.discharge_rate_percent": 100,
         "number.charge_limit": 100,
         "select.pause_mode": "Disabled",
         "sensor.battery_capacity": 10.0,
@@ -2266,6 +2276,8 @@ class DummyInverter:
         self.soc_max = 100
         self.soc_percent = 0
         self.battery_rate_max_charge = 1.0
+        self.battery_rate_max_discharge = 1.0
+        self.battery_rate_max = 1.0 * 60 * 1000
         self.log = log
         self.id = inverter_id
         self.count_register_writes = 0
