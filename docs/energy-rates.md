@@ -200,7 +200,7 @@ rates_gas:
     rate: pence
 ```
 
-**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
+**start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should normally be aligned to 30 minute slots, i.e. end with ":30:00" or ":00:00".
 **rate** is in pence e.g. 4.2
 
 start and end can be omitted and Predbat will assume that you are on a single flat rate tariff.
@@ -216,8 +216,8 @@ You can also override the import or export energy rates (regardless of whether t
 Rate override is used to set the specific date and time period where your rates are different, e.g. an Octopus Power Up session (zero rate for an hour or two),
 or the British Gas half-price electricity on Sunday's.
 
-Unfortunately there aren't any API's available to feed this information automatically into Predbat so you will have to edit `apps.yaml` manually
-to set the appropriate rate over-ride dates and times:
+Unfortunately there aren't any API's available to feed this information automatically into Predbat so you will have to define your own input controls and use the [Predbat manual API](manual-api.md#example-solution-to-over-ride-predicted-house-load),
+or manually edit `apps.yaml` to set the appropriate rate over-ride dates and times:
 
 ```yaml
 rates_import_override:
