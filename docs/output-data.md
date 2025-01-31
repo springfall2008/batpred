@@ -514,6 +514,30 @@ can be used for automations to trigger the immersion heater boost
 increments during the day and is reset to zero at 11:30pm each night
 - predbat.iboost_best - Predicted energy in kWh going into the iBoost solar diverter under the best plan
 
+You can use the iboost_best sensor to create a custom template sensor that gives the time to next planned iBoost:
+
+```yaml
+{% set iboost_times = state_attr("predbat.iboost_best","results") %}
+{% set times =  iboost_times.keys()|list %}
+{% set iboost_energy =  iboost_times.values()|list  %}
+{% set ni = namespace(x=0) %}
+{% set data = namespace(h_bool=False) %}
+{% set iboost_starts = "" %}
+{% for ni in range(0,times|count()-1) if data.h_bool == false  %}
+{% if iboost_energy[ni+1]-iboost_energy[ni] > 0 %}
+{% set data.h_bool = true %}{{ (as_timestamp (times[ni])-as_timestamp (now()) ) / 3600 | round (0) }}
+{% else %}
+{% endif %}
+{% endfor %}
+{% if data.h_bool == false %}
+{{100}}
+{% endif %}
+```
+
+If no iBoost is imminent then the sensor is set to 100h, and if currently boosting it will produce a small negative answer.
+
+Thanks to @mogons57 for the template sensor code.
+
 ## Carbon data
 
 The following sensors output by Predbat give historic and predicted carbon data.

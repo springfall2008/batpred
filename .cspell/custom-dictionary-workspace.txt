@@ -59,6 +59,7 @@ Eddi
 elif
 emszzzz
 enctype
+endfor
 endt
 evse
 feedin
@@ -123,6 +124,7 @@ minuteb
 Mixergy
 mkdocs
 Modbus
+mogons
 Mosquitto
 mqtt
 mult
