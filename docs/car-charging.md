@@ -32,6 +32,10 @@ and through that Predbat gets most of the information it needs.
     if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
     - Let the Octopus app control when your car charges.
 
+    _TIP:_ If you have a Zappi EV charger then you have to set it to Eco+ mode for IOG to control it.
+    If Predbat starts exporting your battery (e.g. prior to the IOG cheap overnight period) then the Zappi can treat the exported energy as excess solar and start charging the EV battery with it!<BR>
+    To prevent this happening, in the Zappi configuration set the Export Margin to 8000W so that the Zappi will only charge the EV from excess solar when more than 8000W is being exported (which should never happen).
+
 - Predbat-led charging - Here Predbat plans and can initiate the car charging based on the upcoming low import rate slots
     - Ensure **car_charging_limit**, **car_charging_soc** and **car_charging_planned** are set correctly in `apps.yaml` to point to the appropriate sensors from your EV (see [Car charging config in apps.yaml](apps-yaml.md#car-charging-integration))
     - Check (and if necessary add) the sensor response value from the sensor configured in **car_charging_planned** that is returned
