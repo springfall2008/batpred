@@ -1143,9 +1143,13 @@ class Inverter:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
                 if self.inv_output_charge_control == "current":
                     self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SOC is above Target SOC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
+                if self.inv_output_charge_control == "current":
+                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SOC)
                 self.base.log(f"Current SOC {self.soc_percent}% is greater than Target SOC {current_charge_limit}. Grid Charge disabled.")
             elif self.soc_percent == float(current_charge_limit):  # If SOC target is reached
                 self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on

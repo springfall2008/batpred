@@ -341,7 +341,7 @@ class Octopus:
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
-        
+
         # Add in the current charging slot
         for slot in slots_sorted:
             start_minutes, end_minutes, kwh, source, location = slot

@@ -1402,6 +1402,7 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
 
     return failed
 
+
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
@@ -1420,6 +1421,7 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
         print("ERROR: Slots should be:\n ref: {}\n  got: {}".format(expected_slots, result))
         failed = True
     return failed
+
 
 def run_load_octopus_slots_tests(my_predbat):
     """
@@ -1445,8 +1447,7 @@ def run_load_octopus_slots_tests(my_predbat):
     expected_slots3 = []
     expected_slots4 = []
     now_utc = my_predbat.now_utc
-    midnight_utc = my_predbat.midnight_utc\
-
+    midnight_utc = my_predbat.midnight_utc
     reset_rates(my_predbat, 10, 5)
     my_predbat.rate_min = 4
 
@@ -1454,53 +1455,18 @@ def run_load_octopus_slots_tests(my_predbat):
     soc = 2.0
     soc2 = 2.0
     for i in range(8):
-        start = now_utc + timedelta(minutes=i*60)
+        start = now_utc + timedelta(minutes=i * 60)
         end = start + timedelta(minutes=30)
         soc += 5
         soc2 += 2.5
-        slots.append(
-        {
-            "start": start.strftime(TIME_FORMAT),
-            "end": end.strftime(TIME_FORMAT),
-            "charge_in_kwh": -5,
-            "source": "null",
-            "location": "AT_HOME"
-        })
+        slots.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
         minutes_start = int((start - midnight_utc).total_seconds() / 60)
         minutes_end = int((end - midnight_utc).total_seconds() / 60)
-        expected_slots.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 5.0, 
-            "average": 4, 
-            "cost": 20.0,
-            "soc": 0.0
-        })
-        expected_slots2.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 0.0, 
-            "average": 4, 
-            "cost": 0.0,
-            "soc": 0.0
-        })
-        expected_slots3.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 5.0 if soc <= 12.0 else 0.0, 
-            "average": 4, 
-            "cost": 20.0 if soc <= 12.0 else 0.0,
-            "soc": min(soc, 12.0)
-        })
-        expected_slots4.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 5.0 if soc <= 24.0 else 0.0, 
-            "average": 4, 
-            "cost": 20.0 if soc <= 24.0 else 0.0,
-            "soc": min(soc2, 12.0)
-        })
-  
+        expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0})
+        expected_slots2.append({"start": minutes_start, "end": minutes_end, "kwh": 0.0, "average": 4, "cost": 0.0, "soc": 0.0})
+        expected_slots3.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 12.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 12.0 else 0.0, "soc": min(soc, 12.0)})
+        expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 24.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 24.0 else 0.0, "soc": min(soc2, 12.0)})
+
     failed |= run_load_octopus_slot_test("test1", my_predbat, slots, expected_slots, False, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test2", my_predbat, slots, expected_slots2, True, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test3", my_predbat, slots, expected_slots3, True, 2.0, 12.0, 1.0)

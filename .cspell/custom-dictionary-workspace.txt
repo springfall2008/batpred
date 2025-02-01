@@ -199,6 +199,7 @@ sunsynk
 tasmota
 tdata
 tdiff
+testname
 thirdparty
 timea
 timeb
