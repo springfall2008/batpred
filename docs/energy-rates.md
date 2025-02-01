@@ -222,7 +222,7 @@ Note: Day 1 = Monday, 2 = Tuesday .... 7 = Sunday
 
 e.g:
 
-```
+```yaml
 rates_import:
   - rate: 15
     day_of_week: "1,2,3,4,5"
