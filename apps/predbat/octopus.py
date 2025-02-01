@@ -341,26 +341,62 @@ class Octopus:
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
-
+        
         # Add in the current charging slot
         for slot in slots_sorted:
             start_minutes, end_minutes, kwh, source, location = slot
+            kwh_original = kwh
+            end_minutes_original = end_minutes
             if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
                 kwh_expected = kwh * self.car_charging_loss
                 if octopus_intelligent_consider_full:
                     kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
                     kwh = dp2(kwh_expected / self.car_charging_loss)
-                car_soc = min(car_soc + kwh_expected, limit)
-                new_slot = {}
-                new_slot["start"] = start_minutes
-                new_slot["end"] = end_minutes
-                new_slot["kwh"] = kwh
-                new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
-                if octopus_slot_low_rate and source != "bump-charge":
-                    new_slot["average"] = self.rate_min  # Assume price in min
-                new_slot["cost"] = new_slot["average"] * kwh
-                new_slot["soc"] = car_soc
-                new_slots.append(new_slot)
+
+                # Remove the remaining unused time
+                if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
+                    required_extra_soc = max(limit - car_soc, 0)
+                    required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5)
+                    required_minutes = min(required_minutes, end_minutes - start_minutes)
+                    end_minutes = start_minutes + required_minutes
+                    end_minutes = int((end_minutes + 29) / 30) * 30 # Round up to 30 minutes
+
+                    car_soc = min(car_soc + kwh_expected, limit)
+                    new_slot = {}
+                    new_slot["start"] = start_minutes
+                    new_slot["end"] = end_minutes
+                    new_slot["kwh"] = kwh
+                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
+                    if octopus_slot_low_rate and source != "bump-charge":
+                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["cost"] = new_slot["average"] * kwh
+                    new_slot["soc"] = car_soc
+                    new_slots.append(new_slot)
+
+                    if end_minutes_original > end_minutes:
+                        new_slot = {}
+                        new_slot["start"] = end_minutes
+                        new_slot["end"] = end_minutes_original
+                        new_slot["kwh"] = 0
+                        new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
+                        if octopus_slot_low_rate and source != "bump-charge":
+                            new_slot["average"] = self.rate_min  # Assume price in min
+                        new_slot["cost"] = 0
+                        new_slot["soc"] = car_soc
+                        new_slots.append(new_slot)
+
+                else:
+                    car_soc = min(car_soc + kwh_expected, limit)
+                    new_slot = {}
+                    new_slot["start"] = start_minutes
+                    new_slot["end"] = end_minutes
+                    new_slot["kwh"] = kwh
+                    new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
+                    if octopus_slot_low_rate and source != "bump-charge":
+                        new_slot["average"] = self.rate_min  # Assume price in min
+                    new_slot["cost"] = new_slot["average"] * kwh
+                    new_slot["soc"] = car_soc
+                    new_slots.append(new_slot)
         return new_slots
 
     def rate_add_io_slots(self, rates, octopus_slots):
