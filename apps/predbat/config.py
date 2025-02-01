@@ -508,6 +508,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_intelligent_consider_full",
+        "friendly_name": "Consider car full as part of Intelligent plan",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",

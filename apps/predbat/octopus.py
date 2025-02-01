@@ -324,16 +324,33 @@ class Octopus:
 
         return start_minutes, end_minutes, kwh, source, location
 
-    def load_octopus_slots(self, octopus_slots):
+    def load_octopus_slots(self, octopus_slots, octopus_intelligent_consider_full):
         """
         Turn octopus slots into charging plan
         """
         new_slots = []
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
+        car_soc = self.car_charging_soc[0]
+        limit = self.car_charging_limit[0]
+        slots_decoded = []
 
+        # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(slot)
+            slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
+
+        # Sort slots by start time
+        slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
+        
+        # Add in the current charging slot
+        for slot in slots_sorted:
+            start_minutes, end_minutes, kwh, source, location = slot
             if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
+                kwh_expected = kwh * self.car_charging_loss
+                if octopus_intelligent_consider_full:
+                    kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
+                    kwh = dp2(kwh_expected / self.car_charging_loss)
+                car_soc = min(car_soc + kwh_expected, limit)
                 new_slot = {}
                 new_slot["start"] = start_minutes
                 new_slot["end"] = end_minutes
@@ -342,6 +359,7 @@ class Octopus:
                 if octopus_slot_low_rate and source != "bump-charge":
                     new_slot["average"] = self.rate_min  # Assume price in min
                 new_slot["cost"] = new_slot["average"] * kwh
+                new_slot["soc"] = car_soc
                 new_slots.append(new_slot)
         return new_slots
 

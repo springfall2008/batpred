@@ -38,7 +38,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.13.1"
+THIS_VERSION = "v8.13.2"
 
 # fmt: off
 PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py"]
@@ -415,6 +415,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.car_charging_energy = {}
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
+        self.octopus_intelligent_consider_full = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.futurerate_url_cache = {}

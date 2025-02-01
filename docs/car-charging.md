@@ -27,6 +27,11 @@ and through that Predbat gets most of the information it needs.
     - If you set **car_charging_limit** in `apps.yaml` then Predbat can also know if the car's limit is set lower than in Intelligent Octopus.
     If you don't set this Predbat will default to 100%.
     - You can use **car_charging_now** as a workaround to indicate your car is charging but the Intelligent API hasn't reported it
+    - The switch **switch.predbat_octopus_intelligent_consider_full** (_expert mode_)
+    when turned on will cause Predbat to predict when your car battery is full and assuming no further charging will occur.
+    This can be useful if Octopus does not know your car battery state of charge but you have a sensor setup in predbat (**car_charging_soc**) which does know the current charge level.
+    Predbat will still assume all Octopus charging slots are low rate even if some are not used by your car.
+    The default for this option is False.
     - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_)
     can be used to prevent Predbat from assuming the car will be charging or that future extra low rate slots apply when the car is unplugged.
     This will only work correctly if **car_charging_planned** is set correctly in apps.yaml to detect your car being plugged in
