@@ -1001,7 +1001,7 @@ class Fetch:
                 if self.octopus_intelligent_charging:
                     self.octopus_slots = self.add_now_to_octopus_slot(self.octopus_slots, self.now_utc)
                     if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[0]:
-                        self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots)
+                        self.car_charging_slots[0] = self.load_octopus_slots(self.octopus_slots, self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[0]:
                             self.log("Car 0 using Octopus Intelligent, charging planned - charging limit {}, ready time {} - battery size {}".format(self.car_charging_limit[0], self.car_charging_plan_time[0], self.car_charging_battery_size[0]))
                             self.car_charging_planned[0] = True
@@ -1899,6 +1899,7 @@ class Fetch:
             self.set_window_minutes = 0
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
+        self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
 
