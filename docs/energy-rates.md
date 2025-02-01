@@ -221,6 +221,7 @@ rates_gas:
 Note: Day 1 = Monday, 2 = Tuesday .... 7 = Sunday
 
 e.g:
+
 ```
 rates_import:
   - rate: 15
