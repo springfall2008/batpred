@@ -197,6 +197,7 @@ stdlib
 stepline
 sunsynk
 tasmota
+testname
 tdata
 tdiff
 thirdparty
