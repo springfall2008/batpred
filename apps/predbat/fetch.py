@@ -1340,7 +1340,7 @@ class Fetch:
             rates = prev.copy()
         else:
             # Set to zero
-            for minute in range(24 * 60):
+            for minute in range(48 * 60):
                 rates[minute] = 0
 
         manual_items = self.get_manual_api(rtype)
@@ -1385,6 +1385,23 @@ class Fetch:
                         self.log("Warn: Bad date {} provided in energy rates".format(this_rate["date"]))
                         self.record_status("Bad date {} provided in energy rates".format(this_rate["date"]), had_errors=True)
                         continue
+                day_of_week = []
+                if "day_of_week" in this_rate:
+                    day = str(this_rate["day_of_week"])
+                    days = day.split(",")
+                    for day in days:
+                        try:
+                            day = int(day)
+                        except (ValueError, TypeError):
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day_of_week), had_errors=True)
+                            continue
+                        if day < 1 or day > 7:
+                            self.log("Warn: Bad day_of_week {} provided in energy rates, should be 0-6".format(day))
+                            self.record_status("Bad day_of_week {} provided in energy rates, should be 0-6".format(day), had_errors=True)
+                            continue
+                        # Store as Python day of week
+                        day_of_week.append(day - 1)
 
                 # Support increment to existing rates (for override)
                 if "rate" in this_rate:
@@ -1433,7 +1450,9 @@ class Fetch:
                     start_minutes += delta_minutes
                     end_minutes += delta_minutes
 
-                self.log("Adding rate {}: {} => {} to {} @ {} date {} increment {}".format(rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, rate_increment))
+                self.log("Adding rate {}: {} => {} to {} @ {} date {} day_of_week {} increment {}".format(rtype, this_rate, self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), rate, date, day_of_week, rate_increment))
+
+                day_of_week_midnight = self.midnight.weekday()
 
                 # Store rates against range
                 if end_minutes >= (-24 * 60) and start_minutes < max_minute:
@@ -1443,16 +1462,18 @@ class Fetch:
                             minute_index = minute_mod
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
-                                if rate_increment:
-                                    rates[minute_index] = rates.get(minute_index, 0.0) + rate
-                                    rate_replicate[minute_index] = "increment"
-                                else:
-                                    rates[minute_index] = rate
-                                    rate_replicate[minute_index] = "user"
-                                if load_scaling is not None:
-                                    self.load_scaling_dynamic[minute_index] = load_scaling
-                                if date or not prev:
-                                    break
+                                current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
+                                if not day_of_week or (current_day_of_week in day_of_week):
+                                    if rate_increment:
+                                        rates[minute_index] = rates.get(minute_index, 0.0) + rate
+                                        rate_replicate[minute_index] = "increment"
+                                    else:
+                                        rates[minute_index] = rate
+                                        rate_replicate[minute_index] = "user"
+                                    if load_scaling is not None:
+                                        self.load_scaling_dynamic[minute_index] = load_scaling
+                                    if date:
+                                        break
                                 minute_index += 24 * 60
                             if not date and not prev:
                                 rates[minute_mod + max_minute] = rate

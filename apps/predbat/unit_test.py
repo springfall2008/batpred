@@ -390,12 +390,14 @@ def run_nordpool_test(my_predbat):
     rate_import2, rate_export2 = future.futurerate_analysis(rates_agile, rates_agile_export)
     for key in rate_import:
         if rate_import[key] != rate_import2.get(key, None):
-            print("ERROR: Rate import data not the same")
+            print("ERROR: Rate import data not the same got {} vs {}".format(rate_import[key], rate_import2.get(key, None)))
             failed = True
+            break
     for key in rate_export:
         if rate_export[key] != rate_export2.get(key, None):
-            print("ERROR: Rate export data not the same")
+            print("ERROR: Rate export data not the same got {} vs {}".format(rate_export[key], rate_export2.get(key, None)))
             failed = True
+            break
 
     # Compute the minimum value in the hash, ignoring the keys
     min_import = min(rate_import.values())
@@ -1420,6 +1422,57 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
     if json.dumps(result) != json.dumps(expected_slots):
         print("ERROR: Slots should be:\n ref: {}\n  got: {}".format(expected_slots, result))
         failed = True
+    return failed
+
+
+def assert_rates(rates, start_minute, end_minute, expect_rate):
+    """
+    Assert rates
+    """
+    end_minute = min(end_minute, len(rates))
+    for minute in range(start_minute, end_minute):
+        if rates[minute] != expect_rate:
+            print("ERROR: Rate at minute {} should be {} got {}".format(minute, expect_rate, rates[minute]))
+            return 1
+    return 0
+
+
+def test_basic_rates(my_predbat):
+    """
+    Test for basic rates function
+
+    rates = basic_rates(self, info, rtype, prev=None, rate_replicate={}):
+    """
+    failed = 0
+
+    old_midnight = my_predbat.midnight
+    my_predbat.midnight = datetime.strptime("2025-07-05T00:00:00+00:00", "%Y-%m-%dT%H:%M:%S%z")
+
+    print("Simple rate1")
+    simple_rate = [
+        {"rate": 5},
+        {
+            "rate": 10,
+            "start": "17:00:00",
+            "end": "19:00:00",
+        },
+    ]
+    results = my_predbat.basic_rates(simple_rate, "import")
+    results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
+
+    failed |= assert_rates(results, 0, 17 * 60, 5)
+    failed |= assert_rates(results, 17 * 60, 19 * 60, 10)
+    failed |= assert_rates(results, 19 * 60, 24 * 60 + 17 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
+
+    simple_rate = [{"rate": 5}, {"rate": 10, "start": "17:00:00", "end": "19:00:00", "day_of_week": "7"}]
+    results = my_predbat.basic_rates(simple_rate, "import")
+    results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
+
+    failed |= assert_rates(results, 0, 17 * 60 + 24 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
+
+    my_predbat.midnight = old_midnight
     return failed
 
 
@@ -7770,7 +7823,11 @@ def main():
         sys.exit(0)
 
     if not failed:
+        failed |= run_nordpool_test(my_predbat)
+    if not failed:
         failed |= run_load_octopus_slots_tests(my_predbat)
+    if not failed:
+        failed |= test_basic_rates(my_predbat)
     if not failed:
         failed |= test_find_charge_rate(my_predbat)
     if not failed:
@@ -7784,8 +7841,6 @@ def main():
         failed = 1
     if not failed:
         failed |= test_alert_feed(my_predbat)
-    if not failed:
-        failed |= run_nordpool_test(my_predbat)
     if not failed:
         failed |= run_inverter_tests()
     if not failed:
