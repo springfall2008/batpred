@@ -416,7 +416,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
-        self.octopus_intelligent_ignore_full= False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.futurerate_url_cache = {}
