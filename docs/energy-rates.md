@@ -217,6 +217,18 @@ rates_gas:
 **start** and **end** are in the time format of "HH:MM:SS" e.g. "12:30:00" and should be aligned to 30 minute slots normally.
 **rate** is in pence e.g. 4.2
 
+**day_of_week** Can also be used to control rates on specific days. You can specify one day or multiple days split by comma.
+Note: Day 1 = Monday, 2 = Tuesday .... 7 = Sunday
+
+e.g:
+```
+rates_import:
+  - rate: 15
+    day_of_week: "1,2,3,4,5"
+  - rate: 10
+    day_of_week: "6,7"
+```
+
 start and end can be omitted and Predbat will assume that you are on a single flat rate tariff.
 
 If there are any gaps in the 24-hour period then a zero rate will be assumed.
