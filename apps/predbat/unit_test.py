@@ -38,6 +38,7 @@ from futurerate import FutureRate
 from config import PREDICT_STEP, MINUTE_WATT
 from inverter import Inverter
 from config import INVERTER_DEF
+from compare import Compare
 
 # Import MagicMock
 from unittest.mock import MagicMock
@@ -1550,7 +1551,6 @@ def run_load_octopus_slots_tests(my_predbat):
     failed |= run_load_octopus_slot_test("test2", my_predbat, slots, expected_slots2, True, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test3", my_predbat, slots, expected_slots3, True, 2.0, 12.0, 1.0)
     failed |= run_load_octopus_slot_test("test4", my_predbat, slots, expected_slots4, True, 2.0, 10.0, 0.5)
-    return 1
     return failed
 
 
@@ -2816,7 +2816,7 @@ def run_execute_test(
     return failed
 
 
-def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
+def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, compare=False):
     print("**** Running debug test {} ****\n".format(debug_file))
     if not expected_file:
         re_do_rates = True
@@ -2834,6 +2834,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
     my_predbat.load_user_config()
+    my_predbat.args["threads"] = 0
     # my_predbat.fetch_config_options()
 
     # Force off combine export XXX:
@@ -2880,9 +2881,19 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
             if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
                 my_predbat.rate_import_cost_threshold = highest
 
-        print("Lowest rate {} highest rate {} rates {}".format(lowest, highest, my_predbat.low_rates))
+            print("Lowest rate {} highest rate {} rates {}".format(lowest, highest, my_predbat.low_rates))
 
     print("minutes_now {} end_record {}".format(my_predbat.minutes_now, my_predbat.end_record))
+
+    if compare:
+        print("Run compare")
+        compare_tariffs = [
+            {"name": "Fixed import", "rates_import": [{"rate": 25.0}]},
+        ]
+        my_predbat.args["compare"] = compare_tariffs
+        compare = Compare(my_predbat)
+        compare.run_all()
+        return
 
     # Reset load model
     if reset_load_model:
@@ -2946,7 +2957,6 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None):
     open(filename, "w").write(my_predbat.html_plan)
     print("Wrote plan to {}".format(filename))
 
-    my_predbat.args["threads"] = 0
     my_predbat.calculate_plan(recompute=True, debug_mode=True)
 
     # Predict
@@ -7827,6 +7837,7 @@ def main():
     parser = argparse.ArgumentParser(description="Predbat unit tests")
     parser.add_argument("--debug_file", action="store", help="Enable debug output")
     parser.add_argument("--quick", action="store_true", help="Run quick tests")
+    parser.add_argument("--compare", action="store_true", help="Run compare")
     args = parser.parse_args()
 
     print("**** Starting Predbat tests ****")
@@ -7846,7 +7857,7 @@ def main():
     failed = False
 
     if args.debug_file:
-        run_single_debug(args.debug_file, my_predbat, args.debug_file)
+        run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare)
         sys.exit(0)
 
     if not failed:
