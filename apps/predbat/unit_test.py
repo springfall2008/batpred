@@ -1405,6 +1405,7 @@ def run_car_charging_smart_test(test_name, my_predbat, battery_size=10.0, limit=
 
     return failed
 
+
 def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, consider_full, car_soc, car_limit, car_loss):
     """
     Run a test for load_octopus_slot
@@ -1424,6 +1425,7 @@ def run_load_octopus_slot_test(testname, my_predbat, slots, expected_slots, cons
         failed = True
     return failed
 
+
 def assert_rates(rates, start_minute, end_minute, expect_rate):
     """
     Assert rates
@@ -1433,11 +1435,12 @@ def assert_rates(rates, start_minute, end_minute, expect_rate):
         if rates[minute] != expect_rate:
             print("ERROR: Rate at minute {} should be {} got {}".format(minute, expect_rate, rates[minute]))
             results_short = {}
-            for i in range(0, 48*60, 30):
+            for i in range(0, 48 * 60, 30):
                 results_short[i] = rates[i]
             print("Rates: {}".format(results_short))
             return 1
     return 0
+
 
 def test_basic_rates(my_predbat):
     """
@@ -1452,70 +1455,45 @@ def test_basic_rates(my_predbat):
 
     print("*** Running test: Simple rate1")
     simple_rate = [
-        {
-            "rate": 5
-        },
+        {"rate": 5},
         {
             "rate": 10,
             "start": "17:00:00",
             "end": "19:00:00",
-        } 
+        },
     ]
     results = my_predbat.basic_rates(simple_rate, "import")
     results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
 
-    failed |= assert_rates(results, 0, 17*60, 5)
-    failed |= assert_rates(results, 17*60, 19*60, 10)
-    failed |= assert_rates(results, 19*60, 24*60 + 17*60, 5)
-    failed |= assert_rates(results, 24*60 + 17*60, 24*60 + 19*60, 10)
-
+    failed |= assert_rates(results, 0, 17 * 60, 5)
+    failed |= assert_rates(results, 17 * 60, 19 * 60, 10)
+    failed |= assert_rates(results, 19 * 60, 24 * 60 + 17 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
     print("*** Running test: Simple rate2")
-    simple_rate = [
-        {
-            "rate": 5
-        },
-        {
-            "rate": 10,
-            "start": "17:00:00",
-            "end": "19:00:00",
-            "day_of_week": 7
-        },
-        {
-            "rate": 9,
-            "start": "17:00:00",
-            "end": "19:00:00",
-            "day_of_week": "5,6"
-        } 
-    ]
+    simple_rate = [{"rate": 5}, {"rate": 10, "start": "17:00:00", "end": "19:00:00", "day_of_week": 7}, {"rate": 9, "start": "17:00:00", "end": "19:00:00", "day_of_week": "5,6"}]
     results = my_predbat.basic_rates(simple_rate, "import")
     results, results_replicated = my_predbat.rate_replicate(results, is_import=True, is_gas=False)
 
-    failed |= assert_rates(results, 0, 17*60, 5)
-    failed |= assert_rates(results, 17*60, 19*60, 9)
-    failed |= assert_rates(results, 19*60, 24*60 + 17*60, 5)
-    failed |= assert_rates(results, 24*60 + 17*60, 24*60 + 19*60, 10)
+    failed |= assert_rates(results, 0, 17 * 60, 5)
+    failed |= assert_rates(results, 17 * 60, 19 * 60, 9)
+    failed |= assert_rates(results, 19 * 60, 24 * 60 + 17 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
-    rate_override = [
-        {
-            "start": "12:00:00",
-            "end": "13:00:00",
-            "rate_increment": 1
-        }
-    ]
+    rate_override = [{"start": "12:00:00", "end": "13:00:00", "rate_increment": 1}]
     results = my_predbat.basic_rates(rate_override, "import", prev=results)
-    failed |= assert_rates(results, 0, 12*60, 5)
-    failed |= assert_rates(results, 12*60, 13*60, 6)
-    failed |= assert_rates(results, 13*60, 17*60, 5)
-    failed |= assert_rates(results, 17*60, 19*60, 9)
-    failed |= assert_rates(results, 19*60, 24*60 + 12*60, 5)
-    failed |= assert_rates(results, 24*60 + 12*60, 24*60 + 13*60, 6)
-    failed |= assert_rates(results, 24*60 + 13*60, 24*60 + 17*60, 5)
-    failed |= assert_rates(results, 24*60 + 17*60, 24*60 + 19*60, 10)
-
+    failed |= assert_rates(results, 0, 12 * 60, 5)
+    failed |= assert_rates(results, 12 * 60, 13 * 60, 6)
+    failed |= assert_rates(results, 13 * 60, 17 * 60, 5)
+    failed |= assert_rates(results, 17 * 60, 19 * 60, 9)
+    failed |= assert_rates(results, 19 * 60, 24 * 60 + 12 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 12 * 60, 24 * 60 + 13 * 60, 6)
+    failed |= assert_rates(results, 24 * 60 + 13 * 60, 24 * 60 + 17 * 60, 5)
+    failed |= assert_rates(results, 24 * 60 + 17 * 60, 24 * 60 + 19 * 60, 10)
 
     my_predbat.midnight = old_midnight
     return failed
+
 
 def run_load_octopus_slots_tests(my_predbat):
     """
@@ -1551,73 +1529,24 @@ def run_load_octopus_slots_tests(my_predbat):
     soc = 2.0
     soc2 = 2.0
     for i in range(8):
-        start = now_utc + timedelta(minutes=i*60)
+        start = now_utc + timedelta(minutes=i * 60)
         end = start + timedelta(minutes=60)
         prev_soc = soc
         prev_soc2 = soc2
         soc += 5
         soc2 += 2.5
-        slots.append(
-        {
-            "start": start.strftime(TIME_FORMAT),
-            "end": end.strftime(TIME_FORMAT),
-            "charge_in_kwh": -5,
-            "source": "null",
-            "location": "AT_HOME"
-        })
+        slots.append({"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": -5, "source": "null", "location": "AT_HOME"})
         minutes_start = int((start - midnight_utc).total_seconds() / 60)
         minutes_end = int((end - midnight_utc).total_seconds() / 60)
-        expected_slots.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 5.0, 
-            "average": 4, 
-            "cost": 20.0,
-            "soc": 0.0
-        })
-        expected_slots2.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 0.0, 
-            "average": 4, 
-            "cost": 0.0,
-            "soc": 0.0
-        })
-        expected_slots3.append(
-            {"start": minutes_start, 
-            "end": minutes_end, 
-            "kwh": 5.0 if soc <= 12.0 else 0.0, 
-            "average": 4, 
-            "cost": 20.0 if soc <= 12.0 else 0.0,
-            "soc": min(soc, 12.0)
-        })
+        expected_slots.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0})
+        expected_slots2.append({"start": minutes_start, "end": minutes_end, "kwh": 0.0, "average": 4, "cost": 0.0, "soc": 0.0})
+        expected_slots3.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 12.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 12.0 else 0.0, "soc": min(soc, 12.0)})
         if prev_soc2 < 10.0 and soc2 >= 10.0:
-            expected_slots4.append(
-                {"start": minutes_start, 
-                "end": minutes_start + 30, 
-                "kwh": 1.0,
-                "average": 4, 
-                "cost": 1 * 4.0,
-                "soc": min(soc2, 10.0)
-            })
-            expected_slots4.append(
-                {"start": minutes_start + 30, 
-                "end": minutes_end, 
-                "kwh": 5.0 if soc <= 20.0 else 0.0, 
-                "average": 4, 
-                "cost": 20.0 if soc <= 20.0 else 0.0,
-                "soc": min(soc2, 10.0)
-            })
+            expected_slots4.append({"start": minutes_start, "end": minutes_start + 30, "kwh": 1.0, "average": 4, "cost": 1 * 4.0, "soc": min(soc2, 10.0)})
+            expected_slots4.append({"start": minutes_start + 30, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 20.0 else 0.0, "soc": min(soc2, 10.0)})
         else:
-            expected_slots4.append(
-                {"start": minutes_start, 
-                "end": minutes_end, 
-                "kwh": 5.0 if soc <= 20.0 else 0.0, 
-                "average": 4, 
-                "cost": 20.0 if soc <= 20.0 else 0.0,
-                "soc": min(soc2, 10.0)
-            })
-  
+            expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": 4, "cost": 20.0 if soc <= 20.0 else 0.0, "soc": min(soc2, 10.0)})
+
     failed |= run_load_octopus_slot_test("test1", my_predbat, slots, expected_slots, False, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test2", my_predbat, slots, expected_slots2, True, 2.0, 0.0, 1.0)
     failed |= run_load_octopus_slot_test("test3", my_predbat, slots, expected_slots3, True, 2.0, 12.0, 1.0)
@@ -2959,7 +2888,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if compare:
         print("Run compare")
         compare_tariffs = [
-            {"name": "Fixed import", "rates_import" : [{"rate": 25.0}]},
+            {"name": "Fixed import", "rates_import": [{"rate": 25.0}]},
         ]
         my_predbat.args["compare"] = compare_tariffs
         compare = Compare(my_predbat)

@@ -789,13 +789,7 @@ class Plan:
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, 
-            self.charge_window, 
-            self.export_window, 
-            self.export_limits, 
-            False, 
-            save="base" if publish else None, 
-            end_record=self.end_record
+            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
         )
         # And base 10
         (
