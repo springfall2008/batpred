@@ -1733,7 +1733,7 @@ class Fetch:
                 # Load data
                 load_forecast = self.minute_data(
                     data,
-                    self.forecast_days,
+                    self.forecast_days + 1,
                     self.midnight_utc,
                     "energy",
                     "last_updated",
