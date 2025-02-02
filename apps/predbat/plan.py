@@ -650,11 +650,10 @@ class Plan:
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None)
 
         # Save step data for debug
-        if self.debug_enable:
-            self.load_minutes_step = load_minutes_step
-            self.load_minutes_step10 = load_minutes_step10
-            self.pv_forecast_minute_step = pv_forecast_minute_step
-            self.pv_forecast_minute10_step = pv_forecast_minute10_step
+        self.load_minutes_step = load_minutes_step
+        self.load_minutes_step10 = load_minutes_step10
+        self.pv_forecast_minute_step = pv_forecast_minute_step
+        self.pv_forecast_minute10_step = pv_forecast_minute10_step
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
@@ -790,7 +789,13 @@ class Plan:
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base" if publish else None, end_record=self.end_record
+            self.charge_limit, 
+            self.charge_window, 
+            self.export_window, 
+            self.export_limits, 
+            False, 
+            save="base" if publish else None, 
+            end_record=self.end_record
         )
         # And base 10
         (
