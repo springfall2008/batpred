@@ -1463,7 +1463,7 @@ class Fetch:
                             # For incremental adjustments we have to loop over 24-hour periods
                             while minute_index < max_minute:
                                 current_day_of_week = (day_of_week_midnight + int(minute_index / (24 * 60))) % 7
-                                if not day_of_week or (current_day_of_week in day_of_week):
+                                if not day_of_week or (current_day_of_week in day_of_week):    
                                     if rate_increment:
                                         rates[minute_index] = rates.get(minute_index, 0.0) + rate
                                         rate_replicate[minute_index] = "increment"

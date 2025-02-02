@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -269,7 +268,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         reset_prediction_globals()
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparisons = {}
-        self.compare_tarrifs = False
+        self.compare_tariffs = False
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
@@ -768,10 +767,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.save_current_config()
 
         # Compare tariffs
-        if self.compare_tarrifs:
+        if self.compare_tariffs:
             compare = Compare(self)
             compare.run_all()
-            self.compare_tarrifs = False
+            self.compare_tariffs = False
 
     async def async_download_predbat_version(self, version):
         """
@@ -946,7 +945,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Called every 15 seconds
         """
         self.check_entity_refresh()
-        if (self.update_pending or self.compare_tarrifs) and not self.prediction_started:
+        if (self.update_pending or self.compare_tariffs) and not self.prediction_started:
             self.prediction_started = True
             self.ha_interface.update_states()
             self.load_user_config()
