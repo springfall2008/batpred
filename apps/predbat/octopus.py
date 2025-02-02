@@ -377,11 +377,11 @@ class Octopus:
                         new_slot = {}
                         new_slot["start"] = end_minutes
                         new_slot["end"] = end_minutes_original
-                        new_slot["kwh"] = 0
+                        new_slot["kwh"] = 0.0
                         new_slot["average"] = self.rate_import.get(start_minutes, self.rate_min)
                         if octopus_slot_low_rate and source != "bump-charge":
                             new_slot["average"] = self.rate_min  # Assume price in min
-                        new_slot["cost"] = 0
+                        new_slot["cost"] = 0.0
                         new_slot["soc"] = car_soc
                         new_slots.append(new_slot)
 
