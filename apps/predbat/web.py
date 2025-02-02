@@ -89,6 +89,8 @@ class WebInterface:
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/compare", self.html_compare)
+        app.router.add_post("/compare", self.html_compare_post)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -867,6 +869,71 @@ var options = {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_compare_post(self, request):
+        """
+        Handle post request for html compare
+        """
+
+        postdata = await request.post()
+        for pitem in postdata:
+            if pitem == "run":
+                self.base.compare_tarrifs = True
+
+        return await self.html_compare(request)
+
+    async def html_compare(self, request):
+        """
+        Return the Predbat compare page as an HTML page
+        """
+        text = self.get_header("Predbat Compare")
+
+        text += "<body>\n"
+        text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
+        active = self.base.compare_tarrifs
+
+        if not active:
+            text += '<button type="submit" form="compareform" value="run">Run</button>\n'
+        else:
+            text += '<button type="submit" form="compareform" value="run" disabled>Running..</button>\n'
+
+        text += '<input type="hidden" name="run" value="run">\n'
+        text += "<table>\n"
+        text += "<tr><th>Tariff</th><th>Cost</th><th>Metric</th><th>Export</th><th>Import</th>\n"
+
+        compare_settings  = self.base.get_arg('compare', [])
+        comparisons = self.base.comparisons
+
+        for compare in compare_settings:
+            name = compare.get("name", "")
+            result = comparisons.get(name, {})
+
+            cost = result.get("cost", "")
+            metric = result.get("metric", "")
+            export = result.get("export", "")
+            imported = result.get("import", "")
+
+            name_anchor = name.replace(" ", "_")
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\n".format(name_anchor, name, cost, metric, export, imported)
+
+        text += "</table>"
+        text += "</form>"
+
+        for compare in compare_settings:
+            name = compare.get("name", "")
+            name_anchor = name.replace(" ", "_")
+            result = comparisons.get(name, {})
+
+            html = result.get("html", "")
+
+            text += "<h2 id='heading-{}'>{}</h2>\n".format(name_anchor, name)
+            if html:
+                text += html
+            else:
+                text += "<p>No data yet</p>"
+
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_menu(self, request):
         """
         Return the Predbat Menu page as an HTML page
@@ -881,6 +948,7 @@ var options = {
         text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
         text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
         text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
+        text += '<td><a href="./compare" target="main_frame">Compare</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
         text += "</table></body></html>\n"
         return web.Response(content_type="text/html", text=text)
