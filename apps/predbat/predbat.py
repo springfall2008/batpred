@@ -38,10 +38,10 @@ from multiprocessing import Pool, cpu_count, set_start_method
 import asyncio
 import json
 
-THIS_VERSION = "v8.13.3"
+THIS_VERSION = "v8.14.0"
 
 # fmt: off
-PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py"]
+PREDBAT_FILES = ["predbat.py", "config.py", "prediction.py", "gecloud.py","utils.py", "inverter.py", "ha.py", "download.py", "unit_test.py", "web.py", "predheat.py", "futurerate.py", "octopus.py", "solcast.py","execute.py", "plan.py", "fetch.py", "output.py", "userinterface.py", "energydataservice.py", "alertfeed.py", "compare.py"]
 # fmt: on
 
 from download import predbat_update_move, predbat_update_download, check_install
@@ -83,6 +83,7 @@ from fetch import Fetch
 from output import Output
 from userinterface import UserInterface
 from alertfeed import Alertfeed
+from compare import Compare
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
@@ -268,6 +269,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         reset_prediction_globals()
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparisons = {}
+        self.comparisons_date = None
+        self.compare_tariffs = False
         self.predheat = None
         self.predbat_mode = "Monitor"
         self.soc_kwh_history = {}
@@ -765,6 +768,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         self.expose_config("active", False)
         self.save_current_config()
 
+        # Compare tariffs
+        if self.compare_tariffs:
+            compare = Compare(self)
+            compare.run_all()
+            self.compare_tariffs = False
+
     async def async_download_predbat_version(self, version):
         """
         Sync wrapper for async download_predbat_version
@@ -938,7 +947,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         Called every 15 seconds
         """
         self.check_entity_refresh()
-        if self.update_pending and not self.prediction_started:
+        if (self.update_pending or self.compare_tariffs) and not self.prediction_started:
             self.prediction_started = True
             self.ha_interface.update_states()
             self.load_user_config()

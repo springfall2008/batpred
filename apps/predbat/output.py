@@ -542,7 +542,7 @@ class Output:
         html += "</tr>"
         return html
 
-    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record):
+    def publish_html_plan(self, pv_forecast_minute_step, pv_forecast_minute_step10, load_minutes_step, load_minutes_step10, end_record, publish=True):
         """
         Publish the current plan in HTML format
         """
@@ -997,8 +997,12 @@ class Output:
             html += "</tr>"
         html += "</table>"
         html = html.replace("£", "&#163;")
-        self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
-        self.html_plan = html
+
+        if publish:
+            self.dashboard_item(self.prefix + ".plan_html", state="", attributes={"html": html, "friendly_name": "Plan in HTML", "icon": "mdi:web-box"})
+            self.html_plan = html
+
+        return html
 
     def publish_rates(self, rates, export, gas=False):
         """

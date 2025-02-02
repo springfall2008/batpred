@@ -30,6 +30,7 @@ Chrg
 citem
 Codespaces
 collapsable
+compareform
 configform
 coro
 crosscharge

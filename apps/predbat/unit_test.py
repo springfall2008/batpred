@@ -39,6 +39,7 @@ from config import PREDICT_STEP, MINUTE_WATT
 from inverter import Inverter
 from config import INVERTER_DEF
 from compare import Compare
+from web import WebInterface
 
 # Import MagicMock
 from unittest.mock import MagicMock
@@ -2888,11 +2889,12 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     if compare:
         print("Run compare")
         compare_tariffs = [
-            {"name": "Fixed import", "rates_import": [{"rate": 25.0}]},
+            {"name": "Fixed exports", "rates_export": [{"rate": 15.0}]},
+            {"name": "Agile export", "rates_export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
         ]
         my_predbat.args["compare"] = compare_tariffs
         compare = Compare(my_predbat)
-        compare.run_all()
+        compare.run_all(debug=True)
         return
 
     # Reset load model
@@ -2992,6 +2994,41 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     my_predbat.create_debug_yaml(write_file=True)
 
+    return failed
+
+
+def run_test_web_if(my_predbat):
+    """
+    Test the web interface
+    """
+    failed = 0
+    print("**** Running web interface test ****\n")
+    my_predbat.web_interface = WebInterface(my_predbat)
+    my_predbat.web_interface_task = my_predbat.create_task(my_predbat.web_interface.start())
+
+    # Fetch page from 127.0.0.1:5052
+    for page in ["/", "/dash", "/plan", "/config", "/apps", "/charts", "/compare", "/log"]:
+        print("Fetch page {}".format(page))
+        address = "http://127.0.0.1:5052" + page
+        res = requests.get(address)
+        if res.status_code != 200:
+            print("ERROR: Failed to fetch from page {} got status {} value {}".format(address, res.status_code, res.text))
+            failed = 1
+
+    # Perform a post to /compare page with data for form 'compareform' value 'run'
+    print("**** Running test: Fetch page /compare with post")
+    address = "http://127.0.0.1:5052/compare"
+    my_predbat.compare_tariffs = False
+    data = {"run": "run"}
+    res = requests.post(address, data=data)
+    if res.status_code != 200:
+        print("ERROR: Failed to post to pagepage {} got status {} value {}".format(address, res.status_code, res.text))
+        failed = 1
+    if not my_predbat.compare_tariffs:
+        print("ERROR: Compare tariffs not set")
+        failed = 1
+
+    my_predbat.web_interface.abort = True
     return failed
 
 
@@ -7860,6 +7897,8 @@ def main():
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare)
         sys.exit(0)
 
+    if not failed:
+        failed |= run_test_web_if(my_predbat)
     if not failed:
         failed |= run_nordpool_test(my_predbat)
     if not failed:

@@ -89,6 +89,8 @@ class WebInterface:
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/compare", self.html_compare)
+        app.router.add_post("/compare", self.html_compare_post)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", 5052)
@@ -600,7 +602,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./dash"
-        text = self.get_header("Predbat Dashboard")
+        text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode)
@@ -758,7 +760,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Config")
+        text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -779,7 +781,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Config")
+        text = self.get_header("Predbat Apps.yaml", refresh=60 * 5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -867,6 +869,95 @@ var options = {
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    async def html_compare_post(self, request):
+        """
+        Handle post request for html compare
+        """
+
+        postdata = await request.post()
+        for pitem in postdata:
+            if pitem == "run":
+                self.base.compare_tariffs = True
+
+        return await self.html_compare(request)
+
+    async def html_compare(self, request):
+        """
+        Return the Predbat compare page as an HTML page
+        """
+        text = self.get_header("Predbat Compare", refresh=60)
+
+        text += "<body>\n"
+        text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
+        active = self.base.compare_tariffs
+
+        if not active:
+            text += '<button type="submit" form="compareform" value="run">Run</button>\n'
+        else:
+            text += '<button type="submit" form="compareform" value="run" disabled>Running..</button>\n'
+        if self.base.comparisons_date:
+            text += " " + self.base.comparisons_date
+        else:
+            text += " Not yet run"
+
+        text += '<input type="hidden" name="run" value="run">\n'
+        text += "<table>\n"
+        text += "<tr><th>Tariff</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Final SOC</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
+
+        compare_settings = self.base.get_arg("compare", [])
+        comparisons = self.base.comparisons
+
+        best_selected = ""
+        best_metric = 9999999999
+
+        for compare in compare_settings:
+            name = compare.get("name", {})
+            result = comparisons.get(name, {})
+            metric = result.get("metric", best_metric)
+            if metric < best_metric:
+                best_metric = metric
+                best_selected = name
+
+        for compare in compare_settings:
+            name = compare.get("name", "")
+            result = comparisons.get(name, {})
+
+            cost = result.get("cost", "")
+            cost10 = result.get("cost10", "")
+            metric = result.get("metric", "")
+            export = result.get("export", "")
+            imported = result.get("import", "")
+            soc = result.get("soc", "")
+            final_iboost = result.get("final_iboost", "")
+            final_carbon_g = result.get("final_carbon_g", "")
+
+            selected = "<td bgcolor=#aaFFaa>Best<td>" if name == best_selected else "<td>&nbsp;</td>"
+
+            name_anchor = name.replace(" ", "_")
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(
+                name_anchor, name, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected
+            )
+
+        text += "</table>"
+        text += "</form>"
+
+        for compare in compare_settings:
+            name = compare.get("name", "")
+            name_anchor = name.replace(" ", "_")
+            result = comparisons.get(name, {})
+
+            html = result.get("html", "")
+
+            text += "<br>\n"
+            text += "<h2 id='heading-{}'>{}</h2>\n".format(name_anchor, name)
+            if html:
+                text += html
+            else:
+                text += "<p>No data yet</p>"
+
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     async def html_menu(self, request):
         """
         Return the Predbat Menu page as an HTML page
@@ -881,6 +972,7 @@ var options = {
         text += '<td><a href="./config" target="main_frame">Config</a></td>\n'
         text += '<td><a href="./apps" target="main_frame">apps.yaml</a></td>\n'
         text += '<td><a href="./log?warnings" target="main_frame">Log</a></td>\n'
+        text += '<td><a href="./compare" target="main_frame">Compare</a></td>\n'
         text += '<td><a href="https://springfall2008.github.io/batpred/" target="main_frame">Docs</a></td>\n'
         text += "</table></body></html>\n"
         return web.Response(content_type="text/html", text=text)

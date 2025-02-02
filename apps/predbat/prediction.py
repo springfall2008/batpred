@@ -481,7 +481,7 @@ class Prediction:
 
             # Save Soc prediction data as minutes for later use
             self.predict_soc[minute] = round(soc, 3)
-            if save and (save in ["best", "test"]):
+            if save and (save in ["best", "test", "compare"]):
                 self.predict_soc_best[minute] = round(soc, 3)
                 self.predict_metric_best[minute] = round(metric, 3)
                 self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
