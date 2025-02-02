@@ -553,7 +553,7 @@ class Plan:
             window_n += 1
         return -1
 
-    def calculate_plan(self, recompute=True, debug_mode=False):
+    def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
 
@@ -657,7 +657,7 @@ class Plan:
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
 
         # Yesterday data
-        if recompute and self.calculate_savings:
+        if recompute and self.calculate_savings and publish:
             self.calculate_yesterday()
 
         # Creation prediction object
@@ -790,8 +790,15 @@ class Plan:
 
         # Final simulation of base
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
-            self.charge_limit, self.charge_window, self.export_window, self.export_limits, False, save="base", end_record=self.end_record
+            self.charge_limit, 
+            self.charge_window, 
+            self.export_window, 
+            self.export_limits, 
+            False, 
+            save="base" if publish else None, 
+            end_record=self.end_record
         )
+        # And base 10
         (
             metricb10,
             import_kwh_batteryb10,
@@ -810,7 +817,7 @@ class Plan:
             self.export_window,
             self.export_limits,
             True,
-            save="base10",
+            save="base10" if publish else None,
             end_record=self.end_record,
         )
 
@@ -834,7 +841,7 @@ class Plan:
                 self.export_window_best,
                 self.export_limits_best,
                 True,
-                save="best10",
+                save="best10" if publish else None,
                 end_record=self.end_record,
             )
             (
@@ -855,7 +862,7 @@ class Plan:
                 self.export_window_best,
                 self.export_limits_best,
                 False,
-                save="best",
+                save="best" if publish else None,
                 end_record=self.end_record,
             )
             # round charge_limit_best (kWh) to 2 decimal places and export_limits_best (percentage) to nearest whole number
@@ -875,16 +882,17 @@ class Plan:
             )
 
             # Publish charge and export window best
-            self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
-            self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
-            self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
+            if publish:
+                self.charge_limit_percent_best = calc_percent_limit(self.charge_limit_best, self.soc_max)
+                self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, self.charge_limit_percent_best, best=True, soc=self.predict_soc_best)
+                self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
 
-            # HTML data
-            self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
+                # HTML data
+                self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
 
-            # Web history
-            if self.web_interface:
-                self.web_interface.history_update()
+                # Web history
+                if self.web_interface:
+                    self.web_interface.history_update()
 
         # Destroy pool
         if self.pool:
@@ -2481,7 +2489,7 @@ class Plan:
             import_kwh_h0 = pred.import_kwh_h0
             predict_export = pred.predict_export
 
-            if save == "best":
+            if save == "best" or save == "compare":
                 self.predict_soc_best = pred.predict_soc_best
                 self.predict_iboost_best = pred.predict_iboost_best
                 self.predict_metric_best = pred.predict_metric_best
@@ -3434,6 +3442,7 @@ class Plan:
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
-                    if end > window_start and start < window_end:
+                    kwh = dp2(window["kwh"])
+                    if end > window_start and start < window_end and kwh > 0:
                         return True
         return False
