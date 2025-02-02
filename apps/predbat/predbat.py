@@ -85,7 +85,6 @@ from userinterface import UserInterface
 from alertfeed import Alertfeed
 from compare import Compare
 
-
 class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed, Fetch, Plan, Execute, Output, UserInterface):
     """
     The battery prediction class itself
@@ -269,6 +268,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Solcast, GECloud, Alertfeed
         reset_prediction_globals()
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparisons = {}
+        self.comparisons_date = None
         self.compare_tariffs = False
         self.predheat = None
         self.predbat_mode = "Monitor"

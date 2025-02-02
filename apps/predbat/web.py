@@ -602,7 +602,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./dash"
-        text = self.get_header("Predbat Dashboard")
+        text = self.get_header("Predbat Dashboard", refresh=60)
         text += "<body>\n"
         soc_perc = calc_percent_limit(self.base.soc_kw, self.base.soc_max)
         text += self.get_status_html(soc_perc, self.base.current_status, self.base.debug_enable, self.base.set_read_only, self.base.predbat_mode)
@@ -760,7 +760,7 @@ var options = {
         args = request.query
         chart = args.get("chart", "Battery")
         self.default_page = "./charts?chart={}".format(chart)
-        text = self.get_header("Predbat Config")
+        text = self.get_header("Predbat Charts", refresh=60*5)
         text += "<body>\n"
         text += "<h2>{} Chart</h2>\n".format(chart)
         text += '- <a href="./charts?chart=Battery">Battery</a> '
@@ -781,7 +781,7 @@ var options = {
         Render apps.yaml as an HTML page
         """
         self.default_page = "./apps"
-        text = self.get_header("Predbat Config")
+        text = self.get_header("Predbat Apps.yaml", refresh=60*5)
         text += "<body>\n"
         text += "<a href='./debug_apps'>apps.yaml</a><br>\n"
         text += "<table>\n"
@@ -885,7 +885,7 @@ var options = {
         """
         Return the Predbat compare page as an HTML page
         """
-        text = self.get_header("Predbat Compare")
+        text = self.get_header("Predbat Compare", refresh=60)
 
         text += "<body>\n"
         text += '<form class="form-inline" action="./compare" method="post" enctype="multipart/form-data" id="compareform">\n'
@@ -895,13 +895,18 @@ var options = {
             text += '<button type="submit" form="compareform" value="run">Run</button>\n'
         else:
             text += '<button type="submit" form="compareform" value="run" disabled>Running..</button>\n'
+        if self.base.comparisons_date:
+            text += ' ' + self.base.comparisons_date
+        else:
+            text += ' Not yet run'
 
         text += '<input type="hidden" name="run" value="run">\n'
         text += "<table>\n"
-        text += "<tr><th>Tariff</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Iboost</th><th>Carbon</th><th></th>\n"
+        text += "<tr><th>Tariff</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Iboost</th><th>Carbon</th><th>Result</th>\n"
 
-        compare_settings = self.base.get_arg("compare", [])
+        compare_settings  = self.base.get_arg('compare', [])
         comparisons = self.base.comparisons
+
 
         best_selected = ""
         best_metric = 9999999999
@@ -927,10 +932,10 @@ var options = {
             final_iboost = result.get("final_iboost", "")
             final_carbon_g = result.get("final_carbon_g", "")
 
-            selected = "<td bgcolor=#aaFFaa>Best<td>" if name == best_selected else "<td>&nbsp;</td>"
+            selected = '<td bgcolor=#aaFFaa>Best<td>' if name == best_selected else "<td>&nbsp;</td>"
 
             name_anchor = name.replace(" ", "_")
-            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(name_anchor, name, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
+            text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(name_anchor, name, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
 
         text += "</table>"
         text += "</form>"
