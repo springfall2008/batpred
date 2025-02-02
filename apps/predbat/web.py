@@ -900,9 +900,8 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>Tariff</th><th>Metric</th><th>Cost</th><th>Cost 10%</th><th>Export</th><th>Import</th><th>Iboost</th><th>Carbon</th><th></th>\n"
 
-        compare_settings  = self.base.get_arg('compare', [])
+        compare_settings = self.base.get_arg("compare", [])
         comparisons = self.base.comparisons
-
 
         best_selected = ""
         best_metric = 9999999999
@@ -928,7 +927,7 @@ var options = {
             final_iboost = result.get("final_iboost", "")
             final_carbon_g = result.get("final_carbon_g", "")
 
-            selected = '<td bgcolor=#aaFFaa>Best<td>' if name == best_selected else "<td>&nbsp;</td>"
+            selected = "<td bgcolor=#aaFFaa>Best<td>" if name == best_selected else "<td>&nbsp;</td>"
 
             name_anchor = name.replace(" ", "_")
             text += "<tr><td><a href='#heading-{}'>{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td>{}\n".format(name_anchor, name, metric, cost, cost10, export, imported, soc, final_iboost, final_carbon_g, selected)
