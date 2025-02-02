@@ -900,7 +900,7 @@ var options = {
         text += "<table>\n"
         text += "<tr><th>Tariff</th><th>Cost</th><th>Metric</th><th>Export</th><th>Import</th>\n"
 
-        compare_settings  = self.base.get_arg('compare', [])
+        compare_settings = self.base.get_arg("compare", [])
         comparisons = self.base.comparisons
 
         for compare in compare_settings:
